@@ -1,0 +1,284 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://autoforge.local/schema/ir.schema.json",
+  "title": "AutoForge IR v0.2.1",
+  "description": "AutoForge 的 Graph 序列化格式（唯一真相）。7 节点 / 6 边。emit 已于 v0.3.0 实现（跨自动化事件·发布侧，节点字段形态）；fn 仍为 P1 保留位（允许出现，但 Runtime 读到即报未实现）；persist 已于 P1 实现（实例持久化与崩溃恢复）。",
+  "type": "object",
+  "required": ["ir_version", "id", "name", "version", "mode", "nodes", "edges"],
+  "additionalProperties": false,
+  "properties": {
+    "ir_version": { "type": "string", "const": "0.2.1" },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "type": "integer", "minimum": 1 },
+    "mode": { "enum": ["single", "restart", "queued", "parallel"] },
+    "snapshot": { "type": "boolean", "default": true },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "persist": { "type": "boolean", "default": false },
+    "enabled": { "type": "boolean", "default": true, "description": "v0.6.0 启停开关：false 时运行时跳过该自动化（批量启停按 tag 落此位）" },
+    "vars": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/var_decl" }
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edge" }
+    },
+    "expect": {
+      "description": "v1.2.0 后置条件断言：声明「跑完之后应该是什么」。forge sim 逐条断言，对不上即判失败——这是自动化自己立的军令状（没有成功判据就无法判定是否跑通）。两种形态：实体形态 {entity_id, state}（state 可为字符串或候选数组）；变量形态 {var, op, value}（op 缺省 eq）。",
+      "type": "array",
+      "items": { "$ref": "#/$defs/expect" }
+    },
+    "meta": { "type": "object" }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$" },
+        "kind": { "enum": ["on", "if", "do", "ask", "wait", "set", "pass"] },
+        "name": { "type": "string" },
+
+        "trigger": { "$ref": "#/$defs/trigger" },
+        "for": { "type": "string" },
+        "debounce": { "type": "string" },
+
+        "expr": { "$ref": "#/$defs/expr" },
+
+        "adapter": { "type": "string" },
+        "action": { "type": "string" },
+        "params": { "type": "object" },
+        "atomic": { "type": "boolean", "default": false },
+        "result_var": { "type": "string" },
+        "requires_confirm": {
+          "type": "boolean",
+          "default": false,
+          "description": "L2 动作（门锁/窗帘/空调）必须显式标记人工确认（IR §8.1）"
+        },
+        "canary": {
+          "type": "object",
+          "description": "L2 动作的灰度（canary）配置，G4 实现；G2 只做编译期存在性要求"
+        },
+
+        "prompt": { "type": "string" },
+        "session": { "enum": ["room", "device", "user", "global"], "default": "room" },
+        "room": { "type": "string" },
+        "timeout": { "type": "string" },
+
+        "duration": { "type": "string" },
+
+        "var": { "type": "string" },
+        "value": {},
+        "from": { "type": "string" },
+
+        "emit": {
+          "description": "跨自动化事件·发布侧（v0.3.0，IR §4.3）：只传消息，禁止跨自动化读写对方私有变量。延迟发布走实例定时器（TimeSource），保证时间旅行可测。",
+          "type": "object",
+          "required": ["event"],
+          "additionalProperties": false,
+          "properties": {
+            "event": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_.]*$"
+            },
+            "data": { "type": "object" },
+            "delay": { "type": "string" }
+          }
+        },
+        "fn": { "type": "object" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "on" } }, "required": ["kind"] },
+          "then": { "required": ["trigger"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "if" } }, "required": ["kind"] },
+          "then": { "required": ["expr"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "do" } }, "required": ["kind"] },
+          "then": { "required": ["adapter", "action"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "ask" } }, "required": ["kind"] },
+          "then": { "required": ["prompt"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "wait" } }, "required": ["kind"] },
+          "then": { "required": ["duration"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "set" } }, "required": ["kind"] },
+          "then": { "required": ["var"] }
+        }
+      ]
+    },
+    "trigger": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["state", "sun", "time", "group", "event"] },
+        "entity_id": { "type": "string" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "event": {
+          "description": "`sun` 为 sunrise/sunset；`event`（v0.4.0 订阅侧）为自定义事件名",
+          "type": "string",
+          "minLength": 1
+        },
+        "offset": { "type": "string" },
+        "at": { "type": "string" },
+        "op": { "enum": ["and", "or"] },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/trigger" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "state" } }, "required": ["type"] },
+          "then": { "required": ["entity_id"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "sun" } }, "required": ["type"] },
+          "then": {
+            "required": ["event"],
+            "properties": { "event": { "enum": ["sunrise", "sunset"] } }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "time" } }, "required": ["type"] },
+          "then": { "required": ["at"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "group" } }, "required": ["type"] },
+          "then": { "required": ["op", "sources"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "event" } }, "required": ["type"] },
+          "then": { "required": ["event"] }
+        }
+      ]
+    },
+    "expr": {
+      "description": "内置表达式（G1 不做 fn 节点）。and/or/not 组合；比较运算 eq/ne/lt/lte/gt/gte；一元判定 is_on/is_off/is_home/is_not_home/truthy。",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["op", "args"],
+          "additionalProperties": false,
+          "properties": {
+            "op": { "enum": ["and", "or", "not"] },
+            "args": { "type": "array", "items": { "$ref": "#/$defs/expr" } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["op", "left", "right"],
+          "additionalProperties": false,
+          "properties": {
+            "op": { "enum": ["eq", "ne", "lt", "lte", "gt", "gte"] },
+            "left": { "$ref": "#/$defs/operand" },
+            "right": { "$ref": "#/$defs/operand" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["op", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "op": { "enum": ["is_on", "is_off", "is_home", "is_not_home", "truthy", "not_is_on", "not_is_off"] },
+            "value": { "$ref": "#/$defs/operand" }
+          }
+        }
+      ]
+    },
+    "operand": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["var"],
+          "additionalProperties": false,
+          "properties": {
+            "var": { "type": "string" },
+            "type": { "enum": ["numeric", "boolean", "string", "enum"] }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["const"],
+          "additionalProperties": false,
+          "properties": { "const": {} }
+        },
+        {
+          "type": "object",
+          "required": ["fn"],
+          "additionalProperties": false,
+          "properties": {
+            "fn": { "type": "string", "minLength": 1 },
+            "args": {
+              "type": "array",
+              "maxItems": 32,
+              "items": { "$ref": "#/$defs/operand" }
+            }
+          }
+        }
+      ]
+    },
+    "edge": {
+      "type": "object",
+      "required": ["from", "to", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "kind": { "enum": ["then", "yes", "no", "default", "on_timeout", "on_cancel", "on_error"] },
+        "label": { "type": "string" }
+      }
+    },
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "entity_id": { "type": "string", "description": "实体形态：断言该实体的最终状态" },
+        "state": {
+          "description": "期望状态；可为单个字符串，或候选数组（命中任一即通过）",
+          "anyOf": [
+            { "type": "string" },
+            { "type": "array", "minItems": 1, "items": { "type": "string" } }
+          ]
+        },
+        "var": { "type": "string", "description": "变量形态：断言实例变量（如 vars.x / turn_on_result.success）" },
+        "op": { "enum": ["eq", "ne", "lt", "lte", "gt", "gte"], "default": "eq" },
+        "value": { "description": "变量形态的目标值" },
+        "note": { "type": "string", "description": "人读说明（渲染进 NL，不参与断言）" }
+      },
+      "anyOf": [
+        { "required": ["entity_id", "state"] },
+        { "required": ["var", "value"] }
+      ]
+    },
+    "var_decl": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["numeric", "boolean", "string", "enum"] },
+        "value": {},
+        "enum": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

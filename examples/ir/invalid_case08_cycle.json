@@ -1,0 +1,62 @@
+{
+  "automations": [
+    {
+      "ir_version": "0.2.1",
+      "id": "cycle_a_turn_on",
+      "name": "【非法样例】A：灯灭就开灯",
+      "version": 1,
+      "mode": "single",
+      "meta": { "acceptance": "G1 用例 8", "expect": "与 cycle_b 构成实体依赖环，编译期被 ENTITY_DEP_CYCLE 拦截" },
+      "nodes": [
+        {
+          "id": "a1",
+          "kind": "on",
+          "name": "灯灭了",
+          "trigger": { "type": "state", "entity_id": "light.hall", "to": "off" }
+        },
+        {
+          "id": "d1",
+          "kind": "do",
+          "name": "开灯",
+          "adapter": "ha",
+          "action": "light.turn_on",
+          "params": { "entity_id": "light.hall" }
+        },
+        { "id": "p1", "kind": "pass" }
+      ],
+      "edges": [
+        { "from": "a1", "to": "d1", "kind": "then" },
+        { "from": "d1", "to": "p1", "kind": "then" }
+      ]
+    },
+    {
+      "ir_version": "0.2.1",
+      "id": "cycle_b_turn_off",
+      "name": "【非法样例】B：灯亮就关灯",
+      "version": 1,
+      "mode": "single",
+      "meta": { "acceptance": "G1 用例 8", "expect": "与 cycle_a 构成实体依赖环" },
+      "nodes": [
+        {
+          "id": "a1",
+          "kind": "on",
+          "name": "灯亮了",
+          "trigger": { "type": "state", "entity_id": "light.hall", "to": "on" }
+        },
+        {
+          "id": "d1",
+          "kind": "do",
+          "name": "关灯",
+          "adapter": "ha",
+          "action": "light.turn_off",
+          "params": { "entity_id": "light.hall" }
+        },
+        { "id": "p1", "kind": "pass" }
+      ],
+      "edges": [
+        { "from": "a1", "to": "d1", "kind": "then" },
+        { "from": "d1", "to": "p1", "kind": "then" }
+      ]
+    }
+  ]
+}

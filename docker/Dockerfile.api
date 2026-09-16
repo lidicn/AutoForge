@@ -1,0 +1,30 @@
+# AutoForge 只读服务层镜像（FastAPI）—— 供前端控制台（AutoForge-UI）取数。
+#
+# 用法（项目根目录）：
+#   docker build -f docker/Dockerfile.api -t autoforge-api .
+#   docker run --rm -p 8787:8787 -v /vol1/1000/docker/autoforge-store:/data autoforge-api
+#
+# 端点见容器内 http://<host>:8787/docs （Swagger UI）或 /openapi.json。
+# ⚠️ Round 1 只读：不连真实 Home Assistant、不写设备、不需要令牌。
+
+FROM python:3.14-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY examples ./examples
+
+# v1.6.0-a：同时装 ha extra（websockets），启用 HA websocket 四注册表；
+# 未安装时目录会自动降级（device_id/integration/area 为空），核心能力不受损。
+RUN pip install --no-cache-dir -e ".[api,ha]"
+
+EXPOSE 8787
+
+# 启动时把 examples/ir 幂等灌入 /data 归档，让控制台一开就有数据
+CMD ["forge", "serve", "--host", "0.0.0.0", "--port", "8787", \
+     "--store-root", "/data", "--examples", "/app/examples/ir"]

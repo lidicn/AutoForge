@@ -1,0 +1,82 @@
+[
+  {
+    "page": "① 概览 /overview",
+    "status": 200,
+    "heading": "AutoForge 控制台",
+    "badge": "✓ 正常运行",
+    "linkCount": 6,
+    "cssCardBg": "rgb(255, 255, 255)",
+    "cssRadius": "8px",
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "② 自动化列表 /automations",
+    "status": 200,
+    "rows": 8,
+    "confidenceBands": 8,
+    "firstRow": "case01_day_light verify v2 restart shadow (0.75) v2 2026-09-14 详情",
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "③ 自动化详情 /automations/case01_day_light",
+    "status": 200,
+    "h1": "case01_day_light",
+    "nl": "【书房白天人来补光】（id：study_day_light，模式：restart） · 触发策略：重新触发会先执行「取消后」的清理动作（与 HA 不同，见 docs/HA_SEMANTIC_DIFF.md） 当 binary_sensor.study_motion 变为「on」： 然后：检查 （sensor.study_illum 低于 200 且 light.study_main 是关闭状态） ",
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "④ 仿真回放 /simulation（点运行仿真）",
+    "status": 200,
+    "clicked": true,
+    "nl": "【书房白天人来补光】（id：study_day_light，模式：restart） · 触发策略：重新触发会先执行「取消后」的清理动作（与 HA 不同，见 docs/HA_SEMANTIC_DIFF.md） 当 binary_sensor.study_motion 变为「on」： 然后：检查 （sensor.study_illum 低于 200 且 light.study_main 是关闭状态） ",
+    "resultTables": 2,
+    "stateBadges": 3,
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "⑤ 置信度面板 /confidence",
+    "status": 200,
+    "rows": 9,
+    "thresholdZones": 3,
+    "firstRow": "adapter_with_retry 0.75 shadow — Shadow 只读 模拟人工干预",
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "⑥ 版本与Diff /versions",
+    "status": 200,
+    "graphOptions": 8,
+    "diffButtonDisabled": false,
+    "diffRender": "无差异",
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "⑦ AF-Spec工作台 /spec-editor（点编译）",
+    "status": 200,
+    "clicked": true,
+    "nl": "【我的自动化】（id：my_auto，模式：single） · 触发策略：已在运行时不再重复触发 当 binary_sensor.study_motion 变为「on」： 然后：检查 sensor.study_illum 低于 200 如果你拒绝：结束 然后：打开 light.study_main 如果执行失败：结束 然后：结束",
+    "irDetails": 1,
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "⑧ 故障注入图鉴 /faults",
+    "status": 200,
+    "tables": 2,
+    "kindRows": 5,
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "⑨ 404 兜底 /xyz-nope",
+    "status": 200,
+    "body": "404 — 页面不存在 您访问的页面不存在。 返回首页",
+    "errors": [],
+    "failedReq": []
+  }
+]

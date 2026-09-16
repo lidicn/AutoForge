@@ -1,0 +1,32 @@
+{
+  "ir_version": "0.2.1",
+  "id": "adapter_with_retry",
+  "name": "【非法样例】适配器配置带 retry",
+  "version": 1,
+  "mode": "single",
+  "meta": {
+    "acceptance": "G1 用例 7",
+    "expect": "编译期被 ADAPTER_POLICY_PARAM 拦截（违反适配器纯执行层契约 §4.4），不进仿真"
+  },
+  "nodes": [
+    {
+      "id": "a1",
+      "kind": "on",
+      "name": "手动触发",
+      "trigger": { "type": "state", "entity_id": "input_boolean.test", "to": "on" }
+    },
+    {
+      "id": "d1",
+      "kind": "do",
+      "name": "开灯但自带重试",
+      "adapter": "ha",
+      "action": "light.turn_on",
+      "params": { "entity_id": "light.study_main", "retry": 3 }
+    },
+    { "id": "p1", "kind": "pass" }
+  ],
+  "edges": [
+    { "from": "a1", "to": "d1", "kind": "then" },
+    { "from": "d1", "to": "p1", "kind": "then" }
+  ]
+}

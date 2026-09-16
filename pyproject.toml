@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoforge"
+version = "0.1.0"
+description = "AutoForge — Agent 为中心的智能家居自动化平台（G1 最小可运行闭环）"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "jsonschema>=4.20",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+# 仿真（vhass）依赖：基于 pytest-homeassistant 二次开发，较重，单独装
+sim = [
+    "pytest-homeassistant-custom-component",
+]
+# 只读 HTTP 服务层（forge serve / docker/Dockerfile.api）
+api = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+# v1.6.0 P0：HA websocket 注册表（entity/device/area/config_entry 四注册表）
+# 只 `device_id` / `platform` / `integration` / 精确 area 需要它；未安装时
+# 目录**优雅降级**（这些字段为空、解析照常工作），不影响内核零依赖承诺。
+ha = [
+    "websockets>=12.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-homeassistant-custom-component",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "httpx>=0.27",
+    "websockets>=12.0",
+]
+
+[project.scripts]
+forge = "autoforge.af_cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# 关键：默认**不自动加载** pytest-homeassistant 插件。
+# 它的 plugins.py → patch_time.py → homeassistant.runner 会 `import fcntl`（POSIX 专有），
+# 在 Windows 上插件加载阶段就崩，会导致整轮 pytest 无法运行。
+# 需要真 vhass 时（Linux/WSL/Docker）显式加：
+#   pytest tests -q -p pytest_homeassistant_custom_component.plugins
+addopts = "-p no:homeassistant"
+markers = [
+    "vhass: 仅在真 vhass（pytest-homeassistant）可用时运行，装不上或非 POSIX 则 skip",
+]
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100

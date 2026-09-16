@@ -1,0 +1,33 @@
+# AutoForge 只读服务层（FastAPI）—— NAS 部署用。
+#
+# 在仓库根目录执行：
+#   docker compose -f docker/docker-compose.api.yml up -d --build
+#
+# 仅暴露 8787；归档目录挂到 NAS 持久路径（重启不丢版本/置信度）。
+# ⚠️ Round 1 只读：不连真实 HA、不写设备。
+
+services:
+  autoforge-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    image: autoforge-api:latest
+    container_name: autoforge-api
+    ports:
+      - "8787:8787"
+    # 前端静态托管：把构建产物 dist 以卷挂入 /ui，由 serve --ui-dir 启用同源 SPA fallback（/api 无需跨域）
+    command: ["forge", "serve", "--host", "0.0.0.0", "--port", "8787", "--store-root", "/data", "--examples", "/app/examples/ir", "--ui-dir", "/ui"]
+    volumes:
+      - /vol1/1000/docker/autoforge-store:/data
+      - /vol1/1000/docker/autoforge-ui/dist:/ui
+      # 挂源码：免重建镜像即可生效新后端代码（生产化可改回镜像内构建 + 去掉此挂载）
+      - /vol1/1000/docker/autoforge/src:/app/src
+    # 可选：仓库根目录放 .env 即可开启真机下发（默认不开）
+    #   AUTOFORGE_LIVE_ENABLED=1
+    #   AUTOFORGE_HA_TOKEN=<HA 长期访问令牌>
+    #   AUTOFORGE_HA_URL=http://192.168.2.200:8123      # 可选
+    #   AUTOFORGE_SESSION_TTL_S=3600                    # 可选
+    env_file:
+      - path: ../.env
+        required: false
+    restart: unless-stopped

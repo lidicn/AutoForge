@@ -1,0 +1,146 @@
+{
+  "ir_version": "0.2.1",
+  "id": "study_room",
+  "name": "书房学习模式自动联动",
+  "version": 1,
+  "mode": "single",
+  "automations": [
+    {
+      "ir_version": "0.2.1",
+      "id": "study_light_on",
+      "name": "书房人来补光",
+      "version": 1,
+      "mode": "restart",
+      "snapshot": true,
+      "meta": {
+        "priority": 10,
+        "expect": "人在 + 光照<200 + 主灯灭 → 开主灯+开台灯，并广播 study_light_on、置位 study_light_triggered=1"
+      },
+      "nodes": [
+        {
+          "id": "a1",
+          "kind": "on",
+          "name": "书房检测到人",
+          "trigger": { "type": "state", "entity_id": "binary_sensor.study_motion", "to": "on" }
+        },
+        {
+          "id": "i1",
+          "kind": "if",
+          "name": "光照不足且主灯关",
+          "expr": {
+            "op": "and",
+            "args": [
+              {
+                "op": "lt",
+                "left": { "var": "entity.sensor.study_illum", "type": "numeric" },
+                "right": { "const": 200 }
+              },
+              { "op": "is_off", "value": { "var": "entity.light.study_main" } }
+            ]
+          }
+        },
+        {
+          "id": "d1",
+          "kind": "do",
+          "name": "开书房主灯",
+          "adapter": "ha",
+          "action": "light.turn_on",
+          "params": { "entity_id": "light.study_main" },
+          "result_var": "r_main"
+        },
+        {
+          "id": "d2",
+          "kind": "do",
+          "name": "开书房台灯",
+          "adapter": "ha",
+          "action": "light.turn_on",
+          "params": { "entity_id": "light.study_desk" },
+          "result_var": "r_desk"
+        },
+        {
+          "id": "e1",
+          "kind": "pass",
+          "name": "广播书房开灯",
+          "emit": { "event": "study_light_on", "data": { "room": "study" } }
+        },
+        {
+          "id": "s1",
+          "kind": "set",
+          "name": "置位已触发标记",
+          "var": "study_light_triggered",
+          "value": 1
+        },
+        { "id": "p1", "kind": "pass", "name": "结束" }
+      ],
+      "edges": [
+        { "from": "a1", "to": "i1", "kind": "then" },
+        { "from": "i1", "to": "d1", "kind": "then" },
+        { "from": "i1", "to": "p1", "kind": "no" },
+        { "from": "d1", "to": "d2", "kind": "then" },
+        { "from": "d2", "to": "e1", "kind": "then" },
+        { "from": "e1", "to": "s1", "kind": "then" },
+        { "from": "s1", "to": "p1", "kind": "then" },
+        { "from": "d1", "to": "p1", "kind": "on_error" }
+      ]
+    },
+    {
+      "ir_version": "0.2.1",
+      "id": "study_light_off",
+      "name": "书房人离 10 分钟关灯",
+      "version": 1,
+      "mode": "single",
+      "snapshot": true,
+      "meta": {
+        "priority": 5,
+        "expect": "人离且持续 10 分钟 → 关主灯+关台灯，并广播 study_light_off、清除 study_light_triggered"
+      },
+      "nodes": [
+        {
+          "id": "a1",
+          "kind": "on",
+          "name": "书房无人且持续 10 分钟",
+          "trigger": { "type": "state", "entity_id": "binary_sensor.study_motion", "to": "off" },
+          "for": "10m"
+        },
+        {
+          "id": "d1",
+          "kind": "do",
+          "name": "关书房主灯",
+          "adapter": "ha",
+          "action": "light.turn_off",
+          "params": { "entity_id": "light.study_main" }
+        },
+        {
+          "id": "d2",
+          "kind": "do",
+          "name": "关书房台灯",
+          "adapter": "ha",
+          "action": "light.turn_off",
+          "params": { "entity_id": "light.study_desk" }
+        },
+        {
+          "id": "e1",
+          "kind": "pass",
+          "name": "广播书房关灯",
+          "emit": { "event": "study_light_off", "data": { "room": "study" } }
+        },
+        {
+          "id": "s1",
+          "kind": "set",
+          "name": "清除标记",
+          "var": "study_light_triggered",
+          "value": 0
+        },
+        { "id": "p1", "kind": "pass", "name": "结束" }
+      ],
+      "edges": [
+        { "from": "a1", "to": "d1", "kind": "then" },
+        { "from": "d1", "to": "d2", "kind": "then" },
+        { "from": "d2", "to": "e1", "kind": "then" },
+        { "from": "e1", "to": "s1", "kind": "then" },
+        { "from": "s1", "to": "p1", "kind": "then" },
+        { "from": "d1", "to": "p1", "kind": "on_error" }
+      ]
+    }
+  ]
+}

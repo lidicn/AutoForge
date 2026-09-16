@@ -1,0 +1,32 @@
+# 真 vhass 测试镜像 —— 在 Linux 上跑 `pytest-homeassistant-custom-component`
+#
+# 为什么需要它：HA 的 `homeassistant.runner` 会 `import fcntl`（POSIX 专有），
+# Windows 上 pytest 插件加载阶段就崩，真 vhass 只能在 Linux/WSL/Docker 里跑。
+#
+# 用法（在项目根目录）：
+#   docker build -f docker/Dockerfile.test -t autoforge-test .
+#   docker run --rm autoforge-test                       # 全量（含真 vhass 复核）
+#   docker run --rm autoforge-test -m vhass              # 只跑真 vhass 用例
+#
+# ⚠️ 本机为 Windows，本文件未经实跑验证（见 docs/G1_ACCEPTANCE.md §4.1）。
+
+FROM python:3.14-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+
+RUN pip install --no-cache-dir -e ".[dev]"
+
+COPY tests ./tests
+COPY examples ./examples
+COPY docs ./docs
+
+# 显式加载 vhass 插件（pyproject 里默认 no:homeassistant 是为了 Windows 能跑）
+CMD ["pytest", "tests", "-q", "-p", "no:cacheprovider", \
+     "-p", "pytest_homeassistant_custom_component.plugins"]

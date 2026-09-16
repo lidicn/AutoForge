@@ -1,0 +1,7 @@
+[
+  { "entity_id": "switch.lumi_cn_lumi_158d000239c546_aq1_on_p_3_1", "state": "on" },
+  { "advance_s": 2 },
+  { "entity_id": "light.yeelink_cn_555003624_lamp22_s_2", "state": "off" },
+  { "advance_s": 2 },
+  { "entity_id": "light.yeelink_cn_555003624_lamp22_s_2", "state": "on" }
+]

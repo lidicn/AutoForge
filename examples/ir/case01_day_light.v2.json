@@ -1,0 +1,61 @@
+{
+  "ir_version": "0.2.1",
+  "id": "study_day_light",
+  "name": "书房白天人来补光",
+  "version": 2,
+  "mode": "restart",
+  "snapshot": true,
+  "meta": {
+    "acceptance": "G1 用例 1（v2：降阈值 + 置位标记）",
+    "expect": "人在 + 光照<150 + 灯灭 → light.study_main = on，并置位已触发标记"
+  },
+  "nodes": [
+    {
+      "id": "a1",
+      "kind": "on",
+      "name": "书房检测到人",
+      "trigger": { "type": "state", "entity_id": "binary_sensor.study_motion", "to": "on" }
+    },
+    {
+      "id": "i1",
+      "kind": "if",
+      "name": "光照不足且灯是关的",
+      "expr": {
+        "op": "and",
+        "args": [
+          {
+            "op": "lt",
+            "left": { "var": "entity.sensor.study_illum", "type": "numeric" },
+            "right": { "const": 150 }
+          },
+          { "op": "is_off", "value": { "var": "entity.light.study_main" } }
+        ]
+      }
+    },
+    {
+      "id": "d1",
+      "kind": "do",
+      "name": "开书房主灯",
+      "adapter": "ha",
+      "action": "light.turn_on",
+      "params": { "entity_id": "light.study_main" },
+      "result_var": "turn_on_result"
+    },
+    {
+      "id": "s1",
+      "kind": "set",
+      "name": "置位已触发标记",
+      "var": "study_day_light_triggered",
+      "value": 1
+    },
+    { "id": "p1", "kind": "pass", "name": "结束" }
+  ],
+  "edges": [
+    { "from": "a1", "to": "i1", "kind": "then" },
+    { "from": "i1", "to": "d1", "kind": "then" },
+    { "from": "i1", "to": "p1", "kind": "no" },
+    { "from": "d1", "to": "s1", "kind": "then" },
+    { "from": "s1", "to": "p1", "kind": "then" },
+    { "from": "d1", "to": "p1", "kind": "on_error" }
+  ]
+}

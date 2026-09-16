@@ -1,0 +1,10 @@
+[
+  { "entity_id": "binary_sensor.study_motion", "state": "on" },
+  { "advance_s": 600 },
+  { "entity_id": "binary_sensor.study_motion", "state": "off" },
+  { "advance_s": 300 },
+  { "entity_id": "binary_sensor.study_motion", "state": "on" },
+  { "advance_s": 600 },
+  { "entity_id": "binary_sensor.study_motion", "state": "off" },
+  { "advance_s": 660 }
+]

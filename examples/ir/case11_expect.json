@@ -1,0 +1,56 @@
+{
+  "ir_version": "0.2.1",
+  "id": "study_expect_demo",
+  "name": "书房补光（带后置条件断言）",
+  "version": 1,
+  "mode": "restart",
+  "snapshot": true,
+  "meta": {
+    "acceptance": "v1.2.0 断言闭环样例",
+    "expect": "人来 + 灯灭 → light.study_main = on，且 do 结果 success=true"
+  },
+  "expect": [
+    {
+      "entity_id": "light.study_main",
+      "state": "on",
+      "note": "灯必须真的亮了"
+    },
+    {
+      "var": "turn_on_result.success",
+      "op": "eq",
+      "value": true,
+      "note": "下发必须成功"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "a1",
+      "kind": "on",
+      "name": "书房检测到人",
+      "trigger": { "type": "state", "entity_id": "binary_sensor.study_motion", "to": "on" }
+    },
+    {
+      "id": "i1",
+      "kind": "if",
+      "name": "灯是关的",
+      "expr": { "op": "is_off", "value": { "var": "entity.light.study_main" } }
+    },
+    {
+      "id": "d1",
+      "kind": "do",
+      "name": "开书房主灯",
+      "adapter": "ha",
+      "action": "light.turn_on",
+      "params": { "entity_id": "light.study_main" },
+      "result_var": "turn_on_result"
+    },
+    { "id": "p1", "kind": "pass", "name": "结束" }
+  ],
+  "edges": [
+    { "from": "a1", "to": "i1", "kind": "then" },
+    { "from": "i1", "to": "d1", "kind": "then" },
+    { "from": "i1", "to": "p1", "kind": "no" },
+    { "from": "d1", "to": "p1", "kind": "then" },
+    { "from": "d1", "to": "p1", "kind": "on_error" }
+  ]
+}

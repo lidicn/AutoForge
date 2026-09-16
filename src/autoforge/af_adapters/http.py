@@ -1,0 +1,80 @@
+"""HTTP 适配器 —— 外网出站，默认 L3（IR §8.1）。
+
+两道防线：
+1. **编译期**：`af_scanner` 检查 URL 主机是否在白名单内，不在则拦截
+2. **运行期**：即使绕过扫描，适配器仍会拒绝非白名单主机（不隐式放行）
+
+⚠️ 这里的 `timeout` 是**传输层**套接超时（防单进程永久挂死），
+与 IR 语义层的业务超时无关——后者必须用 `wait` + `on_timeout` 表达。
+"""
+
+from __future__ import annotations
+
+from typing import Any, Mapping
+from urllib.parse import urlparse
+
+from .base import CallResult
+
+__all__ = ["HTTPAdapter", "DEFAULT_TRANSPORT_TIMEOUT", "host_of"]
+
+#: 传输层超时（秒）——仅用于 socket，不是业务超时
+DEFAULT_TRANSPORT_TIMEOUT = 5.0
+
+
+def host_of(url: str) -> str:
+    """取 URL 主机名，非法 URL 返回空串（扫描器与适配器都用它，口径统一）。"""
+    try:
+        return urlparse(url).hostname or ""
+    except ValueError:
+        return ""
+
+
+class HTTPAdapter:
+    name = "http"
+
+    def __init__(
+        self,
+        allowed_hosts: tuple[str, ...] = (),
+        dry_run: bool = True,
+        timeout: float = DEFAULT_TRANSPORT_TIMEOUT,
+    ):
+        self.allowed_hosts = tuple(allowed_hosts)
+        self.dry_run = dry_run
+        self.timeout = timeout
+        self.intents: list[tuple[str, dict[str, Any]]] = []
+
+    def is_allowed(self, url: str) -> bool:
+        return host_of(url) in self.allowed_hosts
+
+    def call(self, action: str, params: Mapping[str, Any]) -> CallResult:
+        url = str(params.get("url", ""))
+        host = host_of(url)
+        if not host:
+            return CallResult.fail("缺少或非法 url", action=action, params=dict(params))
+        if not self.is_allowed(url):
+            return CallResult.fail(
+                f"主机未在网络出站白名单内：{host}（已配置：{list(self.allowed_hosts)}）",
+                action=action,
+                params=dict(params),
+            )
+        if self.dry_run:
+            self.intents.append((action, dict(params)))
+            return CallResult.ok({"dry_run": True, "action": action, "url": url})
+        # 真实请求走传输层；G1 默认不会走到这里
+        from urllib import request  # 局部导入保持模块轻量
+
+        try:
+            req = request.Request(url, method=_method_of(action))
+            with request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310 - 已过白名单
+                body = resp.read().decode("utf-8", errors="replace")
+                return CallResult.ok({"status": resp.status, "body": body})
+        except Exception as exc:  # 传输层异常 → 交给 IR 的 on_error
+            return CallResult.fail(f"HTTP 请求失败：{exc}", action=action, url=url)
+
+
+def _method_of(action: str) -> str:
+    lowered = action.lower()
+    for method in ("get", "post", "put", "delete", "patch"):
+        if method in lowered:
+            return method.upper()
+    return "GET"

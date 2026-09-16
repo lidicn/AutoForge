@@ -1,0 +1,105 @@
+{
+  "ir_version": "0.2.1",
+  "meta": {
+    "title": "书房吊灯 ↔ 书房射灯 双向状态同步（Zigbee 双开关）",
+    "expect": "吊灯或挂灯任一变化，另一盏无条件镜像。用 emit 事件解耦（状态变化只广播事件，跟随侧订阅事件后写对方），避免跨自动化实体读写成环（ENTITY_DEP_CYCLE 会被安全闸拦截），也避免读对方状态受 HA mesh 抖动影响而丢同步；HA 对已是该状态的调用不产生 state_changed→无死循环；熔断作最后兜底。"
+  },
+  "automations": [
+    {
+      "ir_version": "0.2.1",
+      "id": "ceiling_state_changed",
+      "name": "吊灯状态变化→广播",
+      "version": 1,
+      "mode": "single",
+      "meta": {
+        "priority": 10,
+        "expect": "吊灯状态变化 → 广播 ceiling_on/off（只发事件不写实体，避免与挂灯互相触发成环；单发即完成，不读对方状态）"
+      },
+      "nodes": [
+        { "id": "on1", "kind": "on", "name": "吊灯开", "trigger": { "type": "state", "entity_id": "switch.lumi_cn_lumi_158d000239c546_aq1_on_p_3_1", "to": "on" } },
+        { "id": "e1", "kind": "pass", "name": "广播吊灯开", "emit": { "event": "ceiling_on" } },
+        { "id": "on2", "kind": "on", "name": "吊灯关", "trigger": { "type": "state", "entity_id": "switch.lumi_cn_lumi_158d000239c546_aq1_on_p_3_1", "to": "off" } },
+        { "id": "e2", "kind": "pass", "name": "广播吊灯关", "emit": { "event": "ceiling_off" } },
+        { "id": "p1", "kind": "pass", "name": "结束" }
+      ],
+      "edges": [
+        { "from": "on1", "to": "e1", "kind": "then" },
+        { "from": "e1", "to": "p1", "kind": "then" },
+        { "from": "on2", "to": "e2", "kind": "then" },
+        { "from": "e2", "to": "p1", "kind": "then" }
+      ]
+    },
+    {
+      "ir_version": "0.2.1",
+      "id": "lamp_follow_ceiling",
+      "name": "挂灯跟随吊灯",
+      "version": 1,
+      "mode": "single",
+      "meta": {
+        "priority": 9,
+        "expect": "收到 ceiling_on/off → 无条件镜像书房射灯（由事件触发，不读射灯状态，防 HA 读取抖动丢同步；queued 保证连按时每条事件都被处理、末态正确）"
+      },
+      "nodes": [
+        { "id": "onA", "kind": "on", "name": "收到吊灯开", "trigger": { "type": "event", "event": "ceiling_on" } },
+        { "id": "dA", "kind": "do", "name": "开书房射灯", "adapter": "ha", "action": "switch.turn_on", "params": { "entity_id": "switch.lumi_cn_lumi_158d000239c546_aq1_on_p_2_1" }, "result_var": "r_lamp_on" },
+        { "id": "onB", "kind": "on", "name": "收到吊灯关", "trigger": { "type": "event", "event": "ceiling_off" } },
+        { "id": "dB", "kind": "do", "name": "关书房射灯", "adapter": "ha", "action": "switch.turn_off", "params": { "entity_id": "switch.lumi_cn_lumi_158d000239c546_aq1_on_p_2_1" }, "result_var": "r_lamp_off" },
+        { "id": "p2", "kind": "pass", "name": "结束" }
+      ],
+      "edges": [
+        { "from": "onA", "to": "dA", "kind": "then" },
+        { "from": "dA", "to": "p2", "kind": "then" },
+        { "from": "onB", "to": "dB", "kind": "then" },
+        { "from": "dB", "to": "p2", "kind": "then" }
+      ]
+    },
+    {
+      "ir_version": "0.2.1",
+      "id": "lamp_state_changed",
+      "name": "挂灯状态变化→广播",
+      "version": 1,
+      "mode": "single",
+      "meta": {
+        "priority": 8,
+        "expect": "书房射灯状态变化 → 广播 lamp_on/off（只发事件不写实体，避免与吊灯互相触发成环；单发即完成，不读对方状态）"
+      },
+      "nodes": [
+        { "id": "on3", "kind": "on", "name": "射灯开", "trigger": { "type": "state", "entity_id": "switch.lumi_cn_lumi_158d000239c546_aq1_on_p_2_1", "to": "on" } },
+        { "id": "e3", "kind": "pass", "name": "广播射灯开", "emit": { "event": "lamp_on" } },
+        { "id": "on4", "kind": "on", "name": "射灯关", "trigger": { "type": "state", "entity_id": "switch.lumi_cn_lumi_158d000239c546_aq1_on_p_2_1", "to": "off" } },
+        { "id": "e4", "kind": "pass", "name": "广播挂灯关", "emit": { "event": "lamp_off" } },
+        { "id": "p3", "kind": "pass", "name": "结束" }
+      ],
+      "edges": [
+        { "from": "on3", "to": "e3", "kind": "then" },
+        { "from": "e3", "to": "p3", "kind": "then" },
+        { "from": "on4", "to": "e4", "kind": "then" },
+        { "from": "e4", "to": "p3", "kind": "then" }
+      ]
+    },
+    {
+      "ir_version": "0.2.1",
+      "id": "ceiling_follow_lamp",
+      "name": "吊灯跟随挂灯",
+      "version": 1,
+      "mode": "single",
+      "meta": {
+        "priority": 7,
+        "expect": "收到 lamp_on/off → 无条件镜像吊灯（由事件触发，不读吊灯状态，防 HA 读取抖动丢同步；queued 保证连按时每条事件都被处理、末态正确）"
+      },
+      "nodes": [
+        { "id": "onC", "kind": "on", "name": "收到挂灯开", "trigger": { "type": "event", "event": "lamp_on" } },
+        { "id": "dC", "kind": "do", "name": "开书房吊灯", "adapter": "ha", "action": "switch.turn_on", "params": { "entity_id": "switch.lumi_cn_lumi_158d000239c546_aq1_on_p_3_1" }, "result_var": "r_ceil_on" },
+        { "id": "onD", "kind": "on", "name": "收到挂灯关", "trigger": { "type": "event", "event": "lamp_off" } },
+        { "id": "dD", "kind": "do", "name": "关书房吊灯", "adapter": "ha", "action": "switch.turn_off", "params": { "entity_id": "switch.lumi_cn_lumi_158d000239c546_aq1_on_p_3_1" }, "result_var": "r_ceil_off" },
+        { "id": "p4", "kind": "pass", "name": "结束" }
+      ],
+      "edges": [
+        { "from": "onC", "to": "dC", "kind": "then" },
+        { "from": "dC", "to": "p4", "kind": "then" },
+        { "from": "onD", "to": "dD", "kind": "then" },
+        { "from": "dD", "to": "p4", "kind": "then" }
+      ]
+    }
+  ]
+}

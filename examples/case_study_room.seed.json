@@ -1,0 +1,6 @@
+{
+  "binary_sensor.study_motion": "off",
+  "sensor.study_illum": "80",
+  "light.study_main": "off",
+  "light.study_desk": "off"
+}

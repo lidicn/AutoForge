@@ -1,0 +1,32 @@
+{
+  "ir_version": "0.2.1",
+  "id": "dangerous_delete_all",
+  "name": "【非法样例】外网删除类请求",
+  "version": 1,
+  "mode": "single",
+  "meta": {
+    "acceptance": "G1 用例 6",
+    "expect": "编译期被 L3_ACTION 拦截，不进仿真"
+  },
+  "nodes": [
+    {
+      "id": "a1",
+      "kind": "on",
+      "name": "手动触发",
+      "trigger": { "type": "state", "entity_id": "input_boolean.test", "to": "on" }
+    },
+    {
+      "id": "d1",
+      "kind": "do",
+      "name": "调用外网删除接口",
+      "adapter": "http",
+      "action": "http.post",
+      "params": { "url": "https://api.example.com/delete_all" }
+    },
+    { "id": "p1", "kind": "pass" }
+  ],
+  "edges": [
+    { "from": "a1", "to": "d1", "kind": "then" },
+    { "from": "d1", "to": "p1", "kind": "then" }
+  ]
+}

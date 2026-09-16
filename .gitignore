@@ -1,0 +1,45 @@
+# AutoForge —— 遵循 E:\NAS\开发规范.md：本地写码、git 管、手动部署，绝不把缓存推到 NAS
+.venv/
+.venv*/
+venv/
+venv*/
+env/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# vhass 仿真可能落盘的 HA 配置/数据库
+.ha_config/
+*.db
+*.db-journal
+
+# 本地覆盖配置（含真实 HA token 等，绝不入库）
+.env
+*.local.json
+
+# v1.4.0 凭据热重载（含真实 HA / API 令牌，绝不入库）
+credentials.json
+revision.json
+
+# G6 版本化存储默认目录（本地归档，不入库）
+.forge/
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 开发/调试产物（不入库）
+tmp/
+*.log
+.codebuddy/

@@ -1,0 +1,110 @@
+[
+  {
+    "page": "/overview",
+    "status": 200,
+    "missingText": [],
+    "clicked": false,
+    "afterMissing": [],
+    "dataTableRows": 0,
+    "cards": 11,
+    "tags": 15,
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "/automations",
+    "status": 200,
+    "missingText": [],
+    "clicked": false,
+    "afterMissing": [],
+    "dataTableRows": 9,
+    "cards": 1,
+    "tags": 16,
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "/automations/case01_day_light",
+    "status": 200,
+    "missingText": [],
+    "clicked": false,
+    "afterMissing": [],
+    "dataTableRows": 0,
+    "cards": 3,
+    "tags": 0,
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "/simulation",
+    "status": 200,
+    "missingText": [],
+    "clicked": true,
+    "afterMissing": [],
+    "dataTableRows": 5,
+    "cards": 4,
+    "tags": 3,
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "/confidence",
+    "status": 200,
+    "missingText": [],
+    "clicked": false,
+    "afterMissing": [],
+    "dataTableRows": 10,
+    "cards": 2,
+    "tags": 9,
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "/versions",
+    "status": 200,
+    "missingText": [],
+    "clicked": true,
+    "afterMissing": [],
+    "dataTableRows": 0,
+    "cards": 3,
+    "tags": 1,
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "/spec-editor",
+    "status": 200,
+    "missingText": [],
+    "clicked": true,
+    "afterMissing": [],
+    "dataTableRows": 0,
+    "cards": 3,
+    "tags": 0,
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "/faults",
+    "status": 200,
+    "missingText": [],
+    "clicked": false,
+    "afterMissing": [],
+    "dataTableRows": 11,
+    "cards": 2,
+    "tags": 9,
+    "errors": [],
+    "failedReq": []
+  },
+  {
+    "page": "/xyz-nope",
+    "status": 200,
+    "missingText": [],
+    "clicked": false,
+    "afterMissing": [],
+    "dataTableRows": 0,
+    "cards": 0,
+    "tags": 0,
+    "errors": [],
+    "failedReq": []
+  }
+]
