@@ -1,0 +1,56 @@
+{
+  "name": "night_desk_lamp",
+  "version": 1,
+  "ir": {
+    "ir_version": "0.2.1",
+    "id": "night_desk_lamp",
+    "name": "夜晚开电脑则开挂灯",
+    "version": 1,
+    "mode": "single",
+    "snapshot": true,
+    "meta": {
+      "acceptance": "G1 用例 3",
+      "expect": "夜晚（sun.sun=below_horizon）电脑开 → light.desk_lamp = on"
+    },
+    "nodes": [
+      {
+        "id": "a1",
+        "kind": "on",
+        "name": "电脑开机",
+        "trigger": { "type": "state", "entity_id": "switch.desk_pc", "to": "on" }
+      },
+      {
+        "id": "i1",
+        "kind": "if",
+        "name": "太阳已落下",
+        "expr": { "op": "eq", "left": { "var": "entity.sun.sun", "type": "string" }, "right": { "const": "below_horizon" } }
+      },
+      {
+        "id": "d1",
+        "kind": "do",
+        "name": "开挂灯",
+        "adapter": "ha",
+        "action": "light.turn_on",
+        "params": { "entity_id": "light.desk_lamp" }
+      },
+      { "id": "p1", "kind": "pass", "name": "结束" }
+    ],
+    "edges": [
+      { "from": "a1", "to": "i1", "kind": "then" },
+      { "from": "i1", "to": "d1", "kind": "then" },
+      { "from": "i1", "to": "p1", "kind": "no" },
+      { "from": "d1", "to": "p1", "kind": "then" },
+      { "from": "d1", "to": "p1", "kind": "on_error" }
+    ]
+  },
+  "nl": "当电脑开机时，如果太阳已落下（日落之后），则打开书桌挂灯。",
+  "diagnostics": [
+    {
+      "code": "SNAPSHOT_FALSE_MULTI_AND",
+      "level": "warning",
+      "message": "snapshot=false 且可能存在多条件AND，有撕裂风险",
+      "automation_id": "night_desk_lamp",
+      "node_id": "i1"
+    }
+  ]
+}

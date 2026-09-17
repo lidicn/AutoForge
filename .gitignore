@@ -43,3 +43,12 @@ Thumbs.db
 tmp/
 *.log
 .codebuddy/
+
+# 合并后的前端控制台（ui/ 子目录，原为独立仓库 autoforge-ui）
+/ui/node_modules/
+/ui/dist/
+/ui/*.tsbuildinfo
+/ui/build.log
+/ui/build.out
+/ui/build.err
+/ui/build.pid

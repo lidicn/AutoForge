@@ -1,0 +1,65 @@
+{
+  "name": "study_ask_light",
+  "version": 1,
+  "ir": {
+    "ir_version": "0.2.1",
+    "id": "study_ask_light_cancel",
+    "name": "询问中被打断：动作不回滚",
+    "version": 1,
+    "mode": "single",
+    "snapshot": true,
+    "meta": {
+      "acceptance": "G1 用例 5",
+      "expect": "先开灯→询问中收到中断→走on_cancel；实例cancelled，但灯保持on"
+    },
+    "nodes": [
+      {
+        "id": "a1",
+        "kind": "on",
+        "name": "书房检测到人",
+        "trigger": { "type": "state", "entity_id": "binary_sensor.study_motion", "to": "on" }
+      },
+      {
+        "id": "d1",
+        "kind": "do",
+        "name": "先开灯",
+        "adapter": "ha",
+        "action": "light.turn_on",
+        "params": { "entity_id": "light.study_main" }
+      },
+      {
+        "id": "q1",
+        "kind": "ask",
+        "name": "询问要不要关灯",
+        "prompt": "要关灯吗？",
+        "session": "room",
+        "room": "study",
+        "timeout": "60s"
+      },
+      {
+        "id": "d2",
+        "kind": "do",
+        "name": "关灯",
+        "adapter": "ha",
+        "action": "light.turn_off",
+        "params": { "entity_id": "light.study_main" }
+      },
+      { "id": "p1", "kind": "pass", "name": "正常结束" },
+      { "id": "p2", "kind": "pass", "name": "取消结束（灯保持开，不回滚）" }
+    ],
+    "edges": [
+      { "from": "a1", "to": "d1", "kind": "then" },
+      { "from": "d1", "to": "q1", "kind": "then" },
+      { "from": "d1", "to": "p1", "kind": "on_error" },
+      { "from": "q1", "to": "d2", "kind": "yes" },
+      { "from": "q1", "to": "p1", "kind": "no" },
+      { "from": "q1", "to": "p1", "kind": "on_timeout" },
+      { "from": "q1", "to": "p1", "kind": "default" },
+      { "from": "q1", "to": "p2", "kind": "on_cancel" },
+      { "from": "d2", "to": "p1", "kind": "then" },
+      { "from": "d2", "to": "p1", "kind": "on_error" }
+    ]
+  },
+  "nl": "当书房检测到有人时，先打开主灯，然后询问是否要关灯。如果用户在询问期间被打断（on_cancel），已执行的动作不会回滚。",
+  "diagnostics": []
+}

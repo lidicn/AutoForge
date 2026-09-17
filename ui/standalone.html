@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AutoForge 控制台</title>
+<style>
+:root{--af-bg:#f5f5f5;--af-surface:#fff;--af-primary:#4f46e5;--af-primary-light:#818cf8;--af-error:#dc2626;--af-warning:#f59e0b;--af-success:#10b981;--af-info:#3b82f6;--af-text:#1f2937;--af-text-secondary:#6b7280;--af-border:#e5e7eb;--af-radius:8px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--af-bg);color:var(--af-text);line-height:1.6}
+a{text-decoration:none;color:var(--af-primary)}
+.page{max-width:960px;margin:0 auto;padding:24px}
+.header{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+.back{font-size:0.9rem}
+h1{font-size:1.4rem}
+h2{font-size:0.9rem;margin-bottom:12px;color:var(--af-text-secondary);text-transform:uppercase;letter-spacing:0.05em}
+.tagline{color:var(--af-text-secondary);margin-bottom:24px}
+.panel{background:var(--af-surface);border-radius:var(--af-radius);padding:20px;margin-bottom:16px;border:1px solid var(--af-border)}
+.code-block{background:#1e1e1e;color:#d4d4d4;padding:16px;border-radius:6px;overflow-x:auto;font-size:0.85rem;line-height:1.5;white-space:pre-wrap}
+.nl-text{background:#f0f9ff;border-left:4px solid var(--af-info);padding:12px 16px;border-radius:0 6px 6px 0;font-size:1rem;line-height:1.7}
+.status-badge{display:inline-block;padding:4px 12px;border-radius:99px;font-weight:600;font-size:0.9rem}
+.status-badge.ok{background:#d1fae5;color:#065f46}
+.status-badge.err{background:#fee2e2;color:#991b1b}
+table{width:100%;border-collapse:collapse;font-size:0.9rem}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--af-border)}
+th{background:#f9fafb;font-weight:600;font-size:0.85rem;color:var(--af-text-secondary);text-transform:uppercase}
+.band{display:inline-block;padding:2px 10px;border-radius:99px;font-size:0.8rem;font-weight:600}
+.btn{color:var(--af-primary);cursor:pointer;border:none;background:none;font-size:0.9rem;padding:4px 0;border-bottom:1px dashed var(--af-primary)}
+.btn:hover{text-decoration:underline}
+.btn-primary{padding:10px 20px;background:var(--af-primary);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer}
+.btn-primary:disabled{opacity:0.6;cursor:not-allowed}
+.btn-small{padding:4px 10px;background:var(--af-surface);border:1px solid var(--af-border);border-radius:4px;cursor:pointer;font-size:0.8rem}
+.btn-small:hover{border-color:var(--af-primary);color:var(--af-primary)}
+input,select,textarea{padding:8px 12px;border:1px solid var(--af-border);border-radius:6px;font-size:0.9rem;width:100%}
+textarea.code-input{font-family:monospace;font-size:0.85rem;resize:vertical}
+.search-input{margin-bottom:16px}
+.error{color:var(--af-error);padding:12px;background:#fef2f2;border-radius:6px;margin-bottom:16px}
+.diag-group{margin-bottom:12px}
+.diag-item{padding:8px 12px;border-radius:6px;margin-bottom:4px;font-size:0.9rem}
+.diag-item.error{background:#fef2f2;border-left:3px solid var(--af-error)}
+.diag-item.warning{background:#fffbeb;border-left:3px solid var(--af-warning)}
+.diag-code{font-family:monospace;font-weight:700;margin-right:8px;font-size:0.85rem}
+.diag-loc{color:var(--af-text-secondary);font-family:monospace;font-size:0.8rem;margin-right:8px}
+.state{padding:2px 8px;border-radius:4px;font-size:0.8rem;font-weight:600}
+.state.done,.state.on{background:#d1fae5;color:#065f46}
+.state.active{background:#dbeafe;color:#1e40af}
+.state.suspended{background:#fef3c7;color:#92400e}
+.state.failed,.state.cancelled{background:#fee2e2;color:#991b1b}
+.progress-bar{height:8px;background:#f3f4f6;border-radius:99px;overflow:hidden}
+.progress-fill{height:100%;border-radius:99px;transition:width 0.3s}
+code{font-family:monospace;font-size:0.85em;background:#f3f4f6;padding:1px 4px;border-radius:3px}
+.quick-links{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
+.link-card{display:block;background:var(--af-surface);border:1px solid var(--af-border);border-radius:var(--af-radius);padding:16px;text-align:center;font-weight:600;transition:box-shadow 0.15s}
+.link-card:hover{box-shadow:0 2px 8px rgba(79,70,229,0.15)}
+.nav-bar{background:var(--af-surface);border-bottom:1px solid var(--af-border);padding:12px 24px;display:flex;gap:20px;align-items:center}
+.nav-bar a{color:var(--af-text-secondary);font-size:0.9rem;font-weight:500}
+.nav-bar a.active,.nav-bar a:hover{color:var(--af-primary)}
+.safety-alert{background:#fef2f2;border:2px solid var(--af-error);border-radius:var(--af-radius);padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start}
+.hint{text-align:center;color:var(--af-text-secondary);padding:40px}
+.input-grid{display:grid;grid-template-columns:1fr 280px;gap:16px}
+.side-inputs{display:flex;flex-direction:column;gap:10px}
+.version-controls{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+.workspace{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.spec-editor{width:100%;font-family:monospace;font-size:0.9rem;padding:12px;border:1px solid var(--af-border);border-radius:6px;resize:vertical;margin-bottom:12px;min-height:300px}
+.diff-grid{display:grid;gap:12px}
+.diff-section{padding:12px;background:#f9fafb;border-radius:6px}
+.diff-section h3{font-size:0.9rem;margin-bottom:8px}
+.added{color:var(--af-success)}
+.removed{color:var(--af-error)}
+.threshold-bar{display:flex;height:32px;border-radius:6px;overflow:hidden;margin-bottom:8px}
+.threshold-zone{display:flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:600;white-space:nowrap;overflow:hidden}
+.empty{text-align:center;color:var(--af-text-secondary);padding:32px!important}
+.section{margin-bottom:12px}
+details summary{cursor:pointer;font-weight:600;color:var(--af-text-secondary);margin-bottom:8px}
+.tag{padding:2px 8px;border-radius:4px;font-size:0.8rem;background:#ede9fe;color:#5b21b6;font-family:monospace}
+.recover{font-weight:600;font-size:0.85rem}
+.recover.yes{color:var(--af-success)}
+.recover.no{color:var(--af-error)}
+.desc{color:var(--af-text-secondary);margin-bottom:20px;font-size:0.95rem}
+@media(max-width:768px){.input-grid,.workspace{grid-template-columns:1fr}.threshold-bar{font-size:0.7rem}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="nav-bar">
+    <router-link to="/overview" :class="{active:route==='/overview'}">概览</router-link>
+    <router-link to="/automations" :class="{active:route==='/automations'}">自动化列表</router-link>
+    <router-link to="/simulation" :class="{active:route==='/simulation'}">仿真回放</router-link>
+    <router-link to="/confidence" :class="{active:route==='/confidence'}">置信度面板</router-link>
+    <router-link to="/versions" :class="{active:route==='/versions'}">版本与Diff</router-link>
+    <router-link to="/spec-editor" :class="{active:route==='/spec-editor'}">AF-Spec 工作台</router-link>
+    <router-link to="/faults" :class="{active:route==='/faults'}">故障图鉴</router-link>
+  </div>
+  <router-view></router-view>
+</div>
+
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/vue-router@4/dist/vue-router.global.prod.js"></script>
+<script>
+const { createApp, ref, onMounted, computed, h } = Vue
+const { createRouter, createWebHistory } = VueRouter
+
+/* ===== Types (runtime) ===== */
+const BAND_COLORS = { auto: '#10b981', shadow: '#f59e0b', ask: '#dc2626' }
+
+/* ===== Mock Data ===== */
+const mockData = {
+  health: { ok: true, version: '0.2.1', milestones: ['G1 done','G2 compile gates','G3 runtime','G4 confidence','G5 fault injection','G6 version audit','G7 AF-Spec'] },
+  graphs: { items: [
+    { name:'study_day_light', latest_version:3, saved_at:'2026-09-14T08:00:00Z', note:'白天人在补光' },
+    { name:'study_leave_light', latest_version:2, saved_at:'2026-09-14T07:30:00Z', note:'人离10分钟关灯' },
+    { name:'night_desk_lamp', latest_version:1, saved_at:'2026-09-13T20:00:00Z', note:'夜晚开电脑则开挂灯' },
+    { name:'study_ask_ac', latest_version:2, saved_at:'2026-09-13T18:00:00Z', note:'闷了询问是否开空调' },
+    { name:'study_ask_light', latest_version:1, saved_at:'2026-09-12T10:00:00Z', note:'询问中打断不回滚' },
+  ]},
+  confidences: {
+    items: [
+      { automation_id:'study_day_light', confidence:0.92, band:'auto' },
+      { automation_id:'study_leave_light', confidence:0.78, band:'shadow' },
+      { automation_id:'night_desk_lamp', confidence:0.45, band:'ask' },
+      { automation_id:'study_ask_ac', confidence:0.88, band:'auto' },
+      { automation_id:'study_ask_light', confidence:0.62, band:'shadow' },
+    ],
+    thresholds: { auto:0.85, shadow_low:0.60 }
+  },
+  faults: {
+    kinds: [
+      {value:'sensor_stuck',label:'传感器卡死',inject_layer:'sim',expected_handler:'breaker_open'},
+      {value:'entity_unreachable',label:'实体不可达',inject_layer:'adapter',expected_handler:'action_failed'},
+      {value:'slow_response',label:'响应超时',inject_layer:'adapter',expected_handler:'instance_expired'},
+      {value:'wrong_state',label:'状态错误',inject_layer:'adapter',expected_handler:'entity_drift'},
+      {value:'network_drop',label:'网络中断',inject_layer:'adapter',expected_handler:'breaker_open'},
+    ],
+    failures: [
+      {key:'adapter_down',label:'适配器断连',edge:'do→pass',recoverable:true},
+      {key:'ask_timeout',label:'询问超时',edge:'ask→on_timeout',recoverable:true},
+      {key:'entity_removed',label:'实体被删除',edge:'if→do',recoverable:false},
+      {key:'quota_exceeded',label:'并发配额超限',edge:'created→active',recoverable:true},
+    ]
+  },
+  irs: {
+    study_day_light: {
+      name:'study_day_light',version:1,
+      ir:{ir_version:'0.2.1',id:'study_day_light',name:'书房白天人来补光',version:1,mode:'restart',snapshot:true,meta:{acceptance:'G1 用例 1',expect:'人在 + 光照<200 + 灯灭 → light.study_main = on'},
+        nodes:[
+          {id:'a1',kind:'on',name:'书房检测到人',trigger:{type:'state',entity_id:'binary_sensor.study_motion',to:'on'}},
+          {id:'i1',kind:'if',name:'光照不足且灯是关的',expr:{op:'and',args:[{op:'lt',left:{var:'entity.sensor.study_illum',type:'numeric'},right:{const:200}},{op:'is_off',value:{var:'entity.light.study_main'}}]}},
+          {id:'d1',kind:'do',name:'开书房主灯',adapter:'ha',action:'light.turn_on',params:{entity_id:'light.study_main'},result_var:'turn_on_result'},
+          {id:'p1',kind:'pass',name:'结束'},
+        ],
+        edges:[{from:'a1',to:'i1',kind:'then'},{from:'i1',to:'d1',kind:'then'},{from:'i1',to:'p1',kind:'no'},{from:'d1',to:'p1',kind:'then'},{from:'d1',to:'p1',kind:'on_error'}]
+      },
+      nl:'当书房运动传感器检测到有人时，如果光照低于200且主灯关闭，则打开书房主灯。',
+      diagnostics:[{code:'L2_NEEDS_CONFIRM',level:'warning',message:'L2动作（light.turn_on）建议使用canary+人工确认',automation_id:'study_day_light',node_id:'d1'}]
+    },
+    study_leave_light: {
+      name:'study_leave_light',version:1,
+      ir:{ir_version:'0.2.1',id:'study_leave_light',name:'书房人离10分钟关灯',version:1,mode:'restart',snapshot:false,meta:{acceptance:'G1 用例 2',expect:'人离10分钟才关灯；第5分钟人回来→关灯被取消'},
+        nodes:[{id:'a1',kind:'on',name:'书房无人且持续10分钟',trigger:{type:'state',entity_id:'binary_sensor.study_motion',to:'off'},for:'10m'},{id:'d1',kind:'do',name:'关书房主灯',adapter:'ha',action:'light.turn_off',params:{entity_id:'light.study_main'}},{id:'p1',kind:'pass',name:'结束'}],
+        edges:[{from:'a1',to:'d1',kind:'then'},{from:'d1',to:'p1',kind:'then'},{from:'d1',to:'p1',kind:'on_error'}]
+      },
+      nl:'当书房运动传感器持续无人10分钟后，关闭书房主灯。若期间有人返回，则取消关灯操作。',
+      diagnostics:[]
+    },
+    night_desk_lamp: {
+      name:'night_desk_lamp',version:1,
+      ir:{ir_version:'0.2.1',id:'night_desk_lamp',name:'夜晚开电脑则开挂灯',version:1,mode:'single',snapshot:true,meta:{acceptance:'G1 用例 3',expect:'夜晚（sun.sun=below_horizon）电脑开 → light.desk_lamp = on'},
+        nodes:[{id:'a1',kind:'on',name:'电脑开机',trigger:{type:'state',entity_id:'switch.desk_pc',to:'on'}},{id:'i1',kind:'if',name:'太阳已落下',expr:{op:'eq',left:{var:'entity.sun.sun',type:'string'},right:{const:'below_horizon'}}},{id:'d1',kind:'do',name:'开挂灯',adapter:'ha',action:'light.turn_on',params:{entity_id:'light.desk_lamp'}},{id:'p1',kind:'pass',name:'结束'}],
+        edges:[{from:'a1',to:'i1',kind:'then'},{from:'i1',to:'d1',kind:'then'},{from:'i1',to:'p1',kind:'no'},{from:'d1',to:'p1',kind:'then'},{from:'d1',to:'p1',kind:'on_error'}]
+      },
+      nl:'当电脑开机时，如果太阳已落下（日落之后），则打开书桌挂灯。',
+      diagnostics:[{code:'SNAPSHOT_FALSE_MULTI_AND',level:'warning',message:'snapshot=false 且可能存在多条件AND，有撕裂风险',automation_id:'night_desk_lamp',node_id:'i1'}]
+    },
+    study_ask_ac: {
+      name:'study_ask_ac',version:1,
+      ir:{ir_version:'0.2.1',id:'study_ask_ac',name:'书房闷了问一句要不要开空调',version:1,mode:'single',snapshot:true,meta:{acceptance:'G1 用例 4',expect:'温度>27且门关→询问；60秒无应答→走on_timeout静默结束'},
+        nodes:[
+          {id:'a1',kind:'on',name:'书房温度变化',trigger:{type:'state',entity_id:'sensor.study_temp'}},
+          {id:'i1',kind:'if',name:'太热且门窗紧闭',expr:{op:'and',args:[{op:'gt',left:{var:'entity.sensor.study_temp',type:'numeric'},right:{const:27}},{op:'is_off',value:{var:'entity.binary_sensor.study_door'}}]}},
+          {id:'q1',kind:'ask',name:'询问是否开空调',prompt:'书房 27 度了，要开空调吗？',session:'room',room:'study',timeout:'60s'},
+          {id:'d1',kind:'do',name:'开书房空调',adapter:'ha',action:'climate.turn_on',params:{entity_id:'climate.study'},requires_confirm:true,canary:{duration:'15m',auto_rollback:true}},
+          {id:'p1',kind:'pass',name:'静默结束'},
+          {id:'p2',kind:'pass',name:'用户拒绝'},
+        ],
+        edges:[{from:'a1',to:'i1',kind:'then'},{from:'i1',to:'q1',kind:'then'},{from:'i1',to:'p1',kind:'no'},{from:'q1',to:'d1',kind:'yes'},{from:'q1',to:'p2',kind:'no'},{from:'q1',to:'p1',kind:'on_timeout'},{from:'q1',to:'p1',kind:'default'},{from:'q1',to:'p2',kind:'on_cancel'},{from:'d1',to:'p1',kind:'then'},{from:'d1',to:'p1',kind:'on_error'}]
+      },
+      nl:'当书房温度高于27度且门窗紧闭时，询问用户是否要开空调。60秒内无应答则静默结束；若用户拒绝则不走任何动作。',
+      diagnostics:[{code:'L2_NEEDS_CONFIRM',level:'warning',message:'L2动作（climate.turn_on）已设置requires_confirm+canary',automation_id:'study_ask_ac',node_id:'d1'}]
+    },
+    study_ask_light: {
+      name:'study_ask_light',version:1,
+      ir:{ir_version:'0.2.1',id:'study_ask_light_cancel',name:'询问中被打断：动作不回滚',version:1,mode:'single',snapshot:true,meta:{acceptance:'G1 用例 5',expect:'先开灯→询问中收到中断→走on_cancel；实例cancelled，但灯保持on'},
+        nodes:[
+          {id:'a1',kind:'on',name:'书房检测到人',trigger:{type:'state',entity_id:'binary_sensor.study_motion',to:'on'}},
+          {id:'d1',kind:'do',name:'先开灯',adapter:'ha',action:'light.turn_on',params:{entity_id:'light.study_main'}},
+          {id:'q1',kind:'ask',name:'询问要不要关灯',prompt:'要关灯吗？',session:'room',room:'study',timeout:'60s'},
+          {id:'d2',kind:'do',name:'关灯',adapter:'ha',action:'light.turn_off',params:{entity_id:'light.study_main'}},
+          {id:'p1',kind:'pass',name:'正常结束'},
+          {id:'p2',kind:'pass',name:'取消结束（灯保持开，不回滚）'},
+        ],
+        edges:[{from:'a1',to:'d1',kind:'then'},{from:'d1',to:'q1',kind:'then'},{from:'d1',to:'p1',kind:'on_error'},{from:'q1',to:'d2',kind:'yes'},{from:'q1',to:'p1',kind:'no'},{from:'q1',to:'p1',kind:'on_timeout'},{from:'q1',to:'p1',kind:'default'},{from:'q1',to:'p2',kind:'on_cancel'},{from:'d2',to:'p1',kind:'then'},{from:'d2',to:'p1',kind:'on_error'}]
+      },
+      nl:'当书房检测到有人时，先打开主灯，然后询问是否要关灯。如果用户在询问期间被打断（on_cancel），已执行的动作不会回滚。',
+      diagnostics:[]
+    },
+  }
+}
+
+/* ===== API Layer ===== */
+let useMock = true
+async function apiReq(method, path, body) {
+  if (useMock) return new Promise(resolve => setTimeout(() => resolve(mockApi(path, body)), 80))
+  return fetch(`http://localhost:8787/api${path}`, {method, headers:{'Content-Type':'application/json'}, body:body?JSON.stringify(body):undefined}).then(r=>r.json())
+}
+function mockApi(path, body) {
+  const p = path.split('/')[1]
+  if (p==='health') return mockData.health
+  if (p==='graphs') return mockData.graphs
+  if (p==='graph') return mockData.irs[decodeURIComponent(path.split('/')[2])] ?? {...mockData.irs.study_day_light}
+  if (p==='conf') return mockData.confidences
+  if (p==='spec/compile') return {ok:true, ir:mockData.irs.study_day_light.ir, nl:'当条件满足时执行动作。', diagnostics:[{code:'L2_NEEDS_CONFIRM',level:'warning',message:'L2动作建议使用canary+人工确认',automation_id:'compiled_auto',node_id:'d1'}]}
+  if (p==='spec') return {spec:'automation my_auto\nname "我的自动化"\nmode single\ntrigger:\n  on: binary_sensor.study_motion\n  to: "on"\nif:\n  expr: "entity.sensor.study_illum < 200"\ndo:\n  adapter: ha\n  action: "light.turn_on"\n  params:\n    entity_id: "light.study_main"'}
+  if (p==='diff') return {render:'--- study_day_light v1\n+++ study_day_light v2\n@@ -nodes @@\n+  { id: "d1", kind: "do", name: "新增动作节点" }\n', structured:{added_automations:[],removed_automations:[],added_nodes:[{node_id:'d1',name:'新增动作节点'}],removed_nodes:[],changed_nodes:[],added_edges:[],removed_edges:[],meta_changes:[]}}
+  if (p==='faults') return mockData.faults
+  if (p==='build') return {ok:true, errors:body?.ir?.id==='dangerous_delete_all'?[{code:'L3_ACTION',level:'error',message:'高危动作（HTTP POST to external）',automation_id:'dangerous_delete_all',node_id:'d1'}]:[], warnings:[], nl:'编译完成。'}
+  if (p==='sim') return {instances:[{instance_id:'uuid-001',state:'done',current_node:'p1',trace:[{node:'a1',at:'2026-09-14T08:00:00Z'},{node:'i1',at:'2026-09-14T08:00:01Z'},{node:'d1',at:'2026-09-14T08:00:02Z'},{node:'p1',at:'2026-09-14T08:00:03Z'}]}],audit:[{type:'action_failed',entity_id:'light.study_main',message:'设备响应正常',at:'2026-09-14T08:00:02Z'}],bus:{},final_states:{'light.study_main':'on'},nl:'仿真完成：检测到有人，光照不足，主灯已开启。'}
+  return {}
+}
+const facade = {
+  health: () => apiReq('GET','/health'),
+  graphs: () => apiReq('GET','/graphs'),
+  graph: (name) => apiReq('GET',`/graphs/${encodeURIComponent(name)}`),
+  build: (ir) => apiReq('POST','/build',{ir}),
+  sim: (ir,seed,events) => apiReq('POST','/sim',{ir,seed,events}),
+  conf: (name) => apiReq('GET',`/conf/${encodeURIComponent(name)}`),
+  intervene: (name,automation_id) => apiReq('POST',`/conf/${encodeURIComponent(name)}/intervene`,{automation_id}),
+  diff: (name,old,new_v) => apiReq('GET',`/diff?name=${encodeURIComponent(name)}&old=${old}&new=${new_v}`),
+  spec: (name) => apiReq('GET',`/spec/${encodeURIComponent(name)}`),
+  specCompile: (text) => apiReq('POST','/spec/compile',{text}),
+  faults: () => apiReq('GET','/faults'),
+}
+
+/* ===== Components ===== */
+const DiagnosticPanel = {
+  props:['diagnostics'],
+  template:`
+    <section class="panel" v-if="diagnostics&&diagnostics.length">
+      <h2>扫描诊断</h2>
+      <div v-for="d in diagnostics" :key="d.code+d.node_id+d.message" :class="['diag-item',d.level]">
+        <span class="diag-code">{{d.code}}</span>
+        <span class="diag-loc" v-if="d.automation_id">[{{d.automation_id}}/{{d.node_id}}]</span>
+        <span>{{d.message}}</span>
+      </div>
+    </section>
+    <div v-else class="hint">✓ 无诊断问题</div>
+  `
+}
+
+const SafetyAlert = {
+  props:['diagnostics'],
+  template:`
+    <div v-if="diagnostics&&diagnostics.length" class="safety-alert">
+      <span class="icon">⚠️</span>
+      <div>
+        <h3>安全闸门触发</h3>
+        <ul>
+          <li v-for="a in diagnostics.filter(d=>['L3_ACTION','HTTP_NOT_WHITELISTED','SHADOW_WRITES_DEVICE','LOW_CONF_WRITES_DEVICE','L2_NEEDS_CONFIRM'].includes(d.code))" :key="a.code+a.node_id">
+            <code>{{a.code}}</code>
+            <span v-if="a.automation_id">[{{a.automation_id}}]</span>
+            {{a.message}}
+          </li>
+        </ul>
+      </div>
+    </div>
+  `
+}
+
+/* ===== Views ===== */
+const OverviewView = {
+  template:`
+    <div class="page">
+      <h1>AutoForge 控制台</h1>
+      <p class="tagline">Agent 为中心的智能家居自动化平台 — 自动化的"编译 / 审批 / 审计台"</p>
+      <div class="panel" v-if="loading">加载中...</div>
+      <div class="panel" v-else-if="error" style="color:red">{{error}}</div>
+      <div class="panel" v-else>
+        <h2>健康状态</h2>
+        <span :class="['status-badge',data.ok?'ok':'err']">{{data.ok?'✓ 正常运行':'✗ 异常'}}</span>
+        <p style="margin-top:8px">版本: <code>{{data.version}}</code></p>
+        <h3 style="margin-top:12px">里程碑</h3>
+        <ul style="padding-left:20px;margin-top:8px">
+          <li v-for="m in data.milestones">{{m}}</li>
+        </ul>
+      </div>
+      <div class="quick-links">
+        <router-link to="/automations" class="link-card">② 自动化列表</router-link>
+        <router-link to="/simulation" class="link-card">④ 仿真回放</router-link>
+        <router-link to="/confidence" class="link-card">⑤ 置信度面板</router-link>
+        <router-link to="/versions" class="link-card">⑥ 版本与 Diff</router-link>
+        <router-link to="/spec-editor" class="link-card">⑦ AF-Spec 工作台</router-link>
+        <router-link to="/faults" class="link-card">⑧ 故障注入图鉴</router-link>
+      </div>
+    </div>
+  `,
+  data(){return{data:null,loading:true,error:''}},
+  async mounted(){ try{const r=await facade.health();this.data=r}catch(e){this.error=String(e)}finally{this.loading=false} }
+}
+
+const AutomationsListView = {
+  template:`
+    <div class="page">
+      <div class="header">
+        <router-link to="/overview" class="back">← 概览</router-link>
+        <h1>自动化列表</h1>
+      </div>
+      <input v-model="filter" placeholder="筛选名称或备注..." class="search-input" />
+      <div v-if="loading">加载中...</div>
+      <div v-else-if="error" class="error">{{error}}</div>
+      <table v-else class="list-table">
+        <thead><tr><th>ID / 名称</th><th>版本</th><th>保存时间</th><th>置信度</th><th>操作</th></tr></thead>
+        <tbody>
+          <tr v-for="item in filtered" :key="item.name">
+            <td><div class="name">{{item.name}}</div><div class="sub">{{item.note}}</div></td>
+            <td>v{{item.latest_version}}</td>
+            <td>{{item.saved_at?.slice(0,10)}}</td>
+            <td>
+              <span v-if="getConf(item.name)" class="band" :style="{background:BAND_COLORS[getConf(item.name).band]+'22',color:BAND_COLORS[getConf(item.name).band],border:'1px solid '+BAND_COLORS[getConf(item.name).band]}">
+                {{getConf(item.name).band}} ({{getConf(item.name).confidence.toFixed(2)}})
+              </span>
+              <span v-else class="band" style="opacity:0.4">—</span>
+            </td>
+            <td><router-link :to="`/automations/${item.name}`" class="btn">详情</router-link></td>
+          </tr>
+          <tr v-if="filtered.length===0"><td colspan="5" class="empty">无匹配结果</td></tr>
+        </tbody>
+      </table>
+    </div>
+  `,
+  data(){return{items:[],confidences:new Map(),filter:'',loading:true,error:''}},
+  computed:{
+    filtered(){if(!this.filter)return this.items;const q=this.filter.toLowerCase();return this.items.filter(i=>i.name.toLowerCase().includes(q)||i.note.toLowerCase().includes(q))},
+  },
+  methods:{
+    getConf(id){return this.confidences.get(id)},
+    BAND_COLORS
+  },
+  async mounted(){
+    try{
+      const[g,c]=await Promise.all([facade.graphs(),facade.conf('_all')])
+      this.items=g.items
+      if(c.items){const m=new Map();for(const i of c.items)m.set(i.automation_id,i);this.confidences=m}
+    }catch(e){this.error=String(e)}finally{this.loading=false}
+  }
+}
+
+const AutomationDetailView = {
+  template:`
+    <div class="page">
+      <div class="header"><router-link to="/automations" class="back">← 列表</router-link><h1>{{name}}</h1></div>
+      <div v-if="loading">加载中...</div>
+      <div v-else-if="error" class="error">{{error}}</div>
+      <template v-else-if="data">
+        <SafetyAlert :diagnostics="data.diagnostics" />
+        <section class="panel"><h2>IR 原文</h2><pre class="code-block">{{rawIR}}</pre></section>
+        <section class="panel"><h2>自然语言描述（后端渲染，原样展示）</h2><p class="nl-text">{{data.nl}}</p></section>
+        <DiagnosticPanel :diagnostics="data.diagnostics" />
+      </template>
+    </div>
+  `,
+  props:['name'],
+  data(){return{data:null,loading:true,error:'',rawIR:''}},
+  methods:{formatJSON(obj){return JSON.stringify(obj,null,2)}},
+  async mounted(){
+    try{
+      const res=await facade.graph(this.name)
+      this.data=res
+      this.rawIR=this.formatJSON(res.ir)
+    }catch(e){this.error=String(e)}finally{this.loading=false}
+  }
+}
+
+const SimulationView = {
+  template:`
+    <div class="page">
+      <div class="header"><router-link to="/overview" class="back">← 概览</router-link><h1>仿真回放</h1></div>
+      <section class="panel input-panel">
+        <h2>输入</h2>
+        <div class="input-grid">
+          <div><label>IR（JSON）</label><textarea v-model="irJson" rows="6" class="code-input"></textarea></div>
+          <div class="side-inputs">
+            <div><label>Seed</label><textarea v-model="seedJson" rows="2" class="code-input"></textarea></div>
+            <div><label>Events</label><textarea v-model="eventsJson" rows="2" class="code-input"></textarea></div>
+            <button class="btn-primary" @click="runSim" :disabled="loading">{{loading?'运行中...':'▶ 运行仿真'}}</button>
+          </div>
+        </div>
+      </section>
+      <div v-if="error" class="error">{{error}}</div>
+      <template v-if="result">
+        <section class="panel"><h2>自然语言结果</h2><p class="nl-text">{{result.nl}}</p></section>
+        <section class="panel"><h2>实例轨迹</h2>
+          <table class="table">
+            <thead><tr><th>实例</th><th>状态</th><th>当前节点</th><th>轨迹</th></tr></thead>
+            <tbody>
+              <tr v-for="inst in result.instances" :key="inst.instance_id">
+                <td><code>{{inst.instance_id}}</code></td>
+                <td><span :class="['state',inst.state]">{{inst.state}}</span></td>
+                <td><code>{{inst.current_node}}</code></td>
+                <td class="trace">
+                  <span v-for="(t,i) in inst.trace" :key="i"><code>{{t.node}}</code><span class="arrow">→</span></span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+        <section class="panel" v-if="result.audit.length"><h2>审计记录</h2>
+          <table><thead><tr><th>时间</th><th>类型</th><th>实体</th><th>消息</th></tr></thead>
+          <tbody><tr v-for="(a,i) in result.audit" :key="i">
+            <td>{{a.at}}</td><td><code>{{a.type}}</code></td><td><code>{{a.entity_id||'—'}}</code></td><td>{{a.message}}</td>
+          </tr></tbody></table>
+        </section>
+        <section class="panel" v-if="Object.keys(result.final_states||{}).length"><h2>最终状态</h2>
+          <table><thead><tr><th>实体</th><th>状态</th></tr></thead>
+          <tbody><tr v-for="(state,entity) in result.final_states" :key="entity">
+            <td><code>{{entity}}</code></td><td><span :class="['state',state.toLowerCase()]">{{state}}</span></td>
+          </tr></tbody></table>
+        </section>
+      </template>
+    </div>
+  `,
+  data(){return{result:null,loading:false,error:'',
+    irJson:'{"automations":[{"ir_version":"0.2.1","id":"study_day_light","name":"书房白天人来补光","version":1,"mode":"restart","snapshot":true,"meta":{},"nodes":[{"id":"a1","kind":"on","name":"书房检测到人","trigger":{"type":"state","entity_id":"binary_sensor.study_motion","to":"on"}},{"id":"i1","kind":"if","name":"光照不足且灯是关的","expr":{"op":"and","args":[{"op":"lt","left":{"var":"entity.sensor.study_illum","type":"numeric"},"right":{"const":200}},{"op":"is_off","value":{"var":"entity.light.study_main"}}]}},{"id":"d1","kind":"do","name":"开书房主灯","adapter":"ha","action":"light.turn_on","params":{"entity_id":"light.study_main"}},{"id":"p1","kind":"pass","name":"结束"}],"edges":[{"from":"a1","to":"i1","kind":"then"},{"from":"i1","to":"d1","kind":"then"},{"from":"i1","to":"p1","kind":"no"},{"from":"d1","to":"p1","kind":"then"},{"from":"d1","to":"p1","kind":"on_error"}]}]}',
+    seedJson:'{"light.x":"off"}',
+    eventsJson:'[{"entity_id":"binary_sensor.m","state":"on"}]'
+  }},
+  methods:{
+    async runSim(){
+      this.loading=true;this.error='';this.result=null
+      try{
+        const ir=JSON.parse(this.irJson);const seed=JSON.parse(this.seedJson);const events=JSON.parse(this.eventsJson)
+        const res=await facade.sim(ir,seed,events);this.result=res
+      }catch(e){this.error=String(e)}finally{this.loading=false}
+    }
+  }
+}
+
+const ConfidenceView = {
+  template:`
+    <div class="page">
+      <div class="header"><router-link to="/overview" class="back">← 概览</router-link><h1>置信度面板</h1>
+        <input v-model="graphName" @blur="load" class="name-input" placeholder="Graph 名称" />
+      </div>
+      <div v-if="loading">加载中...</div>
+      <div v-else-if="error" class="error">{{error}}</div>
+      <template v-else-if="data">
+        <section class="panel"><h2>阈值参考</h2>
+          <div class="threshold-bar">
+            <div class="threshold-zone auto" :style="{width:data.thresholds.auto*100+'%'}">auto ≥ {{data.thresholds.auto}}</div>
+            <div class="threshold-zone shadow" :style="{width:(1-data.thresholds.auto)*100+'%'}">
+              <div class="shadow-inner" :style="{width:(data.thresholds.auto-data.thresholds.shadow_low)*100/(1-data.thresholds.auto)+'%'}">shadow ≥ {{data.thresholds.shadow_low}}</div>
+              <div class="ask-inner" :style="{width:(1-data.thresholds.shadow_low)*100/(1-data.thresholds.auto)+'%'}">ask &lt; {{data.thresholds.shadow_low}}</div>
+            </div>
+          </div>
+        </section>
+        <section class="panel"><h2>自动化置信度</h2>
+          <table>
+            <thead><tr><th>Automation</th><th>置信度</th><th>Band</th><th>进度</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr v-for="item in data.items" :key="item.automation_id">
+                <td><code>{{item.automation_id}}</code></td>
+                <td>{{item.confidence.toFixed(2)}}</td>
+                <td><span class="band" :style="{background:BAND_COLORS[item.band]+'22',color:BAND_COLORS[item.band],border:'1px solid '+BAND_COLORS[item.band]}">{{item.band}}</span></td>
+                <td><div class="progress-bar"><div class="progress-fill" :style="{width:item.confidence*100+'%',background:BAND_COLORS[item.band]}"></div></div></td>
+                <td><button class="btn-small" @click="intervene(item.automation_id)">模拟干预</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </template>
+    </div>
+  `,
+  data(){return{data:null,graphName:'all',loading:true,error:'',BAND_COLORS,
+    BAND_LABELS:{auto:'自动部署',shadow:'Shadow 只读',ask:'Ask 需审批'}}},
+  methods:{
+    async load(){
+      this.loading=true;this.error='';
+      try{const res=await facade.conf(this.graphName);this.data=res}catch(e){this.error=String(e)}finally{this.loading=false}
+    },
+    async intervene(aid){
+      try{const res=await facade.intervene(this.graphName,aid);this.data=res}catch(e){this.error=String(e)}
+    }
+  },
+  mounted(){this.load()}
+}
+
+const VersionsView = {
+  template:`
+    <div class="page">
+      <div class="header"><router-link to="/overview" class="back">← 概览</router-link><h1>版本与 Diff</h1></div>
+      <section class="panel">
+        <h2>选择版本</h2>
+        <div class="version-controls">
+          <label>Graph: <select v-model="selectedGraph"><option v-for="g in graphs" :key="g.name" :value="g.name">{{g.name}}</option></select></label>
+          <label>旧版: <select v-model="selectedOld"><option v-for="v in versions" :key="v" :value="v">v{{v}}</option></select></label>
+          <label>新版: <select v-model="selectedNew"><option v-for="v in versions" :key="v" :value="v">v{{v}}</option></select></label>
+          <button class="btn-primary" @click="runDiff" :disabled="diffLoading">{{diffLoading?'加载中...':'对比'}}</button>
+        </div>
+      </section>
+      <div v-if="error" class="error">{{error}}</div>
+      <template v-if="diffData">
+        <section class="panel"><h2>Diff 渲染</h2><pre class="diff-block">{{diffData.render}}</pre></section>
+        <section class="panel"><h2>结构化 Diff</h2>
+          <div class="diff-grid">
+            <div v-if="diffData.structured.added_nodes.length" class="diff-section"><h3 class="added">+ 新增节点</h3><ul><li v-for="n in diffData.structured.added_nodes" :key="n.node_id"><code>{{n.node_id}}</code> {{n.name}}</li></ul></div>
+            <div v-if="diffData.structured.removed_nodes.length" class="diff-section"><h3 class="removed">− 移除节点</h3><ul><li v-for="n in diffData.structured.removed_nodes" :key="n.node_id"><code>{{n.node_id}}</code> {{n.name}}</li></ul></div>
+            <div v-if="diffData.structured.added_edges.length" class="diff-section"><h3 class="added">+ 新增边</h3><ul><li v-for="e in diffData.structured.added_edges" :key="e.from+e.to"><code>{{e.from}}→{{e.to}}</code> {{e.kind}}</li></ul></div>
+            <div v-if="diffData.structured.removed_edges.length" class="diff-section"><h3 class="removed">− 移除边</h3><ul><li v-for="e in diffData.structured.removed_edges" :key="e.from+e.to"><code>{{e.from}}→{{e.to}}</code> {{e.kind}}</li></ul></div>
+            <div v-if="diffData.structured.meta_changes.length" class="diff-section"><h3>◆ 元数据变更</h3><ul><li v-for="m in diffData.structured.meta_changes" :key="m.key"><code>{{m.key}}</code>: {{m.old_value}} → {{m.new_value}}</li></ul></div>
+          </div>
+        </section>
+      </template>
+    </div>
+  `,
+  data(){return{graphs:[],selectedGraph:'',selectedOld:'1',selectedNew:'2',diffData:null,diffLoading:false,error:'',versions:[1,2,3]}},
+  methods:{
+    async loadGraphs(){try{const r=await facade.graphs();this.graphs=r.items;if(r.items.length)this.selectedGraph=r.items[0].name}catch(e){this.error=String(e)}},
+    async runDiff(){
+      this.diffLoading=true;this.error='';
+      try{const r=await facade.diff(this.selectedGraph,this.selectedOld,this.selectedNew);this.diffData=r}catch(e){this.error=String(e)}finally{this.diffLoading=false}
+    }
+  },
+  mounted(){this.loadGraphs()}
+}
+
+const SpecEditorView = {
+  template:`
+    <div class="page">
+      <div class="header"><router-link to="/overview" class="back">← 概览</router-link><h1>AF-Spec 工作台</h1></div>
+      <div class="workspace">
+        <section class="panel editor-panel">
+          <h2>AF-Spec 编辑</h2>
+          <textarea v-model="specText" class="spec-editor" rows="18"></textarea>
+          <button class="btn-primary" @click="compile" :disabled="loading">{{loading?'编译中...':'▶ 编译'}}</button>
+        </section>
+        <section class="panel result-panel">
+          <h2>编译结果</h2>
+          <div v-if="loading">编译中...</div>
+          <div v-else-if="error" class="error">{{error}}</div>
+          <template v-else-if="result">
+            <SafetyAlert :diagnostics="result.diagnostics" />
+            <details class="section"><summary>IR (JSON)</summary><pre class="code-block">{{JSON.stringify(result.ir,null,2)}}</pre></details>
+            <div class="section"><h3>自然语言</h3><p class="nl-text">{{result.nl}}</p></div>
+            <DiagnosticPanel :diagnostics="result.diagnostics" />
+          </template>
+          <div v-else class="hint">点击"编译"查看结果</div>
+        </section>
+      </div>
+    </div>
+  `,
+  data(){return{specText:'automation my_auto\nname "我的自动化"\nmode single\n\ntrigger:\n  on: binary_sensor.study_motion\n  to: "on"\n\nif:\n  expr: "entity.sensor.study_illum < 200"\n\ndo:\n  adapter: ha\n  action: "light.turn_on"\n  params:\n    entity_id: "light.study_main"\n',result:null,loading:false,error:''}},
+  methods:{
+    async compile(){
+      this.loading=true;this.error='';this.result=null
+      try{const r=await facade.specCompile(this.specText);this.result=r}catch(e){this.error=String(e)}finally{this.loading=false}
+    }
+  }
+}
+
+const FaultsView = {
+  template:`
+    <div class="page">
+      <div class="header"><router-link to="/overview" class="back">← 概览</router-link><h1>故障注入图鉴</h1></div>
+      <p class="desc">AutoForge G5 故障注入体系：五种故障类型 + 四类失败模式映射。仿真中注入以验证自动化的容错能力。</p>
+      <div v-if="loading">加载中...</div>
+      <div v-else-if="error" class="error">{{error}}</div>
+      <template v-else-if="data">
+        <section class="panel"><h2>故障类型</h2>
+          <table>
+            <thead><tr><th>值</th><th>标签</th><th>注入层</th><th>期望处理器</th></tr></thead>
+            <tbody>
+              <tr v-for="k in data.kinds" :key="k.value">
+                <td><code>{{k.value}}</code></td><td>{{k.label}}</td>
+                <td><span class="tag">{{k.inject_layer}}</span></td>
+                <td><code>{{k.expected_handler}}</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+        <section class="panel"><h2>失败模式</h2>
+          <table>
+            <thead><tr><th>键</th><th>标签</th><th>触发边</th><th>可恢复</th></tr></thead>
+            <tbody>
+              <tr v-for="f in data.failures" :key="f.key">
+                <td><code>{{f.key}}</code></td><td>{{f.label}}</td><td><code>{{f.edge}}</code></td>
+                <td><span :class="['recover',f.recoverable?'yes':'no']">{{f.recoverable?'✓ 可恢复':'✗ 不可恢复'}}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </template>
+    </div>
+  `,
+  data(){return{data:null,loading:true,error:''}},
+  async mounted(){try{const r=await facade.faults();this.data=r}catch(e){this.error=String(e)}finally{this.loading=false}}
+}
+
+const NotFoundView = {
+  template:`<div class="page"><h1>404</h1><p>页面不存在</p><router-link to="/overview" class="btn-primary" style="display:inline-block;margin-top:12px;padding:10px 20px;background:var(--af-primary);color:#fff;border-radius:6px;text-decoration:none;font-weight:600">返回首页</router-link></div>`
+}
+
+/* ===== App ===== */
+const app = createApp({
+  data(){return{route:window.location.pathname}},
+  template:`<router-view></router-view>`
+})
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes:[
+    {path:'/',redirect:'/overview'},
+    {path:'/overview',component:OverviewView},
+    {path:'/automations',component:AutomationsListView},
+    {path:'/automations/:name',component:AutomationDetailView,props:true},
+    {path:'/simulation',component:SimulationView},
+    {path:'/confidence',component:ConfidenceView},
+    {path:'/versions',component:VersionsView},
+    {path:'/spec-editor',component:SpecEditorView},
+    {path:'/faults',component:FaultsView},
+    {path:'/:pathMatch(.*)*',component:NotFoundView},
+  ]
+})
+
+app.use(router)
+app.component('DiagnosticPanel', DiagnosticPanel)
+app.component('SafetyAlert', SafetyAlert)
+app.mount('#app')
+</script>
+</body>
+</html>

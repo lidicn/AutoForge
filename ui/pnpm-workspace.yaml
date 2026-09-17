@@ -1,0 +1,3 @@
+# 本工程为单包应用（非 monorepo）。原内容为无效占位符（allowBuilds: ... set this to true or false），
+# 已修正为空工作区；本项目统一使用 npm（npm install / npm run build），无需 pnpm workspace。
+packages: []

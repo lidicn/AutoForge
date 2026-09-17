@@ -14,9 +14,9 @@
 |---|---|---|
 | UI 服务层 R1（只读 11 端点） | ✅ 已覆盖 | 列表/详情/构建/仿真/spec/置信度/故障 |
 | UI 服务层 R2（会话 + 真机） | ✅ 已覆盖 | ask 审批台 + live 下发按钮 |
-| v0.6.0 标签体系 + 批量启停 | 🔲 待接入 | 路线图标注 `Autoforge-UI（独立仓库，随 UI 迭代；后端契约已就绪）` |
-| v0.7.0 模板导出/导入 | 🔲 待接入 | 同上为 🔮 |
-| v1.1.0 设备目录 + 实体解析 | 🔲 待接入 | `HTTP 4 端点供 WebUI 设备面板` 仅后端就绪 |
+| v0.6.0 标签体系 + 批量启停 | ✅ 已接入 | 批次 A：标签筛选 + 批量启停工具条 + 降权按钮 |
+| v0.7.0 模板导出/导入 | ✅ 已接入 | 批次 A：数据管理（导出下载 + 导入策略） |
+| v1.1.0 设备目录 + 实体解析 | ✅ 已接入 | 批次 A：设备目录页（概览/浏览/状态/解析选择器/别名/漏斗） |
 | v1.2.0 断言闭环 | ⚠️ 部分 | `expect` 结果在仿真回执里能看，但无独立「期望值编辑」入口 |
 | v1.4.0 治理面（待批/凭据/令牌） | 🔲 待接入 | pending / credentials / auth 全无 UI |
 | v1.5.0 经验闭环（指标/共现/遥测） | 🔲 待接入 | metrics / experience / telemetry 全无 UI |
@@ -39,20 +39,20 @@
 ### 模块 B · 自动化列表 + 详情 + 版本 + diff
 | 后端端点 | 能力 | UI 展现 | 状态 |
 |---|---|---|---|
-| `GET /api/graphs?tag=` | 归档列表（按标签过滤） | 列表页 + 标签筛选器 | ✅（筛选🔲） |
+| `GET /api/graphs?tag=` | 归档列表（按标签过滤） | 列表页 + 标签筛选器 | ✅（筛选✅） |
 | `GET /api/graphs/{name}` | 取某版本图（ir/nl/diagnostics） | 详情抽屉 | ✅ |
-| `POST /api/graphs/tags` | 设标签 | 详情/批量操作 | 🔲 |
-| `POST /api/graphs/enable`·`/disable` | 按标签批量启停 | 批量操作工具条 | 🔲 |
+| `POST /api/graphs/tags` | 设标签 | 详情/批量操作 | ✅ |
+| `POST /api/graphs/enable`·`/disable` | 按标签批量启停 | 批量操作工具条 | ✅ |
 | `GET /api/diff` | 版本 diff | 版本对比视图 | ✅（签名配对重命名待确认） |
 | `GET /api/conf/{name}` | 置信度分级（G4） | 置信度面板 | ✅ |
-| `POST /api/conf/{name}/intervene` | 人工干预降置信度 | 置信度面板「降权」按钮 | 🔲 |
+| `POST /api/conf/{name}/intervene` | 人工干预降置信度 | 置信度面板「降权」按钮 | ✅（原已有） |
 
 ### 模块 C · 编辑器（构建 / 仿真 / 编译 / 绑定）
 | 后端端点 | 能力 | UI 展现 | 状态 |
 |---|---|---|---|
 | `POST /api/build` | 第一道闸：静态扫描 + NL 渲染 | 编辑器「构建并校验」 | ✅ |
 | `POST /api/sim` | 第二道闸：FakeHA 回放 + expect 断言 | 编辑器「仿真」+ expect 报告 | ✅（expect 编辑入口⚠️） |
-| `POST /api/bind` | v1.6.0 占位符 `?设备名` 回填 entity_id | 编辑器「绑定设备」 | 🔲 |
+| `POST /api/bind` | v1.6.0 占位符 `?设备名` 回填 entity_id | 编辑器「绑定设备」 | ✅ |
 | `POST /api/spec/compile` | AF-Spec 文本→IR | 编辑器「编译」 | ✅ |
 | `GET /api/spec/{name}` | 取 AF-Spec 文本 | 编辑器载入 | ✅ |
 | `GET /api/faults` | G5 故障注入图鉴 | 仿真页「注入故障」面板 | ⚠️（图鉴可展示，注入需 sim 扩展） |
@@ -60,14 +60,14 @@
 ### 模块 D · 设备目录 / 实体解析（v1.1.0 + v1.6.0）
 | 后端端点 | 能力 | UI 展现 | 状态 |
 |---|---|---|---|
-| `GET /api/catalog` | 目录摘要（域/区域/freshness） | 设备面板总览 | 🔲 |
-| `POST /api/catalog/refresh` | 拉 HA 全屋目录进缓存 | 「刷新目录」按钮 | 🔲 |
-| `GET /api/entities/resolve` | 设备名→Top-N 候选 | 写 IR 前的「设备选择器」 | 🔲 |
-| `GET /api/entities` | 全屋实体过滤浏览（分页） | 设备浏览器 | 🔲 |
-| `GET /api/entities/{id}/state` | 单实体当前状态 | 设备卡片实时状态 | 🔲 |
-| `GET /api/catalog/aliases` | 已沉淀别名 | 别名列表 | 🔲 |
-| `POST /api/catalog/alias`·`/alias/remove` | 沉淀/删除别名 | 别名管理 | 🔲 |
-| `GET /api/catalog/resolve-metrics` | 解析成功率漏斗 | 解析质量仪表 | 🔲 |
+| `GET /api/catalog` | 目录摘要（域/区域/freshness） | 设备面板总览 | ✅ |
+| `POST /api/catalog/refresh` | 拉 HA 全屋目录进缓存 | 「刷新目录」按钮 | ✅ |
+| `GET /api/entities/resolve` | 设备名→Top-N 候选 | 写 IR 前的「设备选择器」 | ✅ |
+| `GET /api/entities` | 全屋实体过滤浏览（分页） | 设备浏览器 | ✅ |
+| `GET /api/entities/{id}/state` | 单实体当前状态 | 设备卡片实时状态 | ✅ |
+| `GET /api/catalog/aliases` | 已沉淀别名 | 别名列表 | ✅ |
+| `POST /api/catalog/alias`·`/alias/remove` | 沉淀/删除别名 | 别名管理 | ✅ |
+| `GET /api/catalog/resolve-metrics` | 解析成功率漏斗 | 解析质量仪表 | ✅ |
 
 ### 模块 E · 会话 / ask 人机回路（R2-A，进程内）
 | 后端端点 | 能力 | UI 展现 | 状态 |
@@ -80,9 +80,9 @@
 ### 模块 F · 待批队列（v1.4.0 治理）
 | 后端端点 | 能力 | UI 展现 | 状态 |
 |---|---|---|---|
-| `POST /api/pending/list` | 列出待审批写操作 | 待批队列页 | 🔲 |
-| `POST /api/pending/approve` | 批准并回放落盘 | 每条「批准」按钮 | 🔲 |
-| `POST /api/pending/reject` | 拒绝并丢弃 | 每条「拒绝」按钮 | 🔲 |
+| `POST /api/pending/list` | 列出待审批写操作 | 待批队列页 | ✅ |
+| `POST /api/pending/approve` | 批准并回放落盘 | 每条「批准」按钮 | ✅ |
+| `POST /api/pending/reject` | 拒绝并丢弃 | 每条「拒绝」按钮 | ✅ |
 
 > 关键：Agent 通过 MCP `af_save` 写入的全部落这里，UI 是**唯一批准入口**（MCP 不注册 approve，铁律）。
 
@@ -90,20 +90,20 @@
 | 后端端点 | 能力 | UI 展现 | 状态 |
 |---|---|---|---|
 | `GET /api/live/status` | 真机可用性（开关/禁用原因） | 下发前可用性提示 | ✅ |
-| `POST /api/live/run` | 真实设备下发 | 「下发真机」按钮 + 强制二次确认弹窗 + 白名单输入 | ✅（二次确认强化🔲） |
+| `POST /api/live/run` | 真实设备下发 | 「下发真机」按钮 + 强制二次确认弹窗 + 白名单输入 | ✅ |
 
 ### 模块 H · 治理：凭据（v1.4.0）
 | 后端端点 | 能力 | UI 展现 | 状态 |
 |---|---|---|---|
-| `GET /api/credentials` | 凭据掩码 + 连接代数 | 设置页「凭据」卡 | 🔲 |
-| `POST /api/credentials/update` | 原子更新 HA/API 令牌（免重启） | 凭据编辑表单 | 🔲 |
+| `GET /api/credentials` | 凭据掩码 + 连接代数 | 设置页「凭据」卡 | ✅ |
+| `POST /api/credentials/update` | 原子更新 HA/API 令牌（免重启） | 凭据编辑表单 | ✅ |
 
 ### 模块 I · 治理：令牌（v0.8.0 主体模型）
 | 后端端点 | 能力 | UI 展现 | 状态 |
 |---|---|---|---|
-| `GET /api/auth/whoami` | 自检当前令牌 | 设置页「当前身份」 | 🔲 |
-| `GET /api/auth/subjects` | 已注册主体摘要 | 令牌列表 | 🔲 |
-| `POST /api/auth/revoke` | 撤销令牌（即时生效） | 每条「撤销」 | 🔲 |
+| `GET /api/auth/whoami` | 自检当前令牌 | 设置页「当前身份」 | ✅ |
+| `GET /api/auth/subjects` | 已注册主体摘要 | 令牌列表 | ✅ |
+| `POST /api/auth/revoke` | 撤销令牌（即时生效） | 每条「撤销」 | ✅ |
 
 ### 模块 J · 经验闭环（v1.5.0 观测）
 | 后端端点 | 能力 | UI 展现 | 状态 |
@@ -115,8 +115,8 @@
 ### 模块 K · 备份（v0.7.0）
 | 后端端点 | 能力 | UI 展现 | 状态 |
 |---|---|---|---|
-| `GET /api/store/export` | 导出 store bundle | 「导出」按钮 | 🔲 |
-| `POST /api/store/import` | 导入 bundle（策略） | 「导入」+ 策略选择 | 🔲 |
+| `GET /api/store/export` | 导出 store bundle | 「导出」按钮 | ✅ |
+| `POST /api/store/import` | 导入 bundle（策略） | 「导入」+ 策略选择 | ✅ |
 
 ---
 
@@ -142,19 +142,20 @@
 
 按风险与依赖排序，三批递进。每批独立可验收（符合路线图 minor=独立主题规则）。
 
-### 批次 A · 核心闭环补全（v1.7.0-a，规模 M）
-- D 设备目录全模块（目录/浏览器/状态/解析选择器/别名/解析漏斗）—— **最高频缺口**，Agent 写完 IR 前用户需在 UI 也能查设备。
-- C 增强：`/api/bind` 绑定按钮 + `expect` 编辑入口。
-- B 增强：标签筛选器 + 批量启停工具条 + 置信度「降权」按钮。
-- K 备份导入导出。
+### 批次 A · 核心闭环补全（v1.7.0-a，规模 M）✅ 已实现 2026-09-17
+- D 设备目录全模块（目录/浏览器/状态/解析选择器/别名/解析漏斗）—— **最高频缺口**，Agent 写完 IR 前用户需在 UI 也能查设备。 ✅
+- C 增强：`/api/bind` 绑定按钮 + `expect` 编辑入口（expect 编辑入口⚠️ 待补）。 ✅（绑定完成）
+- B 增强：标签筛选器 + 批量启停工具条 + 置信度「降权」按钮。 ✅（降权按钮原已有）
+- K 备份导入导出。 ✅
 - **退出标准**：用户在 UI 完成「查设备 → 写 IR → bind → build → sim（看 expect）→ 存为待批」全链路，无需 CLI。
+  - 已实现：查设备（DevicesView）、写 IR（SpecEditorView 编译）、bind（绑定按钮）、build（构建并校验）、sim（仿真）均已闭环；「存为待批」需批次 B 的 F 待批队列页接入 `af_save` 后才完整。
 
-### 批次 B · 治理与实时（v1.7.0-b，规模 M）
-- F 待批队列页（list/approve/reject）—— 与 Agent `af_save` 形成闭环。
-- H 凭据管理（掩码展示 + 免重启更新）。
-- I 令牌管理（whoami/subjects/revoke）。
-- G 增强：真机下发强制二次确认 + 白名单输入。
-- **退出标准**：Agent 提 `af_save` → UI 待批页可见 → 批准落盘；改 HA 令牌后 UI 即时生效无需重启。
+### 批次 B · 治理与实时（v1.7.0-b，规模 M）✅ 已实现 2026-09-17
+- F 待批队列页（list/approve/reject）—— 与 Agent `af_save` 形成闭环。✅
+- H 凭据管理（掩码展示 + 免重启更新）。✅
+- I 令牌管理（whoami/subjects/revoke）。✅
+- G 增强：真机下发强制二次确认 + 白名单输入。✅
+- **退出标准**：Agent 提 `af_save` → UI 待批页可见 → 批准落盘；改 HA 令牌后 UI 即时生效无需重启。✅ 已达成。
 
 ### 批次 C · 经验与观测（v1.7.0-c，规模 S）
 - J 指标/共现/遥测/错误知识库面板。
@@ -191,7 +192,7 @@
 
 ## 6. 风险与备注
 
-- **UI 仓库独立**：本计划的所有 UI 代码改动发生在 `autoforge-ui` 仓库（不在本后端仓库），实施时需在该仓库进行；
-  本文件与 `ROADMAP.md` 仅定义目标态与验收，不改动 UI 代码。
-- **状态推断**：§0 / §1 的「状态」列为基于路线图声明的推导，实施前需在 UI 仓库逐页核对真实覆盖度，避免重复建设或漏接。
+- **UI 已并入主仓库**：原独立仓库 `autoforge-ui` 已于 2026-09-17 合并进 AutoForge 主仓 `ui/` 目录，UI 代码改动现直接发生在 `ui/`；
+  本文件与 `ROADMAP.md` 仅定义目标态与验收，不改动后端。
+- **状态推断**：§0 / §1 的「状态」列为基于路线图声明的推导，实施前需在 `ui/` 目录逐页核对真实覆盖度，避免重复建设或漏接。
 - **不新增后端**：本版本为纯前端接入，后端 47 端点已齐备；若发现端点缺失/不足，回流后端开新版本（如需要 expect 独立编辑端点可回流 v1.2.0 补强）。

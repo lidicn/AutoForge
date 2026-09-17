@@ -1,0 +1,10 @@
+# AutoForge UI（已并入主仓库 ui/，不再独立仓库）
+node_modules/
+dist/
+*.tsbuildinfo
+build.log
+build.out
+build.err
+build.pid
+.DS_Store
+.env.local

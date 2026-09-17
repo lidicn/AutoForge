@@ -1,0 +1,41 @@
+{
+  "name": "study_leave_light",
+  "version": 1,
+  "ir": {
+    "ir_version": "0.2.1",
+    "id": "study_leave_light",
+    "name": "书房人离10分钟关灯",
+    "version": 1,
+    "mode": "restart",
+    "snapshot": false,
+    "meta": {
+      "acceptance": "G1 用例 2",
+      "expect": "人离10分钟才关灯；第5分钟人回来→关灯被取消"
+    },
+    "nodes": [
+      {
+        "id": "a1",
+        "kind": "on",
+        "name": "书房无人且持续10分钟",
+        "trigger": { "type": "state", "entity_id": "binary_sensor.study_motion", "to": "off" },
+        "for": "10m"
+      },
+      {
+        "id": "d1",
+        "kind": "do",
+        "name": "关书房主灯",
+        "adapter": "ha",
+        "action": "light.turn_off",
+        "params": { "entity_id": "light.study_main" }
+      },
+      { "id": "p1", "kind": "pass", "name": "结束" }
+    ],
+    "edges": [
+      { "from": "a1", "to": "d1", "kind": "then" },
+      { "from": "d1", "to": "p1", "kind": "then" },
+      { "from": "d1", "to": "p1", "kind": "on_error" }
+    ]
+  },
+  "nl": "当书房运动传感器持续无人10分钟后，关闭书房主灯。若期间有人返回，则取消关灯操作。",
+  "diagnostics": []
+}

@@ -1,0 +1,79 @@
+{
+  "name": "study_ask_ac",
+  "version": 1,
+  "ir": {
+    "ir_version": "0.2.1",
+    "id": "study_ask_ac",
+    "name": "书房闷了问一句要不要开空调",
+    "version": 1,
+    "mode": "single",
+    "snapshot": true,
+    "meta": {
+      "acceptance": "G1 用例 4",
+      "expect": "温度>27且门关→询问；60秒无应答→走on_timeout静默结束"
+    },
+    "nodes": [
+      {
+        "id": "a1",
+        "kind": "on",
+        "name": "书房温度变化",
+        "trigger": { "type": "state", "entity_id": "sensor.study_temp" }
+      },
+      {
+        "id": "i1",
+        "kind": "if",
+        "name": "太热且门窗紧闭",
+        "expr": {
+          "op": "and",
+          "args": [
+            { "op": "gt", "left": { "var": "entity.sensor.study_temp", "type": "numeric" }, "right": { "const": 27 } },
+            { "op": "is_off", "value": { "var": "entity.binary_sensor.study_door" } }
+          ]
+        }
+      },
+      {
+        "id": "q1",
+        "kind": "ask",
+        "name": "询问是否开空调",
+        "prompt": "书房 27 度了，要开空调吗？",
+        "session": "room",
+        "room": "study",
+        "timeout": "60s"
+      },
+      {
+        "id": "d1",
+        "kind": "do",
+        "name": "开书房空调",
+        "adapter": "ha",
+        "action": "climate.turn_on",
+        "params": { "entity_id": "climate.study" },
+        "requires_confirm": true,
+        "canary": { "duration": "15m", "auto_rollback": true }
+      },
+      { "id": "p1", "kind": "pass", "name": "静默结束" },
+      { "id": "p2", "kind": "pass", "name": "用户拒绝" }
+    ],
+    "edges": [
+      { "from": "a1", "to": "i1", "kind": "then" },
+      { "from": "i1", "to": "q1", "kind": "then" },
+      { "from": "i1", "to": "p1", "kind": "no" },
+      { "from": "q1", "to": "d1", "kind": "yes" },
+      { "from": "q1", "to": "p2", "kind": "no" },
+      { "from": "q1", "to": "p1", "kind": "on_timeout" },
+      { "from": "q1", "to": "p1", "kind": "default" },
+      { "from": "q1", "to": "p2", "kind": "on_cancel" },
+      { "from": "d1", "to": "p1", "kind": "then" },
+      { "from": "d1", "to": "p1", "kind": "on_error" }
+    ]
+  },
+  "nl": "当书房温度高于27度且门窗紧闭时，询问用户是否要开空调。60秒内无应答则静默结束；若用户拒绝则不走任何动作。",
+  "diagnostics": [
+    {
+      "code": "L2_NEEDS_CONFIRM",
+      "level": "warning",
+      "message": "L2动作（climate.turn_on）已设置requires_confirm+canary",
+      "automation_id": "study_ask_ac",
+      "node_id": "d1"
+    }
+  ]
+}
