@@ -275,7 +275,7 @@ SSE 事件流（`GET /api/stream`），把每个 `state_changed` 实时转成 `B
 > **当前版本**：`1.6.0`（实体解析决策智能 ✅ 2026-09-16）｜**已插队**：`v1.6.0-a` 数据源升级（✅ 2026-09-16）
 > **回归基线（v1.6.0 起）**：本机 **488 passed / 10 skipped**（collected 498；v1.6.0 新增 21 条）。
 > **NAS 双环境全绿**（DoD#4，2026-09-17）：容器 `autoforge-api` 全量回归 **488 passed / 10 skipped / 0 failed**——与本机**完全一致**；部署复核 `/api/health` 等端点 200。
-> **下一阶段**：串行主链 `v1.1.0–v1.6.0` **全部交付**（含 v1.6.0 P2 联动验证闸与决策 3 可选 binding）；后续按需（C §3 弱信号深化 / `Autoforge-UI` 独立仓库 / 新需求）。
+> **下一阶段**：串行主链 `v1.1.0–v1.6.0` **全部交付**；**v1.7.0「WebUI 全功能接入」已规划**（把后端 47 端点 / 24 MCP 工具中需用户操作的能力完整展现到 `autoforge-ui` 控制台，分 A/B/C 三批，详见 `docs/开发计划_WebUI全功能接入.md` + 本章同名章节）；后续按需（C §3 弱信号深化 / 新需求）。
 > v1.1.0 交付 +27 条（`tests/unit/test_v1_1_catalog.py`）、v1.2.0 交付 +22 条（`tests/unit/test_v1_2_expect.py`）。
 > **NAS 复核**：本次为本机改动，`e:/NAS/AutoForge` 是断开副本——`E:\NAS` 与 NAS 已断开（`net use e:` 报 "The network connection could not be found"），
 > 部署须 `scp` 到 `/vol1/1000/docker/autoforge/src` 后 `docker restart autoforge-api`。**待执行**。
@@ -298,6 +298,7 @@ SSE 事件流（`GET /api/stream`），把每个 `state_changed` 实时转成 `B
 | **v1.4.0** | **治理面**（待批队列 + 设备保护分级 + 凭据热重载） | M | v1.3.0 | ✅ 2026-09-16 |
 | **v1.5.0** | **经验闭环**（失败归因 + 错误知识库 + 实体共现 + 解析遥测/消歧） | L | v1.4.0 | ✅ 2026-09-16 |
 | **v1.6.0** | **实体解析决策智能**（数据源 + 归并/优选/别名/弱信号 + 可选 binding） | M | v1.1.0 | ✅ 2026-09-16 |
+| **v1.7.0** | **WebUI 全功能接入**（后端 47 端点 / 24 MCP 工具能力完整展现到控制台） | L | v1.6.0 | 🔨 计划中 |
 
 ---
 
@@ -818,6 +819,36 @@ Runtime 恢复跳过租约未到期的他属实例并审计 `instance_lease_held
 >
 > **NAS 部署状态（2026-09-16）**：`websockets 17.1` 已装入 `autoforge-api` / `autoforge-sync`；
 > `Dockerfile.api` 改为 `pip install -e ".[api,ha]"`（后续重建自带）。实测 `area` 填充率 **0% → 84%**。
+
+---
+
+### v1.7.0 — WebUI 全功能接入 🔨（计划中）
+
+**主题**：把后端已就绪的 **47 个 HTTP 端点 / 24 个 MCP 工具** 中「需要用户操作」的部分，**完整在 `autoforge-ui` 控制台展现**。
+当前 WebUI（独立仓库）仅覆盖 R1 只读子集 + R2 审批/真机，设备目录、治理面（待批/凭据/令牌）、经验闭环（指标/共现/遥测）、备份、别名/绑定等大量后端能力无 UI 入口。
+
+| # | 交付点 | 落点 | 批次 | 状态 |
+|---|---|---|---|---|
+| 1 | 设备目录全模块（目录/浏览器/状态/解析选择器/别名/解析漏斗） | `autoforge-ui`（D 模块） | A | 🔲 |
+| 2 | 编辑器增强：`/api/bind` 绑定 + `expect` 编辑入口 | `autoforge-ui`（C 模块） | A | 🔲 |
+| 3 | 标签筛选 + 批量启停 + 置信度降权按钮 | `autoforge-ui`（B 模块） | A | 🔲 |
+| 4 | 备份导入/导出按钮 | `autoforge-ui`（K 模块） | A | 🔲 |
+| 5 | 待批队列页（list/approve/reject，与 Agent `af_save` 闭环） | `autoforge-ui`（F 模块） | B | 🔲 |
+| 6 | 凭据管理（掩码 + 免重启更新） | `autoforge-ui`（H 模块） | B | 🔲 |
+| 7 | 令牌管理（whoami/subjects/revoke） | `autoforge-ui`（I 模块） | B | 🔲 |
+| 8 | 真机下发强制二次确认 + 白名单输入 | `autoforge-ui`（G 模块） | B | 🔲 |
+| 9 | 经验闭环面板（指标/共现/遥测/错误知识库） | `autoforge-ui`（J 模块） | C | 🔲 |
+| 10 | 仿真故障注入面板（消费 `/api/faults` 图鉴） | `autoforge-ui`（C 模块） | C | 🔲 |
+
+**关键约束**：
+- **UI 仓库独立**：所有 UI 代码改动发生在 `autoforge-ui` 仓库（不在本后端仓库）；本文件与 `docs/开发计划_WebUI全功能接入.md` 仅定义目标态与验收。
+- **待批回路铁律**：写操作统一经 `POST /api/pending/*` 入队，UI 提供批准/拒绝；**绝不在 UI 直连落盘绕过待批**（与 MCP 不注册 approve 一致）。
+- **live 三重闸**：真机下发按钮必须强制二次确认 + `confirm=true` + 非空 `live_allow` 白名单；禁用原因来自 `GET /api/live/status` 的 `reasons`。
+- **不新增后端**：47 端点已齐备；若发现端点不足，回流后端开新版本补强。
+
+**退出标准**：用户在 UI 完成「查设备 → 写 IR → bind → build → sim（看 expect）→ 存为待批 → 人审批落盘 → 真机下发」全链路，无需 CLI。
+**规模**：L（跨三批）　**依赖**：v1.6.0
+**详细映射与分批计划**：见 `docs/开发计划_WebUI全功能接入.md`。
 
 ---
 
