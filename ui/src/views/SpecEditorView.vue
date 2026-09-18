@@ -48,6 +48,11 @@ const error = ref('')
 const bindResult = ref<BindResult | null>(null)
 const binding = ref(false)
 
+function insertExpect() {
+  const template = 'expect {"entity_id": "light.xxx", "state": "on"}\n'
+  specText.value = specText.value + '\n' + template
+}
+
 async function compile() {
   loading.value = true
   error.value = ''
@@ -96,6 +101,7 @@ async function bind() {
           <n-space style="margin-top: 12px">
             <n-button type="primary" :loading="loading" @click="compile">▶ 编译</n-button>
             <n-button :loading="binding" :disabled="!result?.ir" @click="bind">🔗 绑定设备</n-button>
+            <n-button @click="insertExpect">+ expect 断言</n-button>
           </n-space>
         </n-card>
       </n-gi>
