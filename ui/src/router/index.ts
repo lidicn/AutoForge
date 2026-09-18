@@ -18,6 +18,8 @@ const router = createRouter({
     { path: '/pending', name: 'pending', component: () => import('@/views/PendingView.vue') },
     { path: '/live', name: 'live', component: () => import('@/views/LiveView.vue') },
     { path: '/governance', name: 'governance', component: () => import('@/views/GovernanceView.vue') },
+    // v1.7.3 运行中 watch 实例
+    { path: '/running', name: 'running', component: () => import('@/views/RunningView.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('@/views/NotFoundView.vue') },
   ],
 })

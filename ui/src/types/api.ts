@@ -440,3 +440,18 @@ export interface LiveRunResponse {
   nl: string
   asks: unknown[]
 }
+
+
+export interface WatchInstance {
+  owner: string
+  acquired_at: string
+  graph: string
+  ha_url: string
+  sidecar: string
+}
+
+export interface WatchListResponse {
+  ok: boolean
+  watches: WatchInstance[]
+  total: number
+}

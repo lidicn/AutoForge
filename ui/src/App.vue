@@ -18,6 +18,7 @@ const route = useRoute()
 const menuOptions: MenuOption[] = [
   { label: () => h(RouterLink, { to: '/overview' }, { default: () => '概览' }), key: '/overview' },
   { label: () => h(RouterLink, { to: '/automations' }, { default: () => '自动化列表' }), key: '/automations' },
+  { label: () => h(RouterLink, { to: '/running' }, { default: () => '运行中' }), key: '/running' },
   { label: () => h(RouterLink, { to: '/devices' }, { default: () => '设备目录' }), key: '/devices' },
   { label: () => h(RouterLink, { to: '/simulation' }, { default: () => '仿真回放' }), key: '/simulation' },
   { label: () => h(RouterLink, { to: '/confidence' }, { default: () => '置信度面板' }), key: '/confidence' },

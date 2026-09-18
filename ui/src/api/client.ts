@@ -104,4 +104,7 @@ export const api = {
   liveStatus: () => request<LiveStatusResponse>('GET', '/live/status'),
   liveRun: (ir: unknown, live_allow: string[], confirm: boolean, events?: unknown[]) =>
     request<LiveRunResponse>('POST', '/live/run', { ir, live_allow, confirm, events }),
+
+  // v1.7.3 运行中 watch 实例
+  watchList: () => request<WatchListResponse>('GET', '/watch/list'),
 }
