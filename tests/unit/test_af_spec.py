@@ -36,7 +36,7 @@ def _spec() -> str:
     edge i1 -> p1 no
     edge d1 -> p1 on_error id e2 label "失败兜底"
     edge q1 -> p1 on_timeout
-    edge w1 -> p1 on_timeout
+    edge w1 -> p1 then
     edge s1 -> p1 then
     """
 

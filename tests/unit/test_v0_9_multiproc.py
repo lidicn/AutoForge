@@ -61,7 +61,7 @@ def _wait_ir(auto_id: str = "demo", persist: bool = True) -> dict:
         "nodes": [ON_M, {"id": "w1", "kind": "wait", "duration": "10m"}, P1],
         "edges": [
             {"from": "a1", "to": "w1", "kind": "then"},
-            {"from": "w1", "to": "p1", "kind": "on_timeout"},
+            {"from": "w1", "to": "p1", "kind": "then"},
         ],
     }
 

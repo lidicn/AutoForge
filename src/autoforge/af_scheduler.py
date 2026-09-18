@@ -4,7 +4,8 @@
 
 两种 Timer 严格隔离（IR §11）：
 - `for=10m`：静态图的**持续条件**，边沿触发 + 持续时长，**条件破坏即取消**（对齐 HA `for:`）
-- `wait`/`ask`：实例级定时器，绑 `on_timeout`
+- `wait`：实例级**延时**定时器，到点走 `then` 正常继续（语义拍板 A）
+- `ask`：实例级询问定时器，无人应答到点走 `on_timeout` 兜底
 """
 
 from __future__ import annotations
@@ -94,12 +95,16 @@ class Scheduler:
         """时间推进后调用：处理到点的 `for`、定时触发、实例超时与排队。"""
         fired: list[Instance] = []
 
-        # 1) 到点的实例级定时器 → on_timeout
-        #    v0.3.0 起按 kind 分派：`emit` 定时到点是**延迟发布**，不是超时
+        # 1) 到点的实例级定时器，按 kind 分派：
+        #    - `emit`：延迟发布，到点按 then 继续（不是超时）
+        #    - `wait`：语义拍板 A——时间到了走 `then` 正常继续（wait 是"延时"，不是超时）
+        #    - `ask`（或未知 kind）：无人应答到点 → `on_timeout` 兜底
         for instance in self.instances.due_timers():
             kind = instance.timer.kind if instance.timer is not None else "timeout"
             if kind == EMIT_TIMER_KIND:
                 fired.append(self.executor.emit_due(instance))
+            elif kind == "wait":
+                fired.append(self.executor.resume_then(instance))
             else:
                 fired.append(self.executor.timeout(instance))
 

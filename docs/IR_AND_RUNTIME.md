@@ -126,8 +126,8 @@
 | 触发 | `on` | 事件/状态/时间/外部事件 | 否 | — |
 | 条件 | `if` | 布尔判断，无副作用 | 否 | — |
 | 动作 | `do` | 调用适配器 | 否 | 建议 `on_error` |
-| 询问 | `ask` | 人类介入 | **是** | **强制** |
-| 等待 | `wait` | 实例级定时器 | **是** | **强制** |
+| 询问 | `ask` | 人类介入 | **是** | **强制**（on_timeout/default） |
+| 等待 | `wait` | 实例级**延时**定时器，到点走 `then` 继续 | **是** | then（无需超时兜底） |
 | 状态 | `set` | 写实例私有变量 | 否 | — |
 | 终止 | `pass` | 空操作/终点 | 否 | — |
 
@@ -159,7 +159,7 @@
 | `then` | 正常流转 | 上一节点成功 |
 | `yes` / `no` | ask 分支 | 明确肯定/否定 |
 | `default` | 兜底 | ask 收到无法归类回答（"等一会"） |
-| `on_timeout` | 超时 | `wait`/`ask` 计时到点 |
+| `on_timeout` | 超时 | `ask` 计时到点（无人应答）；`wait` 到点走 `then`，不再走本边 |
 | `on_cancel` | 中断 | 外部中断源命中 |
 | **`on_error`** | **执行失败** | `do` 调用异常（设备离线/超时/5xx） |
 
@@ -307,7 +307,8 @@ on_cancel  >  on_error  >  on_timeout  >  yes/no/then  >  default
 | 类型 | 关键字 | 归属 | 中断语义 | 编译到 HA |
 |---|---|---|---|---|
 | **持续条件** | `for=10m` | 静态图条件 | 条件破坏即取消 | 无损映射 `for:` |
-| **实例等待** | `wait 10m` / `ask` | 实例生命周期 | 绑 `on_timeout`/`on_cancel` | `wait_for_trigger` 或 Runtime |
+| **实例延时** | `wait 10m` | 实例生命周期 | 到点走 `then` 继续；可被 `on_cancel` 中断 | Runtime |
+| **实例询问** | `ask` | 实例生命周期 | 无人应答到点绑 `on_timeout`，可被 `on_cancel` 中断 | `wait_for_trigger` 或 Runtime |
 
 ---
 
@@ -341,6 +342,7 @@ on_cancel  >  on_error  >  on_timeout  >  yes/no/then  >  default
 3. **命名 → AutoForge**：子命令 `build`/`run`/`sim`；内部前缀 `af_*`（详见 `docs/NAMING.md`）。
 4. **`on_error` → 采纳为第 6 种边**（§6）。
 5. **IR 序列化 → 原型期用 JSON**（见 §16）。
+6. **`wait` 到期语义 → 选 A（2026-09-18 拍板）**：`wait` 到点走 `then` 正常继续（"等一会儿继续"），`on_timeout` 仅留给 `ask` 无人应答。此前实现把所有非 emit 实例定时器都派发到 `on_timeout`，与 §13.2"轮询用 wait+then"自相矛盾；已按 A 修正运行时（`af_scheduler`/`af_executor.resume_then`）、扫描器（`wait` 不再强制 `on_timeout`）与既有 IR/测试。
 
 ---
 

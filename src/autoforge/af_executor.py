@@ -178,8 +178,12 @@ class NodeExecutor:
         return self.resume(instance, classify_answer(text))
 
     def timeout(self, instance: Instance) -> Instance:
-        """实例级定时器到点 → `on_timeout`。"""
+        """`ask` 计时到点（无人应答）→ `on_timeout` 兜底。"""
         return self.resume(instance, "on_timeout")
+
+    def resume_then(self, instance: Instance) -> Instance:
+        """`wait` 计时到点 → 走 `then` 正常继续（语义拍板 A：wait 是"等一会儿继续"，不是超时）。"""
+        return self.resume(instance, "then")
 
     def cancel(self, instance: Instance, reason: str = "") -> Instance:
         """中断。优先级最高：抢占一切正常流程，走 `on_cancel` 分支。"""

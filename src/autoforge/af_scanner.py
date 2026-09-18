@@ -29,7 +29,7 @@ WARNING = "warning"
 CHECKS: dict[str, str] = {
     "L3_ACTION": "① 高危动作（L3）",
     "HTTP_NOT_WHITELISTED": "① HTTP 出站主机不在白名单",
-    "MISSING_TIMEOUT_OR_DEFAULT": "② ask/wait 缺 on_timeout 或 default（杜绝永久挂起）",
+    "MISSING_TIMEOUT_OR_DEFAULT": "② ask 缺 on_timeout 或 default（杜绝永久挂起）；wait 到期自动走 then",
     "ENTITY_DEP_CYCLE": "③ 跨自动化实体读写依赖成环",
     "STATIC_LOOP": "④ 静态图内循环且无终止条件",
     "CANCEL_SPAWNS_INSTANCE": "⑤ on_cancel 分支产生新实例",
@@ -423,9 +423,12 @@ class StaticScanner:
                     )
                 )
 
-    # ② 挂起必须兜底
+    # ② 挂起必须兜底（语义拍板 A：wait 到期自动走 then，不会永久挂起，故不强制 on_timeout；
+    #    仅 ask——等人类应答、可能永远无人回答——必须有 on_timeout/default 兜底）
     def _check_suspension(self, auto: Automation, node: Node, out: ScanResult) -> None:
         if not node.is_suspending:
+            return
+        if node.kind == "wait":
             return
         kinds = {e.kind for e in auto.outgoing(node.id)}
         if not kinds & {"on_timeout", "default"}:
@@ -483,11 +486,12 @@ class StaticScanner:
                     )
 
     # ⑥ 挂起分支内不得执行高风险动作
+    #    （then 也纳入：方案 A 下 wait 到点自动走 then，等同无人值守执行）
     def _check_high_risk_after_suspend(self, auto: Automation, node: Node, out: ScanResult) -> None:
         if not node.is_suspending:
             return
         for edge in auto.outgoing(node.id):
-            if edge.kind not in ("on_timeout", "default", "on_cancel"):
+            if edge.kind not in ("on_timeout", "default", "on_cancel", "then"):
                 continue
             for reachable in _reachable(auto, edge.to):
                 if reachable.kind != "do":

@@ -188,7 +188,8 @@ def test_entity_drift_is_soft_fail_not_immediate_fail():
     assert any(e.type == ENTITY_DRIFT for e in runtime.audit)
 
 
-def test_wait_timeout():
+def test_wait_then_continues():
+    """语义拍板 A：`wait` 到点走 `then` 正常继续，而不是 `on_timeout`。"""
     runtime = _rt(
         _ir(
             nodes=[ON_M, {"id": "w1", "kind": "wait", "duration": "5s"}, P1, P2],
@@ -203,8 +204,10 @@ def test_wait_timeout():
     assert runtime.instances.all()[0].state == SUSPENDED
 
     runtime.advance(6)
-    assert runtime.instances.all()[0].state == DONE
-    assert runtime.instances.all()[0].ctx.trace[-1]["node"] == "p2"
+    inst = runtime.instances.all()[0]
+    assert inst.state == DONE
+    # wait 到点走 then → p1；那条 on_timeout 边不应被命中
+    assert inst.ctx.trace[-1]["node"] == "p1"
 
 
 # ── atomic 与快照边界 ─────────────────────────────────────────────────

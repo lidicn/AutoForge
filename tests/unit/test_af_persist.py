@@ -38,7 +38,7 @@ def _wait_ir(auto_id: str = "demo", persist: bool = True) -> dict:
         "nodes": [ON_M, {"id": "w1", "kind": "wait", "duration": "10m"}, P1],
         "edges": [
             {"from": "a1", "to": "w1", "kind": "then"},
-            {"from": "w1", "to": "p1", "kind": "on_timeout"},
+            {"from": "w1", "to": "p1", "kind": "then"},
         ],
     }
 
@@ -75,7 +75,7 @@ def test_scanner_rejects_fn_reserved_but_allows_emit():
     """v0.3.0：`emit` 已实现（不再拦截）；仅 `fn` 保留位仍报未实现。"""
     data = _wait_ir()
     data["nodes"].append({"id": "f1", "kind": "set", "var": "x", "value": 1, "fn": {"lang": "cel"}})
-    data["edges"].append({"from": "w1", "to": "f1", "kind": "on_timeout"})
+    data["edges"].append({"from": "w1", "to": "f1", "kind": "then"})
     scan = StaticScanner(Graph([load_automation(data)])).scan()
     assert "RESERVED_NOT_IMPLEMENTED" in scan.codes(), "`fn` 仍是保留位，应报未实现"
 
@@ -172,7 +172,7 @@ def test_runtime_persists_and_restores_active_instance(tmp_path):
     assert restored.timer is not None
     assert any(e.type == INSTANCE_RESTORED for e in rt2.audit)
 
-    # 推进到期 → on_timeout → pass → done → 终态清除落盘
+    # 推进到期 → then（方案 A）→ pass → done → 终态清除落盘
     rt2.advance(601)
     assert restored.state == DONE
     assert store.records() == [], "终态实例必须从落盘清除"
