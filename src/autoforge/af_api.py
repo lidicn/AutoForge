@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import json, time
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -548,6 +549,33 @@ def build_app(
     def api_watch_stop(owner: str = "") -> dict[str, Any]:
         """停止运行中的 watch 进程。"""
         return svc.stop_watch(owner=owner, store_root=store.root if store else None)
+
+    @app.get("/api/asks/pending")
+    def api_asks_pending() -> dict[str, Any]:
+        """读 watch 进程写出的 pending_asks sidecar（供 DB 轮询发现挂起 ask）。"""
+        root = store.root if store else None
+        if not root:
+            return {"ok": True, "asks": []}
+        sc = Path(root) / "pending_asks.json"
+        if not sc.exists():
+            return {"ok": True, "asks": []}
+        try:
+            data = json.loads(sc.read_text(encoding="utf-8"))
+            return {"ok": True, "asks": data.get("asks", []), "ts": data.get("ts", 0)}
+        except Exception:
+            return {"ok": True, "asks": []}
+
+    @app.post("/api/asks/answer", dependencies=[Depends(_write)])
+    def api_asks_answer(body: dict[str, Any]) -> dict[str, Any]:
+        """写答案到 watch 的 answer_inbox（由 watch ticker 注入 runtime）。"""
+        root = store.root if store else None
+        if not root:
+            return {"ok": False, "error": "no store"}
+        inbox = Path(root) / "answer_inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
+        fname = inbox / f"{int(time.time()*1000)}.json"
+        fname.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+        return {"ok": True, "inbox": str(fname)}
 
     @app.post("/api/watch/start", dependencies=[Depends(_write)])
     def api_watch_start(body: dict[str, Any]) -> dict[str, Any]:

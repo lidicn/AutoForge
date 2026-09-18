@@ -552,7 +552,7 @@ def watch(
     stream = af_live.HAEventStream(base_url=ha_url, token=token, cfg=cfg)
     stop = threading.Event()
     typer.echo(f"\n── 常驻监听（forge watch）── 订阅 {ha_url}{af_live.SSE_STREAM_PATH}，Ctrl+C 退出")
-    ticker = af_live.start_ticker(runtime, max(tick_s, 0.1), stop)
+    ticker = af_live.start_ticker(runtime, max(tick_s, 0.1), stop, sidecar_dir=persist_dir or None)
 
     def _on(ev, _rt):
         typer.echo(f"  · {ev.entity_id} = {ev.state}")

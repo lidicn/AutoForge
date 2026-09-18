@@ -250,15 +250,63 @@ def start_ticker(
     interval_s: float,
     stop: "threading.Event",
     tick_fn: Callable[[], Any] | None = None,
+    sidecar_dir: str | None = None,
 ) -> threading.Thread:
-    """后台守护线程：每 `interval_s` 调一次 `runtime.tick()`，驱动 `for`/`wait` 计时。"""
+    """后台守护线程：每 `interval_s` 调一次 `runtime.tick()`，驱动 `for`/`wait` 计时。
+
+    sidecar_dir 存在时：写 pending_asks.json（供 DB 轮询）+ 读 answer_inbox/（注回答案）。
+    """
     fn = tick_fn or runtime.tick
+    sc_dir = Path(sidecar_dir) if sidecar_dir else None
+    inbox = sc_dir / "answer_inbox" if sc_dir else None
+    if inbox:
+        inbox.mkdir(parents=True, exist_ok=True)
+
+    def _write_asks() -> None:
+        if not sc_dir:
+            return
+        try:
+            asks = []
+            for aid, sess in runtime.executor.pending_asks.items():
+                asks.append({
+                    "ask_id": aid,
+                    "instance_id": sess.instance_id,
+                    "node_id": sess.node_id,
+                    "room": sess.room,
+                    "prompt": sess.prompt,
+                    "automation_id": getattr(sess, "automation_id", ""),
+                })
+            out = {"asks": asks, "ts": time.time()}
+            (sc_dir / "pending_asks.json").write_text(
+                json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+    def _read_inbox() -> None:
+        if not inbox:
+            return
+        try:
+            for f in sorted(inbox.glob("*.json")):
+                try:
+                    data = json.loads(f.read_text(encoding="utf-8"))
+                    ask_id = data.get("ask_id", "")
+                    text = data.get("text", "")
+                    room = data.get("room")
+                    runtime.executor.answer(ask_id, text=text, room=room)
+                except Exception:
+                    pass
+                f.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     def _loop() -> None:
         while not stop.is_set():
             if stop.wait(interval_s):
                 break
             fn()
+            _write_asks()
+            _read_inbox()
 
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
