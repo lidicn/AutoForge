@@ -538,6 +538,12 @@ def build_app(
     def api_live_run(body: LiveRunBody) -> dict[str, Any]:
         return _svc(svc.live_run, body.ir, body.live_allow, body.events, body.confirm)
 
+    # ── v1.7.3：运行中 watch 实例列表（只读）──
+    @app.get("/api/watch/list")
+    def api_watch_list() -> dict[str, Any]:
+        """列出当前在跑的 watch 实例（读 persist dir 的 watch.lock.info）。"""
+        return svc.list_watches(store.root if store else None)
+
     # ── v0.8.0：令牌自检与管理 ──
     @app.get("/api/auth/whoami")
     def api_auth_whoami(info: TokenInfo | None = Depends(authenticated())) -> dict[str, Any]:

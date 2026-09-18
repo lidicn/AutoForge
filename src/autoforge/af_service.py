@@ -1567,3 +1567,36 @@ def bind_ir(store: GraphStore, ir: Mapping[str, Any]) -> dict[str, Any]:
                  f"（fail-closed，保留占位符交由安全闸拒编译）"
         ),
     }
+
+
+
+def list_watches(store_root: str | None = None) -> dict[str, Any]:
+    """列出正在跑的 watch 实例（读 persist dir 下的 watch.lock.info sidecar）。
+
+    watch 是独立 CLI 进程，API server 不持有其 Runtime；这里只读 sidecar 文件
+    列出当前在跑的自动化，供 UI「运行中」页展示。
+    """
+    from pathlib import Path
+    root = Path(store_root) if store_root else Path(".forge")
+    watches: list[dict[str, Any]] = []
+    # persist dir 可能在 root 下，也可能 root 本身就是 persist dir
+    candidates = [root] + list(root.glob("*/watch.lock.info"))
+    seen: set[str] = set()
+    for path in candidates:
+        if path.is_dir():
+            path = path / "watch.lock.info"
+        if not path.is_file() or str(path) in seen:
+            continue
+        seen.add(str(path))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        watches.append({
+            "owner": data.get("owner", ""),
+            "acquired_at": data.get("acquired_at", ""),
+            "graph": data.get("graph", ""),
+            "ha_url": data.get("ha_url", ""),
+            "sidecar": str(path),
+        })
+    return {"ok": True, "watches": watches, "total": len(watches)}
