@@ -605,6 +605,30 @@ def build_app(
         revoked = registry.revoke(body.token)
         return {"ok": True, "revoked": revoked}
 
+    # ── HTTP MCP（streamable JSON-RPC，供 opencode 等远程 MCP 客户端）──
+    @app.post("/mcp")
+    def api_mcp(body: dict[str, Any]) -> dict[str, Any]:
+        """JSON-RPC over HTTP：复用 af_mcp.dispatch，支持 initialize/tools.list/tools.call/ping。"""
+        from .af_mcp import dispatch, TOOLS, PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION
+        method = body.get("method", "")
+        id_ = body.get("id")
+        params = body.get("params") or {}
+        if method == "initialize":
+            return {"jsonrpc": "2.0", "id": id_, "result": {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+            }}
+        if method == "tools/list":
+            from .af_mcp import _tool_def
+            return {"jsonrpc": "2.0", "id": id_, "result": {"tools": [_tool_def(t) for t in TOOLS]}}
+        if method == "tools/call":
+            content, is_error = dispatch(params.get("name", ""), params.get("arguments", {}) or {}, store, None)
+            return {"jsonrpc": "2.0", "id": id_, "result": {"content": content, "isError": is_error}}
+        if method == "ping":
+            return {"jsonrpc": "2.0", "id": id_, "result": {}}
+        return {"jsonrpc": "2.0", "id": id_, "error": {"code": -32601, "message": f"unknown method: {method}"}}
+
     # ── 可选：前端静态托管（SPA fallback）──────────────────────────────
     # 仅当显式传入已存在的 ui_dir 时挂载；默认不托管，保持只读 API 纯净。
     if ui_dir and Path(ui_dir).is_dir():
