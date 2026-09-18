@@ -1115,6 +1115,10 @@ def live_preflight(
         )
         return result
 
+    # dry_live：do 只记意图不下发，不校验写目标白名单
+    if dry_live:
+        return result
+
     allowed = set(known_entities)
     for auto in graph:
         for node in auto.nodes.values():
