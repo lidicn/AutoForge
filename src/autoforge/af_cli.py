@@ -22,6 +22,7 @@ from .af_ir import IRValidationError, load_graph
 from .af_nl import render_graph
 from .af_runtime import Runtime, build_runtime
 from .af_scanner import DeviceGuardRegistry, StaticScanner, live_preflight
+from .af_time import SystemTimeSource
 from .af_spec import SpecError, compile_spec, graph_to_raw, render_spec
 from .af_store import DEFAULT_STORE_ROOT, GraphStore, diff_graphs
 from .af_vhass import FakeHAAdapter, seed_from_graph
@@ -258,7 +259,7 @@ def _make_runtime(
     if live:
         # 真机接线：状态读 HA（REST），动作真实下发（dry_run=False）→ G4 canary 才会生效。
         typer.echo(f"· 真机接线：HA {ha_url}（dry_run=False，真实下发意图）")
-        runtime = build_runtime(graph, persist_dir=persist_dir)
+        runtime = build_runtime(graph, persist_dir=persist_dir, clock=SystemTimeSource())
         provider = HAStateProvider(base_url=ha_url, token=ha_token, cfg=cfg)
         transport = HATransport(base_url=ha_url, token=ha_token, cfg=cfg)
         runtime.states = provider
