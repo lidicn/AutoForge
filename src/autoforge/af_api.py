@@ -544,6 +544,12 @@ def build_app(
         """列出当前在跑的 watch 实例（读 persist dir 的 watch.lock.info）。"""
         return svc.list_watches(store.root if store else None)
 
+    @app.post("/api/watch/stop", dependencies=[Depends(_write)])
+    def api_watch_stop(body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """停止运行中的 watch 进程。"""
+        owner = (body or {}).get("owner", "")
+        return svc.stop_watch(owner=owner, store_root=store.root if store else None)
+
     # ── v0.8.0：令牌自检与管理 ──
     @app.get("/api/auth/whoami")
     def api_auth_whoami(info: TokenInfo | None = Depends(authenticated())) -> dict[str, Any]:

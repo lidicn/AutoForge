@@ -1570,6 +1570,44 @@ def bind_ir(store: GraphStore, ir: Mapping[str, Any]) -> dict[str, Any]:
 
 
 
+def _graph_summary(graph_path: str) -> dict[str, Any]:
+    """从 IR 文件提取名称/触发源/动作目标，供 UI 展示。"""
+    from pathlib import Path
+    gp = Path(graph_path)
+    if not gp.is_absolute():
+        # 容器内 graph 路径是 /app/examples/...，相对路径无法定位时返回空
+        gp = Path("/app") / graph_path.lstrip("/")
+    try:
+        data = json.loads(gp.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    auto = data
+    if isinstance(data, dict) and "automations" in data:
+        autos = data["automations"]
+        auto = autos[0] if autos else {}
+    triggers: list[str] = []
+    actions: list[str] = []
+    for node in (auto.get("nodes") or []):
+        kind = node.get("kind", "")
+        if kind == "on":
+            trg = node.get("trigger") or {}
+            eid = trg.get("entity_id", "")
+            if eid:
+                triggers.append(f"{eid} → {trg.get('to', '')}")
+        elif kind == "do":
+            params = node.get("params") or {}
+            eid = params.get("entity_id", "")
+            if eid:
+                actions.append(f"{node.get('action', '')} {eid}")
+    return {
+        "name": auto.get("name", auto.get("id", "")),
+        "automation_id": auto.get("id", ""),
+        "triggers": triggers,
+        "actions": actions,
+        "node_count": len(auto.get("nodes") or []),
+    }
+
+
 def list_watches(store_root: str | None = None) -> dict[str, Any]:
     """列出正在跑的 watch 实例（读 persist dir 下的 watch.lock.info sidecar）。
 
@@ -1579,7 +1617,6 @@ def list_watches(store_root: str | None = None) -> dict[str, Any]:
     from pathlib import Path
     root = Path(store_root) if store_root else Path(".forge")
     watches: list[dict[str, Any]] = []
-    # persist dir 可能在 root 下，也可能 root 本身就是 persist dir
     candidates = [root] + list(root.glob("*/watch.lock.info"))
     seen: set[str] = set()
     for path in candidates:
@@ -1592,11 +1629,55 @@ def list_watches(store_root: str | None = None) -> dict[str, Any]:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        graph_path = data.get("graph", "")
+        summary = _graph_summary(graph_path) if graph_path else {}
         watches.append({
             "owner": data.get("owner", ""),
             "acquired_at": data.get("acquired_at", ""),
-            "graph": data.get("graph", ""),
+            "graph": graph_path,
             "ha_url": data.get("ha_url", ""),
             "sidecar": str(path),
+            "name": summary.get("name", ""),
+            "automation_id": summary.get("automation_id", ""),
+            "triggers": summary.get("triggers", []),
+            "actions": summary.get("actions", []),
+            "node_count": summary.get("node_count", 0),
         })
     return {"ok": True, "watches": watches, "total": len(watches)}
+
+
+def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[str, Any]:
+    """停止正在跑的 watch 进程。
+
+    通过 pkill 终止容器内 forge watch 进程；owner 为空则停全部。
+    """
+    import subprocess
+    root = Path(store_root) if store_root else Path(".forge")
+    lock = root / "watch.lock"
+    info = root / "watch.lock.info"
+    # 读当前持有者
+    holder = {}
+    try:
+        holder = json.loads(info.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    if owner and holder.get("owner") and holder["owner"] != owner:
+        return {"ok": False, "error": f"当前持有者 {holder['owner']} 与请求 {owner} 不符"}
+    # pkill forge watch
+    try:
+        r = subprocess.run(
+            ["pkill", "-f", "forge watch"],
+            capture_output=True, text=True, timeout=10,
+        )
+        killed = r.returncode == 0
+    except Exception as e:
+        return {"ok": False, "error": f"pkill 失败: {e}"}
+    # 清 sidecar
+    try:
+        if info.exists():
+            info.unlink()
+        if lock.exists():
+            lock.unlink()
+    except OSError:
+        pass
+    return {"ok": killed, "stopped": holder.get("owner", ""), "graph": holder.get("graph", "")}
