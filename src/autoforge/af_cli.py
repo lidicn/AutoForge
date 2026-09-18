@@ -1074,7 +1074,7 @@ def entities_summary(
 def entities_list(
     root: str = typer.Option(DEFAULT_STORE_ROOT, "--root", help="存储根目录"),
     domain: str = typer.Option("", "--domain", help="按域过滤"),
-    area: str = typer.Option("", "--area", help="按房间过滤（中文）"),
+    area: str = typer.Option("", "--area", help="按房间硬过滤（中文，只返回该房间实体）"),
     keyword: str = typer.Option("", "--keyword", "-k", help="模糊匹配 entity_id / 中文名"),
     limit: int = typer.Option(50, "--limit", help="每页条数（上限 200）"),
     offset: int = typer.Option(0, "--offset", help="分页偏移"),
