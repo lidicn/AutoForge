@@ -497,13 +497,16 @@ class StaticScanner:
                         )
                     )
 
-    # ⑥ 挂起分支内不得执行高风险动作
-    #    （then 也纳入：方案 A 下 wait 到点自动走 then，等同无人值守执行）
+    # ① 挂起分支内不得执行高风险动作
+    #    方案 A：wait 到期走 then 是设计行为（等待条件确认后自动执行），不拦 then；
+    #    只拦 ask 的 then/default/on_timeout（无人回答时执行高风险）。
     def _check_high_risk_after_suspend(self, auto: Automation, node: Node, out: ScanResult) -> None:
         if not node.is_suspending:
             return
+        edge_kinds = ("on_timeout", "default", "on_cancel") if node.kind == "wait" else ("on_timeout", "default", "on_cancel", "then")
         for edge in auto.outgoing(node.id):
-            if edge.kind not in ("on_timeout", "default", "on_cancel", "then"):
+            if edge.kind not in edge_kinds:
+                continue
                 continue
             for reachable in _reachable(auto, edge.to):
                 if reachable.kind != "do":
