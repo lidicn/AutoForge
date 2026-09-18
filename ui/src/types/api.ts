@@ -448,6 +448,11 @@ export interface WatchInstance {
   graph: string
   ha_url: string
   sidecar: string
+  name: string
+  automation_id: string
+  triggers: string[]
+  actions: string[]
+  node_count: number
 }
 
 export interface WatchListResponse {
