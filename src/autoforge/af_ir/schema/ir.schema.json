@@ -260,13 +260,18 @@
             { "type": "array", "minItems": 1, "items": { "type": "string" } }
           ]
         },
+        "attribute": {
+          "type": "string",
+          "description": "v1.7.1 属性形态：断言实体**属性**（如 climate 的 temperature、light 的 brightness）。与 entity_id 搭配使用，`value` 给出期望值、`op` 给出比较方式；不写 attribute 时仍按 state 断言。"
+        },
         "var": { "type": "string", "description": "变量形态：断言实例变量（如 vars.x / turn_on_result.success）" },
         "op": { "enum": ["eq", "ne", "lt", "lte", "gt", "gte"], "default": "eq" },
-        "value": { "description": "变量形态的目标值" },
+        "value": { "description": "变量形态 / 属性形态的目标值" },
         "note": { "type": "string", "description": "人读说明（渲染进 NL，不参与断言）" }
       },
       "anyOf": [
         { "required": ["entity_id", "state"] },
+        { "required": ["entity_id", "attribute", "value"] },
         { "required": ["var", "value"] }
       ]
     },

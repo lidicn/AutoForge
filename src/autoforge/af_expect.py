@@ -14,8 +14,14 @@
 > **`unverified` 必须与 `pass` 区分开**——把「没验到」当「验过了」，断言就成了自欺。
 > 这与 `af_vhass` 对「未建模服务」的处理是同一条诚实性主线（不伪造、只如实降级）。
 
-`expect` 两种形态：
+`expect` 三种形态：
 - **实体形态** `{"entity_id": "light.study_main", "state": "on"}`（`state` 可为候选数组，命中任一即过）；
+- **属性形态**（v1.7.1）`{"entity_id": "climate.ac", "attribute": "temperature", "value": 18}`——
+  断言的是**属性**而非状态（`op` 缺省 `eq`，支持 `lt/gt` 等）。
+  为什么必须有：HA 里「设定温度 / 亮度 / 当前活动」都在 attributes 里，
+  而 `state` 是 `cool`/`on` 这类粗粒度值。NL 实测 #3 的军令状是「回调到 **18 度**」，
+  用 `state: ["off","cool",...]` 断言时**播种值就已满足**——断言恒真，
+  等于没验证（vacuous assertion）。属性形态才能真回答「跑对了吗」。
 - **变量形态** `{"var": "turn_on_result.success", "op": "eq", "value": true}`（`op` 缺省 `eq`）。
 """
 
@@ -79,6 +85,31 @@ def _state_matches(actual: Any, expected: Any) -> bool:
     return str(actual) == str(expected)
 
 
+def _read_attribute(states: Any, entity_id: str, attribute: str) -> Any:
+    """从状态源读实体属性；读不到返回 `MISSING`（→ unverified，绝不编值）。
+
+    优先走 `snapshot([entity_id])`（与生产 `HAStateProvider` / 仿真 `FakeHA` 同一入口），
+    状态源不支持快照时回退直读 `.attributes`。
+    """
+    snapshot_fn = getattr(states, "snapshot", None)
+    if callable(snapshot_fn):
+        try:
+            snapshot = snapshot_fn([entity_id])
+            attrs = getattr(snapshot, "attributes", None) or {}
+            got = attrs.get(entity_id) or {}
+            if isinstance(got, Mapping) and attribute in got:
+                return got[attribute]
+            return MISSING
+        except Exception:  # 状态源不可达（生产网络/鉴权）→ 落回直读，最终 unverified
+            pass
+    direct = getattr(states, "attributes", None)
+    if isinstance(direct, Mapping):
+        got = direct.get(entity_id) or {}
+        if isinstance(got, Mapping) and attribute in got:
+            return got[attribute]
+    return MISSING
+
+
 class ExpectReport(dict):
     """断言报告：可直接 JSON 化的 dict（`ok` / `checked` / `passed` / `failed` / `unverified` / `items`）。"""
 
@@ -102,22 +133,62 @@ def evaluate_expects(
         item: dict[str, Any] = {"index": index, "note": raw.get("note", "")}
         if raw.get("entity_id"):
             entity_id = str(raw["entity_id"])
-            expected = raw.get("state")
-            actual = states.get(entity_id) if hasattr(states, "get") else None
-            item.update({"kind": "entity", "target": entity_id, "expected": expected, "actual": actual})
-            if actual is None:
+            attribute = raw.get("attribute")
+            if attribute:
+                # ── 属性形态（v1.7.1）────────────────────────────────────
+                attr = str(attribute)
+                op = str(raw.get("op") or "eq")
+                expected = raw.get("value")
+                actual = _read_attribute(states, entity_id, attr)
                 item.update(
-                    status="unverified",
-                    reason="实体不在状态源中（未被播种或不可达），本次仿真无法验证该断言",
+                    {
+                        "kind": "entity_attribute",
+                        "target": f"{entity_id}.{attr}",
+                        "op": op,
+                        "expected": expected,
+                        "actual": None if actual is MISSING else actual,
+                    }
                 )
-                unverified += 1
-            elif _state_matches(actual, expected):
-                item["status"] = "pass"
-                passed += 1
+                if actual is MISSING:
+                    item.update(
+                        status="unverified",
+                        reason=(
+                            f"实体 {entity_id} 的 {attr!r} 属性不在状态源中"
+                            "（未被播种或设备未上报），本次仿真无法验证该断言"
+                        ),
+                    )
+                    unverified += 1
+                else:
+                    outcome = _apply_op(op, actual, expected)
+                    if outcome is True:
+                        item["status"] = "pass"
+                        passed += 1
+                    elif outcome is None:
+                        item.update(status="unverified", reason="无法比较（类型不可比）")
+                        unverified += 1
+                    else:
+                        item["status"] = "fail"
+                        item["reason"] = f"期望 {op} {expected!r}，实际 {actual!r}"
+                        failed += 1
             else:
-                item["status"] = "fail"
-                item["reason"] = f"期望 {expected!r}，实际 {actual!r}"
-                failed += 1
+                expected = raw.get("state")
+                actual = states.get(entity_id) if hasattr(states, "get") else None
+                item.update(
+                    {"kind": "entity", "target": entity_id, "expected": expected, "actual": actual}
+                )
+                if actual is None:
+                    item.update(
+                        status="unverified",
+                        reason="实体不在状态源中（未被播种或不可达），本次仿真无法验证该断言",
+                    )
+                    unverified += 1
+                elif _state_matches(actual, expected):
+                    item["status"] = "pass"
+                    passed += 1
+                else:
+                    item["status"] = "fail"
+                    item["reason"] = f"期望 {expected!r}，实际 {actual!r}"
+                    failed += 1
         else:
             var_name = str(raw.get("var", ""))
             op = str(raw.get("op") or "eq")

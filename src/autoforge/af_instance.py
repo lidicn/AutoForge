@@ -223,7 +223,11 @@ class InstanceManager:
         ctx.state = CREATED
         ctx.context = {
             "instance_id": instance_id,
-            "trigger_time": _utc_now_iso(),
+            # v1.7.1：`context.trigger_time` 取**时间源**而非墙钟。
+            # 表达式里 `time_hour(context.trigger_time)` 这类时间窗判断依赖它：
+            # 用墙钟会让「晚上 20:00-22:00」在仿真/回放里不可复现（同一 IR 换个时刻跑结论就变），
+            # 与项目红线「表达式不读墙钟、时间必须可测」相悖。虚拟时间源下现在完全确定。
+            "trigger_time": self.clock.now().isoformat(),
             "trigger": _trigger_repr(trigger_event),
         }
         # 初始化声明过的实例变量

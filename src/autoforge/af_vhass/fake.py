@@ -15,7 +15,16 @@ from ..af_adapters.base import FaultQueue
 from ..af_ir import Graph
 from ..af_state import Snapshot, StateProvider
 
-__all__ = ["FakeHA", "FakeHAAdapter", "SERVICE_STATE", "default_state_for", "seed_from_graph"]
+__all__ = [
+    "FakeHA",
+    "FakeHAAdapter",
+    "SERVICE_STATE",
+    "DYNAMIC_SERVICES",
+    "default_state_for",
+    "is_modeled",
+    "seed_from_graph",
+    "service_effect",
+]
 
 #: 按 domain 推导默认状态（口径参考 HA 常见初值）
 _DOMAIN_DEFAULT: dict[str, str] = {
@@ -77,8 +86,33 @@ class FakeHA:
         )
 
     # ── 场景构造 ─────────────────────────────────────────────────────
-    def seed(self, states: Mapping[str, str]) -> "FakeHA":
-        self.states.update({k: str(v) for k, v in states.items()})
+    def seed(self, states: Mapping[str, Any]) -> "FakeHA":
+        """播种初始状态。两种写法都支持：
+
+        ```jsonc
+        {"light.study": "off"}                                      // 只给状态
+        {"climate.study_ac": {"state": "cool",                       // 状态 + 属性
+                              "attributes": {"temperature": 26}}}
+        ```
+
+        v1.7.1：支持属性是修 NL 实测 #3 的 `entity_drift` 误报——原实现只能播种 state，
+        `climate` 实体没有 `temperature` 属性，导致 `entity.…temperature` 声明为 numeric
+        却读到字符串 `'off'`，仿真里报「实体漂移」把 seed 缺口伪装成 IR 错误。
+        """
+        for key, value in states.items():
+            entity_id = str(key)
+            if isinstance(value, Mapping):
+                payload = dict(value)
+                state = payload.pop("state", None)
+                extra = dict(payload.pop("attributes", {}) or {})
+                extra.update(payload)  # 顶层其余键一并当作属性（宽松写法）
+                self.set(
+                    entity_id,
+                    str(state) if state is not None else default_state_for(entity_id),
+                    extra or None,
+                )
+            else:
+                self.states[entity_id] = str(value)
         return self
 
     def set(self, entity_id: str, state: str, attributes: Mapping[str, object] | None = None) -> "FakeHA":
@@ -108,11 +142,71 @@ SERVICE_STATE: dict[tuple[str, str], str] = {
     ("climate", "turn_off"): "off",
     ("media_player", "turn_on"): "playing",
     ("media_player", "turn_off"): "off",
+    # ── v1.7.1：补齐 NL 实测暴露的高频缺口（原先 media_pause 被判 unmodeled，
+    #    导致「夜间电视暂停」这类 IR 正确却无法在仿真里验证状态翻转）─────────
+    ("media_player", "media_pause"): "paused",
+    ("media_player", "media_play"): "playing",
+    ("media_player", "media_stop"): "idle",
+    ("media_player", "play_media"): "playing",
     ("lock", "lock"): "locked",
     ("lock", "unlock"): "unlocked",
     ("cover", "open_cover"): "open",
     ("cover", "close_cover"): "closed",
+    ("cover", "stop_cover"): "stopped",
 }
+
+#: 已建模、但**新状态由参数或当前状态决定**的服务（不能在上表里给死值）。
+DYNAMIC_SERVICES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("climate", "set_temperature"),
+        ("climate", "set_hvac_mode"),
+        ("climate", "set_fan_mode"),
+        ("climate", "set_preset_mode"),
+        ("media_player", "volume_set"),
+        ("media_player", "volume_mute"),
+        ("light", "toggle"),
+        ("switch", "toggle"),
+        ("fan", "toggle"),
+        ("input_boolean", "toggle"),
+    }
+)
+
+
+def is_modeled(domain: str, service: str) -> bool:
+    """该 `(domain, service)` 是否能在仿真里产生**可观测效果**。
+
+    vhass 与 FakeHA 共用此判据，避免两条仿真路径对「未建模」的判断不一致。
+    """
+    return (domain, service) in SERVICE_STATE or (domain, service) in DYNAMIC_SERVICES
+
+
+def service_effect(
+    domain: str,
+    service: str,
+    params: Mapping[str, Any],
+    current: str | None,
+) -> tuple[str | None, dict[str, Any]]:
+    """计算一次服务调用的效果：`(新状态 | None=状态不变, 属性更新)`。
+
+    vhass 与 FakeHA **共用**此函数，保证两条仿真路径动作语义一致。
+    """
+    if (domain, service) == ("climate", "set_temperature"):
+        # 沿用既有语义：置 cool 并写入 temperature 属性
+        return "cool", {"temperature": params.get("temperature")}
+    if (domain, service) == ("climate", "set_hvac_mode"):
+        mode = params.get("hvac_mode") or params.get("state")
+        return (str(mode) if mode else current), {}
+    if (domain, service) == ("climate", "set_fan_mode"):
+        return current, {"fan_mode": params.get("fan_mode")}
+    if (domain, service) == ("climate", "set_preset_mode"):
+        return current, {"preset_mode": params.get("preset_mode")}
+    if (domain, service) == ("media_player", "volume_set"):
+        return current, {"volume_level": params.get("volume_level")}
+    if (domain, service) == ("media_player", "volume_mute"):
+        return current, {"is_volume_muted": params.get("is_volume_muted")}
+    if service == "toggle":
+        return ("off" if current == "on" else "on"), {}
+    return SERVICE_STATE.get((domain, service)), {}
 
 
 @dataclass
@@ -134,8 +228,8 @@ class FakeHAAdapter:
 
     @staticmethod
     def _modeled(domain: str, service: str) -> bool:
-        """该 (domain, service) 是否能在 FakeHA 里翻出状态。"""
-        return (domain, service) in SERVICE_STATE or (domain == "climate" and service == "set_temperature")
+        """该 (domain, service) 是否能在 FakeHA 里翻出状态（与 vhass 共用同一判据）。"""
+        return is_modeled(domain, service)
 
     # ── 故障注入（G5，IR §9.5）────────────────────────────────────────
     def fail_next(self, error: str = "fakeha 注入的失败") -> None:
@@ -165,19 +259,26 @@ class FakeHAAdapter:
             # 未建模：**不留假状态**，只登记 → 上层据此把相关断言视为"未验证"
             self.unmodeled.append(action)
         for entity_id in targets or []:
-            new_state = SERVICE_STATE.get((domain, service))
-            if new_state is not None:
-                self.states.set(str(entity_id), new_state)
-            elif domain == "climate" and service == "set_temperature":
-                self.states.set(str(entity_id), "cool", {"temperature": params.get("temperature")})
+            key = str(entity_id)
+            new_state, attrs = service_effect(domain, service, params, self.states.get(key))
+            if new_state is None and not attrs:
+                continue  # 已建模但状态/属性均无变化（如 set_fan_mode 缺参）
+            self.states.set(
+                key,
+                new_state if new_state is not None else (self.states.get(key) or default_state_for(key)),
+                attrs or None,
+            )
         data: dict[str, Any] = {"action": action, "params": dict(params)}
         if not modeled:
             data["unmodeled"] = True
         return CallResult.ok(data)
 
 
-def seed_from_graph(graph: Graph, overrides: Mapping[str, str] | None = None, clock: object | None = None) -> FakeHA:
-    """按 Graph 引用的实体播种默认状态，便于快速起一个可跑的场景。"""
+def seed_from_graph(graph: Graph, overrides: Mapping[str, Any] | None = None, clock: object | None = None) -> FakeHA:
+    """按 Graph 引用的实体播种默认状态，便于快速起一个可跑的场景。
+
+    `overrides` 支持 v1.7.1 的扩展写法（状态 + 属性），见 `FakeHA.seed`。
+    """
     ha = FakeHA(clock=clock)
     for auto in graph:
         # v1.2.0：`expect` 里断言的实体也必须播种，否则断言会被判「无法验证」而非「验过」

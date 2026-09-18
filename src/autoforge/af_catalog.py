@@ -109,6 +109,48 @@ def _is_offline(meta: Mapping[str, Any]) -> bool:
     return bool(meta.get("offline_now")) or str(meta.get("state")) in ("unavailable", "unknown")
 
 
+def _actionable_rank(meta: Mapping[str, Any]) -> int:
+    """可动作域优先（0）/ 只读域靠后（1）——**只影响排序，绝不过滤**。
+
+    存在意义（v1.7.1，2026-09-17 NL 实测暴露）：同名干扰时只读候选会挤掉可控设备。
+    实测 `resolve("客厅电视")` 只有 `sensor.…_客厅电视昨日播放时长`（只读）命中，
+    而真正可下发的 `media_player.…_play_control` 排在后面甚至不出现，
+    导致 Agent 误把「播放时长 sensor」当成「电视」。按「有无可调服务」排序后，
+    可控设备（light/switch/climate/media_player…）稳定排在只读统计量之前。
+
+    判据不硬编码域名单，而是复用 `af_affordance` 的服务词汇表：
+    `services` 为空即只读（sensor / binary_sensor / event / sun …）。
+    """
+    domain = str(meta.get("domain") or domain_of(str(meta.get("entity_id") or "")))
+    return 0 if affordance_for(domain).get("services") else 1
+
+
+def _service_count(meta: Mapping[str, Any]) -> int:
+    """该实体域可调服务数量（能力面大小）。
+
+    只读兜底升级（`readonly_upgrade`）里用它挑主力设备：同一控制词组下，
+    「播放控制 media_player（6 个服务）」比「音量 number（1 个服务）」更可能是用户说的那台设备，
+    「...开关 switch（3 个）」又比「模式 select（1 个）」更可能是本体。
+    """
+    domain = str(meta.get("domain") or domain_of(str(meta.get("entity_id") or "")))
+    return len(affordance_for(domain).get("services") or ())
+
+
+#: 中文设备名常见后缀：原名无候选时剥离后重试
+#: （实测 `resolve("油烟机灯光")` 无候选，而 `resolve("油烟机")` 能命中「米家跨界吸油烟机S1 灯光」）。
+_QUERY_SUFFIXES: tuple[str, ...] = (
+    "灯光", "开关", "插座", "面板", "传感器", "状态", "控制", "灯",
+)
+
+
+def _strip_query_suffix(q: str) -> str:
+    """剥离中文设备名后缀；剥不动返回空串（长后缀优先，避免「灯光」被「灯」先吃掉）。"""
+    for suffix in _QUERY_SUFFIXES:
+        if len(q) > len(suffix) and q.endswith(suffix):
+            return q[: -len(suffix)].strip()
+    return ""
+
+
 def _area_of(attrs: Mapping[str, Any] | None) -> str:
     """从（已裁剪的）attributes 里取区域名——**仅作为解析链的最后一环**。
 
@@ -551,6 +593,64 @@ class DeviceCatalog:
             return f"全部候选当前不可用（如 {offline[0]['entity_id']}），请谨慎用于自动化"
         return ""
 
+    @staticmethod
+    def _duplicate_hint(candidates: list[dict[str, Any]]) -> str:
+        """同名多实体提示（v1.7.1）：实测 `resolve("主卧室空调")` 命中两个同名 climate，
+        Agent「取首个候选」时无从判断——显式提示「有 N 组同名，请确认或收窄 area/domain」。"""
+        groups: dict[str, list[str]] = {}
+        for cand in candidates:
+            # ⚠️ 必须**折叠内部重复空白**再分组：HA 集成常生成「主卧室空调  空调」（双空格）
+            # 与「主卧室空调 空调」两个名字——肉眼与意图都是同名，但 strip() 只去首尾，
+            # 不折叠中间 → 同名检测失效（NL 实测 #3 的真实目录里就是这一对双胞胎 climate）。
+            name = re.sub(r"\s+", " ", str(cand.get("friendly_name") or "")).strip()
+            if name:
+                groups.setdefault(name, []).append(str(cand.get("entity_id")))
+        dups = {name: ids for name, ids in groups.items() if len(ids) > 1}
+        if not dups:
+            return ""
+        name, ids = next(iter(dups.items()))
+        return (
+            f"；⚠️ 命中 {len(dups)} 组同名实体（如 {name!r} ×{len(ids)}：{'、'.join(ids)}），"
+            "选择前请确认（可用 area/domain 收窄，或让用户明确指定）。"
+        )
+
+    @staticmethod
+    def _readonly_hint(candidates: list[dict[str, Any]]) -> str:
+        """只读域提示（v1.7.1）：候选全无可调服务时，明确提示改用 list_entities 找可控设备。
+
+        实测 `resolve("客厅电视")` 只命中「客厅电视昨日播放时长」sensor——它是只读统计量，
+        既不能作为 `do` 目标，也不能表达「电视正在播放」（该信息在 media_player 的 state 里）。
+        """
+        if not candidates or any(cand.get("services") for cand in candidates):
+            return ""
+        return (
+            "；⚠️ 以上候选**全部是只读域**（无可调服务），不能作为 `do` 节点目标，"
+            "也无法用 state 表达「正在播放/运行」。请改用 af_list_entities(domain=light/switch/"
+            "climate/media_player…) 按域浏览可控设备。"
+        )
+
+    @staticmethod
+    def _split_area_query(q: str, entities: Mapping[str, Mapping[str, Any]]) -> tuple[str, str] | None:
+        """把「区域+功能」组合名拆成 `(区域, 功能词)`；拆不开返回 `None`。
+
+        仅在原样查询无候选时兜底（v1.7.1）。实测价值：
+        - `"客厅电视"` → 区域「客厅」+「电视」→ 命中带区域归属的可控 `media_player`
+          （原样查询只会命中名为「客厅电视昨日播放时长」的只读 sensor）；
+        - `"书房光照"` → 区域「书房」+「光照」→ 命中「书房人体传感器 光照度」。
+        长区域名优先，避免「房间」抢先吃掉「房间空调」这类更具体的前缀。
+        """
+        known: set[str] = set()
+        for meta in entities.values():
+            value = _meta_area(meta)
+            if value:
+                known.add(value)
+        for area in sorted(known, key=len, reverse=True):
+            if len(q) > len(area) and q.startswith(area):
+                remainder = q[len(area):].strip()
+                if remainder:
+                    return area, remainder
+        return None
+
     def resolve(
         self,
         name: str,
@@ -568,6 +668,16 @@ class DeviceCatalog:
         - `confidence`：`high`=精确匹配｜`medium`=友好名子串｜`low`=entity_id 子串。
         - 每个候选带 `possible_states`（含 `unavailable`/`unknown`）与 `services`，
           写 IR 立刻知道目标状态怎么填、该调哪个服务。
+        - **v1.7.1 多级兜底**（`match_stage` 字段标明实际命中的级别，每级只在上一级无候选时启用）：
+          `direct` 原样 → `area_relaxed` 放宽区域 → `area_split` 区域+功能组合拆分
+          （「客厅电视」→ 区域「客厅」+「电视」）→ `suffix_stripped` 剥离中文后缀重试
+          （「油烟机灯光」→「油烟机」）。派生命中会**降低一级置信度**并在 `matched_by`
+          前缀标注来源，`note` 里也会写明这是派生结果。
+        - **排序含「可动作域优先」**（**仅直接命中的 stage**）：同一置信度下，可控设备
+          （light/switch/climate/media_player…）排在只读统计量（sensor/binary_sensor…）之前，
+          避免「客厅电视」被「客厅电视昨日播放时长」这类同名 sensor 抢先。
+          派生阶段不启用——派生本身已是猜测，再叠一层会二次猜偏。
+        - `note` 会在必要时附加：只读域警告 / 同名多实体警告 / 离线候选建议。
         """
         q = (name or "").strip()
         if not q:
@@ -613,20 +723,22 @@ class DeviceCatalog:
         ql = q.lower()
         area_filter, area_warning = self._resolve_area(area, entities)
 
-        def _score(meta: Mapping[str, Any]) -> tuple[float, str, str] | None:
-            fn = (meta.get("friendly_name") or "").lower()
-            eid = str(meta.get("entity_id") or "")
-            eid_l = eid.lower()
-            if fn and fn == ql:
-                return (0.0, "friendly_name_exact", "high")
-            if fn and ql in fn:
-                idx = fn.find(ql)
-                return (1.0 + idx * 0.01 + len(fn) * 0.001, "friendly_name_substr", "medium")
-            if ql in eid_l:
-                return (5.0 + eid_l.find(ql) * 0.01, "entity_id_substr", "low")
-            return None
+        def _search(qtext: str, afilter: str | None) -> list[tuple[dict[str, Any], str, str, float]]:
+            """按给定查询串 + 区域过滤做一次评分收集（供多级兜底复用）。"""
 
-        def _collect(afilter: str | None) -> list[tuple[dict[str, Any], str, str, float]]:
+            def _score(meta: Mapping[str, Any]) -> tuple[float, str, str] | None:
+                fn = (meta.get("friendly_name") or "").lower()
+                eid = str(meta.get("entity_id") or "")
+                eid_l = eid.lower()
+                if fn and fn == qtext:
+                    return (0.0, "friendly_name_exact", "high")
+                if fn and qtext in fn:
+                    idx = fn.find(qtext)
+                    return (1.0 + idx * 0.01 + len(fn) * 0.001, "friendly_name_substr", "medium")
+                if qtext in eid_l:
+                    return (5.0 + eid_l.find(qtext) * 0.01, "entity_id_substr", "low")
+                return None
+
             out: list[tuple[dict[str, Any], str, str, float]] = []
             for meta in entities.values():
                 if domain and meta.get("domain") != domain:
@@ -638,34 +750,107 @@ class DeviceCatalog:
                     out.append((meta, hit[1], hit[2], hit[0]))
             return out
 
-        cands = _collect(area_filter)
+        # ── 多级兜底（v1.7.1）：原样 → 区域放宽 → 区域+功能组合 → 后缀剥离 ──
+        # 每级**只在上一级无候选时**才启用 → 原本能命中的查询行为完全不变。
+        cands = _search(ql, area_filter)
+        stage, derived = "direct", ""
         if area_filter and not cands:
             # 区域名可能不一致（设备未分配区域）→ 放宽到全局，避免漏掉正确设备
-            cands = _collect(None)
+            cands, stage = _search(ql, None), "area_relaxed"
+        if not cands and not area_filter:
+            split = self._split_area_query(q, entities)
+            if split is not None:
+                split_area, remainder = split
+                hit_by_remainder = _search(remainder.lower(), split_area)
+                if hit_by_remainder:
+                    cands, stage = hit_by_remainder, "area_split"
+                    derived = f"区域 {split_area!r} + 功能 {remainder!r}"
+        if not cands:
+            stripped = _strip_query_suffix(q)
+            if stripped and stripped.lower() != ql:
+                hit_by_stripped = _search(stripped.lower(), area_filter)
+                if hit_by_stripped:
+                    cands, stage = hit_by_stripped, "suffix_stripped"
+                    derived = f"剥离后缀后按 {stripped!r} 查询"
+        if cands and all(_actionable_rank(meta) for meta, *_ in cands):
+            # ── 只读兜底升级（v1.7.1）────────────────────────────────────
+            # 命中的**全是只读统计量**时，用「功能词」全屋重查一次可控设备。
+            # 实测：`resolve("客厅电视")` 只命中 `sensor.…_客厅电视昨日播放时长`（只读），
+            # 而真正可下发的 `media_player.…_play_control`（lidicn的电视 播放控制）
+            # 名字里根本没有「客厅」二字，只能靠功能词「电视」才找得到。
+            # 只有找到**可控候选**才替换，且标注来源 + 降级置信度（不谎称原有命中）。
+            fallbacks: list[tuple[str, str]] = []
+            split_for_upgrade = self._split_area_query(q, entities)
+            if split_for_upgrade is not None:
+                fallbacks.append((split_for_upgrade[1], f"改用功能词 {split_for_upgrade[1]!r} 全屋重查"))
+            stripped_for_upgrade = _strip_query_suffix(q)
+            if stripped_for_upgrade and stripped_for_upgrade.lower() != ql:
+                fallbacks.append((stripped_for_upgrade, f"剥离后缀后按 {stripped_for_upgrade!r} 全屋重查"))
+            for fallback_query, fallback_desc in fallbacks:
+                upgraded = [
+                    hit for hit in _search(fallback_query.lower(), None) if _actionable_rank(hit[0]) == 0
+                ]
+                if upgraded:
+                    cands, stage = upgraded, "readonly_upgrade"
+                    derived = fallback_desc
+                    break
         cands.sort(
             key=lambda c: (
                 _CONF_RANK.get(c[2], 3),      # ① 置信度优先（不改 fail-closed 纪律）
-                _TIER_RANK[_tier_of(c[0])],   # ② 集成优选：本地 > 云 > 轮询 > 未知
-                1 if _is_offline(c[0]) else 0,  # ③ 弱信号降权：离线靠后（**只排序不过滤**）
-                c[3],                         # ④ 原相似度打分
+                # ② 可动作域优先：**只在原样命中时启用**
+                #    派生阶段（area_split / suffix_stripped）本身已经是一层猜测，
+                #    再叠一层「可动作优先」会二次猜偏——实测 `resolve("书房光照")`
+                #    会把可动作的「光照**补偿**」（number，设置项）顶到「光照**度**」
+                #    （只读测量）之前，而用户问的分明是照度值。
+                #    派生阶段只按相似度排，把「候选本身可疑」如实交给 `match_stage` + note 提示。
+                (_actionable_rank(c[0]) if stage in ("direct", "area_relaxed") else 0),
+                # ②.5 只读升级专用：能力面大者（服务多）优先 → 主力设备压过单点设置项
+                (-_service_count(c[0]) if stage == "readonly_upgrade" else 0),
+                _TIER_RANK[_tier_of(c[0])],   # ③ 集成优选：本地 > 云 > 轮询 > 未知
+                1 if _is_offline(c[0]) else 0,  # ④ 弱信号降权：离线靠后（**只排序不过滤**）
+                c[3],                         # ⑤ 原相似度打分
                 str(c[0].get("entity_id")),
             )
         )
         top = cands[: max(1, int(top_n or 8))]
         candidates = [self._candidate(m, mb, conf) for m, mb, conf, _ in top]
+        if stage in ("area_split", "suffix_stripped", "readonly_upgrade"):
+            # 派生查询的命中**降一级置信度**并标注来源：不谎称「名字精确对上」
+            candidates = [
+                {
+                    **c,
+                    "confidence": "medium" if c.get("confidence") == "high" else c.get("confidence"),
+                    "matched_by": f"{stage}::{c.get('matched_by')}",
+                }
+                for c in candidates
+            ]
         note = (
             "写 IR 时把选中的 entity_id 原样使用；confidence=high 是强匹配，"
             "medium/low 为模糊命中，请核对 friendly_name。"
         )
+        if derived:
+            if stage == "readonly_upgrade":
+                note += (
+                    f"；⚠️ 原样命中的候选**全是只读统计量**（不可下发），已{derived}"
+                    "（只保留可控设备候选）——请核对 friendly_name 后再用。"
+                )
+            else:
+                note += (
+                    f"；⚠️ 原样查询 {q!r} 无候选，已启用**组合查询**（{derived}）——"
+                    "候选为派生结果，请核对 friendly_name 后再用。"
+                )
         advice = self._offline_advice(candidates)
         if advice:
             note += "；" + advice
+        note += self._duplicate_hint(candidates)
+        note += self._readonly_hint(candidates)
         return self._finish({
             "ok": True,
             "query": q,
             "area": area_filter,
             "area_warning": area_warning,
             "domain": domain,
+            "match_stage": stage,
             "count": len(top),
             "candidates": candidates,
             # v1.6.0 P0：按 device_id 归并展示（只影响展示，entity_id 仍是唯一键）

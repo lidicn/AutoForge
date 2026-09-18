@@ -99,8 +99,14 @@ def test_offline_demoted_with_advice(tmp_path):
 def test_alias_direct_hit(tmp_path):
     _write_catalog(tmp_path, ENTITIES)
     cat = DeviceCatalog(tmp_path)
-    # 未沉淀前：无候选
-    assert cat.resolve("书房灯")["bucket"] == "none"
+    # 未沉淀前：**不会 direct 命中**。
+    # v1.7.1 起「书房灯」会被「区域+功能」兜底拆成 区域「书房」+「灯」，
+    # 命中两个同名的「书房吊灯」（light + switch）→ bucket=ambiguous
+    # （旧行为是 none）。别名沉淀要解决的「无法直中」问题依旧存在：它把
+    # ambiguous 升级为 exact/high 的**唯一确定**答案。
+    before = cat.resolve("书房灯")
+    assert before["bucket"] == "ambiguous"
+    assert before["candidates"][0]["matched_by"].startswith("area_split::")
     # 沉淀后：直中（high/exact，matched_by=alias）
     out = cat.set_alias("书房灯", "light.study_lamp")
     assert out["ok"] is True and out["total"] == 1
@@ -112,7 +118,8 @@ def test_alias_direct_hit(tmp_path):
     # 列出 + 删除
     assert cat.list_aliases()["aliases"] == {"书房灯": "light.study_lamp"}
     assert cat.remove_alias("书房灯")["ok"] is True
-    assert cat.resolve("书房灯")["bucket"] == "none"
+    # 删除后回到兜底解析（不再 exact）
+    assert cat.resolve("书房灯")["bucket"] == "ambiguous"
 
 
 def test_set_alias_rejects_unknown_entity(tmp_path):

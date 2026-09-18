@@ -24,7 +24,7 @@ from ..af_runtime import Runtime, build_runtime
 from ..af_scheduler import Quota
 from ..af_time import VirtualTimeSource, parse_duration
 from .bridge import HassAdapter, HassStateProvider
-from .fake import SERVICE_STATE
+from .fake import is_modeled, service_effect
 
 __all__ = [
     "VhassHarness",
@@ -35,10 +35,21 @@ __all__ = [
 ]
 
 
-def seed_states(hass: Any, states: Mapping[str, str]) -> None:
-    """播种实体状态（等价于"现实世界现在是这个样子"）。"""
-    for entity_id, state in states.items():
-        hass.states.async_set(entity_id, str(state))
+def seed_states(hass: Any, states: Mapping[str, Any]) -> None:
+    """播种实体状态（等价于"现实世界现在是这个样子"）。
+
+    v1.7.1：与 `FakeHA.seed` 对齐，支持 `{"state": ..., "attributes": {...}}` 扩展写法，
+    让 vhass / FakeHA 两条仿真路径的 seed 语义一致（否则同一条 IR 换底座就跑不通）。
+    """
+    for entity_id, value in states.items():
+        if isinstance(value, Mapping):
+            payload = dict(value)
+            state = payload.pop("state", None)
+            attrs = dict(payload.pop("attributes", {}) or {})
+            attrs.update(payload)
+            hass.states.async_set(entity_id, str(state) if state is not None else "unknown", attrs)
+        else:
+            hass.states.async_set(entity_id, str(value))
 
 
 async def register_unavailable(hass: Any, entity_id: str, attributes: Mapping[str, Any] | None = None) -> None:
@@ -74,20 +85,25 @@ async def register_device_services(
     """
     registered: list[str] = []
     for domain, service in sorted(_domain_services(actions)):
-        new_state = SERVICE_STATE.get((domain, service))
-        if new_state is None:
+        if not is_modeled(domain, service):
             if unmodeled_out is not None:
                 unmodeled_out.append(f"{domain}.{service}")
             continue
 
-        async def _handler(call: Any, _state: str = new_state) -> None:
+        async def _handler(call: Any, _domain: str = domain, _service: str = service) -> None:
             targets = call.data.get("entity_id") or []
             if isinstance(targets, str):
                 targets = [targets]
             for entity_id in targets:
                 current = hass.states.get(entity_id)
                 attrs = dict(current.attributes) if current is not None else {}
-                hass.states.async_set(entity_id, _state, attrs)
+                new_state, extra = service_effect(_domain, _service, call.data, current.state if current else None)
+                attrs.update(extra)
+                hass.states.async_set(
+                    entity_id,
+                    new_state if new_state is not None else (current.state if current else "unknown"),
+                    attrs,
+                )
 
         hass.services.async_register(domain, service, _handler)
         registered.append(f"{domain}.{service}")

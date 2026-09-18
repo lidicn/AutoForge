@@ -40,7 +40,25 @@ class Snapshot:
     def of(cls, states: Mapping[str, str], **kw: Any) -> "Snapshot":
         return cls(values=MappingProxyType(dict(states)), **kw)
 
-    def get(self, entity_id: str) -> str:
+    def get(self, entity_id: str) -> Any:
+        """取实体状态；**也支持 `实体.属性` 形态的属性读取**（v1.7.1）。
+
+        为什么需要：HA 的「设定温度 / 亮度 / 当前活动」都在 attributes 里，
+        而 `if {"var": "entity.climate.x.temperature", "type": "numeric"}` 这类写法
+        此前会把**整条路径当成 entity_id** 去 `values` 里找 → 状态源为未知实体补默认值
+        （climate 域默认 `'off'`）→ 数值比较拿到 `'off'` 报 `entity_drift`
+        ——IR 本身是对的，只是「属性无处可读」（NL 实测 #3 的真因）。
+
+        判定规则：HA `entity_id` 形如 `domain.object_id` **只含 1 个点**，
+        因此 「≥2 个点」必然是 `实体.属性`；按最后一个点切分，从快照 `attributes` 读取。
+        属性缺失时抛 `UnknownEntity`（与「实体不存在」同样走软失效，不静默编值）。
+        """
+        if entity_id.count(".") >= 2:
+            base, _, attr = entity_id.rpartition(".")
+            attrs = self.attributes.get(base) or {}
+            if attr in attrs:
+                return attrs[attr]
+            raise UnknownEntity(entity_id)
         try:
             return self.values[entity_id]
         except KeyError as exc:

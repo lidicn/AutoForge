@@ -189,18 +189,56 @@ def conf(
         typer.echo("（空图）")
 
 
+def _mirror_state(runtime: Runtime, entity_id: str, state: Any) -> None:
+    """把回放事件的新状态同步进**仿真状态源**（只读状态源自动跳过）。
+
+    为什么必须做：`for` 到期复查（`Scheduler._still_holds`）与实例内后续 `if`
+    都从状态源读**当前值**。只发事件而不改状态，`for` 复查永远读到旧值 →
+    「离家 10 分钟后」这类持续条件永不成立（2026-09-17 NL 实测 #4 实例从不触发）。
+    vhass 驾驶台的 `emit()` 就是"先改状态再发事件"，CLI 这条链路此前漏了这一半。
+    """
+    provider = getattr(runtime, "states", None)
+    setter = getattr(provider, "set", None) or getattr(provider, "set_state", None)
+    if not callable(setter):
+        return  # 真机/只读状态源：不回写（仿真不得改真实世界）
+    try:
+        setter(entity_id, str(state))
+    except Exception:  # pragma: no cover - 状态源不接受写入时不影响事件回放
+        return
+
+
 def _replay(runtime: Runtime, events: list[dict[str, Any]]) -> None:
-    """回放事件序列：`{"entity_id","state","advance_s"?}`。"""
+    """回放事件序列：`{"entity_id","state","advance_s"?}`。
+
+    v1.7.1：事件词汇与 IR 触发对齐——
+    - `to` 可代替 `state`（新状态）；
+    - `from` 会作为 `old_state` 注入事件 payload（`trigger.from` 的校验需要它）。
+    - `{"advance_s": 600}`（无 `entity_id`）表示"时间前进 600 秒并 tick"，用于驱动 `for` / `wait`。
+
+    为什么必须对齐：`Scheduler._satisfied` 只比对 `event.state` 与 `trigger.to`。
+    若调用方按触发词汇写 `"to": "on"`，而这里只认 `"state"`，则事件状态恒为空串，
+    `!= trigger.to` 永远成立 → **实例从未触发**，仿真"跑过了"其实是"空跑"
+    （2026-09-17 NL 实测：8 条里 6 条是空跑，报告却记为「实例到 done」）。
+    """
     for item in events:
         advance = item.get("advance_s")
         if advance:
             runtime.advance(float(advance))
         if "entity_id" in item:
+            payload = {
+                k: v
+                for k, v in item.items()
+                if k not in {"entity_id", "state", "to", "from", "last_changed", "advance_s"}
+            }
+            if "from" in item and "old_state" not in payload:
+                payload["old_state"] = item["from"]
+            new_state = str(item.get("state", item.get("to", "")))
+            _mirror_state(runtime, item["entity_id"], new_state)
             runtime.emit(
                 item["entity_id"],
-                str(item.get("state", "")),
+                new_state,
                 last_changed=item.get("last_changed"),
-                **{k: v for k, v in item.items() if k not in {"entity_id", "state", "last_changed", "advance_s"}},
+                **payload,
             )
         elif advance is None:
             runtime.tick()
@@ -252,13 +290,89 @@ def _make_runtime(
     runtime.states = ha
     runtime.instances.states = ha
     runtime.scheduler.states = ha
+    runtime.executor.states = ha
+    # ⚠️ v1.7.1 关键修复：fake 链路必须注册 **FakeHAAdapter**。
+    # 原实现只用 `build_runtime` 默认的 `HAAdapter(dry_run=True)`——它只记录下发**意图**，
+    # 不翻转任何状态。后果：`do` 看似执行成功，实体状态原地不动，
+    # `expect` 断言必然 fail/unverified，「跑完了」永远变不成「跑对了吗」。
+    # 更隐蔽的是：未建模服务的登记（`unmodeled`）也只发生在 FakeHAAdapter 里，
+    # 用 dry_run 适配器时**连「这个动作没法验证」都无从得知**
+    # （2026-09-17 NL 实测 #7 的 `media_pause` 边界即此）。
+    runtime.adapters.register(FakeHAAdapter(ha))
     return runtime
+
+
+def _unmodeled_actions(runtime: Runtime) -> list[str]:
+    """汇总仿真底座未建模的动作（诚实性：这些动作的后果没被验证过）。"""
+    out: list[str] = []
+    for adapter in runtime.adapters.values():
+        out.extend(str(x) for x in (getattr(adapter, "unmodeled", ()) or ()))
+    return sorted(set(out))
+
+
+def _print_expects(graph, runtime: Runtime) -> bool:
+    """渲染 `expect` 断言报告——**「跑对了吗」的答案**（v1.2.0 断言闭环在 CLI 的出口）。
+
+    返回是否**全部验证通过**（`fully_verified`）。三态必须分开呈现：
+    `pass`/`fail`/`unverified`——把「没验到」当「验过了」就是自欺。
+    """
+    from .af_expect import evaluate_graph_expects
+
+    var_sources = [inst.ctx.vars for inst in runtime.instances.all()]
+    report = evaluate_graph_expects(
+        graph, runtime.states, var_sources, unmodeled_actions=_unmodeled_actions(runtime)
+    )
+    unmodeled = report.get("unmodeled_actions") or []
+    if unmodeled:
+        typer.echo(f"· 未建模动作（后果无法验证）：{'、'.join(unmodeled)}")
+    if not report["declared"]:
+        typer.echo("· 后置条件：未声明 expect → 本次只回答了「跑完了吗」，没回答「跑对了吗」")
+        return False
+    typer.echo(
+        f"· 后置条件（expect）：声明 {report['declared']} 条｜"
+        f"通过 {report['passed']}｜失败 {report['failed']}｜未验证 {report['unverified']}"
+    )
+    for auto_id, per_auto in (report.get("automations") or {}).items():
+        for item in per_auto.get("items", ()):
+            status = str(item.get("status", "?"))
+            if status == "pass":
+                mark = "✓ pass"
+            elif status == "fail":
+                mark = "✗ fail"
+            else:
+                mark = "? unverified"
+            target = item.get("target", "")
+            if item.get("kind") == "entity":
+                detail = f"期望状态 {item.get('expected')!r}，实际 {item.get('actual')!r}"
+            elif item.get("kind") == "entity_attribute":
+                detail = (
+                    f"期望属性 {item.get('op')} {item.get('expected')!r}，"
+                    f"实际 {item.get('actual')!r}"
+                )
+            else:
+                detail = f"{item.get('op')} {item.get('expected')!r}，实际 {item.get('actual')!r}"
+            line = f"    - [{mark}] {auto_id} · {target}：{detail}"
+            reason = str(item.get("reason") or "")
+            if reason:
+                line += f"（{reason}）"
+            typer.echo(line)
+    if report["fully_verified"]:
+        typer.echo("· 判定：fully_verified —— 声明过的断言**全部验过**")
+    elif report["failed"]:
+        typer.echo("· 判定：断言失败 —— 自动化没跑对（详见上面 ✗ 行）")
+    else:
+        typer.echo("· 判定：未能全部验证（有断言没验到）——不等价于通过")
+    return bool(report["fully_verified"])
 
 
 @app.command()
 def sim(
     path: Path = typer.Argument(..., help="IR 文件路径（.json）"),
-    seed: str = typer.Option("", "--seed", help="初始状态 JSON（entity → state）"),
+    seed: str = typer.Option(
+        "",
+        "--seed",
+        help='初始状态 JSON：{"entity": "state"} 或 {"entity": {"state": "...", "attributes": {...}}}',
+    ),
     events: str = typer.Option("", "--events", help="事件序列 JSON 文件路径"),
     vhass: str = typer.Option("ha", "--vhass", help="仿真底座：ha（pytest-homeassistant）| fake"),
     entities: str = typer.Option("", "--entities", help="已知实体清单 JSON"),
@@ -281,12 +395,17 @@ def sim(
     else:
         runtime.tick()
     _print_stats(runtime)
+    _print_expects(graph, runtime)
 
 
 @app.command()
 def run(
     path: Path = typer.Argument(..., help="IR 文件路径（.json）"),
-    seed: str = typer.Option("", "--seed", help="初始状态 JSON（entity → state）"),
+    seed: str = typer.Option(
+        "",
+        "--seed",
+        help='初始状态 JSON：{"entity": "state"} 或 {"entity": {"state": "...", "attributes": {...}}}',
+    ),
     events: str = typer.Option("", "--events", help="事件序列 JSON 文件路径"),
     vhass: str = typer.Option("fake", "--vhass", help="状态源：fake | ha"),
     entities: str = typer.Option("", "--entities", help="已知实体清单 JSON"),
@@ -341,6 +460,7 @@ def run(
     else:
         runtime.tick()
     _print_stats(runtime)
+    _print_expects(graph, runtime)
 
 
 @app.command()

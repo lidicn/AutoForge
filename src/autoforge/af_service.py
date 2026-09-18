@@ -645,8 +645,8 @@ def _expect_failure_message(report: Any) -> str:
             continue
         status = str(item.get("status", item.get("result", ""))).lower()
         if status in ("fail", "failed", "false"):
-            target = item.get("entity_id") or item.get("var") or ""
-            detail = item.get("detail") or item.get("message") or ""
+            target = item.get("target") or item.get("entity_id") or item.get("var") or ""
+            detail = item.get("reason") or item.get("detail") or item.get("message") or ""
             return f"expect 断言失败：{target} {detail}".strip()
     if report.get("ok") is False:
         return "expect 断言失败（详见报告）"

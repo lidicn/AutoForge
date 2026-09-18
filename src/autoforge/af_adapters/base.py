@@ -143,6 +143,15 @@ class AdapterRegistry:
     def __contains__(self, name: object) -> bool:
         return name in self._adapters
 
+    def values(self) -> list[Adapter]:
+        """已注册的全部适配器（v1.7.1）。
+
+        存在的意义：`expect` 断言求值需要问「有没有动作没被仿真底座建模」——
+        未建模动作的后果**根本没被验证过**，此时 `fully_verified` 必须为 False。
+        没有这个出口，调用方只能按名字猜（`ha`/`mock`），漏掉自定义适配器。
+        """
+        return list(self._adapters.values())
+
 
 def is_destructive(action: str) -> bool:
     """删除类 / 非幂等批量动作识别（L3）。"""

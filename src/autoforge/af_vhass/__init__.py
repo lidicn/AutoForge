@@ -10,6 +10,20 @@
 切换开关：环境变量 `AUTOFORGE_VHASS=ha|fake`（默认 `ha`）。
 """
 
-from .fake import FakeHA, FakeHAAdapter, default_state_for, seed_from_graph
+from .fake import (
+    FakeHA,
+    FakeHAAdapter,
+    default_state_for,
+    is_modeled,
+    seed_from_graph,
+    service_effect,
+)
 
-__all__ = ["FakeHA", "FakeHAAdapter", "default_state_for", "seed_from_graph"]
+__all__ = [
+    "FakeHA",
+    "FakeHAAdapter",
+    "default_state_for",
+    "is_modeled",
+    "seed_from_graph",
+    "service_effect",
+]

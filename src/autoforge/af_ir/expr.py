@@ -253,11 +253,24 @@ def collect_var_refs(expr: Mapping[str, Any]) -> set[str]:
 
 
 def collect_entity_refs(expr: Mapping[str, Any]) -> set[str]:
-    """收集表达式引用的实体（`entity.<entity_id>` → `<entity_id>`）。"""
+    """收集表达式引用的实体（`entity.<entity_id>` → `<entity_id>`）。
+
+    v1.7.1：支持 `entity.<entity_id>.<attr>` 形态（如
+    `entity.climate.study_ac.temperature`）——**返回的必须是真实实体**
+    `climate.study_ac`，而不是整条带属性的路径：
+    读集决定状态源去读哪些实体，若把属性路径当实体名（HA 里不存在这个实体），
+    就会读到默认值/404，属性比较永远失败（NL 实测 #3 的 `entity_drift` 真因之一）。
+    判据：HA entity_id 形如 `domain.object_id` 只含 1 个点，多余的点是属性名。
+    """
     out: set[str] = set()
     for name in collect_var_refs(expr):
-        if name.startswith("entity."):
-            out.add(name[len("entity.") :])
+        if not name.startswith("entity."):
+            continue
+        path = name[len("entity.") :]
+        parts = path.split(".")
+        if len(parts) > 2:  # domain.object_id.attr... → 取真实实体
+            path = ".".join(parts[:2])
+        out.add(path)
     return out
 
 
