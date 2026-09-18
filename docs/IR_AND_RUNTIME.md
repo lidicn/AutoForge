@@ -343,6 +343,7 @@ on_cancel  >  on_error  >  on_timeout  >  yes/no/then  >  default
 4. **`on_error` → 采纳为第 6 种边**（§6）。
 5. **IR 序列化 → 原型期用 JSON**（见 §16）。
 6. **`wait` 到期语义 → 选 A（2026-09-18 拍板）**：`wait` 到点走 `then` 正常继续（"等一会儿继续"），`on_timeout` 仅留给 `ask` 无人应答。此前实现把所有非 emit 实例定时器都派发到 `on_timeout`，与 §13.2"轮询用 wait+then"自相矛盾；已按 A 修正运行时（`af_scheduler`/`af_executor.resume_then`）、扫描器（`wait` 不再强制 `on_timeout`）与既有 IR/测试。
+7. **`ask` 节点运行期弃用（2026-09-18 拍板）**：`ask` 的正确定位是**设计期**对话工具——Agent 写 IR 时发现缺设备/条件，在对话里问用户补全，不进 IR。前任把它实现成运行期挂起点（实例 SUSPENDED 等 `/api/sessions/{id}/answer`），但自动化部署后无人实时回答，实例会永久挂起。build 闸新增 `ASK_AT_RUNTIME` WARNING：IR 含 ask 节点时提示删掉、把确认挪到设计期对话。IR schema 不动（已冻结 v0.2.1），`/api/sessions` 端点保留给 sim 诊断用，不用于生产部署。
 
 ---
 
