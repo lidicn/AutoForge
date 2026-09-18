@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { NButton, NCard, NEmpty, NSpace, NText, NDivider, NAlert } from 'naive-ui'
+import { NButton, NCard, NEmpty, NSpace, NText, NDivider, NAlert, NInput } from 'naive-ui'
 import { api } from '@/api/client'
 import type { WatchInstance } from '@/types/api'
 
 const loading = ref(false)
 const stopping = ref('')
+const starting = ref(false)
 const watches = ref<WatchInstance[]>([])
 const error = ref('')
+const irInput = ref('')
 
 async function load() {
   loading.value = true
@@ -35,6 +37,27 @@ async function stop(owner: string) {
   }
 }
 
+async function start() {
+  starting.value = true
+  error.value = ''
+  try {
+    const ir = JSON.parse(irInput.value)
+    const base = import.meta.env.VITE_API_BASE ?? 'http://localhost:8787/api'
+    const res = await fetch(`${base}/watch/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ir, dry_live: true }),
+    })
+    const data = await res.json()
+    if (!data.ok) throw new Error(data.error || '启动失败')
+    await load()
+  } catch (e: any) {
+    error.value = e.message || String(e)
+  } finally {
+    starting.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -48,6 +71,19 @@ onMounted(load)
     </NSpace>
 
     <NAlert v-if="error" type="error" :title="error" />
+
+    <NCard title="启动新 watch（dry-live，不动设备）">
+      <NSpace vertical>
+        <NInput
+          v-model:value="irInput"
+          type="textarea"
+          placeholder='粘贴 IR JSON，如 {"ir_version":"0.2.1","id":"...","nodes":[...],"edges":[...]}'
+          :rows="8"
+        />
+        <NButton @click="start" :loading="starting" type="primary">部署</NButton>
+      </NSpace>
+    </NCard>
+
     <NEmpty v-if="!loading && watches.length === 0" description="当前没有运行中的 watch 实例" />
 
     <NSpace v-for="w in watches" :key="w.owner + w.acquired_at" vertical size="small">
