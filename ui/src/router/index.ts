@@ -14,6 +14,7 @@ const router = createRouter({
     { path: '/versions', name: 'versions', component: () => import('@/views/VersionsView.vue') },
     { path: '/spec-editor', name: 'spec-editor', component: () => import('@/views/SpecEditorView.vue') },
     { path: '/faults', name: 'faults', component: () => import('@/views/FaultsView.vue') },
+    { path: '/metrics', name: 'metrics', component: () => import('@/views/MetricsView.vue') },
     // ── v1.7.0-b 治理与实时（批次 B）──
     { path: '/pending', name: 'pending', component: () => import('@/views/PendingView.vue') },
     { path: '/live', name: 'live', component: () => import('@/views/LiveView.vue') },

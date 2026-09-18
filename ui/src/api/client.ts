@@ -107,4 +107,7 @@ export const api = {
 
   // v1.7.3 运行中 watch 实例
   watchList: () => request<WatchListResponse>('GET', '/watch/list'),
+  metrics: () => request<any>('GET', '/metrics'),
+  experience: (limit = 20) => request<any>('GET', `/experience?limit=${limit}`),
+  telemetry: (days = 30) => request<any>('GET', `/telemetry?days=${days}`),
 }
