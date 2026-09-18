@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { NAlert, NCard, NSpin } from 'naive-ui'
+import { NAlert, NButton, NCard, NSpace, NSpin, NTag } from 'naive-ui'
 import { facade } from '@/api'
 import type { GraphResponse } from '@/types/api'
 import DiagnosticPanel from '@/components/DiagnosticPanel.vue'
@@ -12,6 +12,8 @@ const name = route.params.name as string
 const irData = ref<GraphResponse | null>(null)
 const loading = ref(true)
 const error = ref('')
+const deploying = ref(false)
+const deployMsg = ref('')
 
 onMounted(async () => {
   try {
@@ -23,6 +25,27 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+async function deployWatch() {
+  if (!irData.value?.ir) return
+  deploying.value = true
+  deployMsg.value = ''
+  try {
+    const base = import.meta.env.VITE_API_BASE ?? 'http://localhost:8787/api'
+    const res = await fetch(`${base}/watch/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ir: irData.value.ir, dry_live: true }),
+    })
+    const data = await res.json()
+    if (!data.ok) throw new Error(data.error || data.detail?.[0]?.msg || '部署失败')
+    deployMsg.value = `已部署（dry-live）`
+  } catch (e: any) {
+    deployMsg.value = `部署失败：${e.message || String(e)}`
+  } finally {
+    deploying.value = false
+  }
+}
 </script>
 
 <template>
@@ -30,6 +53,14 @@ onMounted(async () => {
     <div class="page-head">
       <RouterLink to="/automations" class="back">← 返回列表</RouterLink>
       <h1>{{ name }}</h1>
+      <NSpace style="margin-top: 8px">
+        <NButton type="primary" :loading="deploying" @click="deployWatch">
+          部署为常驻 watch（dry-live）
+        </NButton>
+        <NTag v-if="deployMsg" :type="deployMsg.includes('失败') ? 'error' : 'success'">
+          {{ deployMsg }}
+        </NTag>
+      </NSpace>
     </div>
 
     <n-alert v-if="error" type="error" title="加载失败">{{ error }}</n-alert>
