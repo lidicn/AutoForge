@@ -69,8 +69,8 @@ CHECKS: dict[str, str] = {
     "EXPECT_UNREACHABLE": "expect 断言的实体既不在图里读取、也不在图里写入（断言永远验不到）",
     "EXPECT_STATE_INVALID": "expect 断言的状态不是该实体域能取到的值（如灯断言成 open）",
     "ENTITY_GUARD_TIER0": "设备保护 Tier-0：读取/写入须经人工审批",
-    # ── v1.7.3 ask 运行期弃用 ──
-    "ASK_AT_RUNTIME": "IR 含运行期 ask 节点：自动化部署后无人实时回答，实例会永久挂起",
+    # ── v1.7.4 ask 节点需 DB 承接 ──
+    "ASK_AT_RUNTIME": "IR 含 ask 节点：运行期挂起等待回答，需豆包管家（DB）对接 TTS/语音或 WebUI 应答",
 }
 
 #: 诊断码 → **怎么改**（v1.2.0：让 Agent 一次往返就能自修正，而不是自己推断修法）
@@ -116,9 +116,9 @@ CODE_HINT: dict[str, str] = {
     "EXPECT_UNREACHABLE": "断言里的实体必须在本图 reads 或 writes 里出现——通常是把断言写到了别的自动化的实体上。",
     "EXPECT_STATE_INVALID": "把期望状态换成该域契约里列出的值（如灯用 on/off、门锁用 locked/unlocked）；不确定就用 af_resolve_entity 查 possible_states。",
     "ENTITY_GUARD_TIER0": "该实体被设备保护标记为 Tier-0（必须人审）；把写目标移到非保护区，或请管理员调整 `device_acl`。",
-    "ASK_AT_RUNTIME": "ask 节点是设计期对话工具（Agent 写 IR 时跟你确认缺设备/条件），"
-                          "不是运行期挂起点。真部署的自动化不应含 ask 节点——部署后没人回答，"
-                          "实例会永久 SUSPENDED。把 ask 的设计期确认挪到对话里，IR 里删掉 ask 节点。",
+    "ASK_AT_RUNTIME": "ask 节点是运行期挂起点：自动化跑到此处暂停，等豆包管家（DB）通过 TTS 播报"
+                          "并接收语音/文本回答，再 POST /api/sessions/{id}/answer 恢复实例。"
+                          "确认 DB 已对接此房间（room 字段）；未对接时实例会走 on_timeout 静默兜底。",
 }
 
 _SHADOW_LOW = 0.60
@@ -706,8 +706,8 @@ class StaticScanner:
                     Diagnostic(
                         "ASK_AT_RUNTIME",
                         WARNING,
-                        f"ask 节点 {node.id}（prompt={node.prompt!r}）在运行期会挂起实例等回答；"
-                        f"真部署后无人实时回答，建议在设计期对话解决后删掉此节点",
+                        f"ask 节点 {node.id}（prompt={node.prompt!r}）运行期挂起等待回答；"
+                        f"确认豆包管家（DB）已对接 room={node.room}；未对接则走 on_timeout 静默兜底",
                         auto.id,
                         node.id,
                     )
