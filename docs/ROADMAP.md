@@ -1015,3 +1015,46 @@ graph LR
 | [`实体解析决策智能层设计_2026-09-16.md`](实体解析决策智能层设计_2026-09-16.md) | AutoFlow 开发者 dw 的**跨项目设计**（对应 AutoFlow ROADMAP §6 v2.3.0 #13/#14/#15）：v1.1.0 检索层之上补**决策层**（device 归并 / 集成优选 / 弱信号降权 / 遥测消歧）（**v1.6.0 + v1.5.0 依据**） |
 
 > **两份调研的「调研项 → 版本映射」表在 §版本路线图末尾**，保证每一项都有归宿（含明确不采纳项及理由）。
+
+
+---
+
+## v1.7.x 迭代注记（2026-09-18，新 Agent 接手后）
+
+> 本阶段为新 Agent 接手后按交接文档推进的实测驱动迭代。基线 **523 passed / 10 skipped**。
+
+### 已交付
+
+| # | 项 | commit | 说明 |
+|---|---|---|---|
+| 1 | wait 语义选 A（到期走 then，on_timeout 仅给 ask） | f8141f5 | 拍板修正自相矛盾文档 |
+| 2 | live 分支真时钟（SystemTimeSource） | 17fb0f0 | 真机 wait 不命中根因修复 |
+| 3 | TRIGGER_STALE 僵尸触发闸 | 40241ba | entry 传感器 last_changed >24h 给 WARNING |
+| 4 | CLI build 加载 entity_health | 3148894 | FFL 发现 CLI 模式 STALE 闸不生效 |
+| 5 | --dry-live 模式 | 4418141 | 真时钟+真 HA 状态，do 只记意图不下发 |
+| 6 | watch dry-live 预检修复 | d105168 / 9bc83bc | dry_live 跳过 confirm/whitelist |
+| 7 | ask 节点定位修正 | c58ef8b | 原作者确认：ask 由 DB 承接，不是废弃 |
+| 8 | watch↔API 桥 | ec50da3 / 7822840 | GET /api/watch/list + POST /api/watch/stop |
+| 9 | 运行中 webui 页 | 7929662 | 展示自动化摘要+停止按钮 |
+| 10 | --area help 文本修正 | 3148894 | "提示而非硬约束" → "硬过滤" |
+
+### FFL 测试
+
+- 工单 PROJECT-20260918-AF-WAIT-STALE：9/9 PASS（wait A / TRIGGER_STALE / --area）
+- 报告：`D:\Documents\WorkSpace\Test\results\ffl_0918\REPORT.md`
+
+### ask 节点生态定位（原作者确认）
+
+- ask 是 AF/DB 生态分工的一环：AF Runtime 挂起 → DB TTS 播报+语音回答 → answer API 恢复
+- AF 侧机制完整（挂起/超时/取消/房间消歧义/answer API）
+- 缺的是 DB↔AF 对接链路（发现挂起/房间维度/answer 注回）
+- 详见 `E:\NAS\doubao-butler\doc\ask\ask端到端链路详解.md`
+
+### 下一步
+
+| 项 | 说明 |
+|---|---|
+| DB↔AF ask 对接 | DB 轮询 /api/sessions 发现挂起，TTS 播报，语音注回 answer |
+| watch 启停控制 | 当前 pkill 粗暴，后续收进 API server 管理 |
+| v1.7.0 批次 C | metrics/experience/telemetry 前端面板 |
+| 住户版 UI | 等产品真跑起来再做 |
