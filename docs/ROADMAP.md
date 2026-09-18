@@ -1052,9 +1052,12 @@ graph LR
 
 ### 下一步
 
-| 项 | 说明 |
-|---|---|
-| DB↔AF ask 对接 | DB 轮询 /api/sessions 发现挂起，TTS 播报，语音注回 answer |
-| watch 启停控制 | 当前 pkill 粗暴，后续收进 API server 管理 |
-| v1.7.0 批次 C | metrics/experience/telemetry 前端面板 |
-| 住户版 UI | 等产品真跑起来再做 |
+| 项 | 说明 | 状态 |
+|---|---|---|
+| DB↔AF ask 对接 | AF 侧已就绪（pending sidecar + answer_inbox + /api/asks/*）；DB 侧写交接单由 DB 开发者实现 | 🔨 AF 侧完成 |
+| watch 启停控制 | list/start/stop API 端点 + 前端运行中页 + 详情页一键部署 | ✅ |
+| v1.7.0 批次 C | metrics/experience/telemetry 前端面板 | ✅ |
+| FFL 报告 7 项发现 | High(CLI entity_health) + Medium(--area help / L2 after wait) 已修；Low 项文档说明 | ✅ |
+| expect 编辑入口 | SpecEditor 加 expect 节点编辑 | ⏳ |
+| 住户版 UI | 等产品真跑起来再做 | 🔮 |
+| emit/on event | 跨自动化事件，Schema 留位未实现 | 🔮 |
