@@ -189,7 +189,7 @@ def _enrich(meta: dict[str, Any], registry: Any, attrs: Mapping[str, Any] | None
     meta["area_id"] = area_id
     meta["area"] = registry.area_name_of(area_id) or _area_of(attrs)
     meta["offline_now"] = str(meta.get("state")) in ("unavailable", "unknown")
-    meta["last_changed"] = str((attrs or {}).get("last_changed") or "")
+    meta["last_changed"] = str(meta.get("last_changed") or "")
 
 
 #: 注册表派生字段：**缺失时沿用旧值**，绝不用空串覆盖已知值
@@ -323,7 +323,12 @@ class DeviceCatalog:
 
         added = changed = 0
         for entity_id, pair in raw.items():
-            state, attrs = pair
+            # 兼容：新 fetch 给 (state, attrs, last_changed)；旧 mock 可能只给 (state, attrs)
+            if len(pair) == 3:
+                state, attrs, lc = pair
+            else:
+                state, attrs = pair
+                lc = ""
             dom = domain_of(entity_id)
             if domain and dom != domain:
                 continue
@@ -334,6 +339,7 @@ class DeviceCatalog:
                 "friendly_name": keep.get("friendly_name") or "",
                 "state": state,
                 "attributes": keep,
+                "last_changed": lc,
             }
             # v1.6.0 P0：注册表富化（device_id / platform / integration / area 解析链）
             _enrich(meta, registry, attrs)
@@ -389,14 +395,34 @@ class DeviceCatalog:
                 snap.reasons.append("area_registry 为空且 REST /api/areas 兜底失败（该版本可能 404）")
         return snap
 
-    def _default_fetch_all(self) -> dict[str, tuple[str, dict[str, Any]]] | None:
-        """默认数据源：HA REST `/api/states`。失败返回 None（不抛）。"""
-        transport = HATransport(base_url=self.ha_url, token=self.ha_token, timeout=self.timeout)
-        raw = transport.all_states()
-        if not raw:
-            # 空 dict 既可能是「真没有实体」也可能是「连不上」——按失败处理并显式报错
+    def _default_fetch_all(self) -> dict[str, tuple[str, dict[str, Any], str]] | None:
+        """默认数据源：HA REST `/api/states`。失败返回 None（不抛）。
+
+        返回 `{eid: (state, attributes, last_changed)}`——比 transport.all_states 多保留
+        顶层 `last_changed`，供 build 闸判断触发源是否僵尸（长期无变化）。
+        """
+        import json as _json, urllib.request as _u
+        req = _u.Request(
+            f"{self.ha_url}/api/states",
+            headers={"Authorization": f"Bearer {self.ha_token}"},
+        )
+        try:
+            with _u.urlopen(req, timeout=self.timeout) as resp:
+                payload = _json.loads(resp.read().decode("utf-8"))
+        except Exception:
             return None
-        return raw
+        out: dict[str, tuple[str, dict[str, Any], str]] = {}
+        if isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, dict) and "entity_id" in item:
+                    out[str(item["entity_id"])] = (
+                        str(item.get("state", "")),
+                        dict(item.get("attributes") or {}),
+                        str(item.get("last_changed") or ""),
+                    )
+        if not out:
+            return None
+        return out
 
     # ── 2. 解析（自然语言设备名 → 候选 entity_id）──────────────────────
     #: v1.5.0 解析遥测五档（C §3 P2）：真实成功率漏斗。
@@ -1024,6 +1050,7 @@ class DeviceCatalog:
             eid: {
                 "offline_now": bool(meta.get("offline_now", False)),
                 "connectivity_tier": _tier_of(meta),
+                "last_changed": str(meta.get("last_changed") or ""),
             }
             for eid, meta in self._load().get("entities", {}).items()
         }

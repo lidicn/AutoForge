@@ -47,6 +47,7 @@ CHECKS: dict[str, str] = {
     "NESTED_SUSPEND_IN_CANCEL": "§5.3 on_cancel 分支内禁止再次挂起（禁止嵌套中断）",
     "ENTITY_ACL_DENIED": "① 实体读写权限不足（ACL）",
     "ENTITY_OFFLINE_NOW": "v1.6.0 联动验证闸：引用了当前不可用实体（防假绿）",
+    "TRIGGER_STALE": "触发源实体长期无状态变化（疑似僵尸/断电/离线但未报 unavailable）",
     # IR §8.2 补充项
     "DUPLICATE_EDGE_PRIORITY": "⑭ 同节点同优先级边重复定义",
     "NON_IDEMPOTENT_CONCURRENT": "⑪ 非幂等动作 + restart/parallel",
@@ -94,6 +95,9 @@ CODE_HINT: dict[str, str] = {
     "ENTITY_ACL_DENIED": "该实体不在 ACL 允许范围；换实体或请管理员放开对应读写权限。",
     "ENTITY_OFFLINE_NOW": "该实体当前不可用（unavailable/unknown）：换在线候选或先恢复设备，"
                           "离线设备会让自动化「假绿」（sim 通过、真机不生效）。",
+    "TRIGGER_STALE": "触发源 {eid} 自 {last} 起 {age}h 没动过——它可能没电/离线但没报 unavailable。"
+                          "先到 HA 里确认它还活着（按房间找、别全屋搜），或换一个活跃的同功能传感器；"
+                          "别让一个僵尸传感器写进自动化。",
     "DUPLICATE_EDGE_PRIORITY": "同一节点同一优先级只允许一条边，删掉重复定义。",
     "NON_IDEMPOTENT_CONCURRENT": "非幂等动作不要配 `restart`/`parallel`（会重复执行）。",
     "RESERVED_NOT_IMPLEMENTED": "`fn` 仍为保留位；把自定义逻辑改写成内置表达式或拆成多个节点。",
@@ -293,6 +297,9 @@ class StaticScanner:
     #: v1.6.0 P2 联动验证闸：实体健康视图 `{entity_id: {"offline_now": bool, "connectivity_tier": str}}`。
     #: 由 `af_service` 从设备目录注入；`None`/空 = 不校验（离线编写 IR 场景零误报）。
     entity_health: Mapping[str, Any] | None = None
+    #: 触发源「长期无变化」阈值（秒）。默认 24h；0/None 关闭此项检查。
+    #: 只查 entry 节点的触发实体（传感器本就该动），不查灯/空调等动作目标。
+    trigger_stale_after_s: float = 86400.0
 
     def __post_init__(self) -> None:
         self._known = frozenset(self.known_entities) if self.known_entities is not None else None
@@ -625,6 +632,67 @@ class StaticScanner:
                     )
                 )
 
+    def _check_trigger_stale(self, auto: Automation, out: ScanResult) -> None:
+        """触发源长期无状态变化 → 告警（疑似僵尸传感器/断电但未报 unavailable）。
+
+        只查 entry（on）节点的 trigger.entity_id；group 触发递归展开。
+        动作目标（灯/空调）长期不动是正常的，不查。
+        """
+        if not self.trigger_stale_after_s:
+            return
+        import datetime as _dt
+        now = _dt.datetime.now(_dt.timezone.utc)
+
+        def _triggers(node):
+            tr = node.trigger
+            if tr is None:
+                return
+            if getattr(tr, "type", "") == "group":
+                for sub in (tr.sources or []):
+                    yield from _triggers_node(sub)
+            else:
+                if getattr(tr, "entity_id", ""):
+                    yield tr.entity_id
+
+        def _triggers_node(tr):
+            if tr is None:
+                return
+            if getattr(tr, "type", "") == "group":
+                for sub in (tr.sources or []):
+                    yield from _triggers_node(sub)
+            elif getattr(tr, "entity_id", ""):
+                yield tr.entity_id
+
+        for node in auto.entry_nodes():
+            for entity_id in _triggers(node):
+                health = self._health.get(entity_id)
+                if not isinstance(health, Mapping):
+                    continue
+                lc = str(health.get("last_changed") or "")
+                if not lc:
+                    continue
+                try:
+                    # HA last_changed 形如 2026-09-15T03:21:44.438450+00:00
+                    dt = _dt.datetime.fromisoformat(lc.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=_dt.timezone.utc)
+                except ValueError:
+                    continue
+                age_s = (now - dt).total_seconds()
+                if age_s <= self.trigger_stale_after_s:
+                    continue
+                age_h = round(age_s / 3600, 1)
+                out.diagnostics.append(
+                    Diagnostic(
+                        "TRIGGER_STALE",
+                        WARNING,
+                        f"触发源 {entity_id} 自 {lc} 起约 {age_h}h 无状态变化，"
+                        f"疑似僵尸/断电但未报 unavailable；确认它活着或换活跃同功能传感器",
+                        auto.id,
+                        node.id,
+                    )
+                )
+
     # ⑫ 实体存在性 + ① 设备保护分级（v1.4.0 tier 模型）
     def _check_entities(self, auto: Automation, out: ScanResult) -> None:
         refs = auto.reads() | auto.writes()
@@ -656,6 +724,10 @@ class StaticScanner:
                     auto.id,
                 )
             )
+
+        # v1.7.2 僵尸触发源闸：entry 节点引用的传感器若 last_changed 距今过久，
+        # 它可能没电/离线但没报 unavailable（我们真机就踩过：人体传感器卡 on 三天）。
+        self._check_trigger_stale(auto, out)
 
         if self._guard is None:
             return

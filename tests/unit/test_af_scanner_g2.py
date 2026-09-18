@@ -241,3 +241,43 @@ def test_write_conflict_resolved_by_priority():
 def test_single_automation_has_no_conflict():
     scan = _scan_many([_writer("a", "binary_sensor.x")])
     assert "ENTITY_WRITE_CONFLICT" not in scan.codes()
+
+
+# ── v1.7.2 僵尸触发源闸（TRIGGER_STALE）──────────────────────────────
+
+import datetime as _dt
+
+
+def _iso_ago(hours: float) -> str:
+    return (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=hours)).isoformat()
+
+
+def test_stale_trigger_flagged():
+    """触发源 last_changed 距今 >24h → TRIGGER_STALE warning。"""
+    health = {"binary_sensor.m": {"last_changed": _iso_ago(48)}}
+    scan = _scan(_base(), entity_health=health)
+    assert "TRIGGER_STALE" in scan.codes()
+
+
+def test_fresh_trigger_not_flagged():
+    """触发源近期有变化 → 不误报。"""
+    health = {"binary_sensor.m": {"last_changed": _iso_ago(0.1)}}
+    scan = _scan(_base(), entity_health=health)
+    assert "TRIGGER_STALE" not in scan.codes()
+
+
+def test_stale_check_disabled():
+    """trigger_stale_after_s=0 关闭此项。"""
+    health = {"binary_sensor.m": {"last_changed": _iso_ago(999)}}
+    scan = _scan(_base(), entity_health=health, trigger_stale_after_s=0)
+    assert "TRIGGER_STALE" not in scan.codes()
+
+
+def test_stale_only_targets_trigger_not_action_target():
+    """do 目标实体（灯）长期不动是正常的，不告警；只查触发源。"""
+    health = {
+        "binary_sensor.m": {"last_changed": _iso_ago(0.1)},
+        "light.a": {"last_changed": _iso_ago(999)},
+    }
+    scan = _scan(_base(), entity_health=health)
+    assert "TRIGGER_STALE" not in scan.codes()
