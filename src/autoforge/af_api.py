@@ -545,9 +545,8 @@ def build_app(
         return svc.list_watches(store.root if store else None)
 
     @app.post("/api/watch/stop", dependencies=[Depends(_write)])
-    def api_watch_stop(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    def api_watch_stop(owner: str = "") -> dict[str, Any]:
         """停止运行中的 watch 进程。"""
-        owner = (body or {}).get("owner", "")
         return svc.stop_watch(owner=owner, store_root=store.root if store else None)
 
     @app.post("/api/watch/start", dependencies=[Depends(_write)])

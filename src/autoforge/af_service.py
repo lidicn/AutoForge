@@ -1663,15 +1663,25 @@ def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[
         pass
     if owner and holder.get("owner") and holder["owner"] != owner:
         return {"ok": False, "error": f"当前持有者 {holder['owner']} 与请求 {owner} 不符"}
-    # pkill forge watch
+    # 找 forge watch 进程并杀掉（Alpine 容器无 ps/pkill，读 /proc）
+    killed = False
     try:
-        r = subprocess.run(
-            ["pkill", "-f", "forge watch"],
-            capture_output=True, text=True, timeout=10,
-        )
-        killed = r.returncode == 0
+        proc_root = Path("/proc")
+        for entry in proc_root.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                cmdline = (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace")
+            except (OSError, PermissionError):
+                continue
+            if "forge watch" in cmdline:
+                try:
+                    os.kill(int(entry.name), 15)  # SIGTERM
+                    killed = True
+                except (ProcessLookupError, PermissionError):
+                    pass
     except Exception as e:
-        return {"ok": False, "error": f"pkill 失败: {e}"}
+        return {"ok": False, "error": f"停止 watch 失败: {e}"}
     # 清 sidecar
     try:
         if info.exists():
