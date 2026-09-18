@@ -83,11 +83,18 @@ def _gate(
     if entities_path:
         data = json.loads(Path(entities_path).read_text(encoding="utf-8"))
         known = set(data) if isinstance(data, list) else set(data)
+    # v1.7.4：CLI build 也加载 entity_health，否则 TRIGGER_STALE 闸在 CLI 模式不生效
+    try:
+        from .af_catalog import DeviceCatalog
+        entity_health = DeviceCatalog(DEFAULT_STORE_ROOT).health_map()
+    except Exception:
+        entity_health = None
+
     if guard_path:
         # v1.4.0：设备保护规则文件（规则数组 / 旧 ACL 对象 / {"rules":[…]}）
-        scanner = StaticScanner(graph, known_entities=known, device_guard=DeviceGuardRegistry.from_file(guard_path))
+        scanner = StaticScanner(graph, known_entities=known, device_guard=DeviceGuardRegistry.from_file(guard_path), entity_health=entity_health)
     else:
-        scanner = StaticScanner(graph, known_entities=known, entity_acl=_load_json_mapping(acl_path) or None)
+        scanner = StaticScanner(graph, known_entities=known, entity_acl=_load_json_mapping(acl_path) or None, entity_health=entity_health)
     result = scanner.scan()
     typer.echo("── 安全闸（forge build）──")
     typer.echo(result.render())
@@ -1096,7 +1103,7 @@ def entities_list(
 def entities_resolve(
     name: str = typer.Argument(..., help="自然语言设备名，如「书房吊灯」"),
     root: str = typer.Option(DEFAULT_STORE_ROOT, "--root", help="存储根目录"),
-    area: str = typer.Option("", "--area", help="房间（中文，提示而非硬约束）"),
+    area: str = typer.Option("", "--area", help="房间（中文，硬过滤：只返回该房间实体）"),
     domain: str = typer.Option("", "--domain", help="限定域（一般不要传，让它多返回候选）"),
     top_n: int = typer.Option(8, "--top-n", help="最多返回几个候选"),
 ):
