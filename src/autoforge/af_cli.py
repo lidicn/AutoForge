@@ -251,14 +251,17 @@ def _make_runtime(
     vhass: str,
     *,
     live: bool = False,
+    dry_live: bool = False,
     ha_url: str = DEFAULT_HA_URL,
     ha_token: str = "",
     persist_dir: str | None = None,
     cfg=None,
 ):
-    if live:
-        # 真机接线：状态读 HA（REST），动作真实下发（dry_run=False）→ G4 canary 才会生效。
-        typer.echo(f"· 真机接线：HA {ha_url}（dry_run=False，真实下发意图）")
+    if live or dry_live:
+        # live：真时钟 + 真 HA 状态 + 真下发（dry_run=False）
+        # dry_live：真时钟 + 真 HA 状态，但 do 只记意图不真下发——抓 live 代码路径的 bug，不动设备
+        mode_label = "dry-live（真时钟/真状态，do 只记意图不下发）" if dry_live else "真机接线（dry_run=False，真实下发意图）"
+        typer.echo(f"· {mode_label}：HA {ha_url}")
         runtime = build_runtime(graph, persist_dir=persist_dir, clock=SystemTimeSource())
         provider = HAStateProvider(base_url=ha_url, token=ha_token, cfg=cfg)
         transport = HATransport(base_url=ha_url, token=ha_token, cfg=cfg)
@@ -266,7 +269,7 @@ def _make_runtime(
         runtime.instances.states = provider
         runtime.scheduler.states = provider
         runtime.executor.states = provider
-        runtime.adapters.register(HAAdapter(transport=transport, dry_run=False))
+        runtime.adapters.register(HAAdapter(transport=transport, dry_run=dry_live))
         return runtime
 
     seed: dict[str, str] = {}
@@ -412,7 +415,8 @@ def run(
     entities: str = typer.Option("", "--entities", help="已知实体清单 JSON"),
     acl: str = typer.Option("", "--acl", help="实体读写权限表 JSON"),
     live: bool = typer.Option(False, "--live", help="真机下发（真实操作 HA，需 --confirm + 令牌 + 白名单）"),
-    ha_url: str = typer.Option(DEFAULT_HA_URL, "--ha-url", help="HA 地址（--live 时生效）"),
+    dry_live: bool = typer.Option(False, "--dry-live", help="真时钟/真 HA 状态，但 do 只记意图不下发（抓 live 代码路径 bug，不动设备）"),
+    ha_url: str = typer.Option(DEFAULT_HA_URL, "--ha-url", help="HA 地址（--live/--dry-live 时生效）"),
     ha_token: str = typer.Option("", "--ha-token", help="HA 长期访问令牌（缺省读环境变量 AUTOFORGE_HA_TOKEN）"),
     confirm: bool = typer.Option(False, "--confirm", help="真机下发二次确认（--live 必需）"),
     live_allow: str = typer.Option(
@@ -429,7 +433,7 @@ def run(
     if not _gate(graph, show_nl=True, entities_path=entities or None, acl_path=acl or None):
         raise typer.Exit(code=EXIT_SCAN_ERROR)
 
-    if live:
+    if live or dry_live:
         token = ha_token or os.environ.get("AUTOFORGE_HA_TOKEN", "")
         allow = (
             {x.strip() for x in live_allow.split(",") if x.strip()}
@@ -440,15 +444,16 @@ def run(
             graph,
             known_entities=allow,
             token=token,
-            confirm=confirm,
+            confirm=confirm or dry_live,  # dry-live 不动设备，预检 confirm 检查自动通过
         )
-        typer.echo("\n── 真机预检（forge run --live）──")
+        typer.echo("\n── 真机预检（forge run {}）──".format("--live" if live else "--dry-live"))
         typer.echo(pre.render())
         if not pre.ok:
-            typer.echo("真机预检未通过，拒绝下发。", err=True)
+            typer.echo("真机预检未通过，拒绝启动。", err=True)
             raise typer.Exit(code=EXIT_SCAN_ERROR)
         runtime = _make_runtime(
-            graph, None, vhass, live=True, ha_url=ha_url, ha_token=token,
+            graph, None, vhass, live=live, dry_live=dry_live,
+            ha_url=ha_url, ha_token=token,
             persist_dir=persist_dir or None,
         )
     else:
@@ -469,9 +474,10 @@ def watch(
     path: Path = typer.Argument(..., help="IR 文件路径（.json）"),
     entities: str = typer.Option("", "--entities", help="已知实体清单 JSON"),
     acl: str = typer.Option("", "--acl", help="实体读写权限表 JSON"),
-    ha_url: str = typer.Option(DEFAULT_HA_URL, "--ha-url", help="HA 地址（--live 时生效）"),
+    ha_url: str = typer.Option(DEFAULT_HA_URL, "--ha-url", help="HA 地址（--live/--dry-live 时生效）"),
     ha_token: str = typer.Option("", "--ha-token", help="HA 长期访问令牌（缺省读环境变量 AUTOFORGE_HA_TOKEN）"),
-    confirm: bool = typer.Option(False, "--confirm", help="真机下发二次确认（常驻监听必需）"),
+    confirm: bool = typer.Option(False, "--confirm", help="真机下发二次确认（常驻监听必需；--dry-live 不需要）"),
+    dry_live: bool = typer.Option(False, "--dry-live", help="真时钟/真 HA 状态常驻，do 只记意图不下发（不动设备）"),
     live_allow: str = typer.Option("", "--live-allow", help="真机可写实体白名单（逗号分隔）"),
     tick_s: float = typer.Option(1.0, "--tick-s", help="计时器/超时巡检间隔（秒）"),
     persist_dir: str = typer.Option(
@@ -490,7 +496,7 @@ def watch(
     graph = _load(path)
     if not _gate(graph, show_nl=True, entities_path=entities or None, acl_path=acl or None):
         raise typer.Exit(code=EXIT_SCAN_ERROR)
-    if not confirm:
+    if not confirm and not dry_live:
         typer.echo("真机常驻监听会**持续**真实操作 HA，必须显式 --confirm，拒绝启动。", err=True)
         raise typer.Exit(code=EXIT_SCAN_ERROR)
 
@@ -509,7 +515,8 @@ def watch(
         raise typer.Exit(code=EXIT_SCAN_ERROR)
 
     runtime = _make_runtime(
-        graph, None, "fake", live=True, ha_url=ha_url, ha_token=token,
+        graph, None, "fake", live=not dry_live, dry_live=dry_live,
+        ha_url=ha_url, ha_token=token,
         persist_dir=persist_dir or None, cfg=cfg,
     )
     if runtime.persist is not None and runtime.restored:
