@@ -1078,6 +1078,7 @@ def live_preflight(
     known_entities: Iterable[str] | None,
     token: str | None,
     confirm: bool,
+    dry_live: bool = False,
 ) -> ScanResult:
     """真机下发前的安全检查（`forge run --live`）。
 
@@ -1104,7 +1105,7 @@ def live_preflight(
                 "真机下发会真实操作设备，必须显式二次确认（--confirm）",
             )
         )
-    if known_entities is None:
+    if known_entities is None and not dry_live:
         result.diagnostics.append(
             Diagnostic(
                 LIVE_WHITELIST_REQUIRED,

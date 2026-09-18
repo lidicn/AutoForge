@@ -445,6 +445,7 @@ def run(
             known_entities=allow,
             token=token,
             confirm=confirm or dry_live,  # dry-live 不动设备，预检 confirm 检查自动通过
+            dry_live=dry_live,
         )
         typer.echo("\n── 真机预检（forge run {}）──".format("--live" if live else "--dry-live"))
         typer.echo(pre.render())
@@ -507,7 +508,7 @@ def watch(
         if live_allow
         else _known_entities(entities or None)
     )
-    pre = live_preflight(graph, known_entities=allow, token=token, confirm=confirm)
+    pre = live_preflight(graph, known_entities=allow, token=token, confirm=confirm or dry_live, dry_live=dry_live)
     typer.echo("\n── 真机预检（forge watch）──")
     typer.echo(pre.render())
     if not pre.ok:
