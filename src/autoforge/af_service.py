@@ -1681,3 +1681,57 @@ def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[
     except OSError:
         pass
     return {"ok": killed, "stopped": holder.get("owner", ""), "graph": holder.get("graph", "")}
+
+
+def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) -> dict[str, Any]:
+    """启动 watch 进程跑指定 IR。
+
+    把 IR 写到临时文件，subprocess.Popen 起 forge watch 子进程。
+    dry_live=True 时不动设备（do 只记意图），首次部署建议先用 dry-live 验证。
+    """
+    import subprocess
+    import tempfile
+    root = Path(store_root) if store_root else Path(".forge")
+    # 先停旧 watch（单实例模型）
+    try:
+        subprocess.run(["pkill", "-f", "forge watch"], capture_output=True, timeout=5)
+    except Exception:
+        pass
+    # 写 IR 到临时文件
+    tmp = Path(tempfile.mkdtemp(dir=str(root))) / "deployed_ir.json"
+    tmp.write_text(json.dumps(ir, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 起 watch
+    cmd = [
+        "forge", "watch", str(tmp),
+        "--persist-dir", str(root),
+        "--ha-url", os.environ.get("AUTOFORGE_HA_URL", "http://192.168.2.200:8123"),
+    ]
+    if dry_live:
+        cmd.append("--dry-live")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"启动 watch 失败: {e}"}
+    # 等 sidecar 出现
+    import time
+    info = root / "watch.lock.info"
+    for _ in range(15):
+        time.sleep(1)
+        if info.exists():
+            try:
+                data = json.loads(info.read_text(encoding="utf-8"))
+                return {
+                    "ok": True,
+                    "pid": proc.pid,
+                    "owner": data.get("owner", ""),
+                    "graph": data.get("graph", ""),
+                    "dry_live": dry_live,
+                }
+            except (OSError, ValueError):
+                pass
+    return {"ok": True, "pid": proc.pid, "dry_live": dry_live, "note": "watch 已启动，sidecar 尚未出现"}

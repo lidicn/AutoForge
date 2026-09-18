@@ -550,6 +550,15 @@ def build_app(
         owner = (body or {}).get("owner", "")
         return svc.stop_watch(owner=owner, store_root=store.root if store else None)
 
+    @app.post("/api/watch/start", dependencies=[Depends(_write)])
+    def api_watch_start(body: dict[str, Any]) -> dict[str, Any]:
+        """启动 watch 进程跑指定 IR（dry-live 默认）。"""
+        ir = body.get("ir")
+        if not ir:
+            return {"ok": False, "error": "缺少 ir 字段"}
+        dry_live = body.get("dry_live", True)
+        return svc.start_watch(ir=ir, store_root=store.root if store else None, dry_live=dry_live)
+
     # ── v0.8.0：令牌自检与管理 ──
     @app.get("/api/auth/whoami")
     def api_auth_whoami(info: TokenInfo | None = Depends(authenticated())) -> dict[str, Any]:
