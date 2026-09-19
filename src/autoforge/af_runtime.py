@@ -98,7 +98,13 @@ class Runtime:
         last_changed: str | None = None,
         **payload: Any,
     ) -> list[Instance]:
-        """便捷方法：构造事件并发布（测试与 FakeHA 场景常用）。"""
+        """便捷方法：构造事件并发布（测试与 FakeHA 场景常用）。
+
+        P1-12：先更新状态源再发布事件——事件到达时状态必须已就绪，
+        否则 spawn 实例时 _refresh_snapshot 会因未知实体 raise UnknownEntity。
+        """
+        if hasattr(self.states, "set_state"):
+            self.states.set_state(entity_id, state)
         return self.publish(BusEvent.of(entity_id, state, source=source, last_changed=last_changed, **payload))
 
     # ── 持久化（P1：实例持久化与崩溃恢复）───────────────────────────────

@@ -187,6 +187,8 @@ def test_fault_drift_triggers_canary_rollback():
     inject_drift(states, "light.x", "off")  # 目标停在非预期值
 
     runtime.emit("binary_sensor.m", "on")
+    # P1-11：canary.duration 生效——推进时钟超过观察期
+    runtime.advance(15 * 60 + 1)
 
     assert any(ev.type == ENTITY_DRIFT for ev in runtime.audit), "应记录漂移审计"
     calls = [(a, p) for a, p in runtime.adapters.get("mock").calls]

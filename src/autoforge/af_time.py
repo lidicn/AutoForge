@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import math
+
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -114,21 +116,43 @@ def parse_duration(value: str | int | float) -> float:
     """解析时长字面量为秒。
 
     支持 `'10m'` / `'90s'` / `'2h'` / `'1d'`，也接受纯数字（按秒）。
+    支持 HA 原生 `'HH:MM:SS'` 格式（P1-9）。
     IR 里 `for=10m`、`wait 60s` 都走这里，保证两种 Timer 的单位口径一致。
+
+    P1-9 修复：拒绝 inf/nan/负值（fail-closed），避免挂起项永不过期或定时器静默不触发。
     """
     if isinstance(value, (int, float)):
-        return float(value)
+        seconds = float(value)
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError(f"时长必须是非负有限值：{value!r}")
+        return seconds
     text = str(value).strip().lower()
     if not text:
         raise ValueError("时长不能为空")
+    # P1-9：支持 HH:MM:SS 格式
+    if ":" in text:
+        parts = text.split(":")
+        if len(parts) != 3:
+            raise ValueError(f"HH:MM:SS 格式需要三个部分：{value!r}")
+        try:
+            h, m, s = float(parts[0]), float(parts[1]), float(parts[2])
+        except ValueError as exc:
+            raise ValueError(f"无法解析 HH:MM:SS：{value!r}") from exc
+        seconds = h * 3600 + m * 60 + s
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError(f"时长必须是非负有限值：{value!r}")
+        return seconds
     if text[-1] in _UNIT_SECONDS:
         number, unit = text[:-1], text[-1]
     else:
         number, unit = text, "s"
     try:
-        return float(number) * _UNIT_SECONDS[unit]
+        seconds = float(number) * _UNIT_SECONDS[unit]
     except ValueError as exc:
         raise ValueError(f"无法解析时长字面量：{value!r}") from exc
+    if not math.isfinite(seconds) or seconds < 0:
+        raise ValueError(f"时长必须是非负有限值：{value!r}")
+    return seconds
 
 
 def format_duration(seconds: float) -> str:

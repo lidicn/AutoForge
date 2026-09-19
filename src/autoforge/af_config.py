@@ -66,15 +66,40 @@ class Config:
         """AutoForge API 令牌：文件优先，缺省回退环境变量。"""
         return str(self._creds.get("api_token") or os.environ.get("AUTOFORGE_API_TOKEN", ""))
 
-    # ── 原子写（mkstemp + os.replace + chmod 600）────────────────────
+    # ── 原子写（mkstemp + fsync + os.replace，权限在 tmp 上先设）────────────────────
     def _atomic_write(self, path: Path, data: Mapping[str, Any]) -> None:
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        # P1-22 修复：
+        # - 用 tempfile.mkstemp 生成随机 tmp 名（避免并发写同名 .tmp）
+        # - 权限在 tmp 上先设 0o600（避免 rename 后、chmod 前的窗口期令牌可读）
+        # - 写后 fsync（掉电数据落盘）
+        import tempfile
+        fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
         try:
-            os.chmod(path, 0o600)
-        except OSError:  # Windows 无 0600 语义，尽力而为
-            pass
+            # 先设权限再写内容（窗口期最小化）
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                pass  # Windows 无 0600 语义
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps(data, ensure_ascii=False, indent=2))
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+            # 目录 fsync
+            try:
+                dir_fd = os.open(str(path.parent), os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except OSError:
+                pass
 
     # ── 更新凭据 + 代数自增 ──────────────────────────────────────────
     def update_credentials(

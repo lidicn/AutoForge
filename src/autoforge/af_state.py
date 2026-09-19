@@ -110,10 +110,14 @@ class InMemoryStateProvider:
             self.attributes[entity_id] = dict(attributes)
 
     def snapshot(self, entity_ids: Iterable[str]) -> Snapshot:
+        # P1-12：对未知实体 raise UnknownEntity（fail-closed，不静默省略）
         self.clock_reads += 1
         wanted = list(entity_ids)
+        for e in wanted:
+            if e not in self.states:
+                raise UnknownEntity(e)
         return Snapshot(
-            values=MappingProxyType({e: self.states[e] for e in wanted if e in self.states}),
+            values=MappingProxyType({e: self.states[e] for e in wanted}),
             attributes=MappingProxyType({e: dict(self.attributes.get(e, {})) for e in wanted}),
         )
 

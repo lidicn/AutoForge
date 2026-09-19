@@ -206,17 +206,30 @@ class RateLimiter:
     任一维度超限即抛 `RateLimitExceeded`。
     """
 
+    #: 最大保留的 key 数量（P0-10：防止 _hits 无界增长导致内存泄漏）
+    _MAX_KEYS = 10000
+
     def __init__(self, per_minute: int = 1000, window_s: int = 60) -> None:
         self.per_minute = per_minute
         self.window_s = window_s
         self._hits: dict[str, list[float]] = {}
         self._lock = threading.Lock()
 
+    def _cleanup_expired(self, now: float) -> None:
+        """清理所有已过期的 key（P0-10：防止 _hits 无界增长）。"""
+        cutoff = now - self.window_s
+        expired = [k for k, v in self._hits.items() if not v or v[-1] <= cutoff]
+        for k in expired:
+            del self._hits[k]
+
     def check(self, key: str) -> None:
         if self.per_minute <= 0:
             return
         now = time.time()
         with self._lock:
+            # P0-10：超过最大 key 数时触发全量清理
+            if len(self._hits) >= self._MAX_KEYS:
+                self._cleanup_expired(now)
             hits = self._hits.setdefault(key, [])
             cutoff = now - self.window_s
             if hits and hits[0] <= cutoff:

@@ -99,8 +99,12 @@ class Scheduler:
         #    - `emit`：延迟发布，到点按 then 继续（不是超时）
         #    - `wait`：语义拍板 A——时间到了走 `then` 正常继续（wait 是"延时"，不是超时）
         #    - `ask`（或未知 kind）：无人应答到点 → `on_timeout` 兜底
-        for instance in self.instances.due_timers():
+        due = self.instances.due_timers()
+        import sys
+        print(f"[TICK] due_timers={len(due)} instances", file=sys.stderr, flush=True)
+        for instance in due:
             kind = instance.timer.kind if instance.timer is not None else "timeout"
+            print(f"[TICK] inst={instance.instance_id} kind={kind} node={instance.ctx.current_node}", file=sys.stderr, flush=True)
             if kind == EMIT_TIMER_KIND:
                 fired.append(self.executor.emit_due(instance))
             elif kind == "wait":
@@ -229,10 +233,14 @@ class Scheduler:
     def _satisfied(self, trig: Trigger, event: BusEvent) -> bool:
         trig = _normalize(trig)
         if trig.type == "group":
-            results = [self._satisfied(sub, event) for sub in trig.sources]
-            # group 的 and/or 按**当前状态**判定（不只依赖触发事件），避免多源组合永远不成立
+            # P1-6：group and 基于状态快照判定（窗口默认 0，严格同时）。
+            # 旧实现用同一个 event 匹配所有子 trigger，一个事件只能匹配一个
+            # entity_id，导致 and 永远不成立。修复后：对 state 类型子 trigger
+            # 查当前状态快照；event 类型仍按事件匹配。
             if trig.op == "and":
-                return all(results)
+                return all(self._group_sub_satisfied(sub, event) for sub in trig.sources)
+            # or 保持原逻辑：任一子 trigger 匹配当前事件即成立
+            results = [self._satisfied(sub, event) for sub in trig.sources]
             return any(results)
         if trig.type == "event":
             # v0.4.0 订阅侧：只按事件名**精确**匹配（不支持通配符，KICKOFF §4.1）
@@ -248,6 +256,31 @@ class Scheduler:
         if trig.from_ is not None and event.payload.get("old_state") != trig.from_:
             return False
         return True
+
+    def _group_sub_satisfied(self, sub: Trigger, event: BusEvent) -> bool:
+        """P1-6：group and 的子 trigger 判定——state 类型查状态快照，event 类型按事件匹配。"""
+        sub = _normalize(sub)
+        if sub.type == "state":
+            if not sub.entity_id:
+                return False
+            try:
+                snap = self.states.snapshot([sub.entity_id])
+                current = snap.get(sub.entity_id)
+            except Exception:
+                return False
+            if sub.to is not None and current != sub.to:
+                return False
+            if sub.from_ is not None:
+                old_state = event.payload.get("old_state") if event.entity_id == sub.entity_id else None
+                if old_state is not None and old_state != sub.from_:
+                    return False
+            return True
+        if sub.type == "event":
+            if not sub.event:
+                return False
+            return event.entity_id == f"{EVENT_ENTITY_PREFIX}{sub.event}"
+        # time/sun 等非事件驱动类型：在 group and 里无法由事件触发，返回 False
+        return False
 
     def _still_holds(self, pending: _PendingFor) -> bool:
         """到期时复查持续条件是否仍成立（条件破坏即取消）。"""
@@ -282,6 +315,9 @@ class Scheduler:
         today = now.date().isoformat()
         hhmm = f"{now.hour:02d}:{now.minute:02d}"
         for auto in self.graph:
+            # P1-5 修复：停用的自动化不触发时间事件
+            if not getattr(auto, "enabled", True):
+                continue
             for node in auto.entry_nodes():
                 trig = node.trigger
                 if trig is None or trig.type != "time":

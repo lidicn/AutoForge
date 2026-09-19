@@ -243,17 +243,38 @@ class Node:
         return self.kind in ("ask", "wait")
 
     def target_entities(self) -> set[str]:
-        """`do` 节点写入的实体（`params.entity_id`，支持 str 与 list）。"""
+        """`do` 节点写入的实体（`params.entity_id` 与 `params.target.entity_id`，支持 str 与 list）。
+
+        安全约定：必须同时解析 `entity_id` 与 `target.{entity_id,device_id,area_id}`，
+        否则扫描器/爆炸半径/ACL 会漏掉 `target:` 形式的写目标（P0-5 绕过）。
+        `device_id`/`area_id` 需服务端查 HA 展开，此处先标记为待展开（前缀 `device:`/`area:`）。
+        """
         if self.kind != "do":
             return set()
+        result: set[str] = set()
+
+        # 1. params.entity_id（传统形式）
         raw = self.params.get("entity_id")
-        if raw is None:
-            return set()
-        if isinstance(raw, str):
-            return {raw}
-        if isinstance(raw, (list, tuple)):
-            return {str(x) for x in raw}
-        return set()
+        if raw is not None:
+            if isinstance(raw, str):
+                result.add(raw)
+            elif isinstance(raw, (list, tuple)):
+                result.update(str(x) for x in raw)
+
+        # 2. params.target.{entity_id, device_id, area_id}（HA 原生 target 形式）
+        target = self.params.get("target")
+        if isinstance(target, dict):
+            for key in ("entity_id", "device_id", "area_id"):
+                val = target.get(key)
+                if val is None:
+                    continue
+                prefix = "" if key == "entity_id" else f"{key}:"
+                if isinstance(val, str):
+                    result.add(f"{prefix}{val}")
+                elif isinstance(val, (list, tuple)):
+                    result.update(f"{prefix}{x}" for x in val)
+
+        return result
 
 
 @dataclass(frozen=True)

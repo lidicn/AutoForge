@@ -1,0 +1,4 @@
+[
+  { "entity_id": "binary_sensor.study_desk_motion", "state": "on" },
+  { "advance_s": 31 }
+]

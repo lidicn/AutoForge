@@ -50,20 +50,17 @@ MAX_STEPS_PER_SEGMENT = 1000
 #: v0.3.0：`emit` 延迟发布所用的实例定时器 kind（与 `wait`/`ask` 的 timeout 区分）
 EMIT_TIMER_KIND = "emit"
 
-_YES_WORDS = ("是", "好", "要", "开", "嗯", "yes", "y", "ok", "okay", "确认", "开吧", "来吧")
-_NO_WORDS = ("不", "否", "别", "不用", "不要", "算了", "no", "n", "cancel")
+# WO-AF-001：同意判定收口到 homesdk.consent，本仓不再持有词表
+from homesdk.consent import YES as _HOMESDK_YES, classify_answer as _homesdk_classify
 
 
 def classify_answer(text: str) -> str:
-    """把人类应答归类为 yes / no / default（IR §5.2）。"""
-    lowered = str(text).strip().lower()
-    if not lowered:
-        return "default"
-    if any(w in lowered for w in _YES_WORDS):
-        return "yes"
-    if any(w in lowered for w in _NO_WORDS):
-        return "no"
-    return "default"
+    """yes / no（IR §5.2）。判定口径来自 homesdk，本仓不再持有词表。
+
+    homesdk 返回 yes / no / unknown；AF 的 IR 只有两条出口，
+    unknown 映射到 no（收紧：听不清不执行，而不是走 default 边放行）。
+    """
+    return "yes" if _homesdk_classify(text) == _HOMESDK_YES else "no"
 
 
 @dataclass
@@ -161,6 +158,28 @@ class NodeExecutor:
         if instance.state == SUSPENDED:
             self.instances.resume(instance)  # 恢复时重新取快照
 
+        # P1-11：canary 观察期结束 → 检查漂移并回滚
+        pending_canary = instance.ctx.context.pop("pending_canary", None)
+        if pending_canary is not None and kind == "on_timeout":
+            try:
+                wrapped, adapter = pending_canary
+                if wrapped.has_drift():
+                    rolled = wrapped.rollback(adapter)
+                    self.audit.add(
+                        AuditEvent(
+                            type=ENTITY_DRIFT,
+                            at=self.clock.now(),
+                            message=f"canary 观察期检测到漂移 {wrapped.action}，已自动回滚（{len(rolled)} 次反向下发）",
+                            automation_id=instance.automation.id,
+                            instance_id=instance.instance_id,
+                            node_id=node.id,
+                            data={"params": dict(wrapped.params)},
+                        )
+                    )
+            except Exception:
+                import logging
+                logging.getLogger("autoforge.executor").exception("canary 漂移检查失败")
+
         edge = auto.pick_edge(node.id, {kind, "default"})
         if edge is None:
             self._terminate(instance)
@@ -168,13 +187,35 @@ class NodeExecutor:
         instance.ctx.current_node = edge.to
         return self.run(instance)
 
-    def answer(self, room: str | None, text: str) -> Instance | None:
-        """人类应答。默认按 room 维度匹配；同房间多实例按创建时间优先；一次应答仅生效一次。"""
-        candidates = [s for s in self.pending_asks.values() if s.room == room]
-        if not candidates:
+    def resolve_ask(self, ask_id: str | None, room: str | None) -> AskSession | None:
+        """WO-AF-002：ask 应答解析器（唯一入口，仓内不留第二份匹配逻辑）。
+
+        ask_id 精确命中字典键（= instance_id）。ask_id 给了却不命中 → None，**绝不 fallback**。
+        ask_id 为 None 时才允许按 room 取最旧。
+
+        不变式：一个实例同一时刻只有一个挂起 ask（af_service.py:1063 注释声明）。
+        """
+        if ask_id:
+            return self.pending_asks.get(ask_id)
+        candidates = [s for s in self.pending_asks.values() if s.room == room] if room else list(self.pending_asks.values())
+        return min(candidates, key=lambda s: s.created_at) if candidates else None
+
+    def answer(self, room: str | None, text: str, ask_id: str | None = None) -> Instance | None:
+        """人类应答。WO-AF-002：统一走 resolve_ask，ask_id 不匹配绝不 fallback。"""
+        import logging
+        logger = logging.getLogger("autoforge.executor")
+
+        session = self.resolve_ask(ask_id, room)
+        if session is None:
+            if ask_id:
+                logger.warning("answer: ask_id=%r 不匹配任何挂起 ask，拒绝 fallback", ask_id)
+            else:
+                logger.warning("answer: room=%r 无挂起 ask", room)
             return None
-        session = min(candidates, key=lambda s: s.created_at)
         instance = self.instances.get(session.instance_id)
+        if instance is None:
+            logger.warning("answer: session.instance_id=%r 对应实例不存在", session.instance_id)
+            return None
         return self.resume(instance, classify_answer(text))
 
     def timeout(self, instance: Instance) -> Instance:
@@ -215,7 +256,11 @@ class NodeExecutor:
         if node.kind == "if":
             try:
                 value = evaluate(node.expr or {}, self._resolver(instance))
+                import sys
+                print(f"[IF] {node.id} expr={node.expr} → value={value}", file=sys.stderr, flush=True)
             except (UnknownEntity, ExprError, KeyError, ValueError) as exc:
+                import sys
+                print(f"[IF] {node.id} ERROR: {exc}", file=sys.stderr, flush=True)
                 return self._soft_fail(instance, node, exc)
             return {"then"} if value else {"no", "default"}
 
@@ -249,12 +294,28 @@ class NodeExecutor:
         )
         if use_canary:
             from .af_canary import CanaryGuard
+            from .af_time import parse_duration
 
             guard = CanaryGuard(
                 self.states,
                 auto_rollback=bool(canary.get("auto_rollback", True)) if isinstance(canary, dict) else True,
             )
             wrapped = guard.perform(adapter, node.action or "", dict(node.params))
+            # P1-11：canary.duration 接入——动作下发后挂起观察 duration，超时恢复时检查漂移
+            canary_duration = None
+            if isinstance(canary, dict):
+                dur_str = canary.get("duration")
+                if dur_str:
+                    try:
+                        canary_duration = parse_duration(dur_str)
+                    except (ValueError, TypeError):
+                        pass
+            if canary_duration and canary_duration > 0:
+                # 挂起观察：存 CanaryResult + adapter，duration 到点后 resume 检查漂移
+                instance.ctx.context["pending_canary"] = (wrapped, adapter)
+                self.instances.suspend(instance, node.id, canary_duration, kind="canary_observe")
+                return None
+            # 无 duration → 立即检查漂移（原行为）
             if wrapped.has_drift():
                 rolled = guard.check_and_rollback(adapter, wrapped)
                 self.audit.add(

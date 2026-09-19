@@ -101,7 +101,9 @@ def test_executor_canary_rolls_back_on_drift():
     states.set_state("binary_sensor.m", "off")
     states.set_state("light.x", "off")
     runtime = build_runtime(graph, states=states)
-    runtime.publish(BusEvent.of("binary_sensor.m", "on"))  # 触发
+    runtime.publish(BusEvent.of("binary_sensor.m", "on"))  # 触发 → do 节点挂起观察 15m
+    # P1-11：canary.duration 生效——推进时钟超过观察期，触发漂移检查
+    runtime.advance(15 * 60 + 1)
 
     # 漂移被检测到并审计
     assert any(ev.type == ENTITY_DRIFT for ev in runtime.audit)

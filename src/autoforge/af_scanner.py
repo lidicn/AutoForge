@@ -371,17 +371,31 @@ class StaticScanner:
                     node.id,
                 )
             )
-        if level == "L2" and not node.requires_confirm:
-            out.diagnostics.append(
-                Diagnostic(
-                    "L2_NEEDS_CONFIRM",
-                    ERROR,
-                    f"动作 {node.adapter}.{node.action} 属于 L2（门锁/窗帘/空调），"
-                    f"必须显式标记 requires_confirm=true 并可配 canary 灰度（IR §8.1）",
-                    auto.id,
-                    node.id,
+        # P1-2：L2 动作服务端策略表——requires_confirm=true 必须配 canary 灰度，不可免费豁免
+        if level == "L2":
+            if not node.requires_confirm:
+                out.diagnostics.append(
+                    Diagnostic(
+                        "L2_NEEDS_CONFIRM",
+                        ERROR,
+                        f"动作 {node.adapter}.{node.action} 属于 L2（门锁/窗帘/空调），"
+                        f"必须显式标记 requires_confirm=true（IR §8.1）",
+                        auto.id,
+                        node.id,
+                    )
                 )
-            )
+            elif not node.canary:
+                # P1-2：requires_confirm=true 但无 canary → 免费豁免，服务端策略表拒绝
+                out.diagnostics.append(
+                    Diagnostic(
+                        "L2_NEEDS_CANARY",
+                        ERROR,
+                        f"动作 {node.adapter}.{node.action} 属于 L2 且 requires_confirm=true，"
+                        f"必须配 canary 灰度（duration + auto_rollback），不可仅凭 requires_confirm 豁免（P1-2 服务端策略表）",
+                        auto.id,
+                        node.id,
+                    )
+                )
         if node.adapter == "http":
             url = str(node.params.get("url", ""))
             host = host_of(url)

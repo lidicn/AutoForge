@@ -197,9 +197,12 @@ def build_app(
     )
 
     def _client_ip(request: Request) -> str:
-        fwd = request.headers.get("x-forwarded-for")
-        if fwd:
-            return fwd.split(",")[0].strip()
+        # P0-10 修复：默认不信任 X-Forwarded-For（可伪造）
+        # 只有显式配置 AUTOFORGE_TRUST_PROXY=true 时才使用 XFF 第一个 IP
+        if os.getenv("AUTOFORGE_TRUST_PROXY", "").lower() in ("1", "true", "yes"):
+            fwd = request.headers.get("x-forwarded-for")
+            if fwd:
+                return fwd.split(",")[0].strip()
         return request.client.host if request.client else "unknown"
 
     def _rate_limit_dep(
@@ -266,16 +269,22 @@ def build_app(
         description="AutoForge 只读服务层（Round 1 控制台后端，对齐 UI 开工令附录 A）",
         dependencies=[Depends(_rate_limit_dep)],
     )
+    # P0-10 修复：CORS 不再默认 *，从环境变量读取允许的 origin
+    # 未配置时只允许 localhost（本地开发），生产环境应显式配置 AUTOFORGE_CORS_ORIGINS
+    _cors_origins = [o.strip() for o in (os.getenv("AUTOFORGE_CORS_ORIGINS") or "").split(",") if o.strip()]
+    if not _cors_origins:
+        _cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8000", "http://127.0.0.1:8000"]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # 原型期：供本地前端（Vite dev）跨域联调
+        allow_origins=_cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
+        allow_credentials=True,
     )
 
     @app.get("/api/health")
     def api_health() -> dict[str, Any]:
-        return svc.health()
+        return svc.health(store)
 
     # ── v1.4.0 治理面：待批队列（部署前写操作先入队，人审后回放）──
     # 注意：approve / reject **只在服务层**（此处 + CLI），MCP 面绝不注册。
@@ -537,7 +546,7 @@ def build_app(
 
     @app.post("/api/live/run", dependencies=[Depends(_live)])
     def api_live_run(body: LiveRunBody) -> dict[str, Any]:
-        return _svc(svc.live_run, body.ir, body.live_allow, body.events, body.confirm)
+        return _svc(svc.live_run, body.ir, body.live_allow, body.events, body.confirm, store)
 
     # ── v1.7.3：运行中 watch 实例列表（只读）──
     @app.get("/api/watch/list")
@@ -606,13 +615,19 @@ def build_app(
         return {"ok": True, "revoked": revoked}
 
     # ── HTTP MCP（streamable JSON-RPC，供 opencode 等远程 MCP 客户端）──
-    @app.post("/mcp")
-    def api_mcp(body: dict[str, Any]) -> dict[str, Any]:
-        """JSON-RPC over HTTP：复用 af_mcp.dispatch，支持 initialize/tools.list/tools.call/ping。"""
+    @app.post("/mcp", dependencies=[Depends(_write)])
+    def api_mcp(body: dict[str, Any], token_info: TokenInfo | None = Depends(authenticated())) -> dict[str, Any]:
+        """JSON-RPC over HTTP：复用 af_mcp.dispatch，支持 initialize/tools.list/tools.call/ping。
+
+        安全约定（P0-6 修复）：
+        - 加 _write 鉴权依赖（启用鉴权时必须携带有效令牌）
+        - token_info 传递给 dispatch，工具层 scope 门基于真实令牌主体
+        """
         from .af_mcp import dispatch, TOOLS, PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION
         method = body.get("method", "")
         id_ = body.get("id")
         params = body.get("params") or {}
+        current = {"subject": token_info.subject, "scopes": sorted(token_info.scopes)} if token_info else None
         if method == "initialize":
             return {"jsonrpc": "2.0", "id": id_, "result": {
                 "protocolVersion": PROTOCOL_VERSION,
@@ -623,7 +638,7 @@ def build_app(
             from .af_mcp import _tool_def
             return {"jsonrpc": "2.0", "id": id_, "result": {"tools": [_tool_def(t) for t in TOOLS]}}
         if method == "tools/call":
-            content, is_error = dispatch(params.get("name", ""), params.get("arguments", {}) or {}, store, None)
+            content, is_error = dispatch(params.get("name", ""), params.get("arguments", {}) or {}, store, current)
             return {"jsonrpc": "2.0", "id": id_, "result": {"content": content, "isError": is_error}}
         if method == "ping":
             return {"jsonrpc": "2.0", "id": id_, "result": {}}

@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Iterable, Mapping
@@ -33,6 +34,19 @@ __all__ = ["HAAdapter", "HATransport", "HAStateProvider"]
 Transport = Callable[[str, Mapping[str, Any]], CallResult]
 
 DEFAULT_HA_URL = "http://192.168.2.200:8123"
+
+#: domain/service 合法字符（P0-11：防止路径注入）
+_HA_DOMAIN_RE = re.compile(r"^[a-z0-9_]+$")
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """禁用重定向（P0-11：防止 HA 令牌随 3xx 外泄到外部主机）。"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # 返回 None = 不跟随重定向
+
+
+_no_redirect_opener = urllib.request.build_opener(_NoRedirectHandler)
 
 
 class HATransport:
@@ -57,7 +71,7 @@ class HATransport:
         # 凭据热重载（§2.9）：有 cfg 时 token 以 cfg 为准，call/get_state 比对代数刷新
         self.token = cfg.get_ha_token() if cfg is not None else token
         self.timeout = float(timeout)
-        self._opener = opener or urllib.request.urlopen
+        self._opener = opener or _no_redirect_opener.open
 
     def _refresh_if_stale(self) -> None:
         """凭据热重载（§2.9）：connection_revision 变化即丢弃旧 token，从 cfg 取最新。"""
@@ -75,6 +89,9 @@ class HATransport:
         domain, _, service = action.partition(".")
         if not domain or not service:
             return CallResult.fail(f"非法动作（应为 domain.service）：{action!r}", action=action)
+        # P0-11：domain/service 字符校验，防止路径注入
+        if not _HA_DOMAIN_RE.match(domain) or not _HA_DOMAIN_RE.match(service):
+            return CallResult.fail(f"非法 domain/service（含非法字符）：{action!r}", action=action)
         url = f"{self.base_url}/api/services/{domain}/{service}"
         payload = json.dumps(dict(params or {})).encode("utf-8")
         req = urllib.request.Request(
@@ -215,6 +232,8 @@ class HAAdapter:
             return CallResult.fail(error, fault=kind, action=action, params=dict(params))
         if self.dry_run:
             self.intents.append((action, dict(params)))
+            import sys
+            print(f"[HAAdapter.dry_run] {action} {dict(params)}", file=sys.stderr, flush=True)
             if self.on_dry_run is not None:
                 self.on_dry_run(action, params)
             return CallResult.ok({"dry_run": True, "action": action, "params": dict(params)})

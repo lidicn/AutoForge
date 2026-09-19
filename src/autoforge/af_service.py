@@ -157,13 +157,28 @@ def _entities_of(graph: Graph) -> set[str]:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def health() -> dict[str, Any]:
+def health(store: "GraphStore | None" = None) -> dict[str, Any]:
+    """WO-AF-004 打回 4：ok 由真实探测决定，不再硬编码 True。
+
+    探 store 可读（list 归档历史）；store 为 None（测试/离线场景）时 ok=True
+    保持向后兼容。readonly 仍是硬编码字面量（v1.x 只读服务层身份声明）。
+    """
+    ok = True
+    store_ok = None
+    if store is not None:
+        try:
+            list(store.history())
+            store_ok = True
+        except Exception:
+            ok = False
+            store_ok = False
     return {
-        "ok": True,
+        "ok": ok,
         "version": API_VERSION,
         "contract_version": CONTRACT_VERSION,
         "milestones": list(MILESTONES),
         "readonly": True,
+        "store_ok": store_ok,
     }
 
 
@@ -398,11 +413,15 @@ def submit_pending(
     summary: str | None = None,
     submitted_by: str = "",
     agent_key: str | None = None,
+    authenticated_subject: str | None = None,
 ) -> dict[str, Any]:
     """把一条写操作入待批队列；per-agent 熔断达上限抛 `ServiceError(400)`。
 
     v1.4.0：提交前先过**第一道闸**（静态扫描）——未通过即拒绝入队（fail-fast），
     避免坏自动化占坑等人审；`approve` 回放时 `save_graph` 会**再校验一次**（双保险）。
+
+    P0-13 修复：`authenticated_subject` 来自认证上下文（token subject），
+    传入时强制覆盖 `submitted_by`，防止调用方伪造提交人身份。
     """
     ir = payload.get("ir")
     if ir is not None:
@@ -421,13 +440,15 @@ def submit_pending(
                 f"先修 IR 或改用 af_build 查看诊断。",
                 status=400,
             )
+    # P0-13：认证主体强制覆盖调用方自报的 submitted_by
+    effective_submitter = authenticated_subject or submitted_by
     ps = PendingStore(store.root)
     br = payload.get("blast_radius") or _blast_radius_of(payload.get("ir", {}))
     summary = summary or f"{tool}：{payload.get('name', '')}"
     try:
         op = ps.submit(
             tool, payload, summary=summary, blast_radius=br,
-            submitted_by=submitted_by, agent_key=agent_key,
+            submitted_by=effective_submitter, agent_key=agent_key,
         )
     except PendingLimitExceeded as exc:
         raise ServiceError(str(exc), status=400)
@@ -457,6 +478,13 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
     op = ps.load(op_id)
     if op is None:
         raise ServiceError(f"未找到待批操作 {op_id!r}", status=404)
+    # P0-13：禁止自批（提交人不能批准自己提交的操作）
+    submitter = str(op.get("submitted_by") or "")
+    if reviewer and submitter and reviewer == submitter:
+        raise ServiceError(
+            f"禁止自批：提交人 {submitter!r} 不能批准自己提交的操作 {op_id!r}",
+            status=403,
+        )
     payload = op["payload"]
     result = save_graph(
         store,
@@ -557,6 +585,9 @@ def load_device_guard(store: GraphStore | None) -> DeviceGuardRegistry | None:
     - 每次调用**重新读盘**：规则文件改动后下次 `scan()` 自动生效（热更新，无需重启）；
     - 读盘/解析失败 → 记日志并返回 None（不让坏策略文件把服务打挂）。
 
+    P0-7 修复：注入 DeviceCatalog，让 area 类型的保护规则能正确匹配
+    （之前 catalog 始终为 None，area 规则永远不命中）。
+
     规则文件形态见 `DeviceGuardRegistry.from_file`（规则数组 / 旧 ACL 对象 / `{"rules":[…]}`）。
     """
     if store is None:
@@ -565,7 +596,14 @@ def load_device_guard(store: GraphStore | None) -> DeviceGuardRegistry | None:
     if not path.is_file():
         return None
     try:
-        return DeviceGuardRegistry.from_file(path)
+        guard = DeviceGuardRegistry.from_file(path)
+        # P0-7：注入 catalog，使 area 规则可匹配
+        try:
+            from .af_catalog import DeviceCatalog
+            guard.catalog = DeviceCatalog(store.root)
+        except Exception as exc:
+            logger.warning("DEVICE_GUARD_CATALOG_INJECT_FAILED err=%s", exc)
+        return guard
     except (OSError, ValueError) as exc:
         logger.warning("DEVICE_ACL_LOAD_FAILED path=%s err=%s", path, exc)
         return None
@@ -1119,18 +1157,14 @@ def answer_session(
     ask_id: str | None = None,
     room: str | None = None,
 ) -> dict[str, Any]:
-    """人工应答：按 `ask_id`（优先）或 `room` 匹配挂起 ask，唤醒后继续执行。"""
+    """WO-AF-002：人工应答。统一走 executor.resolve_ask，ask_id 非空且不匹配时 404，绝不 fallback。"""
     sess = _get_session(session_id)
     runtime: Runtime = sess["runtime"]
-    pending = runtime.executor.pending_asks
 
-    ask = pending.get(ask_id) if ask_id else None
+    ask = runtime.executor.resolve_ask(ask_id, room)
     if ask is None:
-        candidates = [
-            s for s in pending.values() if room is None or s.room == room
-        ]
-        ask = min(candidates, key=lambda s: s.created_at) if candidates else None
-    if ask is None:
+        if ask_id:
+            raise ServiceError(f"ask_id={ask_id!r} 不匹配任何挂起 ask（绝不 fallback 到最旧）", status=404)
         raise ServiceError("没有匹配的待应答 ask（可能已超时或被取消）", status=404)
 
     instance = runtime.instances.get(ask.instance_id)
@@ -1220,8 +1254,15 @@ def live_run(
     live_allow: Sequence[str],
     events: Sequence[Mapping[str, Any]] | None = None,
     confirm: bool = False,
+    store: "GraphStore | None" = None,
 ) -> dict[str, Any]:
-    """受闸门的真机下发：三重闸全通过才执行。"""
+    """受闸门的真机下发：三重闸全通过才执行。
+
+    安全约定（P0-4 修复）：
+    - **必须先过 StaticScanner**，ERROR 级诊断硬拒绝（未扫描即拒绝）
+    - `allow` 只能做**减法**（从扫描器算出的可写集合中再收窄），不能扩权
+    - `target/device_id/area_id` 形式的写目标必须被展开后再分级（P0-5）
+    """
     cfg = _live_config()
     if not cfg["enabled"]:
         raise ServiceError("真机下发未启用：服务端需设置 AUTOFORGE_LIVE_ENABLED=1", status=403)
@@ -1235,6 +1276,21 @@ def live_run(
         raise ServiceError("真机下发必须提供可写白名单（live_allow），先不开放全量", status=400)
 
     graph = _load_ir(ir)
+
+    # ★ 第一道闸：静态扫描（P0-4 修复：未扫描即拒绝）
+    scan = StaticScanner(
+        graph,
+        device_guard=load_device_guard(store) if store else None,
+        entity_health=load_entity_health(store) if store else None,
+    ).scan()
+    if not scan.ok:
+        errors = [f"{d.code}: {d.message}" for d in scan.errors[:5]]
+        err_text = "; ".join(errors)
+        raise ServiceError(
+            f"拒绝真机下发：IR 未通过静态扫描（{len(scan.errors)} 个错误）：{err_text}",
+            status=400,
+        )
+    factory = LIVE_TRANSPORT_FACTORY
     targets: set[str] = set()
     for auto in graph:
         targets |= auto.writes()
@@ -1244,7 +1300,6 @@ def live_run(
 
     token = os.getenv("AUTOFORGE_HA_TOKEN", "")
     ha_url = str(cfg["ha_url"])
-    factory = LIVE_TRANSPORT_FACTORY
     if factory is not None:
         transport = factory(ha_url, token)
         provider = HAStateProvider(transport=transport)
@@ -1649,12 +1704,12 @@ def list_watches(store_root: str | None = None) -> dict[str, Any]:
 def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[str, Any]:
     """停止正在跑的 watch 进程。
 
-    通过 pkill 终止容器内 forge watch 进程；owner 为空则停全部。
+    P1-19 修复：用 PID 文件精确终止（不用 /proc 模式匹配，避免误伤无关进程）。
     """
-    import subprocess
     root = Path(store_root) if store_root else Path(".forge")
     lock = root / "watch.lock"
     info = root / "watch.lock.info"
+    pid_file = root / "watch.pid"
     # 读当前持有者
     holder = {}
     try:
@@ -1663,24 +1718,19 @@ def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[
         pass
     if owner and holder.get("owner") and holder["owner"] != owner:
         return {"ok": False, "error": f"当前持有者 {holder['owner']} 与请求 {owner} 不符"}
-    # 找 forge watch 进程并杀掉（Alpine 容器无 ps/pkill，读 /proc）
+    # P1-19：读 PID 文件精确终止
     killed = False
     try:
-        proc_root = Path("/proc")
-        for entry in proc_root.iterdir():
-            if not entry.name.isdigit():
-                continue
-            try:
-                cmdline = (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace")
-            except (OSError, PermissionError):
-                continue
-            if "forge watch" in cmdline:
+        if pid_file.exists():
+            pid_str = pid_file.read_text(encoding="utf-8").strip()
+            if pid_str:
+                pid = int(pid_str)
                 try:
-                    os.kill(int(entry.name), 15)  # SIGTERM
+                    os.kill(pid, 15)  # SIGTERM
                     killed = True
                 except (ProcessLookupError, PermissionError):
                     pass
-    except Exception as e:
+    except (OSError, ValueError) as e:
         return {"ok": False, "error": f"停止 watch 失败: {e}"}
     # 清 sidecar
     try:
@@ -1688,6 +1738,8 @@ def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[
             info.unlink()
         if lock.exists():
             lock.unlink()
+        if pid_file.exists():
+            pid_file.unlink()
     except OSError:
         pass
     return {"ok": killed, "stopped": holder.get("owner", ""), "graph": holder.get("graph", "")}
@@ -1696,21 +1748,35 @@ def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[
 def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) -> dict[str, Any]:
     """启动 watch 进程跑指定 IR。
 
-    把 IR 写到临时文件，subprocess.Popen 起 forge watch 子进程。
-    dry_live=True 时不动设备（do 只记意图），首次部署建议先用 dry-live 验证。
+    P1-19 修复：
+    - HA 令牌经环境变量 AUTOFORGE_HA_TOKEN 传递（不出现在 /proc/pid/cmdline）
+    - 用 PID 文件精确终止旧进程（不用 pkill -f 模式匹配）
+    - 返回值基于真实健康探测（子进程 poll）
     """
     import subprocess
     import tempfile
     root = Path(store_root) if store_root else Path(".forge")
-    # 先停旧 watch（单实例模型）
+    pid_file = root / "watch.pid"
+    # P1-19：先停旧 watch（读 PID 文件精确终止）
     try:
-        subprocess.run(["pkill", "-f", "forge watch"], capture_output=True, timeout=5)
-    except Exception:
+        if pid_file.exists():
+            pid_str = pid_file.read_text(encoding="utf-8").strip()
+            if pid_str:
+                os.kill(int(pid_str), 15)
+    except (ProcessLookupError, PermissionError, OSError, ValueError):
         pass
     # 写 IR 到临时文件
     tmp = Path(tempfile.mkdtemp(dir=str(root))) / "deployed_ir.json"
     tmp.write_text(json.dumps(ir, ensure_ascii=False, indent=2), encoding="utf-8")
-    # 起 watch
+    # P1-19：令牌从 credentials.json 读出，经环境变量传递（不传 --ha-token argv）
+    ha_token = ""
+    cred = root / "credentials.json"
+    if cred.exists():
+        try:
+            ha_token = json.loads(cred.read_text(encoding="utf-8")).get("ha_token", "")
+        except (OSError, ValueError):
+            pass
+    # 起 watch（不传 --ha-token，令牌走环境变量）
     cmd = [
         "forge", "watch", str(tmp),
         "--persist-dir", str(root),
@@ -1718,20 +1784,34 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
     ]
     if dry_live:
         cmd.append("--dry-live")
+    # P1-19：构造子进程环境，注入 AUTOFORGE_HA_TOKEN
+    child_env = dict(os.environ)
+    if ha_token:
+        child_env["AUTOFORGE_HA_TOKEN"] = ha_token
     try:
+        logf = (root / "watch.log").open("ab")
         proc = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=logf,
+            stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=child_env,
         )
     except Exception as e:
         return {"ok": False, "error": f"启动 watch 失败: {e}"}
-    # 等 sidecar 出现
+    # P1-19：写 PID 文件（供 stop_watch 精确终止）
+    try:
+        pid_file.write_text(str(proc.pid), encoding="utf-8")
+    except OSError:
+        pass
+    # 等 sidecar 出现，同时做健康探测
     import time
     info = root / "watch.lock.info"
     for _ in range(15):
         time.sleep(1)
+        # P1-19：子进程已死 → 立即返回失败（不再假成功）
+        if proc.poll() is not None:
+            return {"ok": False, "error": f"watch 子进程启动后立即退出（exit_code={proc.returncode}），请检查 watch.log"}
         if info.exists():
             try:
                 data = json.loads(info.read_text(encoding="utf-8"))
@@ -1744,4 +1824,7 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
                 }
             except (OSError, ValueError):
                 pass
+    # P1-19：15 秒后做最终健康探测
+    if proc.poll() is not None:
+        return {"ok": False, "error": f"watch 子进程已退出（exit_code={proc.returncode}），请检查 watch.log"}
     return {"ok": True, "pid": proc.pid, "dry_live": dry_live, "note": "watch 已启动，sidecar 尚未出现"}

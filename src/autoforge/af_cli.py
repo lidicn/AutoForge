@@ -77,6 +77,7 @@ def _gate(
     entities_path: str | None = None,
     acl_path: str | None = None,
     guard_path: str | None = None,
+    store_root: str = DEFAULT_STORE_ROOT,
 ) -> bool:
     """第一道闸：静态扫描 + NL 渲染（含覆盖率）。返回是否通过。"""
     known = None
@@ -86,13 +87,25 @@ def _gate(
     # v1.7.4：CLI build 也加载 entity_health，否则 TRIGGER_STALE 闸在 CLI 模式不生效
     try:
         from .af_catalog import DeviceCatalog
-        entity_health = DeviceCatalog(DEFAULT_STORE_ROOT).health_map()
+        entity_health = DeviceCatalog(store_root).health_map()
     except Exception:
         entity_health = None
 
+    # P0-8：CLI 也加载 device_guard（从 store 的 device_acl.json），让 Tier-0 规则在 CLI 模式生效
+    # 显式 --guard 优先；否则尝试从 store_root 加载；都没有则用旧 entity_acl 兜底
+    device_guard = None
     if guard_path:
-        # v1.4.0：设备保护规则文件（规则数组 / 旧 ACL 对象 / {"rules":[…]}）
-        scanner = StaticScanner(graph, known_entities=known, device_guard=DeviceGuardRegistry.from_file(guard_path), entity_health=entity_health)
+        device_guard = DeviceGuardRegistry.from_file(guard_path)
+    else:
+        try:
+            from .af_service import load_device_guard
+            from .af_store import GraphStore
+            device_guard = load_device_guard(GraphStore(store_root))
+        except Exception:
+            device_guard = None
+
+    if device_guard is not None:
+        scanner = StaticScanner(graph, known_entities=known, device_guard=device_guard, entity_health=entity_health)
     else:
         scanner = StaticScanner(graph, known_entities=known, entity_acl=_load_json_mapping(acl_path) or None, entity_health=entity_health)
     result = scanner.scan()
@@ -276,7 +289,13 @@ def _make_runtime(
         runtime.instances.states = provider
         runtime.scheduler.states = provider
         runtime.executor.states = provider
-        runtime.adapters.register(HAAdapter(transport=transport, dry_run=dry_live))
+        adapter = HAAdapter(transport=transport, dry_run=dry_live)
+        if dry_live:
+            def _on_dry(action, params):
+                import sys
+                print(f"[DRY-LIVE 意图] {action} {params}", file=sys.stderr, flush=True)
+            adapter.on_dry_run = _on_dry
+        runtime.adapters.register(adapter)
         return runtime
 
     seed: dict[str, str] = {}

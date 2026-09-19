@@ -55,8 +55,9 @@ def test_save_to_pending_and_approve(tmp_path):
     listing = svc.list_pending(store)
     assert any(it["op_id"] == op_id for it in listing["items"])
     # approve 回放落盘 + 删 pending
-    approved = svc.approve_pending(store, op_id, reviewer="alice")
-    assert approved["ok"] and approved["approved_by"] == "alice"
+    # P0-13：批准人必须不同于提交人（禁止自批）
+    approved = svc.approve_pending(store, op_id, reviewer="bob")
+    assert approved["ok"] and approved["approved_by"] == "bob"
     assert not (tmp_path / "pending" / f"{op_id}.json").is_file()
     # 落盘生效
     assert store.latest("demo") is not None

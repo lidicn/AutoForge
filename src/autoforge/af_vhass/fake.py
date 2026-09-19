@@ -73,13 +73,17 @@ class FakeHA:
 
     # ── StateProvider ────────────────────────────────────────────────
     def snapshot(self, entity_ids: Iterable[str]) -> Snapshot:
+        # P1-12：对未知实体 raise UnknownEntity（fail-closed，不编造默认状态）
+        from ..af_state import UnknownEntity
         wanted = list(entity_ids)
         values = {}
         for entity_id in wanted:
             if entity_id == "sun.sun" and self.clock is not None:
                 values[entity_id] = sun_state(self.clock.now())  # type: ignore[attr-defined]
                 continue
-            values[entity_id] = self.states.get(entity_id, default_state_for(entity_id))
+            if entity_id not in self.states:
+                raise UnknownEntity(entity_id)
+            values[entity_id] = self.states[entity_id]
         return Snapshot(
             values=values,
             attributes={e: dict(self.attributes.get(e, {})) for e in wanted},

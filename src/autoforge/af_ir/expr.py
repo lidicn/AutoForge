@@ -16,6 +16,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+
+from ..af_state import UnknownEntity
 from typing import Any, Callable, Mapping
 
 __all__ = [
@@ -465,13 +467,12 @@ def evaluate(
             return _compare(op, left, right)
         if op in _UNARY_OPS:
             if op in ("not_is_on", "not_is_off"):
-                # 同步类守卫：实体缺失（漂移）时**视为需要动作**，而非跳过。
-                # 否则 HA 状态读取抖动会让 `if` 软失效，导致合法的开关同步被静默丢弃
-                # （2026-09-15 真机实测：连按后状态读取间歇失败 → 联动自伤）。
+                # P1-16 修复：实体未知（UnknownEntity）时保守返回 False（fail-closed），
+                # 避免把「实体掉线/名字写错」当成「条件成立」触发不该动的写。
                 try:
                     value = _operand_value(expr["value"], resolve, budget)
-                except KeyError:  # UnknownEntity 是 KeyError 子类
-                    return True
+                except UnknownEntity:
+                    return False
                 return _unary(op, value)
             return _unary(op, _operand_value(expr["value"], resolve, budget))
         raise ExprError(f"未知算子：{op!r}")

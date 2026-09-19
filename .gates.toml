@@ -1,0 +1,38 @@
+# AutoForge 质量门禁口径（复制到仓库根，改名 `.gates.toml`）
+# 由 PM/整合 于 2026-09-19 依据 `doc/审计与横评-202609/02-审计-AutoForge.md` 起草。
+
+source_roots = ["src"]
+
+# 冒烟：只证明顶层 import 打得开，不证明服务能起。部署验收仍要 `docker compose ps` + HTTP。
+smoke_targets = ["autoforge"]
+
+# ── 关键模块：这里的 `except Exception: pass` 是硬错误，不许进基线 ──────────
+# 选取依据：本次审计里「闸门被绕过 / 回滚谎报 / 鉴权失效」全部发生在这批文件。
+critical_globs = [
+    "src/autoforge/af_executor.py",    # 审批门（P0-1 classify_answer / P1-24 ask 路由）
+    "src/autoforge/af_pending.py",     # 待批队列
+    "src/autoforge/af_canary.py",      # 金丝雀回滚
+    "src/autoforge/af_auth.py",        # 鉴权
+    "src/autoforge/af_scanner.py",     # 静态扫描分级
+    "src/autoforge/af_affordance.py",  # 风险域表（与 af_adapters/base.py 的表矛盾即 P0）
+    "src/autoforge/af_adapters/*",     # 真机写入
+    "src/autoforge/af_ir/*",           # IR 与边优先级
+]
+
+# ── 写入路径：这里的字面量 `ok=True` 是硬错误 ─────────────────────────────
+write_path_globs = [
+    "src/autoforge/af_adapters/*",
+    "src/autoforge/af_live.py",
+    "src/autoforge/af_executor.py",
+    "src/autoforge/af_canary.py",
+    "src/autoforge/af_persist.py",
+    "src/autoforge/af_instance.py",
+]
+
+# G3 加严项：WO-AF-001 合入、词表物理删除之后，**必须改成 true** 再不许回头。
+forbid_local_consent_tables = false
+
+extra_skip_globs = [
+    "src/autoforge.egg-info/*",
+    "examples/*",   # 示例 IR 的配套 py 不参与门禁
+]

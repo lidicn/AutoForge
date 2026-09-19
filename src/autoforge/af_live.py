@@ -226,13 +226,19 @@ def run_watch(
     返回累计统计。
     """
     published = 0
+    total_fired = 0
     for i, ev in enumerate(events):
         if stop is not None and stop.is_set():
             break
         if ev is None:
             continue
-        runtime.publish(ev)
+        fired = runtime.publish(ev)
         published += 1
+        total_fired += len(fired)
+        if fired:
+            import sys
+            for inst in fired:
+                print(f"[FIRE] {ev.entity_id}={ev.state} → 实例 {inst.instance_id} 节点 {inst.current_node_id}", file=sys.stderr, flush=True)
         if on_event is not None:
             on_event(ev, runtime)
         if tick_each and (i + 1) % tick_each == 0:
@@ -241,6 +247,7 @@ def run_watch(
             break
     return {
         "published": published,
+        "fired": total_fired,
         "stopped": bool(stop and stop.is_set()),
     }
 
@@ -286,19 +293,26 @@ def start_ticker(
     def _read_inbox() -> None:
         if not inbox:
             return
+        import logging
+        logger = logging.getLogger("autoforge.live")
         try:
             for f in sorted(inbox.glob("*.json")):
                 try:
                     data = json.loads(f.read_text(encoding="utf-8"))
-                    ask_id = data.get("ask_id", "")
+                    ask_id = data.get("ask_id") or None
                     text = data.get("text", "")
                     room = data.get("room")
-                    runtime.executor.answer(ask_id, text=text, room=room)
+                    result = runtime.executor.answer(room=room, text=text, ask_id=ask_id)
+                    if result is not None:
+                        f.unlink(missing_ok=True)  # 成功消费后才清理
+                        logger.info("answer consumed: ask_id=%s room=%s → inst=%s", ask_id, room, result.instance_id)
+                    else:
+                        logger.warning("answer not consumed (保留证据文件): ask_id=%s room=%s text=%s", ask_id, room, text[:50])
                 except Exception:
-                    pass
-                f.unlink(missing_ok=True)
+                    logger.exception("answer processing failed (保留证据文件): %s", f.name)
+                    # 不删除文件，保留审批证据链
         except Exception:
-            pass
+            logger.exception("inbox scan failed")
 
     def _loop() -> None:
         while not stop.is_set():

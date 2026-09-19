@@ -1,0 +1,4 @@
+{
+  "binary_sensor.study_desk_motion": "off",
+  "light.study_monitor_bar": "off"
+}

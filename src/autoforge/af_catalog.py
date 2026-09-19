@@ -295,6 +295,19 @@ class DeviceCatalog:
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, path)
+
+    def area_of(self, entity_id: str) -> str:
+        """P0-7：查询实体所属区域（房间名）。供 DeviceGuardRegistry 的 area 规则匹配使用。
+
+        优先走 catalog 里的 `area` 字段（注册表解析结果），兜底走 attributes.area_name。
+        实体不存在或无区域信息 → 返回空字符串。
+        """
+        data = self._load()
+        entities = data.get("entities") or {}
+        meta = entities.get(entity_id)
+        if not meta:
+            return ""
+        return _meta_area(meta)
         self._cache = None
 
     # ── 1. 刷新（拉 HA 全量落缓存）──────────────────────────────────────

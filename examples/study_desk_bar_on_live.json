@@ -1,0 +1,75 @@
+{
+    "ir_version":  "0.2.1",
+    "id":  "study_desk_bar_on",
+    "name":  "书桌前有人则延时开书房显示器挂灯",
+    "version":  1,
+    "mode":  "single",
+    "persist":  true,
+    "meta":  {
+                 "author":  "agent",
+                 "note":  "真机部署：书房人体传感器检测到人 → 等30秒确认不是路过 → 开显示器挂灯（wait 新语义）"
+             },
+    "expect":  [
+                   {
+                       "entity_id":  "light.yeelink_cn_555003624_lamp22_s_2",
+                       "state":  "on",
+                       "note":  "wait 30 秒到点走 then 后，挂灯应点亮"
+                   }
+               ],
+    "nodes":  [
+                  {
+                      "id":  "a1",
+                      "kind":  "on",
+                      "name":  "书房检测到人在",
+                      "trigger":  {
+                                      "type":  "state",
+                                      "entity_id":  "binary_sensor.xiaomi_cn_blt_3_1hsett9ug4k01_03_occupancy_status_p_2_1078",
+                                      "to":  "on"
+                                  }
+                  },
+                  {
+                      "id":  "w1",
+                      "kind":  "wait",
+                      "duration":  "30s",
+                      "name":  "等 30 秒确认不是路过"
+                  },
+                  {
+                      "id":  "d1",
+                      "kind":  "do",
+                      "name":  "开书房显示器挂灯",
+                      "adapter":  "ha",
+                      "action":  "light.turn_on",
+                      "params":  {
+                                     "entity_id":  "light.yeelink_cn_555003624_lamp22_s_2"
+                                 },
+                      "result_var":  "bar_on"
+                  },
+                  {
+                      "id":  "p1",
+                      "kind":  "pass",
+                      "name":  "结束"
+                  }
+              ],
+    "edges":  [
+                  {
+                      "from":  "a1",
+                      "to":  "w1",
+                      "kind":  "then"
+                  },
+                  {
+                      "from":  "w1",
+                      "to":  "d1",
+                      "kind":  "then"
+                  },
+                  {
+                      "from":  "d1",
+                      "to":  "p1",
+                      "kind":  "then"
+                  },
+                  {
+                      "from":  "d1",
+                      "to":  "p1",
+                      "kind":  "on_error"
+                  }
+              ]
+}

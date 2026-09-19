@@ -18,6 +18,9 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY examples ./examples
+# WO-AF-004 打回 5：homesdk 0.1.1 烘进镜像，文件名钉死（不通配，避免多 wheel 静默装错）
+COPY docker/homesdk/homesdk-0.1.1-py3-none-any.whl /tmp/homesdk/
+RUN pip install --no-cache-dir /tmp/homesdk/homesdk-0.1.1-py3-none-any.whl
 
 # v1.6.0-a：同时装 ha extra（websockets），启用 HA websocket 四注册表；
 # 未安装时目录会自动降级（device_id/integration/area 为空），核心能力不受损。

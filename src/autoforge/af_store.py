@@ -79,10 +79,37 @@ class WriteConflictError(Exception):
 
 
 def _atomic_write(path: Path, text: str) -> None:
-    """同目录临时文件 + `os.replace` 原子替换（并发读者永远看到完整文件）。"""
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    """同目录临时文件 + `os.replace` 原子替换（并发读者永远看到完整文件）。
+
+    P1-18 修复：
+    - 用 tempfile.mkstemp 生成随机 tmp 名（避免并发写同名 .tmp 互相截断）
+    - 写后 fsync 文件句柄（掉电时数据已落盘）
+    - replace 后 fsync 目录（确保目录项持久化）
+    """
+    import tempfile
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+        # 目录 fsync（确保 rename 持久化）；Windows 上可能 PermissionError，尽力而为
+        try:
+            dir_fd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+    finally:
+        # 清理残留的 tmp 文件（如果 replace 失败）
+        try:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -137,7 +164,8 @@ class GraphStore:
         self.lock_timeout = float(lock_timeout)
 
     def _dir(self, name: str) -> Path:
-        safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in name).strip("_") or "graph"
+        # P1-18 修复：白名单只允许字母数字、-、_，不允许 "."（防止 ../ 目录逃逸）
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name).strip("_") or "graph"
         return self.root / safe
 
     @property
@@ -439,17 +467,25 @@ class GraphStore:
                 elif strategy == "rename":
                     target = self._unique_name(name)
                     report["renamed"][name] = target
-                else:  # overwrite
-                    self._delete_archive(name)
+                # overwrite：P1-17 修复——先校验全部版本，通过后再删除旧归档
+            # P1-17：先校验所有版本，非法版本跳过，合法版本仍写入
+            validated = []
+            entry_has_error = False
             for ver in entry.get("versions", []):
                 graph_dict = ver.get("graph")
                 try:
                     _validate_graph_dict(graph_dict)
+                    validated.append((ver, graph_dict))
                 except IRValidationError as exc:
                     report["errors"].append(
                         {"name": target, "version": ver.get("version"), "error": str(exc)}
                     )
-                    continue
+                    entry_has_error = True
+            # overwrite 策略：全部版本校验通过后才删除旧归档（避免校验失败时历史不可回滚）
+            if self.versions(name) and strategy == "overwrite" and not entry_has_error:
+                self._delete_archive(name)
+            # 合法版本仍然写入（非法版本已被跳过）
+            for ver, graph_dict in validated:
                 self.save_version_raw(
                     target,
                     graph_dict,

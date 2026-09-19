@@ -29,9 +29,9 @@ def test_not_is_on_false_when_on():
     assert evaluate({"op": "not_is_on", "value": {"var": "entity.lamp"}}, _resolver({"lamp": "on"})) is False
 
 
-def test_not_is_on_true_when_unknown():
-    # 关键：状态缺失（漂移）→ 视为需要动作，不软失效
-    assert evaluate({"op": "not_is_on", "value": {"var": "entity.lamp"}}, _resolver({})) is True
+def test_not_is_on_false_when_unknown():
+    # P1-16 修复：实体未知（UnknownEntity）→ 保守返回 False（fail-closed），不触发写
+    assert evaluate({"op": "not_is_on", "value": {"var": "entity.lamp"}}, _resolver({})) is False
 
 
 def test_not_is_off_true_when_on():
@@ -42,8 +42,9 @@ def test_not_is_off_false_when_off():
     assert evaluate({"op": "not_is_off", "value": {"var": "entity.lamp"}}, _resolver({"lamp": "off"})) is False
 
 
-def test_not_is_off_true_when_unknown():
-    assert evaluate({"op": "not_is_off", "value": {"var": "entity.lamp"}}, _resolver({})) is True
+def test_not_is_off_false_when_unknown():
+    # P1-16 修复：实体未知（UnknownEntity）→ 保守返回 False（fail-closed）
+    assert evaluate({"op": "not_is_off", "value": {"var": "entity.lamp"}}, _resolver({})) is False
 
 
 def test_old_is_off_still_raises_on_unknown():

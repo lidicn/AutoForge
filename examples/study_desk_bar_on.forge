@@ -1,0 +1,16 @@
+automation study_desk_bar_on
+name "书桌前有人则延时开书房显示器挂灯"
+ir_version "0.2.1"
+version 1
+mode single
+snapshot true
+
+on a1 {"type": "state", "entity_id": "binary_sensor.study_desk_motion", "to": "on"} name "书桌前有人"
+wait w1 30s name "等 30 秒确认不是路过"
+do d1 ha.light.turn_on {"entity_id": "light.study_monitor_bar"} result bar_on name "开书房显示器挂灯"
+pass p1 name "结束"
+
+edge a1 -> w1 then
+edge w1 -> d1 then
+edge d1 -> p1 then
+edge d1 -> p1 on_error

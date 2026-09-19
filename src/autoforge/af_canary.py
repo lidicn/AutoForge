@@ -45,8 +45,33 @@ INVERSE_ACTION = _inverse_map()
 
 
 def inverse_action(action: str) -> str | None:
-    """返回动作的反向动作（用于回滚）；无反向则 None。"""
+    """返回动作的反向动作（用于回滚）；无反向则 None。
+
+    P1-10 注：此函数基于仿真逆推，已不再用于 live 路径的 rollback。
+    保留仅为向后兼容（外部可能引用）。
+    """
     return INVERSE_ACTION.get(action)
+
+
+# P1-10：依据真实状态推导恢复动作（不用仿真逆推）
+_ON_STATES = frozenset({"on", "open", "locked", "active", "home", "true", "1"})
+_OFF_STATES = frozenset({"off", "closed", "unlocked", "idle", "away", "false", "0", "unavailable", "unknown"})
+
+
+def _state_to_action(domain: str, state: str | None) -> str | None:
+    """P1-10：依据实体的真实状态推导恢复动作。
+
+    只覆盖 on/off 类域（light/switch/fan/binary_sensor 等）。
+    state 为 None 或无法映射 → 返回 None（不回滚，fail-closed）。
+    """
+    if state is None:
+        return None
+    s = str(state).strip().lower()
+    if s in _ON_STATES:
+        return f"{domain}.turn_on"
+    if s in _OFF_STATES:
+        return f"{domain}.turn_off"
+    return None
 
 
 @dataclass
@@ -83,13 +108,25 @@ class CanaryResult:
         return False
 
     def rollback(self, adapter: Adapter) -> list[CallResult]:
-        """对每一个目标实体下发反向动作，恢复到动作前状态。"""
-        inv = inverse_action(self.action)
-        if inv is None:
-            return []
+        """P1-10：依据动作前真实快照（pre_states）恢复每个目标实体。
+
+        不用仿真逆推（inverse_action）——只依据变更前抓取的真实状态。
+        pre_state 未知或无法映射 → 跳过该实体（fail-closed，不猜）。
+        """
+        import logging
+        logger = logging.getLogger("autoforge.canary")
+        domain = self.action.partition(".")[0]
         out: list[CallResult] = []
         for entity_id in self._targets():
-            out.append(adapter.call(inv, {"entity_id": entity_id}))
+            pre_state = self.pre_states.get(entity_id)
+            restore_action = _state_to_action(domain, pre_state)
+            if restore_action is None:
+                logger.warning(
+                    "canary 回滚跳过 %s：pre_state=%r 无法映射到恢复动作（domain=%s）",
+                    entity_id, pre_state, domain,
+                )
+                continue
+            out.append(adapter.call(restore_action, {"entity_id": entity_id}))
         return out
 
 

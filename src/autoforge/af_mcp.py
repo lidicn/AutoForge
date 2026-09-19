@@ -141,7 +141,8 @@ def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | N
         "owner": owner,
         "allow_bulk": bool(args.get("allow_bulk", False)),
     }
-    return svc.submit_pending(store, "af_save", payload, submitted_by=owner or "mcp")
+    # P0-13：传 authenticated_subject，让服务层强制使用认证主体
+    return svc.submit_pending(store, "af_save", payload, submitted_by=owner or "mcp", authenticated_subject=owner or None)
 
 
 def _t_diff(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:

@@ -344,9 +344,20 @@ class InstanceManager:
 
     # ── 内部 ──────────────────────────────────────────────────────────
     def _refresh_snapshot(self, instance: Instance) -> None:
-        """新建快照并丢弃旧快照（IR §7.1）。"""
+        """新建快照并丢弃旧快照（IR §7.1）。
+
+        P1-12：snapshot 对未知实体 raise UnknownEntity。spawn 时不应因此
+        阻止实例创建——只 snapshot 已知实体，未知实体留到表达式求值时
+        由 P1-16（UnknownEntity→False）处理。
+        """
+        from .af_state import UnknownEntity
         entity_ids = sorted(instance.automation.reads())
-        snapshot = self.states.snapshot(entity_ids)
+        known = [e for e in entity_ids if self.states.has(e)] if hasattr(self.states, "has") else entity_ids
+        try:
+            snapshot = self.states.snapshot(known)
+        except UnknownEntity:
+            # 双重保险：has() 与 snapshot() 之间状态变化的竞态
+            snapshot = self.states.snapshot([])
         instance.snapshot = snapshot
         instance.ctx.snapshot = snapshot.to_dict()
 
