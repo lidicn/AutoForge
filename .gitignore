@@ -52,3 +52,10 @@ tmp/
 /ui/build.out
 /ui/build.err
 /ui/build.pid
+
+# AF-KEEPERS (2026-09-19)：归一后禁止此类垃圾长回来
+backups/
+tests_fresh/
+examples_fresh/
+tmp_*.py
+*.whl

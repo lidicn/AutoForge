@@ -1,0 +1,47 @@
+# homesdk 质量门禁基线：只准减少，不准新增。
+# 指纹 = 相对路径#规则#函数限定名（刻意不含行号，改一行不该让基线失效）。
+# 由 `python -m homesdk.gates app --update-baseline` 生成。
+src/autoforge/af_expect.py#except-pass-broad#_read_attribute
+src/autoforge/af_live.py#except-pass-broad#start_ticker._write_asks
+src/autoforge/af_api.py#fake-ok-const#build_app.api_asks_answer
+src/autoforge/af_api.py#fake-ok-const#build_app.api_asks_pending
+src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_revoke
+src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_subjects
+src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_whoami
+src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.get_state
+src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.list_aliases
+src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.list_entities
+src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.refresh
+src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.remove_alias
+src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.resolve
+src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.resolve_metrics
+src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.set_alias
+src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.snapshot
+src/autoforge/af_experience.py#fake-ok-const#ExperienceStore.export
+src/autoforge/af_experience.py#fake-ok-const#ExperienceStore.summary
+src/autoforge/af_service.py#fake-ok-const#_session_view
+src/autoforge/af_service.py#fake-ok-const#delete_session
+src/autoforge/af_service.py#fake-ok-const#diff
+src/autoforge/af_service.py#fake-ok-const#enable_by_tag
+src/autoforge/af_service.py#fake-ok-const#export_store
+src/autoforge/af_service.py#fake-ok-const#faults
+src/autoforge/af_service.py#fake-ok-const#get_conf
+src/autoforge/af_service.py#fake-ok-const#get_graph
+src/autoforge/af_service.py#fake-ok-const#graphs_by_tag
+src/autoforge/af_service.py#fake-ok-const#health
+src/autoforge/af_service.py#fake-ok-const#intervene
+src/autoforge/af_service.py#fake-ok-const#list_graphs
+src/autoforge/af_service.py#fake-ok-const#list_pending
+src/autoforge/af_service.py#fake-ok-const#list_sessions
+src/autoforge/af_service.py#fake-ok-const#list_watches
+src/autoforge/af_service.py#fake-ok-const#live_run
+src/autoforge/af_service.py#fake-ok-const#live_status
+src/autoforge/af_service.py#fake-ok-const#reject_pending
+src/autoforge/af_service.py#fake-ok-const#save_graph
+src/autoforge/af_service.py#fake-ok-const#set_graph_tags
+src/autoforge/af_service.py#fake-ok-const#simulate
+src/autoforge/af_service.py#fake-ok-const#spec_of
+src/autoforge/af_service.py#fake-ok-const#start_watch
+src/autoforge/af_service.py#fake-ok-const#submit_pending
+src/autoforge/af_store.py#fake-ok-const#GraphStore.import_bundle
+src/autoforge/af_telemetry.py#fake-ok-const#TelemetryStore.usage
