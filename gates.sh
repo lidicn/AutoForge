@@ -6,6 +6,15 @@
 #
 # 退出码就是结论：0 过 / 1 有未获批违规 / 2 环境或配置不对。
 # 验收单里贴这条命令的**完整输出**，不接受「跑过了」。
+
+# R-WO-GATE-002：本脚本用了 bashism（${PIPESTATUS[0]}、pipefail）。非 bash（dash/sh）
+# 下 AST 红/AST 绿/冒烟红三态会塌成一态、import 冒烟门静默不跑。第一道门之前先自检：
+# 非 bash 立即 exit=126（不复用 1=设计红，以免把"闸自己坏了"藏进"红是设计"）。
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "gates.sh: 需要 bash（当前 shell 无 BASH_VERSION）；dash/sh 会让 \${PIPESTATUS[0]} 塌三态。请用 bash gates.sh。" >&2
+  exit 126
+fi
+
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
