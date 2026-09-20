@@ -28,7 +28,6 @@ src/autoforge/af_service.py#fake-ok-const#faults
 src/autoforge/af_service.py#fake-ok-const#get_conf
 src/autoforge/af_service.py#fake-ok-const#get_graph
 src/autoforge/af_service.py#fake-ok-const#graphs_by_tag
-src/autoforge/af_service.py#fake-ok-const#health
 src/autoforge/af_service.py#fake-ok-const#intervene
 src/autoforge/af_service.py#fake-ok-const#list_graphs
 src/autoforge/af_service.py#fake-ok-const#list_pending
