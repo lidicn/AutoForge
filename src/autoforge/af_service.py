@@ -1780,7 +1780,7 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
     cmd = [
         "forge", "watch", str(tmp),
         "--persist-dir", str(root),
-        "--ha-url", os.environ.get("AUTOFORGE_HA_URL", "http://192.168.2.200:8123"),
+        "--ha-url", os.environ.get("AUTOFORGE_HA_URL", ""),
     ]
     if dry_live:
         cmd.append("--dry-live")

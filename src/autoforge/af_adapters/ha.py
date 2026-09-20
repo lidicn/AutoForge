@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.error
 import urllib.request
@@ -33,7 +34,9 @@ __all__ = ["HAAdapter", "HATransport", "HAStateProvider"]
 #: transport(action, params) -> CallResult
 Transport = Callable[[str, Mapping[str, Any]], CallResult]
 
-DEFAULT_HA_URL = "http://192.168.2.200:8123"
+# R-39：不再硬编码内网 HA 地址；从环境变量 AUTOFORGE_HA_URL 读。
+# 未配置时为空，构造 HATransport/HAStateProvider 会明确报错。
+DEFAULT_HA_URL = (os.getenv("AUTOFORGE_HA_URL") or "").strip()
 
 #: domain/service 合法字符（P0-11：防止路径注入）
 _HA_DOMAIN_RE = re.compile(r"^[a-z0-9_]+$")
@@ -52,7 +55,7 @@ _no_redirect_opener = urllib.request.build_opener(_NoRedirectHandler)
 class HATransport:
     """HA REST 客户端（真实下发）。实现 `Transport` 协议（可调用）。
 
-    - `base_url`：HA 地址，如 `http://192.168.2.200:8123`
+    - `base_url`：HA 地址（缺省读环境变量 `AUTOFORGE_HA_URL`）
     - `token`：长期访问令牌（Bearer）
     - `timeout`：**传输层**套接超时（秒），保留它是为了单进程不永久挂死
     """
@@ -66,6 +69,10 @@ class HATransport:
         cfg: "Config | None" = None,
     ):
         self.base_url = (base_url or DEFAULT_HA_URL).rstrip("/")
+        if not self.base_url:
+            raise RuntimeError(
+                "HA_URL 未配置：请设置环境变量 AUTOFORGE_HA_URL 或显式传 base_url"
+            )
         self._cfg = cfg
         self._revision = cfg.connection_revision if cfg is not None else -1
         # 凭据热重载（§2.9）：有 cfg 时 token 以 cfg 为准，call/get_state 比对代数刷新

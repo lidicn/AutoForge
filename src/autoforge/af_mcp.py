@@ -17,6 +17,7 @@ agent 端（Claude Desktop / CodeBuddy 等）只认 stdio 协议，不关心服�
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import traceback
@@ -28,6 +29,8 @@ from .af_store import DEFAULT_STORE_ROOT, GraphStore
 from .af_telemetry import record_failure
 
 __all__ = ["serve_mcp", "dispatch", "TOOLS", "PROTOCOL_VERSION"]
+
+logger = logging.getLogger("autoforge.mcp")
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "autoforge-mcp"
@@ -583,8 +586,10 @@ def dispatch(
     except ServiceError as exc:
         return [_text(_annotate_failure(store, name, str(exc)))], True
     except Exception as exc:  # 业务异常（ServiceError/IRValidationError/KeyError 等）转 isError
+        # R-57：完整 traceback 只落服务端日志，不回传 MCP 客户端（防文件路径/行号/堆栈外泄）
+        logger.exception("MCP tool %s failed", name)
         msg = f"工具执行出错：{type(exc).__name__}: {exc}"
-        return [_text(f"{_annotate_failure(store, name, msg)}\n{traceback.format_exc()}")], True
+        return [_text(_annotate_failure(store, name, msg))], True
 
 
 def _annotate_failure(store: GraphStore, tool: str, message: str) -> str:
