@@ -30,7 +30,7 @@ write_path_globs = [
 ]
 
 # G3 加严项：WO-AF-001 合入、词表物理删除之后，**必须改成 true** 再不许回头。
-forbid_local_consent_tables = false
+forbid_local_consent_tables = true
 
 extra_skip_globs = [
     "src/autoforge.egg-info/*",
