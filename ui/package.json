@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/build-manifest.mjs",
+    "manifest": "node scripts/build-manifest.mjs",
     "type-check": "vue-tsc -b",
     "preview": "vite preview"
   },
