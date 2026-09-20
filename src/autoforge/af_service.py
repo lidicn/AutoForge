@@ -1377,6 +1377,20 @@ def _bundle_automation_count(bundle: Mapping[str, Any]) -> int:
     return total
 
 
+def _existing_automation_count(store: GraphStore, name: str) -> int:
+    """R-21: overwrite 会删掉的存量归档里有多少条自动化（分母含存量）。"""
+    try:
+        graph = store.load(name)
+    except Exception:
+        return 0
+    autos = graph.get("automations") if isinstance(graph, Mapping) else None
+    if isinstance(autos, list):
+        return len(autos)
+    if isinstance(graph, Mapping) and graph.get("id"):
+        return 1
+    return 0
+
+
 def import_store(
     store: GraphStore,
     bundle: Mapping[str, Any],
@@ -1391,11 +1405,23 @@ def import_store(
     `allow_bulk=True`**——但默认关着，能让「误导入整个 bundle」这类事故先被拦一下。
     """
     count = _bundle_automation_count(bundle)
+    clobbered = 0
+    if strategy == "overwrite":
+        existing_names = set(store.names())
+        for entry in bundle.get("entries") or ():
+            nm = str(entry.get("name", ""))
+            if nm and nm in existing_names:
+                clobbered += _existing_automation_count(store, nm)
+    affected = count + clobbered
     if not allow_bulk:
-        _check_blast(count, f"本次导入含约 {count} 条自动化")
+        note = f"（含覆盖销毁存量 {clobbered} 条）" if clobbered else ""
+        _check_blast(affected, f"本次导入含约 {affected} 条自动化{note}")
     report = store.import_bundle(bundle, strategy)
     if isinstance(report, dict):
-        report.setdefault("blast_radius", {"affected": count, "limit": blast_radius_limit()})
+        report.setdefault("blast_radius", {
+            "affected": affected, "incoming": count, "clobbered": clobbered,
+            "limit": blast_radius_limit(),
+        })
     return report
 
 
