@@ -73,9 +73,29 @@ class PendingStore:
         return self.pending_dir / f"{op_id}.json"
 
     def _atomic_write(self, path: Path, data: Mapping[str, Any]) -> None:
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os_replace(tmp, path)
+        # R-19：随机 tmp 名（避免并发写同名 .tmp）；mkstemp 的 fd 必须显式关闭（AF-9 半修）
+        import os
+        import tempfile
+        fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps(data, ensure_ascii=False, indent=2))
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            os_replace(Path(tmp_path), path)
+        finally:
+            try:
+                os.close(fd)  # 兜底关闭描述符：with 已关则吞 EBADF
+            except OSError:
+                pass
+            if os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     def _agent_of(self, path: Path) -> str:
         try:

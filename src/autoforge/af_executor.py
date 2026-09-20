@@ -216,7 +216,13 @@ class NodeExecutor:
         if instance is None:
             logger.warning("answer: session.instance_id=%r 对应实例不存在", session.instance_id)
             return None
-        return self.resume(instance, classify_answer(text))
+        verdict = classify_answer(text)
+        import homesdk
+        logger.info(
+            "consent resolved: ask verdict=%s text_len=%d text_head=%r homesdk=%s",
+            verdict, len(text or ""), (text or "")[:2], getattr(homesdk, "__version__", "?"),
+        )
+        return self.resume(instance, verdict)
 
     def timeout(self, instance: Instance) -> Instance:
         """`ask` 计时到点（无人应答）→ `on_timeout` 兜底。"""
