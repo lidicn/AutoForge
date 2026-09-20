@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -127,6 +128,14 @@ class Config:
         self._atomic_write(self._revision_path(), {"revision": self.connection_revision})
         return self.connection_revision
 
+    # ── 外部改盘后自愈（R-54）──────────────────────────────────────
+    def refresh(self) -> None:
+        """从磁盘重读凭据与代数：外部进程改了 credentials.json/revision.json
+        后，本进程缓存的 Config 不再永久过期。"""
+        with self._lock:
+            self._creds = self._load_credentials()
+            self.connection_revision = self._load_revision()
+
     # ── 自检（只掩码 + 长度）────────────────────────────────────────
     def describe(self) -> dict[str, Any]:
         return {
@@ -136,17 +145,24 @@ class Config:
         }
 
 
-#: 进程内单例缓存（按 root 字符串键）：同一 store 根共享一个 Config，
-#: 使 af_adapters/ha.py 的 HATransport/HAStateProvider 与 af_cli watch 引用同一代数。
-_CONFIGS: dict[str, Config] = {}
+#: 进程内单例缓存（按 root 字符串键）：同一 store 根共享一个 Config。
+#: R-54：不再永久缓存——按 TTL 重读磁盘（默认 60s，env AUTOFORGE_CONFIG_TTL_S 可调，0=不过期）。
+_CONFIGS: dict[str, tuple[Config, float]] = {}
 _CONFIGS_LOCK = threading.Lock()
+_CONFIG_TTL_S = float(os.getenv("AUTOFORGE_CONFIG_TTL_S", "60"))
 
 
 def get_config(root: str | Path) -> Config:
     key = str(Path(root))
+    now = time.monotonic()
     with _CONFIGS_LOCK:
-        cfg = _CONFIGS.get(key)
-        if cfg is None:
+        entry = _CONFIGS.get(key)
+        if entry is None:
             cfg = Config(root)
-            _CONFIGS[key] = cfg
+            _CONFIGS[key] = (cfg, now)
+            return cfg
+        cfg, loaded_at = entry
+        if _CONFIG_TTL_S > 0 and now - loaded_at > _CONFIG_TTL_S:
+            cfg.refresh()
+            _CONFIGS[key] = (cfg, now)
         return cfg

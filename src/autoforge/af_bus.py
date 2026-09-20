@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import os
 from collections import deque
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterable, Mapping
@@ -114,9 +115,9 @@ class EventBus:
         *,
         dedup_size: int = 4096,
         throttle_ms: float = 200.0,
-        breaker_threshold: int = 12,
-        breaker_window_s: float = 10.0,
-        breaker_cooldown_s: float = 15.0,
+        breaker_threshold: int | None = None,
+        breaker_window_s: float | None = None,
+        breaker_cooldown_s: float | None = None,
     ):
         self.clock = time_source or SystemTimeSource()
         self.audit = audit if audit is not None else AuditLog()
@@ -126,9 +127,19 @@ class EventBus:
         #: 熔断阈值：默认偏宽松，避免误伤合法快速输入（物理开关抖动 / 用户连按）。
         # 真正的隐式循环由 IR 结构（emit 解耦 + `if` 护栏）在编译/运行期杜绝，
         # 此处熔断仅作最后兜底；阈值需显著高于单次物理操作的抖动次数。
-        self.breaker_threshold = breaker_threshold
-        self.breaker_window = breaker_window_s
-        self.breaker_cooldown = breaker_cooldown_s
+        # R-53：熔断参数可经 env 覆盖（AUTOFORGE_BREAKER_*），未显式传时读 env，缺省与原硬编码一致。
+        self.breaker_threshold = (
+            breaker_threshold if breaker_threshold is not None
+            else int(os.getenv("AUTOFORGE_BREAKER_THRESHOLD", "12"))
+        )
+        self.breaker_window = (
+            breaker_window_s if breaker_window_s is not None
+            else float(os.getenv("AUTOFORGE_BREAKER_WINDOW_S", "10"))
+        )
+        self.breaker_cooldown = (
+            breaker_cooldown_s if breaker_cooldown_s is not None
+            else float(os.getenv("AUTOFORGE_BREAKER_COOLDOWN_S", "15"))
+        )
 
         self._seen: set[tuple[str, str, str | None]] = set()
         self._seen_order: deque[tuple[str, str, str | None]] = deque()
