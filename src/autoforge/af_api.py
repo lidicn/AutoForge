@@ -582,6 +582,19 @@ def build_app(
             return {"ok": False, "error": "no store"}
         inbox = Path(root) / "answer_inbox"
         inbox.mkdir(parents=True, exist_ok=True)
+        # A6 write-side sign: mirror af_live._read_inbox _expect_sig
+        # (ask_id or None / text default "" / room as-is), else our own answer
+        # files are rejected fail-closed by the read side.
+        import hashlib as _hashlib
+        import hmac as _hmac
+        key = (os.environ.get("AUTOFORGE_INBOX_KEY") or "").strip()
+        ask_id = body.get("ask_id") or None
+        text = body.get("text", "")
+        room = body.get("room")
+        body = dict(body)
+        if key:
+            msg = f"{ask_id}|{text}|{room}".encode("utf-8")
+            body["sig"] = _hmac.new(key.encode("utf-8"), msg, _hashlib.sha256).hexdigest()
         fname = inbox / f"{int(time.time()*1000)}.json"
         fname.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
         return {"ok": True, "inbox": str(fname)}

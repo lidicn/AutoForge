@@ -23,7 +23,7 @@ import traceback
 from typing import Any, Callable
 
 from . import af_service as svc
-from .af_auth import TokenRegistry
+from .af_auth import TokenExpired, TokenRegistry
 from .af_store import DEFAULT_STORE_ROOT, GraphStore
 from .af_telemetry import record_failure
 
@@ -43,12 +43,30 @@ def _text(s: str) -> dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────
 
 
+#: R-40 fail-closed：鉴权已配却无法确定合法启动身份时，使用空 scope 身份
+# （所有 write/live 工具走拒绝分支，read 仍公开），绝不再退回 None=全放行。
+MCP_NOACCESS: dict[str, Any] = {"subject": "<no-access>", "scopes": []}
+
+
 def _build_current(registry: TokenRegistry) -> dict[str, Any] | None:
-    """当前启动主体（来自 env 配置的第一条令牌）。无鉴权 → None（全放行）。"""
+    """当前启动主体：鉴权已配时必须由显式启动令牌 AUTOFORGE_MCP_TOKEN 确定。
+
+    - 未配任何令牌（registry.enabled=False）→ None（原型模式全放行，向后兼容）。
+    - 已配令牌 → 不再盲目取 subs[0]（两条令牌时第一条能用就放行整体 = fail-open）。
+      启动令牌缺失 / 未知 / 已撤销 / 已过期 → 返回空 scope 的拒绝身份（A7）。
+    """
     if not registry.enabled:
         return None
-    subs = registry.subjects()
-    return subs[0] if subs else None
+    token = (os.environ.get("AUTOFORGE_MCP_TOKEN") or "").strip()
+    if not token:
+        return dict(MCP_NOACCESS)
+    try:
+        info = registry.authenticate(token)
+    except TokenExpired:
+        return dict(MCP_NOACCESS)
+    if info is None or info.invalid:
+        return dict(MCP_NOACCESS)
+    return {"subject": info.subject, "scopes": sorted(info.scopes)}
 
 
 def _guard(scope: str | None, current: dict[str, Any] | None) -> None:

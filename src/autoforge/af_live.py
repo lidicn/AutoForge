@@ -293,21 +293,42 @@ def start_ticker(
     def _read_inbox() -> None:
         if not inbox:
             return
+        import hashlib
+        import hmac
         import logging
+        import os
         logger = logging.getLogger("autoforge.live")
+        # R-20：inbox 是命令通道，必须验完整性。密钥取 env AUTOFORGE_INBOX_KEY
+        # （与写侧 af_api.asks_answer 共享）。无密钥/无签名/签名不符 → 拒读、不动作、留 WARN。
+        key = (os.environ.get("AUTOFORGE_INBOX_KEY") or "").strip()
+
+        def _expect_sig(ask_id: Any, text: str, room: Any) -> str:
+            msg = f"{ask_id}|{text}|{room}".encode("utf-8")
+            return hmac.new(key.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+
         try:
             for f in sorted(inbox.glob("*.json")):
                 try:
                     data = json.loads(f.read_text(encoding="utf-8"))
+                    if not isinstance(data, dict):
+                        logger.warning("inbox reject: 非对象 JSON，未动作（保留证据文件）: %s", f.name)
+                        continue
                     ask_id = data.get("ask_id") or None
                     text = data.get("text", "")
                     room = data.get("room")
+                    sig = str(data.get("sig", "") or "")
+                    if not key or not hmac.compare_digest(sig, _expect_sig(ask_id, text, room)):
+                        logger.warning(
+                            "inbox reject: 签名缺失或不符，未动作（保留证据文件）: %s ask_id=%r",
+                            f.name, ask_id,
+                        )
+                        continue
                     result = runtime.executor.answer(room=room, text=text, ask_id=ask_id)
                     if result is not None:
                         f.unlink(missing_ok=True)  # 成功消费后才清理
                         logger.info("answer consumed: ask_id=%s room=%s → inst=%s", ask_id, room, result.instance_id)
                     else:
-                        logger.warning("answer not consumed (保留证据文件): ask_id=%s room=%s text=%s", ask_id, room, text[:50])
+                        logger.warning("answer not consumed (保留证据文件): ask_id=%s room=%s", ask_id, room)
                 except Exception:
                     logger.exception("answer processing failed (保留证据文件): %s", f.name)
                     # 不删除文件，保留审批证据链
