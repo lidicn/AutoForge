@@ -89,6 +89,10 @@ def _gate(
         from .af_catalog import DeviceCatalog
         entity_health = DeviceCatalog(store_root).health_map()
     except Exception:
+        import logging
+        logging.getLogger("autoforge.cli").warning(
+            "device_health load failed, TRIGGER_STALE gate degraded", exc_info=True
+        )
         entity_health = None
 
     # P0-8：CLI 也加载 device_guard（从 store 的 device_acl.json），让 Tier-0 规则在 CLI 模式生效
@@ -102,6 +106,10 @@ def _gate(
             from .af_store import GraphStore
             device_guard = load_device_guard(GraphStore(store_root))
         except Exception:
+            import logging
+            logging.getLogger("autoforge.cli").warning(
+                "device_guard load failed, gate running WITHOUT Tier-0 device protection", exc_info=True
+            )
             device_guard = None
 
     if device_guard is not None:
@@ -357,7 +365,7 @@ def _print_expects(graph, runtime: Runtime) -> bool:
         typer.echo(f"· 未建模动作（后果无法验证）：{'、'.join(unmodeled)}")
     if not report["declared"]:
         typer.echo("· 后置条件：未声明 expect → 本次只回答了「跑完了吗」，没回答「跑对了吗」")
-        return False
+        return True  # P1-13: no expect = pass (exit 0)
     typer.echo(
         f"· 后置条件（expect）：声明 {report['declared']} 条｜"
         f"通过 {report['passed']}｜失败 {report['failed']}｜未验证 {report['unverified']}"
@@ -425,7 +433,10 @@ def sim(
     else:
         runtime.tick()
     _print_stats(runtime)
-    _print_expects(graph, runtime)
+    expect_ok = _print_expects(graph, runtime)
+    # P1-13 修复：expect 断言失败时非 0 退出，外部编排可依赖返回码
+    if not expect_ok:
+        raise typer.Exit(code=EXIT_SCAN_ERROR)
 
 
 @app.command()

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 from urllib.parse import urlparse
+import urllib.request
 
 from .base import CallResult
 
@@ -20,11 +21,28 @@ __all__ = ["HTTPAdapter", "DEFAULT_TRANSPORT_TIMEOUT", "host_of"]
 #: 传输层超时（秒）——仅用于 socket，不是业务超时
 DEFAULT_TRANSPORT_TIMEOUT = 5.0
 
+class _NoRedirectAllowed(Exception):
+    pass
+
+class _WhitelistRedirector(urllib.request.HTTPRedirectHandler):
+    """HI-03：跟随 3xx 前必须对 Location 重过白名单，否则白名单形同虚设。"""
+    def __init__(self, is_allowed):
+        self._is_allowed = is_allowed
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not self._is_allowed(newurl):
+            raise _NoRedirectAllowed(f"重定向目标不在出站白名单内: {host_of(newurl)}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
 
 def host_of(url: str) -> str:
-    """取 URL 主机名，非法 URL 返回空串（扫描器与适配器都用它，口径统一）。"""
+    """取 URL 主机名，非法 URL 返回空串（扫描器与适配器都用它，口径统一）。
+    ADM B-09：检测 netloc 中的 @ 凭证注入（如 http://evil@whitelisted.com）。"""
     try:
-        return urlparse(url).hostname or ""
+        parsed = urlparse(url)
+        # ADM B-09：@ 在 netloc 中表示 userinfo 注入，实际请求发往 @ 前的主机
+        if parsed.netloc and "@" in parsed.netloc:
+            return ""
+        return parsed.hostname or ""
     except ValueError:
         return ""
 
@@ -63,11 +81,14 @@ class HTTPAdapter:
         # 真实请求走传输层；G1 默认不会走到这里
         from urllib import request  # 局部导入保持模块轻量
 
+        opener = request.build_opener(_WhitelistRedirector(self.is_allowed))
         try:
             req = request.Request(url, method=_method_of(action))
-            with request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310 - 已过白名单
+            with opener.open(req, timeout=self.timeout) as resp:
                 body = resp.read().decode("utf-8", errors="replace")
                 return CallResult.ok({"status": resp.status, "body": body})
+        except _NoRedirectAllowed as exc:
+            return CallResult.fail(str(exc), action=action, url=url)
         except Exception as exc:  # 传输层异常 → 交给 IR 的 on_error
             return CallResult.fail(f"HTTP 请求失败：{exc}", action=action, url=url)
 
