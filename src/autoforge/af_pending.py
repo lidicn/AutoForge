@@ -30,6 +30,9 @@ __all__ = [
 #: per-agent 待批上限（autoflow 同款默认值）
 DEFAULT_AGENT_LIMIT = 20
 
+#: 待批条目最长存活（秒）——过期自动清理，避免僵尸条目占着 per-agent 名额（审计 Medium）
+DEFAULT_TTL_S = 7 * 24 * 3600
+
 
 class PendingLimitExceeded(Exception):
     """某 agent 待批数达上限，拒绝新提交（请先审批 / 拒绝积压）。"""
@@ -116,6 +119,7 @@ class PendingStore:
         """入队一条待批操作；per-agent 熔断达上限抛 `PendingLimitExceeded`。"""
         agent = agent_key or submitted_by or "anonymous"
         with self._lock:
+            self._sweep_locked(DEFAULT_TTL_S)  # 清掉僵尸条目，避免占名额
             if self.max_per_agent > 0 and self.pending_dir.is_dir():
                 count = sum(
                     1 for p in self.pending_dir.glob("*.json") if self._agent_of(p) == agent
@@ -170,6 +174,33 @@ class PendingStore:
             p.unlink()
             return True
         return False
+
+    def _sweep_locked(self, max_age_s: float) -> int:
+        """调用方持锁。删除过期僵尸待批，返回条数。"""
+        if not self.pending_dir.is_dir():
+            return 0
+        import time
+        now = time.time()
+        removed = 0
+        for p in self.pending_dir.glob("*.json"):
+            try:
+                sub = datetime.fromisoformat(
+                    json.loads(p.read_text(encoding="utf-8"))["submitted_at"].replace("Z", "+00:00")
+                ).timestamp()
+            except (OSError, ValueError, KeyError):
+                continue
+            if now - sub > max_age_s:
+                try:
+                    p.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+        return removed
+
+    def sweep(self, max_age_s: float = DEFAULT_TTL_S) -> int:
+        """删除提交时间早于 max_age_s 的僵尸待批，返回清理条数。线程安全。"""
+        with self._lock:
+            return self._sweep_locked(max_age_s)
 
 
 def os_replace(src: Path, dst: Path) -> None:
