@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -172,6 +173,15 @@ def health(store: "GraphStore | None" = None) -> dict[str, Any]:
         except Exception:
             ok = False
             store_ok = False
+    # mimo TickSupervisor: expose tick health if a watch is running
+    tick_health = None
+    try:
+        from .af_live import get_tick_supervisor
+        sup = get_tick_supervisor()
+        if sup is not None:
+            tick_health = sup.health().snapshot(sup._clock)
+    except Exception:
+        pass  # tick_health is best-effort, must not break /api/health
     return {
         "ok": ok,
         "version": API_VERSION,
@@ -179,6 +189,7 @@ def health(store: "GraphStore | None" = None) -> dict[str, Any]:
         "milestones": list(MILESTONES),
         "readonly": True,
         "store_ok": store_ok,
+        "tick_health": tick_health,
     }
 
 
@@ -479,12 +490,16 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
     if op is None:
         raise ServiceError(f"未找到待批操作 {op_id!r}", status=404)
     # P0-13：禁止自批（提交人不能批准自己提交的操作）
+    # ADM B-11：submitted_by 为空时（无鉴权原型模式）不阻止，但标注 unverified
     submitter = str(op.get("submitted_by") or "")
+    self_check = ""
     if reviewer and submitter and reviewer == submitter:
         raise ServiceError(
             f"禁止自批：提交人 {submitter!r} 不能批准自己提交的操作 {op_id!r}",
             status=403,
         )
+    if not submitter:
+        self_check = "unverified_submitter"  # ADM B-11：无提交人信息，自批检查无法生效
     payload = op["payload"]
     result = save_graph(
         store,
@@ -499,6 +514,8 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
     ps.delete(op_id)
     result["approved_by"] = reviewer
     result["pending"] = op_id
+    if self_check:
+        result["self_check"] = self_check  # ADM B-11
     return result
 
 
@@ -664,7 +681,21 @@ def _replay(runtime: Runtime, states: Any, events: Sequence[Mapping[str, Any]]) 
     for item in events:
         advance = item.get("advance_s")
         if advance:
-            runtime.advance(float(advance))
+            secs = float(advance)
+            if secs < 0 and hasattr(runtime.clock, "jump"):
+                runtime.clock.jump(secs)
+                runtime.tick()
+            else:
+                runtime.advance(secs)
+        # mimo Clock 增量：ask answer 注入，让 yes/no/default 分支在 sim 里可测
+        answer_text = item.get("answer")
+        if answer_text is not None:
+            runtime.executor.answer(
+                room=item.get("room"),
+                text=str(answer_text),
+                ask_id=item.get("ask_id"),
+            )
+            continue
         entity_id = item.get("entity_id")
         if entity_id:
             state = str(item.get("state", ""))
@@ -1022,6 +1053,13 @@ def bootstrap_examples(store: GraphStore, examples_dir: str | Path) -> list[str]
             graph = load_graph(path)
         except (IRValidationError, json.JSONDecodeError, OSError):
             continue
+        # ADM B-06：bootstrap 样例也过静态扫描，不安全的跳过
+        try:
+            _scan = StaticScanner(graph, device_guard=load_device_guard(store), entity_health=load_entity_health(store)).scan()
+            if not _scan.ok:
+                continue
+        except Exception:
+            continue
         store.save(graph, name, note="bootstrap: examples/ir")
         created.append(name)
         # 版本化样例：若存在 `<name>.v2.json` / `.v3.json` … 依次存为 v2 / v3 …
@@ -1033,6 +1071,13 @@ def bootstrap_examples(store: GraphStore, examples_dir: str | Path) -> list[str]
             try:
                 vg = load_graph(vp)
             except (IRValidationError, json.JSONDecodeError, OSError):
+                break
+            # ADM B-06：版本化样例也过扫描
+            try:
+                _vscan = StaticScanner(vg, device_guard=load_device_guard(store), entity_health=load_entity_health(store)).scan()
+                if not _vscan.ok:
+                    break
+            except Exception:
                 break
             store.save(vg, name, note=f"bootstrap: examples/ir v{v}")
             v += 1
@@ -1125,7 +1170,7 @@ def create_session(
     graph = _load_ir(ir)
     runtime, states = _build_sim_runtime(graph, seed)
     _replay(runtime, states, list(events or []))
-    session_id = uuid.uuid4().hex[:12]
+    session_id = secrets.token_hex(16)  # ADM C-10: 128-bit entropy (was 48-bit)
     sess = {
         "id": session_id,
         "runtime": runtime,
@@ -1241,7 +1286,12 @@ def _replay_live(runtime: Runtime, events: Sequence[Mapping[str, Any]]) -> None:
     for item in events:
         advance = item.get("advance_s")
         if advance:
-            runtime.advance(float(advance))
+            secs = float(advance)
+            if secs < 0 and hasattr(runtime.clock, "jump"):
+                runtime.clock.jump(secs)
+                runtime.tick()
+            else:
+                runtime.advance(secs)
         entity_id = item.get("entity_id")
         if entity_id:
             runtime.emit(str(entity_id), str(item.get("state", "")), last_changed=item.get("last_changed"))

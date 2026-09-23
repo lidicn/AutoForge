@@ -223,11 +223,22 @@ def build_app(
             raise HTTPException(status_code=429, detail=str(exc)) from exc
 
     def requires(scope: str):
-        """端点分级依赖：write / live。未配置令牌时全站公开（向后兼容）。"""
+        """端点分级依赖：write / live。
+
+        鉴权策略（P0-9 收口，fail-closed 优先）：
+        - AF_REQUIRE_AUTH=true 且未配置令牌 -> 403（生产无令牌即不开）
+        - 未设 AF_REQUIRE_AUTH 且未配置令牌 -> None（开发/原型模式，向后兼容）
+        - 已配置令牌 -> 正常校验
+        """
         def dep(
             creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
         ) -> TokenInfo | None:
             if not registry.enabled:
+                if os.environ.get("AF_REQUIRE_AUTH", "").lower() in ("1", "true", "yes"):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="AF_REQUIRE_AUTH enabled but no API tokens configured (fail-closed)",
+                    )
                 return None
             if creds is None:
                 raise HTTPException(status_code=403, detail="缺少 API 令牌")
@@ -262,6 +273,7 @@ def build_app(
 
     _write = requires("write")
     _live = requires("live")
+    _read = requires("read")
 
     app = FastAPI(
         title="AutoForge API",
@@ -515,11 +527,11 @@ def build_app(
     def api_session_create(body: SessionBody) -> dict[str, Any]:
         return _svc(svc.create_session, body.ir, body.seed, body.events)
 
-    @app.get("/api/sessions")
+    @app.get("/api/sessions", dependencies=[Depends(_read)])
     def api_session_list() -> dict[str, Any]:
         return svc.list_sessions()
 
-    @app.get("/api/sessions/{session_id}")
+    @app.get("/api/sessions/{session_id}", dependencies=[Depends(_read)])
     def api_session_get(session_id: str) -> dict[str, Any]:
         return _svc(svc.get_session, session_id)
 

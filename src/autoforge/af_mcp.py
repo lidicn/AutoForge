@@ -18,7 +18,11 @@ from __future__ import annotations
 
 import json
 import logging
+
+# ADM B-07: MCP stdio single-line size limit (10MB), reject oversized to prevent OOM
+MAX_STDIN_LINE = 10 * 1024 * 1024
 import os
+from pathlib import Path
 import sys
 import traceback
 from typing import Any, Callable
@@ -102,7 +106,16 @@ def _t_build(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _t_compile(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    return svc.compile_text(args["text"])
+    text = args.get("text") or args.get("spec") or args.get("prompt") or ""
+    if not text.strip():
+        return {
+            "ok": False,
+            "ir": None,
+            "nl": "",
+            "diagnostics": [],
+            "error": {"code": "MISSING_ARG", "message": "af_compile_spec 需要 text 参数（AF-Spec 文本）"},
+        }
+    return svc.compile_text(text)
 
 
 def _t_simulate(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
@@ -627,7 +640,8 @@ def _error(id_: Any, code: int, message: str) -> str:
 def serve_mcp(root: str = DEFAULT_STORE_ROOT) -> None:
     """MCP stdio 服务主循环。由 `forge mcp` 或 `python -m autoforge.af_mcp` 启动。"""
     store = GraphStore(root)
-    registry = TokenRegistry()
+    # P0-12 修复：传 revoked_path，与 af_api/af_cli 一致
+    registry = TokenRegistry(Path(root) / ".auth" / "revoked.json")
     current = _build_current(registry)
     if current:
         sys.stderr.write(f"[af_mcp] 鉴权启用：subject={current.get('subject')} scopes={current.get('scopes')}\n")
@@ -636,6 +650,11 @@ def serve_mcp(root: str = DEFAULT_STORE_ROOT) -> None:
     sys.stderr.flush()
 
     for raw in sys.stdin:
+        # ADM B-07: reject oversized input lines to prevent OOM
+        if len(raw) > MAX_STDIN_LINE:
+            sys.stderr.write(f'[af_mcp] input line too large: {len(raw)} bytes > {MAX_STDIN_LINE}\n')
+            sys.stderr.flush()
+            continue
         line = raw.strip()
         if not line:
             continue
@@ -659,6 +678,10 @@ def serve_mcp(root: str = DEFAULT_STORE_ROOT) -> None:
         elif method == "tools/list":
             out = _respond(id_, {"tools": [_tool_def(t) for t in TOOLS]})
         elif method == "tools/call":
+            # P0-12 修复：每次工具调用前重新加载 revoked 列表并重鉴权
+            # （防止已吊销 token 在长运行 stdio 会话中继续有效）
+            registry._load_revoked_file()
+            current = _build_current(registry)
             content, is_error = dispatch(params.get("name", ""), params.get("arguments", {}) or {}, store, current)
             out = _respond(id_, {"content": content, "isError": is_error})
         elif method == "ping":

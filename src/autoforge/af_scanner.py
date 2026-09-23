@@ -58,6 +58,7 @@ CHECKS: dict[str, str] = {
     "NL_COVERAGE": "⑬ NL 覆盖率检查：有节点没出现在自然语言描述里",
     # ── v0.3.0 跨自动化事件·发布侧（IR §4.3）──
     "EMIT_SELF_LOOP": "§4.3 emit 发布成环（含自环）：A 发出 event.X 且 B 由 event.X 触发",
+    "CROSS_DEP_CYCLE": "P1-4 跨自动化混合依赖成环（实体写+事件发布联合图）",
     "EMIT_STORM_LIMIT": "§4.3 事件风暴风险：emit 节点过多 / 同一事件名重复发布",
     # ── 真机接线预检（forge run --live）──
     "LIVE_TOKEN_REQUIRED": "真机下发缺 HA 令牌",
@@ -517,7 +518,14 @@ class StaticScanner:
     def _check_high_risk_after_suspend(self, auto: Automation, node: Node, out: ScanResult) -> None:
         if not node.is_suspending:
             return
-        edge_kinds = ("on_timeout", "default", "on_cancel") if node.kind == "wait" else ("on_timeout", "default", "on_cancel", "then")
+        # P1-3 修复：ask 节点的 yes/no 分支也必须纳入高风险动作检查
+        # （之前只检查 on_timeout/default/on_cancel/then，yes/no 分支里的写动作成盲区）
+        if node.kind == "wait":
+            edge_kinds = ("on_timeout", "default", "on_cancel")
+        elif node.kind == "ask":
+            edge_kinds = ("on_timeout", "default", "on_cancel", "yes", "no")
+        else:
+            edge_kinds = ("on_timeout", "default", "on_cancel", "then")
         for edge in auto.outgoing(node.id):
             if edge.kind not in edge_kinds:
                 continue
@@ -953,15 +961,6 @@ class StaticScanner:
                 # 只看**触发源**依赖：A 写 X 且 B 由 X 触发 → A→B（含自环，自环是真死循环）
                 if writes & b.trigger_entities():
                     deps[a.id].add(b.id)
-        for cycle in _cycles_in(deps):
-            out.diagnostics.append(
-                Diagnostic(
-                    "ENTITY_DEP_CYCLE",
-                    ERROR,
-                    "跨自动化实体读写依赖成环：" + " → ".join(cycle),
-                    cycle[0] if cycle else "",
-                )
-            )
 
         # v0.3.0 发布侧：emit 事件成环——A 发出 `event.X`，B 由 `event.X` 触发 → A→B（含自环）
         emit_deps: dict[str, set[str]] = {a.id: set() for a in autos}
@@ -972,14 +971,31 @@ class StaticScanner:
             for b in autos:
                 if emitted & b.trigger_entities():
                     emit_deps[a.id].add(b.id)
-        for cycle in _cycles_in(emit_deps):
+        # P1-4 收口：实体依赖与事件依赖 union 后统一查环，避免跨图环漏检
+        # （A 写实体+emit -> B 触发 -> B 写同一实体，在两张图里各自都不是环，但 union 后是环）
+        full_deps: dict[str, set[str]] = {a.id: set() for a in autos}
+        for aid in full_deps:
+            full_deps[aid] = deps.get(aid, set()) | emit_deps.get(aid, set())
+        for cycle in _cycles_in(full_deps):
+            has_entity_edge = any(
+                b in deps.get(a, set())
+                for a, b in zip(cycle, cycle[1:] + [cycle[0]])
+            )
+            has_emit_edge = any(
+                b in emit_deps.get(a, set())
+                for a, b in zip(cycle, cycle[1:] + [cycle[0]])
+            )
+            if has_entity_edge and has_emit_edge:
+                code = "CROSS_DEP_CYCLE"
+                msg = "跨自动化混合依赖成环（实体+事件）：" + " → ".join(cycle)
+            elif has_emit_edge:
+                code = "EMIT_SELF_LOOP"
+                msg = "跨自动化事件发布成环（自触发）：" + " → ".join(cycle)
+            else:
+                code = "ENTITY_DEP_CYCLE"
+                msg = "跨自动化实体读写依赖成环：" + " → ".join(cycle)
             out.diagnostics.append(
-                Diagnostic(
-                    "EMIT_SELF_LOOP",
-                    ERROR,
-                    "跨自动化事件发布成环（自触发）：" + " → ".join(cycle),
-                    cycle[0] if cycle else "",
-                )
+                Diagnostic(code, ERROR, msg, cycle[0] if cycle else "")
             )
 
         # ③ 跨自动化实体抢占：多条自动化写同一实体且没有优先级区分
