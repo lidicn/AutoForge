@@ -1,0 +1,7 @@
+{
+  "name": "开门亮灯",
+  "mode": "restart",
+  "when": {"type": "state", "entity": "前门", "to": "on"},
+  "if": {"lt": {"var": "照度", "const": 200}},
+  "do": {"action": "开灯", "target": "客厅灯"}
+}

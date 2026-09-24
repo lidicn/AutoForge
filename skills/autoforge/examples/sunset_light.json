@@ -1,0 +1,6 @@
+{
+  "name": "日落开灯",
+  "mode": "restart",
+  "when": {"type": "sun", "event": "sunset", "offset": "-1800"},
+  "do": {"action": "开灯", "target": "客厅灯"}
+}

@@ -1,0 +1,7 @@
+{
+  "name": "定时关空调询问",
+  "mode": "restart",
+  "when": {"type": "time", "at": "22:00"},
+  "ask": {"prompt": "要关空调吗？", "room": "书房", "timeout": "30s"},
+  "do": {"action": "关空调", "target": "书房空调"}
+}

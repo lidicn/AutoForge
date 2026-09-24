@@ -228,6 +228,23 @@ def _t_get_entity_state(store: GraphStore, args: dict[str, Any]) -> dict[str, An
     return svc.catalog_state(store, args["entity_id"])
 
 
+def _t_draft(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
+    """意图 JSON → IR，返回 ref。"""
+    from .af_draft import draft_intent, DraftError
+    try:
+        return draft_intent(args["intent"])
+    except DraftError as e:
+        return {"ok": False, "error": {"code": e.code, "message": str(e), "fix": e.fix}}
+
+
+def _t_apply(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
+    """一次走完 校验→仿真→入队。"""
+    from .af_apply import apply
+    ref = args["ref"]
+    stage = args.get("stage", "save")
+    return apply(ref, stage=stage, store=store)
+
+
 def _t_catalog(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     return svc.catalog_snapshot(store)
 
@@ -261,6 +278,36 @@ _TOOLS_WITH_CONTEXT = frozenset({_t_whoami, _t_save, _t_import, _t_enable})
 
 
 TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
+    (
+        "af_draft",
+        "【黄金路径第1步】传意图 JSON，自动生成 IR 并返回 ref。实体写中文名/别名，服务端自动解析。参数：intent(object 必填)。",
+        {
+            "type": "object",
+            "properties": {
+                "intent": {
+                    "type": "object",
+                    "description": "意图 JSON，如 {name, mode, when, if, do}",
+                }
+            },
+            "required": ["intent"],
+        },
+        _t_draft,
+        None,
+    ),
+    (
+        "af_apply",
+        "【黄金路径第2步】用 ref 一次走完 校验→仿真→入队。参数：ref(str 必填)、stage(str 可选: check/simulate/save 默认 save)。",
+        {
+            "type": "object",
+            "properties": {
+                "ref": {"type": "string", "description": "af_draft 返回的 ref"},
+                "stage": {"type": "string", "description": "check/simulate/save，默认 save"},
+            },
+            "required": ["ref"],
+        },
+        _t_apply,
+        "write",
+    ),
     (
         "af_health",
         "服务健康自检：返回版本、契约版本、里程碑、只读标记。无参数。",
