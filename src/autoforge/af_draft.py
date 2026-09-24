@@ -257,12 +257,18 @@ def _resolve_do(do: dict[str, Any], resolved: dict[str, str], catalog: Any) -> d
     entity_id = _resolve_entity(target, catalog)
     resolved[target] = entity_id
 
-    # 动作映射：开灯 → light.turn_on
+    # 动作映射：开灯/turn_on → light.turn_on
     action_map = {
         "开灯": ("ha", "light.turn_on"),
         "关灯": ("ha", "light.turn_off"),
         "开空调": ("ha", "climate.turn_on"),
         "关空调": ("ha", "climate.turn_off"),
+        "turn_on": ("ha", "light.turn_on"),
+        "turn_off": ("ha", "light.turn_off"),
+        "light.turn_on": ("ha", "light.turn_on"),
+        "light.turn_off": ("ha", "light.turn_off"),
+        "climate.turn_on": ("ha", "climate.turn_on"),
+        "climate.turn_off": ("ha", "climate.turn_off"),
     }
     adapter, action_name = action_map.get(action, ("ha", action))
 
