@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+html,
+body,
+#app {
+  height: 100%;
+}
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: #fafafa;
+  color: #1f2937;
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer utilities {
+  .bg-glow {
+    background: radial-gradient(1000px 360px at 50% -12%, rgba(245, 158, 11, 0.12), transparent);
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* 三端自适应：移动端底部 Tab、≥768px 左侧栏 */
+.nav-sidebar {
+  display: none;
+}
+@media (min-width: 768px) {
+  .nav-bottom {
+    display: none;
+  }
+  .nav-sidebar {
+    display: flex;
+  }
+}

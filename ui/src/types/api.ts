@@ -46,6 +46,16 @@ export interface Edge {
   kind: 'then' | 'no' | 'yes' | 'on_error' | 'on_timeout' | 'on_cancel' | 'default'
 }
 
+export interface ExpectItem {
+  entity_id?: string
+  state?: string | string[]
+  attribute?: string
+  var?: string
+  op?: 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte'
+  value?: unknown
+  note?: string
+}
+
 export interface IR {
   ir_version: string
   id: string
@@ -56,6 +66,7 @@ export interface IR {
   meta?: Record<string, unknown>
   nodes: Node[]
   edges: Edge[]
+  expect?: ExpectItem[]
 }
 
 export interface Diagnostic {
