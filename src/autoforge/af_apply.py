@@ -47,7 +47,7 @@ def apply(ref: str, stage: str = "save", store: Any = None) -> dict[str, Any]:
         return result
 
     # 3. simulate（仿真回放）
-    sim_result = af_service.simulate(graph.raw, store=store)
+    sim_result = af_service.simulate(ir_payload, store=store)
     result["simulate"] = sim_result
     if not sim_result.get("ok"):
         result["ok"] = False
@@ -58,9 +58,11 @@ def apply(ref: str, stage: str = "save", store: Any = None) -> dict[str, Any]:
         return result
 
     # 4. save（入待批队列）
+    save_payload = {"ir": ir_payload, "name": staged.get("summary", "")}
     save_result = af_service.submit_pending(
         store,
-        graph.raw,
+        "af_apply",
+        save_payload,
         submitted_by="af_apply",
     )
     result["save"] = save_result
