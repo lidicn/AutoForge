@@ -415,12 +415,14 @@ def test_auth_required_when_token_set(tmp_path, examples_dir, monkeypatch):
 
 
 def test_auth_does_not_block_read_endpoints(tmp_path, examples_dir, monkeypatch):
-    """读端点（会话列表/详情、图表、健康）不受鉴权影响，始终开放。"""
+    """公开读端点（健康/图表）不受鉴权影响；session 读端点含 ask 敏感信息需鉴权（B-05）。"""
     client = _token_client(tmp_path, examples_dir, monkeypatch, "secret")
 
-    # 无令牌也开放
+    # 无令牌也开放的公开读端点
     assert client.get("/api/health").status_code == 200
     assert client.get("/api/graphs").status_code == 200
-    assert client.get("/api/sessions").status_code == 200
-    # 详情端点（即使会话存在与否都不应被 403 拦截）
-    assert client.get("/api/sessions/nope").status_code != 403
+    # session 读端点需鉴权（B-05：含 ask prompt/room 等敏感信息）
+    assert client.get("/api/sessions").status_code == 403
+    assert client.get("/api/sessions/nope").status_code == 403
+    # 带正确令牌后 session 读端点可用
+    assert client.get("/api/sessions", headers={"Authorization": "Bearer secret"}).status_code == 200

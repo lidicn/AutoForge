@@ -27,8 +27,8 @@ def test_iter_sse_blocks_parses_event_and_data():
     ]
     blocks = list(iter_sse_blocks(lines))
     assert blocks == [
-        ("state_changed", '{"entity_id":"light.x","state":"on"}'),
-        ("other", '{"k":1}'),
+        ("state_changed", '{"entity_id":"light.x","state":"on"}', ""),
+        ("other", '{"k":1}', ""),
     ]
 
 
@@ -39,12 +39,12 @@ def test_iter_sse_blocks_multiline_data_joined():
         'data: 1}',
         "",
     ]
-    assert list(iter_sse_blocks(lines)) == [("state_changed", '{"a":\n1}')]
+    assert list(iter_sse_blocks(lines)) == [("state_changed", '{"a":\n1}', "")]
 
 
 def test_iter_sse_blocks_missing_blank_line_flushes():
     # 流在中途结束（无尾随空行）
-    assert list(iter_sse_blocks(["event: x", 'data: y'])) == [("x", "y")]
+    assert list(iter_sse_blocks(["event: x", 'data: y'])) == [("x", "y", "")]
 
 
 # ── parse_ha_event ─────────────────────────────────────────────────────
