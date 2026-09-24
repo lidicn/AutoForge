@@ -21,6 +21,7 @@ from .af_instance import Instance, InstanceManager
 from .af_ir import Automation, Graph, Node, Trigger
 from .af_state import StateProvider
 from .af_time import TimeSource, SystemTimeSource, parse_duration
+from .af_fire_recorder import FireRecorder
 
 __all__ = ["Quota", "Scheduler", "SINGLE", "RESTART", "QUEUED", "PARALLEL", "normalize_trigger"]
 
@@ -61,6 +62,7 @@ class Scheduler:
     clock: TimeSource = field(default_factory=SystemTimeSource)
     audit: AuditLog = field(default_factory=AuditLog)
     quota: Quota = field(default_factory=Quota)
+    fire_recorder: FireRecorder | None = None  # mimo: 当日一次记账落盘，防重启重放
 
     def __post_init__(self) -> None:
         self._pending: dict[tuple[str, str, str], _PendingFor] = {}
@@ -283,9 +285,14 @@ class Scheduler:
         return False
 
     def _still_holds(self, pending: _PendingFor) -> bool:
-        """到期时复查持续条件是否仍成立（条件破坏即取消）。"""
+        """到期时复查持续条件是否仍成立（条件破坏即取消）。
+
+        P1-7 修复：`to is None` 时保守返回 False（fail-closed），
+        不再 fail-open 当作「仍然成立」。无明确目标态的 for 条件不可靠，
+        用户应指定 `to` 才能用持续条件。
+        """
         if pending.to is None:
-            return True
+            return False
         snapshot = self.states.snapshot([pending.entity_id])
         try:
             return snapshot.get(pending.entity_id) == pending.to
@@ -311,7 +318,8 @@ class Scheduler:
 
     def _fire_time_triggers(self) -> list[Instance]:
         fired: list[Instance] = []
-        now = self.clock.now()
+        # B3-AF-04: local time for hhmm (user writes at:07:00 meaning local)
+        now = getattr(self.clock, 'local_now', self.clock.now)()
         today = now.date().isoformat()
         hhmm = f"{now.hour:02d}:{now.minute:02d}"
         for auto in self.graph:
@@ -324,13 +332,27 @@ class Scheduler:
                     continue
                 if trig.at != hhmm:
                     continue
-                mark = (auto.id, node.id, today)
-                if mark in self._time_fired:
-                    continue
-                self._time_fired.add(mark)
-                instance = self._try_fire(auto, node, None)
-                if instance is not None:
-                    fired.append(instance)
+                rule_key = f"{auto.id}:{node.id}"
+                # mimo FireRecorder: 落盘记账防重启重放；无 recorder 时回退内存态
+                if self.fire_recorder is not None:
+                    lease = self.fire_recorder.try_begin(rule_key)
+                    if lease is None:
+                        continue
+                    instance = self._try_fire(auto, node, None)
+                    if instance is not None:
+                        lease.confirm(instance.id)
+                        fired.append(instance)
+                    else:
+                        lease.release()  # B3-AF-03: 失败释放，当天可重试
+                else:
+                    mark = (auto.id, node.id, today)
+                    if mark in self._time_fired:
+                        continue
+                    instance = self._try_fire(auto, node, None)
+                    if instance is not None:
+                        # B3-AF-03: mark after successful fire (was mark-then-fire)
+                        self._time_fired.add(mark)
+                        fired.append(instance)
         return fired
 
     # ─────────────────────────────────────────────────────────────────
@@ -357,10 +379,12 @@ def normalize_trigger(trig: Trigger) -> Trigger:
     """
     if trig.type != "sun":
         return trig
+    # P1-8 修复：offset 字段透传，不丢弃（state 类型暂不消费，但信息保留）
     return Trigger(
         type="state",
         entity_id="sun.sun",
         to="below_horizon" if trig.event == "sunset" else "above_horizon",
+        offset=trig.offset,
     )
 
 

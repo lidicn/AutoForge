@@ -378,7 +378,10 @@ class GraphStore:
         saved_at: str,
         note: str,
     ) -> int:
-        """直接写入某版本记录（不经 Graph round-trip，保证 raw 级一致）。"""
+        """直接写入某版本记录（不经 Graph round-trip，保证 raw 级一致）。
+
+        P1-18 修复：写入在 FileLock 内完成，防止并发写同一归档时版本号冲突。
+        """
         directory = self._dir(name)
         directory.mkdir(parents=True, exist_ok=True)
         record = {
@@ -389,9 +392,10 @@ class GraphStore:
             "writer": owner_id(),
             "graph": dict(graph_dict),
         }
-        _atomic_write(
-            directory / f"v{version}.json", json.dumps(record, ensure_ascii=False, indent=2)
-        )
+        with FileLock(directory / ".lock", timeout=self.lock_timeout):
+            _atomic_write(
+                directory / f"v{version}.json", json.dumps(record, ensure_ascii=False, indent=2)
+            )
         return version
 
     def save_conf_raw(self, name: str, payload: Mapping[str, Any]) -> Path:
@@ -510,6 +514,8 @@ class GraphStore:
             if target != cname and not self.versions(target):
                 continue
             self.save_conf_raw(target, conf.get("payload", {}))
+        # P1-17 修复：ok 由 errors 驱动（有错误即 ok=False，之前永为 True）
+        report["ok"] = not report["errors"]
         return report
 
     # ── 置信度持久化（G4 ConfidenceStore）──────────────────────────────

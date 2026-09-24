@@ -26,6 +26,12 @@ RUN pip install --no-cache-dir /tmp/homesdk/homesdk-0.1.1-py3-none-any.whl
 # 未安装时目录会自动降级（device_id/integration/area 为空），核心能力不受损。
 RUN pip install --no-cache-dir -e ".[api,ha]"
 
+# P1-21 修复：非 root 用户运行，防止容器内 RCE 持久化到宿主
+# uid=1000/gid=1001 匹配 NAS 宿主 lidicn:Users，确保挂载的 /data  store 目录可写
+RUN groupadd --gid 1001 autoforge && useradd --uid 1000 --gid 1001 --home /app --shell /usr/sbin/nologin autoforge
+RUN mkdir -p /data && chown -R 1000:1001 /data /app
+USER autoforge
+
 EXPOSE 8787
 
 # 启动时把 examples/ir 幂等灌入 /data 归档，让控制台一开就有数据

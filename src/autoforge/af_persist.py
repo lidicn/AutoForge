@@ -151,6 +151,10 @@ class PersistStore:
         path = self._path(instance.instance_id)
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            tmp.chmod(0o600)  # ADM B-14：敏感实例文件限权
+        except OSError:
+            pass
         os.replace(tmp, path)
         return path
 

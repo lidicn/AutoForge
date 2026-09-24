@@ -138,6 +138,10 @@ class FileLock:
                 ),
                 encoding="utf-8",
             )
+            try:
+                tmp.chmod(0o600)  # ADM B-14：锁信息文件限权
+            except OSError:
+                pass
             os.replace(tmp, self._info_path)
         except OSError:
             pass

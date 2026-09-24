@@ -391,6 +391,18 @@ def _operand_value(operand: Any, resolve: Resolver, budget: _Budget) -> Any:
 
 def _compare(op: str, left: Any, right: Any) -> bool:
     if op in ("eq", "ne"):
+        # P1-15 修复：eq/ne 加类型守卫，与 lt/gt 一致（防止数值/字符串间漂移）
+        # None 可与任何类型比较（HA 状态可能为 None）；同类型可比较；bool 不与 int 混比
+        if left is not None and right is not None:
+            if isinstance(left, bool) != isinstance(right, bool):
+                raise ExprError(f"eq/ne 不能跨 bool 与非 bool 比较：{left!r} vs {right!r}")
+            if not isinstance(left, bool) and type(left) is not type(right):
+                # 允许 int vs float（同为数值）
+                if not (isinstance(left, (int, float)) and isinstance(right, (int, float))):
+                    raise ExprError(
+                        f"eq/ne 操作数类型不一致（{type(left).__name__} vs {type(right).__name__}）："
+                        f"{left!r} vs {right!r}；请检查 operand 是否声明了正确的 type"
+                    )
         equal = left == right
         return equal if op == "eq" else not equal
     # 有序比较：两侧必须同为数字，或同为字符串（显式类型系统会挡住大部分误用）
@@ -418,7 +430,18 @@ def _compare(op: str, left: Any, right: Any) -> bool:
 
 def _unary(op: str, value: Any) -> bool:
     if op == "truthy":
-        return bool(value)
+        # P1-14 修复：显式 HA 语义真值表，不再用 bool(value)（对 off/unavailable 恒真）
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return value != 0
+        text = str(value).strip().lower()
+        if text in ON_STATES:
+            return True
+        # OFF_STATES / unknown / unavailable / 空串 全部保守 False（fail-closed）
+        return False
     if op in ("not_is_on", "not_is_off"):
         # 实体状态为「开/关」之外的任意值（含 unknown/unavailable）都视为需要动作：
         # not_is_on → 非 on 即动作；not_is_off → 非 off 即动作。

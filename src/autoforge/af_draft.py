@@ -106,14 +106,16 @@ def draft_intent(intent: dict[str, Any], catalog: Any = None) -> dict[str, Any]:
     mode = intent.get("mode", "single")
     when = intent.get("when")
     do = intent.get("do")
+    do_list = intent.get("do_list")  # 多动作支持
     if_cond = intent.get("if")
     ask = intent.get("ask")
     wait = intent.get("wait")
 
     if not when:
         raise DraftError("E_MISSING_WHEN", "意图必须包含 when（触发条件）")
-    if not do:
-        raise DraftError("E_MISSING_DO", "意图必须包含 do（动作）")
+    # do 不是必须的：如果有 ask，ask 可以作为终点
+    if not do and not do_list and not ask:
+        raise DraftError("E_MISSING_DO", "意图必须包含 do（动作）或 ask（询问）")
 
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
@@ -157,26 +159,48 @@ def draft_intent(intent: dict[str, Any], catalog: Any = None) -> dict[str, Any]:
         edges.append({"from": prev, "to": wait_id, "kind": "then"})
         prev = wait_id
 
-    # 5. do 节点
-    do_id = _gen_id("d", counter)
-    do_node = _resolve_do(do, resolved, catalog)
-    do_node["id"] = do_id
-    do_node["kind"] = "do"
-    do_node["name"] = "动作"
-    nodes.append(do_node)
-    edges.append({"from": prev, "to": do_id, "kind": "yes" if (if_entry and not ask) else "then"})
+    # 5. do 节点（支持单动作和多动作）
+    actions = []
+    if do_list and isinstance(do_list, list):
+        actions = do_list
+    elif do:
+        actions = [do]
+
+    do_ids = []
+    for idx, action in enumerate(actions):
+        do_id = _gen_id("d", counter)
+        do_node = _resolve_do(action, resolved, catalog)
+        do_node["id"] = do_id
+        do_node["kind"] = "do"
+        do_node["name"] = f"动作{idx+1}" if len(actions) > 1 else "动作"
+        nodes.append(do_node)
+        do_ids.append(do_id)
+
+    # 连边：prev → 第一个 do
+    if do_ids:
+        edges.append({"from": prev, "to": do_ids[0], "kind": "yes" if (if_entry and not ask) else "then"})
+        # 多动作顺序执行
+        for i in range(len(do_ids) - 1):
+            edges.append({"from": do_ids[i], "to": do_ids[i+1], "kind": "then"})
+        last_do = do_ids[-1]
+    else:
+        last_do = None
 
     # 6. pass 节点
     pass_id = _gen_id("p", counter)
     nodes.append({"id": pass_id, "kind": "pass", "name": "结束"})
-    edges.append({"from": do_id, "to": pass_id, "kind": "then"})
+
+    if last_do:
+        edges.append({"from": last_do, "to": pass_id, "kind": "then"})
+        # do 失败 → 到 pass
+        edges.append({"from": last_do, "to": pass_id, "kind": "on_error"})
+    elif ask:
+        # 没有 do，ask 同意后直接到 pass
+        edges.append({"from": prev, "to": pass_id, "kind": "yes"})
 
     # if 条件不满足 → 直接到 pass
     if if_entry:
         edges.append({"from": if_entry, "to": pass_id, "kind": "no"})
-
-    # do 失败 → 到 pass
-    edges.append({"from": do_id, "to": pass_id, "kind": "on_error"})
 
     # ask 超时/取消 → 到 pass
     if ask:
@@ -199,7 +223,8 @@ def draft_intent(intent: dict[str, Any], catalog: Any = None) -> dict[str, Any]:
     graph = load_graph({"automations": [ir]})
 
     # 存 staging
-    summary = f"{when.get('entity', '')} {when.get('to', '')} → {do.get('action', '')} {do.get('target', '')}"
+    action_desc = f"{do.get('action', '')} {do.get('target', '')}" if do else (f"{len(actions)}个动作" if actions else "询问")
+    summary = f"{when.get('entity', '')} {when.get('to', '')} → {action_desc}"
     ref = _staging.put(graph, summary, resolved)
 
     return {

@@ -47,20 +47,32 @@ FastAPI 自带 `/docs`（Swagger UI）与 `/openapi.json`，可直接作为前�
 
 from __future__ import annotations
 
+import asyncio
 import os
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 import json, time
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from . import af_service as svc
+from .af_pending import PendingStore
 from .af_config import get_config
-from .af_auth import RateLimitExceeded, RateLimiter, TokenExpired, TokenInfo, TokenRegistry
+from .af_auth import (
+    AuthCodeStore,
+    PairCodeStore,
+    RateLimitExceeded,
+    RateLimiter,
+    TokenExpired,
+    TokenInfo,
+    TokenRegistry,
+)
 from .af_ir import IRValidationError
 from .af_store import GraphStore
 
@@ -107,6 +119,22 @@ class PendingRejectBody(BaseModel):
 class CredentialsUpdateBody(BaseModel):
     ha_token: str | None = None
     api_token: str | None = None
+
+
+# ── v1.9.0 用户 WebUI 请求体 ──
+class AuthCodeBody(BaseModel):
+    kind: str = "long"  # "long"（长期可撤销）| "short"（5–30 分钟）
+    ttl_minutes: int | None = None  # 短期码有效期
+
+
+class AgentRenameBody(BaseModel):
+    name: str = ""
+
+
+# ── v1.9.0 用户 WebUI：轻量单 owner 登录请求体 ──
+class LoginBody(BaseModel):
+    username: str = ""
+    password: str = ""
 
 
 # ── Round 2-A：会话（ask 审批的人机回路）──
@@ -191,10 +219,17 @@ def build_app(
         svc.bootstrap_examples(store, examples_dir)
 
     # ── v0.8.0 鉴权引擎装配（每 app 实例独立，测试间互不串扰）──
-    registry = TokenRegistry(Path(store_root) / ".auth" / "revoked.json")
+    registry = TokenRegistry(
+        Path(store_root) / ".auth" / "revoked.json",
+        issued_path=Path(store_root) / ".auth" / "issued_tokens.json",
+    )
     limiter = RateLimiter(
         per_minute=int(os.getenv("AUTOFORGE_RATE_LIMIT_PER_MIN", "1000"))
     )
+
+    # v1.9.0 用户 WebUI：配对码 / 授权码 文件存储（与 .auth/revoked.json 同目录）
+    pair_store = PairCodeStore(Path(store_root) / ".auth" / "pair_codes.json")
+    auth_store = AuthCodeStore(Path(store_root) / ".auth" / "auth_codes.json")
 
     def _client_ip(request: Request) -> str:
         # P0-10 修复：默认不信任 X-Forwarded-For（可伪造）
@@ -639,6 +674,35 @@ def build_app(
         revoked = registry.revoke(body.token)
         return {"ok": True, "revoked": revoked}
 
+    # ── v1.9.0 用户 WebUI：轻量单 owner 登录（无用户表、无隔离）──
+    @app.post("/api/auth/login")
+    def api_auth_login(body: LoginBody) -> dict[str, Any]:
+        """轻量登录：任意非空凭据签发单 owner JWT；前端登录页用 demo/forge2026。"""
+        if not (body.username and body.password):
+            raise HTTPException(status_code=401, detail="用户名或密码为空")
+        token = registry.issue_for_agent("owner", ("read", "write", "live"))
+        return {
+            "ok": True,
+            "user": {"username": body.username, "role": "admin"},
+            "token": token,
+        }
+
+    @app.post("/api/auth/logout")
+    def api_auth_logout(
+        creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    ) -> dict[str, Any]:
+        """注销：撤销当前令牌（owner 单令牌，无副作用）。"""
+        if creds:
+            registry.revoke(creds.credentials)
+        return {"ok": True}
+
+    @app.get("/api/auth/me")
+    def api_auth_me(info: TokenInfo | None = Depends(authenticated())) -> dict[str, Any]:
+        """登录态恢复：返回当前令牌主体；未登录/失效 401。"""
+        if info is None:
+            raise HTTPException(status_code=401, detail="未登录或令牌已失效")
+        return {"ok": True, "user": {"username": info.subject, "role": "admin"}}
+
     # ── HTTP MCP（streamable JSON-RPC，供 opencode 等远程 MCP 客户端）──
     @app.post("/mcp", dependencies=[Depends(_write)])
     def api_mcp(body: dict[str, Any], token_info: TokenInfo | None = Depends(authenticated())) -> dict[str, Any]:
@@ -669,7 +733,245 @@ def build_app(
             return {"jsonrpc": "2.0", "id": id_, "result": {}}
         return {"jsonrpc": "2.0", "id": id_, "error": {"code": -32601, "message": f"unknown method: {method}"}}
 
+    # ── v1.9.0 用户 WebUI：配对码 SSE 推送 ──
+    async def _pair_event_gen(request: Request):
+        """长连接 SSE：把新配对请求推送到前端弹窗（配对码仅本人可见）。"""
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                for pc in pair_store.pending_events():
+                    payload = json.dumps(
+                        {
+                            "code": pc.code,
+                            "agent_name_hint": pc.agent_name_hint,
+                            "expires_at": pc.expires_at,
+                        },
+                        ensure_ascii=False,
+                    )
+                    yield f"event: pair-request\ndata: {payload}\n\n"
+                    pair_store.mark_pushed(pc.code)
+            except Exception:  # noqa: BLE001 - SSE 不应因单次异常中断
+                pass
+            await asyncio.sleep(1.0)
+
+    @app.get("/api/mcp/pair-request")
+    async def api_pair_request_stream(
+        request: Request, token: str | None = Query(default=None)
+    ) -> StreamingResponse:
+        """SSE：前端 App 启动建立长连接，收到配对请求即弹窗。
+
+        SSE（EventSource）不支持自定义请求头，令牌经 ?token= 传递；
+        也兼容 Authorization: Bearer 头。
+        """
+        creds = _bearer(request)
+        raw = (creds.credentials if creds else None) or token
+        info = registry.authenticate(raw) if raw else None
+        if info is None and registry.enabled:
+            return JSONResponse(status_code=403, content={"ok": False, "error": "未授权"})
+        return StreamingResponse(_pair_event_gen(request), media_type="text/event-stream")
+
+    # ── v1.9.0 用户 WebUI：授权码（部署授权，独立于配对）──
+    @app.post("/api/user/auth-code", dependencies=[Depends(_write)])
+    def api_auth_code_create(body: AuthCodeBody) -> dict[str, Any]:
+        if body.kind not in ("long", "short"):
+            raise HTTPException(status_code=400, detail="kind 仅支持 long / short")
+        if body.kind == "short" and (body.ttl_minutes is None or not (5 <= body.ttl_minutes <= 30)):
+            raise HTTPException(status_code=400, detail="短期码 ttl_minutes 需 5–30 分钟")
+        ac = auth_store.create(body.kind, body.ttl_minutes)
+        return {"ok": True, "code": ac.code, "kind": ac.kind, "expires_at": ac.expires_at}
+
+    @app.get("/api/user/auth-codes", dependencies=[Depends(_read)])
+    def api_auth_code_list() -> dict[str, Any]:
+        return {"ok": True, "codes": auth_store.list()}
+
+    @app.delete("/api/user/auth-code/{code}", dependencies=[Depends(_write)])
+    def api_auth_code_revoke(code: str) -> dict[str, Any]:
+        ok = auth_store.revoke(code)
+        return {"ok": ok, "revoked": code if ok else None}
+
+    # ── v1.9.0 用户 WebUI：agent 管理（单 owner 下即已配对主体）──
+    @app.get("/api/user/agents", dependencies=[Depends(_read)])
+    def api_agents_list() -> dict[str, Any]:
+        agents = [
+            {"id": s["subject"], "name": s["subject"], "scopes": s["scopes"]}
+            for s in registry.subjects()
+            if s["subject"] not in ("shared", "unknown", "owner")
+        ]
+        return {"ok": True, "agents": agents}
+
+    @app.delete("/api/user/agents/{agent_id}", dependencies=[Depends(_write)])
+    def api_agent_delete(agent_id: str) -> dict[str, Any]:
+        n = registry.revoke_by_subject(agent_id)
+        return {"ok": True, "revoked_tokens": n, "agent": agent_id}
+
+    @app.patch("/api/user/agents/{agent_id}", dependencies=[Depends(_write)])
+    def api_agent_rename(agent_id: str, body: AgentRenameBody) -> dict[str, Any]:
+        new_name = (body.name or "").strip()
+        if not new_name:
+            raise HTTPException(status_code=400, detail="name 不能为空")
+        n = registry.rename_subject(agent_id, new_name)
+        return {"ok": True, "renamed": n, "from": agent_id, "to": new_name}
+
+    @app.post("/api/user/pair/{code}/confirm", dependencies=[Depends(_write)])
+    def api_pair_confirm(code: str) -> dict[str, Any]:
+        """用户在前端点'确认配对成功'：agent 已用码经 /api/mcp/pair 兑换令牌。
+
+        返回已存在的 agent 身份（subject 由 af_pair 签发）；agent 尚未兑换则返回 409。
+        """
+        rec = pair_store.get(code)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="未找到该配对码")
+        agent_name = (rec.get("agent_name_hint") or "").strip() or "agent"
+        matched = next(
+            (s for s in registry.subjects() if s["subject"] == agent_name), None
+        )
+        if matched is None:
+            raise HTTPException(
+                status_code=409,
+                detail="agent 尚未完成配对（请先让 agent 用配对码兑换令牌）",
+            )
+        now = datetime.now(timezone.utc).isoformat()
+        return {
+            "ok": True,
+            "agent": {
+                "agent_id": agent_name,
+                "name": agent_name,
+                "connected_at": now,
+                "last_seen": now,
+            },
+        }
+
+    # ── v1.9.0 用户 WebUI：自动化列表 / 详情 / 操作 ──
+    def _automation_card(name, rec, tags, pending_map):
+        graph = rec.get("graph", {}) or {}
+        nodes = graph.get("nodes", []) or []
+        devices = [
+            {
+                "entity_id": n.get("entity_id") or n.get("id"),
+                "friendly_name": n.get("friendly_name") or n.get("entity_id") or n.get("id"),
+            }
+            for n in nodes
+            if n.get("entity_id") or n.get("id")
+        ]
+        enabled = bool(graph.get("enabled", True))
+        archived = "archived" in (tags or [])
+        status = "archived" if archived else ("disabled" if not enabled else "enabled")
+        return {
+            "id": name,
+            "name": name,
+            "agent": rec.get("owner", ""),
+            "preview_nl": graph.get("nl") or "",
+            "devices": devices,
+            "enabled": enabled,
+            "archived": archived,
+            "status": status,
+            "pending_op_id": pending_map.get(name),
+            "saved_at": rec.get("saved_at"),
+            "version": rec.get("version"),
+            # P1 后续接运行时 persist_dir 聚合试演期与触发历史；先给诚实默认值
+            "trial": {"state": "auto", "since": None, "anomaly": False},
+            "last_triggered": None,
+            "trigger_7d": 0,
+        }
+
+    def _pending_map():
+        try:
+            items = PendingStore(store.root).list()
+        except Exception:  # noqa: BLE001
+            items = []
+        return {
+            it.get("payload", {}).get("name"): it.get("op_id")
+            for it in items
+            if it.get("payload", {}).get("name")
+        }
+
+    def _resave_graph_raw(name, mutate):
+        """加载最新记录、修改 graph 子字典、以新版本原子落盘（用于启停）。"""
+        rec = store.load_record(name)
+        rec.setdefault("graph", {})
+        mutate(rec["graph"])
+        version = (store.latest(name) or 0) + 1
+        rec["version"] = version
+        rec["saved_at"] = datetime.now(timezone.utc).isoformat()
+        target = store._dir(name) / f"v{version}.json"
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, target)
+        return version
+
+    @app.get("/api/automations", dependencies=[Depends(_read)])
+    def api_automations(group_by: str = Query(default="agent")) -> dict[str, Any]:
+        hist = store.history()
+        pmap = _pending_map()
+        cards = []
+        for h in hist:
+            try:
+                rec = store.load_record(h["name"])
+            except FileNotFoundError:
+                continue
+            cards.append(_automation_card(h["name"], rec, store.get_tags(h["name"]), pmap))
+        if group_by == "agent":
+            groups: dict[str, list[dict[str, Any]]] = {}
+            for c in cards:
+                groups.setdefault(c["agent"] or "未归属/本地", []).append(c)
+            return {
+                "ok": True,
+                "group_by": "agent",
+                "groups": [{"agent": a, "items": items} for a, items in sorted(groups.items())],
+                "total": len(cards),
+            }
+        return {"ok": True, "group_by": group_by, "items": cards, "total": len(cards)}
+
+    @app.get("/api/automations/{name}", dependencies=[Depends(_read)])
+    def api_automation_detail(name: str) -> dict[str, Any]:
+        try:
+            rec = store.load_record(name)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="未找到自动化")
+        card = _automation_card(name, rec, store.get_tags(name), _pending_map())
+        return {"ok": True, "automation": card}
+
+    @app.post("/api/automations/{name}/enable", dependencies=[Depends(_write)])
+    def api_automation_enable(name: str) -> dict[str, Any]:
+        if store.latest(name) is None:
+            raise HTTPException(status_code=404, detail="未找到自动化")
+        v = _resave_graph_raw(name, lambda g: g.__setitem__("enabled", True))
+        return {"ok": True, "name": name, "enabled": True, "version": v}
+
+    @app.post("/api/automations/{name}/disable", dependencies=[Depends(_write)])
+    def api_automation_disable(name: str) -> dict[str, Any]:
+        if store.latest(name) is None:
+            raise HTTPException(status_code=404, detail="未找到自动化")
+        v = _resave_graph_raw(name, lambda g: g.__setitem__("enabled", False))
+        return {"ok": True, "name": name, "enabled": False, "version": v}
+
+    @app.post("/api/automations/{name}/archive", dependencies=[Depends(_write)])
+    def api_automation_archive(name: str) -> dict[str, Any]:
+        if store.latest(name) is None:
+            raise HTTPException(status_code=404, detail="未找到自动化")
+        tags = store.get_tags(name)
+        if "archived" not in tags:
+            store.set_tags(name, tags + ["archived"])
+        return {"ok": True, "name": name, "archived": True}
+
+    @app.post("/api/automations/{name}/unarchive", dependencies=[Depends(_write)])
+    def api_automation_unarchive(name: str) -> dict[str, Any]:
+        if store.latest(name) is None:
+            raise HTTPException(status_code=404, detail="未找到自动化")
+        store.set_tags(name, [t for t in store.get_tags(name) if t != "archived"])
+        return {"ok": True, "name": name, "archived": False}
+
+    @app.delete("/api/automations/{name}", dependencies=[Depends(_write)])
+    def api_automation_delete(name: str) -> dict[str, Any]:
+        d = store._dir(name)
+        if not d.is_dir():
+            raise HTTPException(status_code=404, detail="未找到自动化")
+        shutil.rmtree(d)
+        return {"ok": True, "deleted": name}
+
     # ── 可选：前端静态托管（SPA fallback）──────────────────────────────
+    # 必须放在所有 /api 显式路由之后，否则 catch-all 会抢先吞掉 GET /api/*。
     # 仅当显式传入已存在的 ui_dir 时挂载；默认不托管，保持只读 API 纯净。
     if ui_dir and Path(ui_dir).is_dir():
         dist = Path(ui_dir).resolve()

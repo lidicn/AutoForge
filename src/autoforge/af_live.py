@@ -27,6 +27,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping
 from .af_adapters import DEFAULT_HA_URL
 from .af_bus import BusEvent
 from .af_flock import FileLock, owner_id
+from .af_tick_supervisor import TickSupervisor, SseReconnector, ExponentialBackoff, default_fault_policy
 
 __all__ = [
     "iter_sse_blocks",
@@ -35,7 +36,16 @@ __all__ = [
     "run_watch",
     "start_ticker",
     "WatchCoordinator",
+    "get_tick_supervisor",
 ]
+
+# mimo TickSupervisor: current active tick supervisor (for /api/health)
+_tick_supervisor = None
+
+
+def get_tick_supervisor():
+    """Return current active TickSupervisor (None when no watch running)."""
+    return _tick_supervisor
 
 SSE_STREAM_PATH = "/api/stream"
 
@@ -73,23 +83,26 @@ class WatchCoordinator:
 
 
 # ── SSE 帧解析（纯函数，零网络）────────────────────────────────────────
-def iter_sse_blocks(lines: Iterable[str]) -> Iterator[tuple[str, str]]:
-    """从 SSE 行迭代器产出 `(event_type, data_str)` 块。
+def iter_sse_blocks(lines: Iterable[str]) -> Iterator[tuple[str, str, str]]:
+    """从 SSE 行迭代器产出 `(event_type, data_str, sse_id)` 块。
 
     空行分隔事件；以 `:` 开头的注释行（HA 心跳 `: ping`）忽略；
-    `event:` / `data:` 之外的字段（id/retry）忽略。`data` 可跨多行（以换行拼接）。
+    `data` 可跨多行（以换行拼接）。
+    mimo 增量：捕获 SSE `id:` 行（HA event_id），用于跨重连去重。
     """
     event_type = ""
     data_parts: list[str] = []
+    sse_id = ""
     for raw in lines:
         line = raw.rstrip("\n").rstrip("\r") if isinstance(raw, str) else raw
         if isinstance(line, bytes):
             line = line.decode("utf-8", "replace")
         if line == "":
             if event_type or data_parts:
-                yield (event_type, "\n".join(data_parts))
+                yield (event_type, "\n".join(data_parts), sse_id)
                 event_type = ""
                 data_parts = []
+                sse_id = ""
             continue
         if line.startswith(":"):
             continue
@@ -97,13 +110,15 @@ def iter_sse_blocks(lines: Iterable[str]) -> Iterator[tuple[str, str]]:
             event_type = line[len("event:"):].lstrip()
         elif line.startswith("data:"):
             data_parts.append(line[len("data:"):].lstrip())
-        # 其他字段（id:、retry:）忽略
+        elif line.startswith("id:"):
+            sse_id = line[len("id:"):].lstrip()
+        # retry: 忽略
     # 流在块中途结束（无尾随空行）时仍 flush 已累积内容
     if event_type or data_parts:
-        yield (event_type, "\n".join(data_parts))
+        yield (event_type, "\n".join(data_parts), sse_id)
 
 
-def parse_ha_event(event_type: str, data_str: str) -> BusEvent | None:
+def parse_ha_event(event_type: str, data_str: str, sse_id: str = "") -> BusEvent | None:
     """把一个 HA SSE 块转成 `BusEvent`；非 `state_changed` / 非法返回 `None`。
 
     时间戳取 HA 事件的 `new_state.last_changed`（与总线去重键一致），
@@ -132,6 +147,7 @@ def parse_ha_event(event_type: str, data_str: str) -> BusEvent | None:
     return BusEvent.of(
         entity_id,
         str(state),
+        ha_event_id=sse_id,
         source="ha",
         last_changed=new_state.get("last_changed"),
         attributes=new_state.get("attributes", {}) or {},
@@ -187,24 +203,53 @@ class HAEventStream:
                 yield raw
 
     def events(self) -> Iterator[BusEvent]:
-        """产出 `BusEvent` 的生成器；断流后自动重连。"""
-        retries = 0
-        while self.max_retries < 0 or retries <= self.max_retries:
+        """产出 `BusEvent` 的生成器；断流后自动重连（mimo SseReconnector：指数退避+稳定窗口清零）。"""
+        from .af_time import SystemTimeSource
+        _clock = SystemTimeSource()
+        # max_retries 语义: <0 永不放弃, >=0 为重试次数(总尝试=max_retries+1)
+        # SseReconnector max_attempts 语义: 0=永不放弃, >0=总尝试次数上限
+        _max_attempts = 0 if self.max_retries < 0 else self.max_retries + 1
+        reconnector = SseReconnector(
+            _clock,
+            backoff=ExponentialBackoff(base=self.backoff_s, cap=60.0),
+            max_attempts=_max_attempts,
+            escalate_after=10,
+        )
+        epoch = 0
+        _seen_ids: dict[str, bool] = {}
+        while True:
+            drop_exc: BaseException | None = None
             try:
                 resp = self._open()
+                reconnector.on_open()
                 self._log("EVENT_STREAM_CONNECTED")
                 for block in iter_sse_blocks(self._line_iter(resp)):
                     ev = parse_ha_event(*block)
                     if ev is not None:
+                        # mimo 增量：epoch:ha_event_id 去重（防跨 SSE 重连 event_id 回绕）
+                        dedup_key = f"{epoch}:{ev.payload.get('ha_event_id', '')}" if ev.payload.get('ha_event_id') else None
+                        if dedup_key and dedup_key in _seen_ids:
+                            continue
+                        if dedup_key:
+                            _seen_ids[dedup_key] = True
+                            if len(_seen_ids) > 4096:
+                                # LRU: 清掉最早的一半
+                                for k in list(_seen_ids.keys())[:2048]:
+                                    del _seen_ids[k]
                         yield ev
                 self._log("EVENT_STREAM_ENDED")
-            except Exception as exc:  # 网络抖动/连接失败：退避后重连
+                drop_exc = RuntimeError("stream ended normally")
+            except Exception as exc:
                 self._log(f"EVENT_STREAM_ERROR {exc}")
-            retries += 1
-            if self.max_retries >= 0 and retries > self.max_retries:
+                drop_exc = exc
+            plan = reconnector.on_drop(drop_exc)
+            epoch += 1  # mimo: 每次重连 epoch+1，防 HA event_id 跨连接回绕
+            if plan.give_up:
                 self._log("EVENT_STREAM_GAVE_UP")
                 return
-            time.sleep(self.backoff_s)
+            if plan.escalate:
+                self._log(f"EVENT_STREAM_ESCALATE attempt={plan.attempt}")
+            time.sleep(plan.delay)
 
 
 # ── 常驻监听主循环 ────────────────────────────────────────────────────
@@ -335,11 +380,26 @@ def start_ticker(
         except Exception:
             logger.exception("inbox scan failed")
 
+    # mimo TickSupervisor: fault classification + backoff + health + SAFE HALT
+    global _tick_supervisor
+    from .af_time import SystemTimeSource
+    _clock = getattr(runtime, "clock", None) or SystemTimeSource()
+    supervisor = TickSupervisor(
+        clock=_clock,
+        policy=default_fault_policy(),
+        tick_interval_s=interval_s,
+    )
+    _tick_supervisor = supervisor
+
     def _loop() -> None:
         while not stop.is_set():
             if stop.wait(interval_s):
                 break
-            fn()
+            # B3-AF-01 + mimo: TickSupervisor 包装，异常分类/退避/SAFE HALT
+            outcome = supervisor.run_once(fn)
+            if outcome.status.value == "halted":
+                logger.error("tick SAFE HALTED: %s", supervisor.health().halted_reason)
+                break
             _write_asks()
             _read_inbox()
 

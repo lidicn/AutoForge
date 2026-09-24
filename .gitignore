@@ -59,3 +59,21 @@ tests_fresh/
 examples_fresh/
 tmp_*.py
 *.whl
+
+# ── 用户端 WebUI（2026-09-25 补）：依赖与构建产物绝不入库 ──
+# 注意：根已有 dist/ 规则，但那是全局的；这里是按前端子目录精确兜底，
+# 防止 git add 时把几千个 node_modules / dist 产物灌进版本库。
+/ui-user-mimo/node_modules/
+/ui-user-mimo/dist/
+/ui-user/node_modules/
+/ui-user/dist/
+# vite 偶发的临时编译产物
+*.timestamp-*.mjs
+
+# 工具缓存目录
+.qoder/
+
+# 一次性调试脚本（下划线前缀，用完即弃，不入库）
+_*.py
+_*.sh
+_*.conf

@@ -28,6 +28,7 @@ from .af_instance import TERMINAL_STATES, Instance, InstanceManager
 from .af_ir import Graph
 from .af_persist import PersistStore, restore_instance
 from .af_scheduler import Quota, Scheduler
+from .af_fire_recorder import FireRecorder, JsonFireStore
 from .af_state import InMemoryStateProvider, StateProvider
 from .af_time import SystemTimeSource, TimeSource, VirtualTimeSource
 
@@ -47,6 +48,8 @@ class Runtime:
     conf: ConfidenceStore = field(default_factory=ConfidenceStore)
     #: P1 实例持久化目录；None = 关闭（默认，与原型期内存态行为一致）
     persist_dir: str | None = None
+    #: conf 分级引擎（mimo #19）；None = 未启用，由环境变量 AUTOFORGE_CONF_GRADING=1 激活
+    grading: Any = None
 
     def __post_init__(self) -> None:
         self.bus = EventBus(self.clock, self.audit)
@@ -76,10 +79,31 @@ class Runtime:
         self.persist: PersistStore | None = (
             PersistStore(self.persist_dir) if self.persist_dir else None
         )
+        # mimo FireRecorder: 当日一次记账落盘，防重启重放（与 persist 同目录）
+        if self.persist_dir is not None:
+            self.scheduler.fire_recorder = FireRecorder(
+                JsonFireStore(self.persist_dir), self.clock,
+                max_attempts_per_day=3, lease_s=30.0, keep_days=3,
+            )
         self.restored: list[Instance] = []
         self.instances.on_change = self._on_instance_change
         if self.persist is not None:
             self.restored = self.restore_persisted()
+
+        # ── mimo #19: conf 分级引擎（可选，默认关闭） ──────────────────
+        # 环境变量 AUTOFORGE_CONF_GRADING=1 启用；启用后 ShadowRunner 装饰
+        # executor._do，按 conf band 路由（auto 透传 / shadow 只读比对 / ask 挂起），
+        # InterventionDetector 监听人工干预，CanarySupervisor 观察期自动晋升/降级。
+        # SSE 事件接入由 af_live.py 在启动时调用 runtime.grading.observe()。
+        import os as _os
+        if _os.environ.get("AUTOFORGE_CONF_GRADING", "").lower() in ("1", "true", "yes"):
+            try:
+                from autoforge.af_runtime_ext import install as _install_grading
+                self.grading = _install_grading(self)
+                self.audit.append({"kind": "conf_grading_enabled", "at": self.clock.now()})
+            except Exception as _e:
+                self.audit.append({"kind": "conf_grading_init_failed", "error": str(_e), "at": self.clock.now()})
+                self.grading = None
 
     # ── 事件 ──────────────────────────────────────────────────────────
     def publish(self, event: BusEvent) -> list[Instance]:

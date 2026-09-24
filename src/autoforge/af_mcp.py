@@ -1,4 +1,4 @@
-"""AutoForge MCP server（零依赖，stdio 传输，兼容 MCP 2024-11-05）。
+﻿"""AutoForge MCP server（零依赖，stdio 传输，兼容 MCP 2024-11-05）。
 
 **为什么零依赖**：`mcp` 包在本机/NAS 双环境装不稳（外部网络受限），且 MCP 的 stdio
 协议本质就是「逐行 JSON-RPC 2.0」，自实现最稳、双环境都能跑、测试可纯子进程驱动。
@@ -28,7 +28,7 @@ import traceback
 from typing import Any, Callable
 
 from . import af_service as svc
-from .af_auth import TokenExpired, TokenRegistry
+from .af_auth import AuthCodeStore, PairCodeStore, TokenExpired, TokenRegistry
 from .af_store import DEFAULT_STORE_ROOT, GraphStore
 from .af_telemetry import record_failure
 
@@ -165,6 +165,7 @@ def _t_import(store: GraphStore, args: dict[str, Any], current: dict[str, Any] |
 def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
     # v1.4.0：部署前写操作先入待批队列，人审后由服务层回放落盘。
     # MCP 面绝不注册 approve（agent 不能自批；批准只在 HTTP / CLI 服务层）。
+    # v1.9.0 用户 WebUI：授权码路径 A/B——持有效授权码 → 直接部署；否则入待批队列。
     owner = (current or {}).get("subject", "") or ""
     payload = {
         "ir": args["ir"],
@@ -176,11 +177,76 @@ def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | N
         "allow_bulk": bool(args.get("allow_bulk", False)),
     }
     # P0-13：传 authenticated_subject，让服务层强制使用认证主体
+    auth_code = (args.get("auth_code") or "").strip()
+    if auth_code:
+        acs = _MCP_AUTH_STORE or AuthCodeStore(Path(store.root) / ".auth" / "auth_codes.json")
+        if acs.validate(auth_code):
+            # 路径 A：持有效授权码 → 直接部署（提交后自动批准回放落盘）
+            res = svc.submit_pending(
+                store, "af_save", payload,
+                submitted_by=owner or "mcp", authenticated_subject=owner or None,
+            )
+            op_id = res["pending"]
+            applied = svc.approve_pending(store, op_id, reviewer=f"auth_code:{auth_code[:2]}" + "***")
+            applied["deployed_via"] = "auth_code"
+            return applied
+        # 无效授权码：仍入待批队列（路径 B），并标注提示
+        pending = svc.submit_pending(
+            store, "af_save", payload,
+            submitted_by=owner or "mcp", authenticated_subject=owner or None,
+        )
+        pending["warning"] = "auth_code 无效或已过期，已转为待人工审批"
+        return pending
     return svc.submit_pending(store, "af_save", payload, submitted_by=owner or "mcp", authenticated_subject=owner or None)
 
 
 def _t_diff(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     return svc.diff(store, args["name"], int(args["old"]), int(args["new"]))
+
+
+# ── v1.9.0 用户 WebUI：配对（MCP 连接认证）──
+# 模块级共享（serve_mcp 启动时注入），供配对工具访问运行时令牌注册表与配对码存储。
+_MCP_REGISTRY: TokenRegistry | None = None
+_MCP_PAIR_STORE: PairCodeStore | None = None
+_MCP_AUTH_STORE: AuthCodeStore | None = None
+
+
+def _pair_store(store: GraphStore) -> PairCodeStore:
+    return _MCP_PAIR_STORE or PairCodeStore(Path(store.root) / ".auth" / "pair_codes.json")
+
+
+def _t_request_pair(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
+    """agent 发起配对：后端生成 6 位单次短时效配对码，经 SSE 推送给用户弹窗。
+
+    码只回显给用户（不返回给 agent），agent 等待用户口述码后调 `af_pair` 兑换令牌。
+    """
+    hint = (args.get("agent_name_hint") or "").strip() or "未知 agent"
+    pc = _pair_store(store).create(hint)
+    return {
+        "ok": True,
+        "expires_at": pc.expires_at,
+        "message": "配对请求已发起，请在 ForgeSight 中输入显示的 6 位码完成配对",
+    }
+
+
+def _t_pair(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
+    """agent 用配对码兑换运行时签发的 Bearer 令牌（subject=agent_name）。"""
+    code = (args.get("code") or "").strip()
+    if not code:
+        return {"ok": False, "error": "缺少 code 参数"}
+    pc = _pair_store(store).consume(code)
+    if pc is None:
+        return {"ok": False, "error": "配对码无效、已使用或已过期"}
+    agent_name = (args.get("agent_name") or "").strip() or pc.agent_name_hint or "agent"
+    if _MCP_REGISTRY is None:
+        return {"ok": False, "error": "服务未就绪（令牌注册表不可用）"}
+    token = _MCP_REGISTRY.issue_for_agent(agent_name)
+    return {
+        "ok": True,
+        "token": token,
+        "subject": agent_name,
+        "message": "配对成功：请将 token 作为 Bearer 调用 AutoForge API",
+    }
 
 
 def _t_live(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
@@ -243,6 +309,36 @@ def _t_apply(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     ref = args["ref"]
     stage = args.get("stage", "save")
     return apply(ref, stage=stage, store=store)
+
+
+def _t_test_submit(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
+    """批量提交测试自动化：draft -> build -> simulate -> 自动 approve -> 落盘测试区。"""
+    from .af_test import get_test_channel, TestError
+    intents = args.get("intents", [])
+    batch_id = args.get("batch_id")
+    try:
+        channel = get_test_channel()
+        return channel.submit_batch(intents, batch_id=batch_id)
+    except TestError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _t_test_report(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
+    """获取测试报告。参数：batch_id(str 必填)。"""
+    from .af_test import get_test_channel, TestError
+    batch_id = args["batch_id"]
+    try:
+        channel = get_test_channel()
+        return channel.get_report(batch_id)
+    except TestError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _t_test_clear(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
+    """清空测试区。无参数。"""
+    from .af_test import get_test_channel
+    channel = get_test_channel()
+    return channel.clear()
 
 
 def _t_catalog(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
@@ -309,11 +405,75 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
         "write",
     ),
     (
+        "af_test_submit",
+        "【测试通道】批量提交测试自动化：draft → build → simulate → 自动 approve → 落盘测试区（/data/test/，与正式环境完全隔离）。参数：intents(array 必填，意图JSON列表)、batch_id(str 可选)。返回测试报告摘要。",
+        {
+            "type": "object",
+            "properties": {
+                "intents": {"type": "array", "description": "意图 JSON 列表，每个元素如 {name, mode, when, do}"},
+                "batch_id": {"type": "string", "description": "批次 ID（可选，默认自动生成）"}
+            },
+            "required": ["intents"],
+        },
+        _t_test_submit,
+        "write",
+    ),
+    (
+        "af_test_report",
+        "【测试通道】获取测试报告。参数：batch_id(str 必填)。返回完整测试报告（通过率、失败原因、每题详情）。",
+        {
+            "type": "object",
+            "properties": {
+                "batch_id": {"type": "string", "description": "批次 ID"}
+            },
+            "required": ["batch_id"],
+        },
+        _t_test_report,
+        None,
+    ),
+    (
+        "af_test_clear",
+        "【测试通道】清空测试区（/data/test/）。无参数。测试完调用此工具清理，不影响正式环境。",
+        {"type": "object", "properties": {}},
+        _t_test_clear,
+        "write",
+    ),
+    (
         "af_health",
         "服务健康自检：返回版本、契约版本、里程碑、只读标记。无参数。",
         {"type": "object", "properties": {}},
         _t_health,
         None,
+    ),
+    (
+        "af_request_pair",
+        "【配对·第1步】agent 发起配对请求：后端生成 6 位单次短时效配对码，经 SSE 推送到"
+        "用户 ForgeSight 弹窗。码只显示给用户，agent 不拿码，等用户口述后调 af_pair 兑换。"
+        "参数：agent_name_hint(str 可选，agent 自报名称)。返回 {ok,expires_at}。",
+        {
+            "type": "object",
+            "properties": {
+                "agent_name_hint": {"type": "string", "description": "agent 自报名称（显示在用户弹窗）"}
+            },
+        },
+        _t_request_pair,
+        "write",
+    ),
+    (
+        "af_pair",
+        "【配对·第2步】用用户口述的 6 位配对码兑换运行时签发的 Bearer 令牌。"
+        "参数：code(str 必填)、agent_name(str 可选，默认用请求时的 hint)。"
+        "返回 {ok,token,subject}；token 作为 Bearer 调用 AutoForge API。",
+        {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "用户在 ForgeSight 弹窗显示的 6 位配对码"},
+                "agent_name": {"type": "string", "description": "agent 名称（可选）"},
+            },
+            "required": ["code"],
+        },
+        _t_pair,
+        "write",
     ),
     (
         "af_refresh_catalog",
@@ -688,8 +848,15 @@ def serve_mcp(root: str = DEFAULT_STORE_ROOT) -> None:
     """MCP stdio 服务主循环。由 `forge mcp` 或 `python -m autoforge.af_mcp` 启动。"""
     store = GraphStore(root)
     # P0-12 修复：传 revoked_path，与 af_api/af_cli 一致
-    registry = TokenRegistry(Path(root) / ".auth" / "revoked.json")
+    registry = TokenRegistry(
+        Path(root) / ".auth" / "revoked.json",
+        issued_path=Path(root) / ".auth" / "issued_tokens.json",
+    )
     current = _build_current(registry)
+    # v1.9.0 用户 WebUI：配对工具需要运行时令牌注册表 + 配对码存储
+    globals()["_MCP_REGISTRY"] = registry
+    globals()["_MCP_PAIR_STORE"] = PairCodeStore(Path(root) / ".auth" / "pair_codes.json")
+    globals()["_MCP_AUTH_STORE"] = AuthCodeStore(Path(root) / ".auth" / "auth_codes.json")
     if current:
         sys.stderr.write(f"[af_mcp] 鉴权启用：subject={current.get('subject')} scopes={current.get('scopes')}\n")
     else:

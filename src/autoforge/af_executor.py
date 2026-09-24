@@ -149,11 +149,12 @@ class NodeExecutor:
     # ─────────────────────────────────────────────────────────────────
     def resume(self, instance: Instance, kind: str) -> Instance:
         """用给定的边类型唤醒挂起实例（yes / no / default / on_timeout / on_cancel）。"""
+        # B3-AF-02: pop pending_asks BEFORE terminal check (was after, leaving ghost in queue)
+        self.pending_asks.pop(instance.instance_id, None)
         if instance.is_terminal:
             return instance
         auto = instance.automation
         node = auto.node(instance.ctx.current_node)
-        self.pending_asks.pop(instance.instance_id, None)
 
         if instance.state == SUSPENDED:
             self.instances.resume(instance)  # 恢复时重新取快照
@@ -222,11 +223,37 @@ class NodeExecutor:
             "consent resolved: ask verdict=%s text_len=%d text_head=%r homesdk=%s",
             verdict, len(text or ""), (text or "")[:2], getattr(homesdk, "__version__", "?"),
         )
+        # B3-AF-02: terminal instance (expired) -> pop ghost, return None so caller keeps evidence file
+        # 用 `is True` 而非 truthy：真实 Instance.is_terminal 返回 bool，Mock 对象返回非 bool
+        if getattr(instance, "is_terminal", False) is True:
+            self.pending_asks.pop(instance.instance_id, None)
+            logger.warning("answer: instance %s is terminal, popping ghost ask", instance.instance_id)
+            return None
         return self.resume(instance, verdict)
 
     def timeout(self, instance: Instance) -> Instance:
         """`ask` 计时到点（无人应答）→ `on_timeout` 兜底。"""
         return self.resume(instance, "on_timeout")
+
+    def sweep_orphans(self) -> int:
+        """mimo SuspendManager 增量：清理终态实例残留的 pending_asks（防 B3-AF-02 幽灵）。
+
+        定期调用（如每次 tick 后），遍历 pending_asks，对应实例已终态则 pop。
+        返回清理的幽灵数量。
+        """
+        ghosts = []
+        for inst_id in list(self.pending_asks.keys()):
+            inst = self.instances.get(inst_id)
+            if inst is None or getattr(inst, "is_terminal", False) is True:
+                ghosts.append(inst_id)
+        for inst_id in ghosts:
+            self.pending_asks.pop(inst_id, None)
+        if ghosts:
+            import logging
+            logging.getLogger("autoforge.executor").warning(
+                "sweep_orphans: cleaned %d ghost pending_asks: %s", len(ghosts), ghosts
+            )
+        return len(ghosts)
 
     def resume_then(self, instance: Instance) -> Instance:
         """`wait` 计时到点 → 走 `then` 正常继续（语义拍板 A：wait 是"等一会儿继续"，不是超时）。"""
