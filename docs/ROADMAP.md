@@ -833,7 +833,7 @@ Runtime 恢复跳过租约未到期的他属实例并审计 `instance_lease_held
 | # | 交付点 | 落点 | 批次 | 状态 |
 |---|---|---|---|---|
 | 1 | 设备目录全模块（目录/浏览器/状态/解析选择器/别名/解析漏斗） | `ui/`（D 模块） | A | ✅ |
-| 2 | 编辑器增强：`/api/bind` 绑定 + `expect` 编辑入口 | `ui/`（C 模块） | A | ⚠️（expect 编辑入口待补） |
+| 2 | 编辑器增强：`/api/bind` 绑定 + `expect` 编辑入口 | `ui/`（C 模块） | A | ✅（2026-09-22，可视化面板：实体/属性/变量三形态增删，编译后自动同步 IR.expect） |
 | 3 | 标签筛选 + 批量启停 + 置信度降权按钮 | `ui/`（B 模块） | A | ✅ |
 | 4 | 备份导入/导出按钮 | `ui/`（K 模块） | A | ✅ |
 | 5 | 待批队列页（list/approve/reject，与 Agent `af_save` 闭环） | `ui/`（F 模块） | B | ✅ |
@@ -1073,6 +1073,35 @@ graph LR
 | 8 | watch↔API 桥 | ec50da3 / 7822840 | GET /api/watch/list + POST /api/watch/stop |
 | 9 | 运行中 webui 页 | 7929662 | 展示自动化摘要+停止按钮 |
 | 10 | --area help 文本修正 | 3148894 | "提示而非硬约束" → "硬过滤" |
+| 11 | expect 可视化编辑面板 | — | SpecEditorView 新增 expect 断言管理：三形态（实体状态/实体属性/实例变量）添加删除、编译后自动同步 IR.expect、编辑后回写 Spec；IR 类型补 ExpectItem + expect 字段；NAS Docker 构建部署 |
+| 12 | mimo 运行时三件套·第一步 Clock 抽象 | — | 吸收 mimo `11_clock_abstraction.py`：ensure_aware/load_tz/assert_clock_consistent/matches_at + today/utc_now/wall_after/VirtualTimeSource.jump（只动墙钟不动单调钟）；保留现有类名与 now() 行为；本机 164 passed，NAS health ok |
+| 13 | mimo 运行时三件套·第二步 SuspendManager 增量 | — | 吸收 mimo `01_suspend_manager.py` 两个高价值点：(1) `_replay` answer 事件注入——simulate 的 events 支持 `{"answer":"好","room":"study"}`，ask yes/no/default 分支首次可在 sim 里测（FFL 报告最大测试缺口）；(2) `NodeExecutor.sweep_orphans()` 清理终态实例残留 pending_asks，防 B3-AF-02 幽灵；新建 test_ask_branches_sim.py 4/4 PASS，回归 168 passed，NAS MCP 实测 yes→d1→p1 空调 off→cool |
+| 14 | mimo 运行时三件套·第三步 TickSupervisor | — | 吸收 mimo `07_tick_supervisor.py`：新建 `af_tick_supervisor.py`（FaultClass 三分类/ExponentialBackoff/TickHealth/TickSupervisor），集成到 `start_ticker._loop` 替换简单 try/except；把 B3-AF-01「tick 不许死」升级为「tick 不许假活」——TRANSIENT 退避重试/DEGRADED 隔离不退避/连续 20 次失败 SAFE HALT；健康快照供 /health 与 watchdog；修复 is_terminal 对 MagicMock truthy 的副作用（`is True` 判断）；8 项单测全过，全量回归 613 passed，NAS health ok |
+| 15 | mimo 第三步增强·健康快照暴露 + SseReconnector | — | (1) `/api/health` 新增 `tick_health` 字段（watch 运行时返回 ticks/ok/degraded/failed/consecutive_failures/ewma/faults/last_error，无 watch 时 null）；af_live 加 `_tick_supervisor` 模块级注册 + `get_tick_supervisor()`；(2) HAEventStream 固定退避(2s)替换为 mimo SseReconnector：指数退避(base=backoff_s, cap=60s)+稳定窗口清零(60s)+escalate_after=10 告警+max_retries 语义对齐(重试次数→总尝试次数)；17 项 af_live 测试全过，NAS health ok |
+| 16 | mimo 事件去重·epoch:ha_event_id | — | 吸收 mimo `08_event_dedup.py` 核心：`iter_sse_blocks` 从 2 元组改为 3 元组(捕获 SSE `id:` 行=HA event_id)；`parse_ha_event` 存 `ha_event_id` 进 payload；HAEventStream.events() 加 epoch 计数(每次重连+1)+LRU 去重(4096 容量，半满清理)；解决跨 SSE 重连后 HA event_id 回绕导致的重复触发；4 项去重单测(同 epoch 去重/跨 epoch 不重/id 捕获/parse 存储)+3 项现有测试更新；全量回归 617 passed，NAS health ok |
+| 17 | mimo FireRecorder·当日一次记账落盘 | — | 吸收 mimo `13_fire_recorder.py`，文件级 JSON 持久化(不引入 sqlite，与 af_persist 一致)：JsonFireStore+FireLease+FireRecorder；集成到 Scheduler(可选 fire_recorder 字段)+Runtime(persist_dir 自动初始化)；解决 B3-AF-03 重启重放；8 项单测全过；全量回归 625 passed，NAS health ok |
+| 18 | mimo Agent 编排层·NL→自动化统一编排 | 🚧 进行中 | 吸收 mimo 编排器设计：2427 行 af_orchestrator.py，含设计期对话协议(14 状态机+槽位模型)、Compose Pipeline(8 步)、Auto-fix Loop(12 fixer)、Quality Scorer(5 维度)、仿真计划自动生成；22 项单测 16 通过(73%)，6 项 auto-fix 待修；端到端验证 3 场景核心流程全通(NL→intent→resolve→build_graph→compile→build→simulate→score)，推荐功能正常；全量回归 625 passed |
+| 19 | mimo conf 分级引擎·运行时完整闭环 | ✅ 完成 | 吸收 mimo conf 引擎：5 新模块(af_shadow/af_intervention/af_canary_supervisor/af_proposal/af_feedback)+af_runtime_ext 集成层；5 关键决策(D1 单一 do 派发咽喉实例级装饰/D2 af_caused 不给正样本 hold 期满才结算/D3 归因保守窗口外算人工接管/D4 静态拦截与运行时 band 两层独立/D5 失败分型加权唯一写入口)；**40/40 单测全过**；全量回归 **700 passed** 无破坏；已部署 NAS，Runtime 集成完成（环境变量 AUTOFORGE_CONF_GRADING=1 启用，默认关闭）；IR §10 三级自主从编译期静态拦截升级为运行时完整闭环；增量吸收第二版设计：E2E 示例 examples/e2e_conf_loop.py（shadow→转正→canary晋升→干预降级→反馈回灌，容器内验证通过）；api_handlers 7端点已就绪待挂载 |
+
+## v2.0 模块设计储备（按优先级）
+
+| 模块 | 设计难度 | 状态 | 核心难点 | 优先级 |
+|------|---------|------|---------|--------|
+| **conf 分级引擎**（auto/shadow/ask） | ⭐⭐⭐⭐ | ✅ 已完成(Runtime集成) | MA 假设→conf 阈值→执行策略(auto/canary/shadow/ask)、人工干预回灌、灰度发布；IR §10 有设计未落地 | 高（ADM 生态链关键） |
+| **DB ask 对接层** | ⭐⭐⭐ | 未启动 | AF 挂起实例发现→DB TTS 播报→语音回注 answer→房间消歧义；AF 侧 ask 自洽，DB 链路未落地 | 高（ask 完整价值依赖） |
+| **跨自动化冲突检测** | ⭐⭐⭐ | 未启动 | 多自动化同时触发同一设备的优先级、互斥、资源竞争；目前只有 mode=restart/parallel | 中 |
+| **自动化版本管理/回滚** | ⭐⭐ | 未启动 | version 字段已有，缺版本历史、diff、一键回滚 | 中 |
+| **可观测性/审计** | ⭐⭐ | 未启动 | 运行日志、实例历史、动作审计链路；fire_recorder 部分覆盖 | 中 |
+| **内置 NLU** | ⭐⭐⭐⭐ | 未启动 | NL→intent 目前依赖外部 agent；orchestrator 有 IntentParser 需 LLM | 低（外部 agent 够用） |
+
+### 现有模块难度回顾
+- ⭐⭐⭐⭐⭐ 运行时执行引擎（forge watch --live）：事件驱动状态机、ask 挂起/恢复、时间触发、并发实例
+- ⭐⭐⭐⭐⭐ vhass/FakeHA 仿真器：HA 事件语义模拟、时钟推进、设备行为；与真机差距是最大痛点
+- ⭐⭐⭐⭐ Agent 编排层（af_orchestrator）：NL→IR 智能、设计期对话、auto-fix
+- ⭐⭐⭐ IR + AF-Spec：节点/边模型、文本 DSL（agent 撰写面，非用户语言）
+- ⭐⭐⭐ forge build 安全闸：实体校验、STALE 拦截、L2/L3 确认
+- ⭐⭐ dry-live：真事件+假动作，vhass 与真机的桥梁
+- ⭐ MCP 工具层：af_* 薄封装
 
 ### FFL 测试
 
@@ -1094,6 +1123,137 @@ graph LR
 | watch 启停控制 | list/start/stop API 端点 + 前端运行中页 + 详情页一键部署 | ✅ |
 | v1.7.0 批次 C | metrics/experience/telemetry 前端面板 | ✅ |
 | FFL 报告 7 项发现 | High(CLI entity_health) + Medium(--area help / L2 after wait) 已修；Low 项文档说明 | ✅ |
-| expect 编辑入口 | SpecEditor 加 expect 节点编辑 | ⏳ |
+| expect 编辑入口 | SpecEditor 加 expect 节点编辑 | ✅（2026-09-22） |
+| ADM 审计 3 项安全修复 | C-10 session_id 128-bit / B-07 MCP stdin 10MB / D-04 inbox 随机文件名+chmod700 | ✅（2026-09-22） |
+| ADM 审计 6 项稳定性修复 | B-05 session读端点鉴权 / B-09 HTTP@注入 / B-11 自批检查 / B-14 文件权限 / B-15 inbox警告 / B-06 bootstrap扫描 | ✅（2026-09-22） |
+| B3 审计 4 项功能性修复 | B3-AF-01 tick异常边界 / B3-AF-02 ask幽灵清理 / B3-AF-03 当日一次先试后记 / B3-AF-04 时区本地时间 | ✅（2026-09-22） |
 | 住户版 UI | 等产品真跑起来再做 | 🔮 |
 | emit/on event | 跨自动化事件，Schema 留位未实现 | 🔮 |
+| **阶段性验收测试** | ~120 项全覆盖（端到端/节点/安全闸/仿真/dry-live/ask/边界/MCP/交互） | 🔨 计划中（2026-09-22） |
+| 部署仪式 + 试演期（产品名待定） | 一次性授权码绑定 diff 哈希 + 过期 + 原子消费；部署后试演期自动暂停异常（吸收 HOMESTAGE 设计理念，详见 `docs/设计_吸收mimo与HOMESTAGE优秀设计.md` §1.1；名称后续重定） | → **v2.0.0** |
+| MCP 暴露 dry-live watch | 当前 MCP 无启动 watch 工具，需补 af_start_watch | ⏸ 待排期 |
+
+---
+
+## 设计吸收与版本重排（2026-09-24，CB 重新主导）
+
+> 背景：ADM 降级为每周碰头；AFD（豆包）转前端/接工单；CB 重新主导后端。
+> 设计来源：小米 **mimo 2.6ultraspeed**（经 `E:\NAS\Lever-Hub\需求稿` 产出设计与代码）+ 蓝图 **HOMESTAGE「家演」**。**AFD 是吸收落地者，不是原创设计者**。
+> 完整设计依据：`docs/设计_吸收mimo与HOMESTAGE优秀设计.md`（本文件只列版本计划与定级结论）。
+
+### 已锁架构（不回退）
+意图 JSON → `af_draft`(意图→IR) → `af_apply`(校验→仿真→入队一次搞定)；1–2 次 MCP 调用、0.3–0.8k token/题。已 commit（`184bf39`）并 NAS 真机实测通过。`af_orchestrator` 作**参考实现 + 契约源**保留（闭环依赖其 RepairReport/FixContext 契约），生产链路仍是 `af_draft`+`af_apply`，不进生产管线。
+
+### 模块定级（CB 拍板，依据 AFD 交接回复）
+
+| 动作 | 模块 |
+|------|------|
+| **晋级生产**（09-30 范围） | `af_draft`/`af_apply`/`af_test`/`af_mcp`/`af_api`/`af_runtime`/`af_executor`/`af_scanner`/`af_store`/`af_catalog`/`af_service` + 基础设施；`af_conf` 分级引擎（env `AUTOFORGE_CONF_GRADING=1` 启用，默认关） |
+| **保留（mimo 设计入口，勿删）** | `af_runtime_plugins`（统一装配入口，挂 bootstrap 即启用冲突仲裁器）、`af_nl`（G1 NL 签核，被 af_cli/af_service/af_scanner 引用）、`af_orchestrator`（参考实现+契约源，闭环依赖）、`af_closedloop`（自修复闭环，已接 orchestrator 契约） |
+| **降级实验/v2.x 候选（保留不删）** | `af_evo`、`af_health`(evo/predict 前置)、`af_predict`、`af_preference`、`af_proposal`、`af_scene`、`af_tick_supervisor` |
+| **待集成（入口就绪）** | `af_conflict_runtime`+`af_conflict`+`af_conflict_audit`（经 `af_runtime_plugins` 挂载，补 `af_scanner` 做 G2 运行时门禁）、`af_version`（接 `af_store` 一键回滚 UI）；`af_self_repair.py` 不存在（交接单笔误） |
+
+### 版本排期（新增，串接 v1.9.0 之后）
+
+| 版本 | 主题 | 关键交付 | 依赖 | 状态 |
+|------|------|---------|------|------|
+| **v1.10.0** | **投产收口（09-30）** | ① 提交固化 WIP（103 文件分批，中文前缀不 push）；② P0-9 fail-closed（无令牌即拒启动）；③ P1-4 跨自动化环 `union(deps,emit_deps)`；④ `gates.sh` 跑绿 + WO-AF-014 基线单源；⑤ 镜像基于 commit 重建（弃 scp 挂卷危险态）；⑥ token 改 secret；⑦ CI(`.github/workflows` pytest+gates) | — | 🔨 计划中 |
+| **v2.0.0** | **产品可信层（吸收 HOMESTAGE 理念，产品名待重定）** | 部署仪式+试演期自动暂停（§1.1 理念）；结构化 Ask 协议（§1.2）；AF-Spec 封闭词表 `extra="forbid"`（§1.3）；诚实报告分层（§1.5 理念） | v1.10.0 | 🔮 |
+| **v2.1.0** | **sim-to-real（吸收 HOMESTAGE 理念，产品名待重定）** | 仿真物理保真（§1.4 理念）；全屋仿真冲突检测（§1.6）；sim↔real trace 对齐测试集（§1.7） | v1.6.0 / v2.0.0 | 🔮 |
+| **v2.2.0** | **DB↔AF ask 对接层** | AF 挂起→DB TTS→语音回注 answer（生态高优先） | v2.0.0 | 🔮 |
+| **v2.3.0** | **高阶模块集成** | `af_health`→`af_evo`/`af_predict`；`af_conflict_runtime` 接 G2；`af_scene`；`af_preference` | v2.1.0 | 🔮 |
+
+### AFD 工作安排（CB 主导下）
+- **AFD 承接**：前端（SpecEditorView / expect 面板）、`af_test` 测试通道完善、单测补测（`af_closedloop`/`af_tick_supervisor`/`af_conflict`）、FFL 批量执行、文档维护。
+- **CB 主导**：WIP 固化、投产硬阻塞、安全门禁、吸收 mimo/HOMESTAGE 设计、高阶模块定级与集成、运行态装配。
+- **红线**：AFD 不碰 `af_runtime` 装配与安全闸/`af_scanner` 写路径，杜绝「未提交 WIP 漂线上、不可回滚」再现。
+
+### 当前最大风险（接手即处理）
+1. **线上代码 ≠ git**（scp 挂卷注入 WIP，d7c2a64 + 未提交文件）→ v1.10.0 ①⑤ 立即处理。
+2. **零提交**（103 文件）→ v1.10.0 ①。
+3. **P0-9 无令牌仍开放**（fail-closed 未做）→ v1.10.0 ②。
+4. **P1-4 跨自动化环漏检**（case_lamp_sync）→ v1.10.0 ③。
+5. **af_orchestrator 106KB 参考实现：作参考/契约源保留，勿当生产管线**（生产走 af_draft+af_apply；闭环依赖其 RepairReport/FixContext 契约）。
+
+---
+
+## v2.0 模块设计储备（2026-09-24 重排）
+
+> 下表替换原「v2.0 模块设计储备」的待启动项，反映模块定级结论。
+
+| 模块 | 设计难度 | 状态（重排） | 核心难点 | 优先级 |
+|------|---------|------|---------|--------|
+| **conf 分级引擎**（auto/shadow/ask） | ⭐⭐⭐⭐ | ✅ 已集成（env 开关，默认关） | 运行时三级自主闭环 | 高（已落地） |
+| **部署仪式 + 试演期（产品名待定）** | ⭐⭐⭐ | 🔮 v2.0.0 | 一次性授权码+哈希绑定+试演期自动暂停+推送（HOMESTAGE 理念，名称待重定） | 高 |
+| **结构化 Ask 协议** | ⭐⭐ | 🔮 v2.0.0 | typed 挂起 + 原生控件映射 + 收敛纪律 | 高 |
+| **DB↔AF ask 对接层** | ⭐⭐⭐ | 🔮 v2.2.0 | 挂起发现→TTS→语音回注→房间消歧 | 高（生态链） |
+| **仿真物理保真（产品名待定）** | ⭐⭐⭐⭐ | 🔮 v2.1.0 | latency/auto_off/rate_limit 拟合（HOMESTAGE 理念，名称待重定） | 高（sim-to-real 护城河） |
+| **跨自动化冲突检测（运行时）** | ⭐⭐⭐ | 🔨 实现完待集成 | `af_conflict_runtime` 接 executor 写路径 | 中（v2.3.0） |
+| **全屋仿真冲突** | ⭐⭐⭐ | 🔮 v2.1.0 | 整屋 automation 一起 replay 冲突 | 中 |
+| **自动化版本管理/回滚** | ⭐⭐ | 🔨 `af_version` 实现完待接 UI | 版本历史+diff+一键回滚 | 中（v2.3.0） |
+| **可观测性/审计** | ⭐⭐ | 🔮 | 运行日志/实例历史/动作链路（fire_recorder 部分覆盖） | 中 |
+| **af_health / af_evo / af_predict** | ⭐⭐⭐ | 🔮 v2.3.0 | health 是 evo/predict 前置 | 中（迭代） |
+| **af_closedloop 自愈** | ⭐⭐⭐ | 🔮 实验（待定级） | 检测→诊断→修复→验证 | 低（重叠 canary/health） |
+| **内置 NLU** | ⭐⭐⭐⭐ | 不采纳 | NL→intent 依赖外部 agent（mimo 足够） | 低 |
+
+---
+
+## 用户 WebUI 与测试通道（2026-09-24 补充，CB 主导）
+
+> 背景：用户重新梳理两套 UI 定位——`ui/`（开发者面板，admin）与新建 `ui-user/`（面向家庭用户，Deep reduction）。
+> 缩写约定（后续对话通用）：**AFU** = 用户 WebUI 前端开发（新豆包对话承接）；**AFD** = 承接 CB 工单继续后端开发（含测试通道完善、单测补测、文档）。
+
+### 一、两套 UI 定位（铁律）
+| | 开发者面板 `ui/` | 用户 WebUI `ui-user/` |
+|---|---|---|
+| 定位 | 内部/admin：IR/SpecEditor/治理/扫描/日志/测试通道控制台 | 家庭用户：只暴露用户该碰的 |
+| 四大区块 | — | 配对 / 自动化(按 agent 分组) / 待确认·试演期 / 设置 |
+| 状态 | 现有，需恢复可访问 | 设计稿 `doc/设计_用户WebUI_深度减法.md`，AFU 新建 |
+| 部署 | NAS `/vol1/1000/docker/autoforge/ui/dist`（autoforge-api 同源托管） | NAS `/vol1/1000/docker/autoforge/ui-user/dist`（独立路径/端口） |
+
+### 二、AFD 已落地的测试通道（af_test）
+- `src/autoforge/af_test.py`：`TestChannel`，`/data/test/` 与 `/data/` 完全隔离；`draft→apply(simulate)→save_graph(tags=["test"])`，不碰真机、不走正式 pending、自动 approve。
+- 3 个 MCP 工具 `af_test_submit` / `af_test_report` / `af_test_clear`（批量上限 500、报告、一键清空）。
+- 设计稿 `docs/AF测试通道设计方案.md`（AFD 已对比 AutoFlow 竞技场：竞技场更全但属前身多 agent 内容生产场景，AF 刻意精简 ~300 行，判断成立，不推翻）。
+- **待完善（用户决策）**：测试模式的「控制台入口 + 开关」做进开发者 WebUI（`ui/`），由用户在面板里控制测试通道的启停/看报告/清空；详见 `docs/开发计划_用户WebUI与测试通道.md`。
+
+### 三、架构稳定性结论
+- **测试通道模块本身稳**：隔离干净、fail-closed 充分、与正式区零耦合。
+- **整体部署态不稳（高优先）**：ROADMAP §当前最大风险 仍成立——线上代码 ≠ git（103 文件未提交、scp 挂卷注入 WIP）、零提交、P0-9 无令牌仍开放、P1-4 跨自动化环漏检。v1.10.0（投产收口 09-30）是第一红线，任何新功能（含测试通道 UI）不得在 WIP 未固化前上生产。
+- 本次开发者 WebUI 源已本地 `npm run build` 通过（vite 2742 模块 / 28s / 无错）；"挂了访问不了" 为 NAS 服务/挂载态问题，需 scp dist + 确认容器托管（见开发计划 §B.1）。
+
+### 四、关联开发计划
+- 用户 WebUI 全功能：`doc/设计_用户WebUI_深度减法.md`（AFU 承接）
+- 开发者 WebUI 恢复 + 测试通道控制台：`docs/开发计划_用户WebUI与测试通道.md`（AFD 承接）
+
+---
+
+## 用户 WebUI 后端跟进（2026-09-24 咨询单回复）
+
+> 来源：`doc/咨询_用户WebUI后端确认_20260924.md`（AFU → ADF 确认单）。后端核对结论见下，详细契约以 `doc/设计_用户WebUI_深度减法.md` §5（已对齐实际后端）为准。
+
+### 一、后端现状核对（逐项）
+- **配对**：`af_pair` MCP 方法**不存在**；无面向用户 SSE；配对码存储无。需新建。
+- **授权码（部署）**：`/api/user/auth-code*` **全部不存在**（搜索 0 命中）。需新建 + 部署入口接校验。
+- **多用户**：**完全没有**。`af_auth` 是多令牌主体模型（token→subject 标签，仅审计/限速），无用户表/登录/role/session。→ v1 定为**单 owner**，多用户推迟 v2.0。
+- **自动化列表/详情**：`/api/automations` **不存在**（仅 `/api/graphs`）。`preview_nl` 字段无；触发历史可借 `af_fire_recorder`；试演期状态需聚合 conf band + anomaly。
+- **Pending**：实际路径 `POST /api/pending/list` / `approve{op_id}` / `reject{op_id,reason}`（设计稿原写 GET+路径参数，已纠正）；驳回 `reason` **已支持**；无 SSE，v1 轮询。
+- **MCP URL**：HTTP `POST /mcp`（Bearer 头，**非** `?token=`）；另有 stdio。前端配对页显示静态 URL + SSE 推送的码，不拼"码+URL"。
+
+### 二、后端跟进清单（交 AFD，按优先级）
+- **P0（v1 用户 WebUI 必做）**
+  - B1 授权码体系：`POST /api/user/auth-code`(short/long)、`GET /api/user/auth-codes`、`DELETE /api/user/auth-code/{code}`；部署入口（af_save/af_apply）接授权码校验（A 直部署 / B 入 pending）。
+  - B2 配对：`af_pair(code, agent_name?)` MCP 方法（运行时发 Bearer 令牌，扩展 `af_auth` 注册表）+ 配对码存储（单次/短时，落盘参考 revoked.json）+ SSE `GET /api/mcp/pair-request`。
+  - B3 自动化列表/详情：`GET /api/automations?group_by=agent`、`GET /api/automations/{id}`（preview_nl/devices/last_triggered/trigger_7d/trial）、enable/disable/delete/archive。
+  - B4 预演 NL：`preview_nl` 入库异步算+缓存，`/preview` 现算端点（驱动 `af_vhass`+`af_nl`）。
+- **P1（增强）**
+  - B5 试演期状态聚合端点（conf band auto/shadow/canary + anomaly）。
+  - B6 Pending SSE 推送（v1 先轮询）。
+  - B7 触发历史端点（基于 `af_fire_recorder`）。
+- **P2 / 推迟 v2.0**：多用户体系（用户表/登录/role/按用户隔离）。
+
+### 三、契约对齐修正（已回写设计稿 §5）
+- Pending：`POST /api/pending/list` / `POST /api/pending/approve{op_id}` / `POST /api/pending/reject{op_id,reason}`。
+- 配对：SSE 推送 + `af_pair` MCP 方法，删掉"前端生成配对码按钮"假设。
+- MCP URL：Bearer 头非 query；前端不拼"码+URL"。
+- 多用户：v1 单 owner、无登录页。
