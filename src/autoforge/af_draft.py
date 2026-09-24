@@ -228,14 +228,23 @@ def _resolve_trigger(when: dict[str, Any], resolved: dict[str, str], catalog: An
 
 
 def _resolve_expr(expr: dict[str, Any], resolved: dict[str, str], catalog: Any) -> dict[str, Any]:
-    """解析条件表达式（简化版）。"""
-    # 支持 {"lt": {"var": "照度", "const": 200}}
+    """解析条件表达式，支持 and/or 嵌套。"""
+    # and/or 组合
+    for op in ("and", "or"):
+        if op in expr and isinstance(expr[op], list):
+            args = [_resolve_expr(sub, resolved, catalog) for sub in expr[op]]
+            return {"op": op, "args": args}
+    # 单条件：{"lt": {"var": "xxx", "const": 200}}
     for op, val in expr.items():
         if isinstance(val, dict) and "var" in val:
             var_name = val["var"]
             entity_id = _resolve_entity(var_name, catalog)
             resolved[var_name] = entity_id
-            left = {"var": f"entity.{entity_id}", "type": val.get("type", "numeric")}
+            vtype = val.get("type", "numeric")
+            if var_name.startswith("entity.") or "." in var_name:
+                left = {"var": var_name, "type": vtype}
+            else:
+                left = {"var": f"entity.{entity_id}", "type": vtype}
             right = {"const": val["const"]}
             return {"op": op, "left": left, "right": right}
     raise DraftError("E_INVALID_EXPR", f"无法解析条件表达式: {expr}")
