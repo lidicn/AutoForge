@@ -50,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 import json, time
@@ -260,21 +261,29 @@ def build_app(
     def requires(scope: str):
         """端点分级依赖：write / live。
 
-        鉴权策略（P0-9 收口，fail-closed 优先）：
-        - AF_REQUIRE_AUTH=true 且未配置令牌 -> 403（生产无令牌即不开）
-        - 未设 AF_REQUIRE_AUTH 且未配置令牌 -> None（开发/原型模式，向后兼容）
-        - 已配置令牌 -> 正常校验
+        鉴权策略（P0-9 收口，fail-closed 默认）：
+        - 未配置任何令牌 -> 默认 403（生产无令牌即不开）
+        - AF_ALLOW_NOAUTH=1 -> 唯一逃生舱：本地开发/原型模式放行（向后兼容旧默认开放）
+        - 已配置令牌 -> 正常校验（缺令牌 403 / 越权 403 / 过期 403）
         """
         def dep(
             creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
         ) -> TokenInfo | None:
             if not registry.enabled:
+                # 默认 fail-closed（P0-9 收口）：生产无令牌即拒绝
+                if os.environ.get("AF_ALLOW_NOAUTH", "").lower() in ("1", "true", "yes"):
+                    return None  # 本地开发/原型逃生舱
                 if os.environ.get("AF_REQUIRE_AUTH", "").lower() in ("1", "true", "yes"):
-                    raise HTTPException(
-                        status_code=403,
-                        detail="AF_REQUIRE_AUTH enabled but no API tokens configured (fail-closed)",
+                    warnings.warn(
+                        "AF_REQUIRE_AUTH 已废弃：v1.10.0 起默认 fail-closed，无需设置；"
+                        "本地开放请用 AF_ALLOW_NOAUTH=1",
+                        DeprecationWarning,
+                        stacklevel=2,
                     )
-                return None
+                raise HTTPException(
+                    status_code=403,
+                    detail="no API tokens configured (fail-closed); set AF_ALLOW_NOAUTH=1 for local dev",
+                )
             if creds is None:
                 raise HTTPException(status_code=403, detail="缺少 API 令牌")
             try:
@@ -767,8 +776,13 @@ def build_app(
         creds = _bearer(request)
         raw = (creds.credentials if creds else None) or token
         info = registry.authenticate(raw) if raw else None
-        if info is None and registry.enabled:
-            return JSONResponse(status_code=403, content={"ok": False, "error": "未授权"})
+        # fail-closed（P0-9）：未认证即拒；仅本地无令牌逃生舱（AF_ALLOW_NOAUTH=1）放行
+        if info is None:
+            local_escape = (not registry.enabled) and os.environ.get("AF_ALLOW_NOAUTH", "").lower() in (
+                "1", "true", "yes",
+            )
+            if not local_escape:
+                return JSONResponse(status_code=403, content={"ok": False, "error": "未授权"})
         return StreamingResponse(_pair_event_gen(request), media_type="text/event-stream")
 
     # ── v1.9.0 用户 WebUI：授权码（部署授权，独立于配对）──

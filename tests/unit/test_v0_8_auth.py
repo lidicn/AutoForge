@@ -86,12 +86,20 @@ def test_rate_limiter_fixed_window():
 # ── HTTP 端到端 ──────────────────────────────────────────────────────
 
 
-def test_no_tokens_all_open(tmp_path, monkeypatch):
-    """未配置任何令牌：全站公开（含写/真机下发端点），向后兼容原型期。"""
+def test_no_tokens_fail_closed(tmp_path, monkeypatch):
+    """未配置任何令牌：默认 fail-closed，受保护写/真机端点 403（读/健康仍公开）。"""
     client = _client(tmp_path, monkeypatch, {})
     assert client.get("/api/health").status_code == 200
-    assert client.get("/api/live/status").status_code == 200
+    assert _probe_write(client).status_code == 403
+    assert client.get("/api/live/status").status_code == 403
+
+
+def test_no_tokens_allow_noauth(tmp_path, monkeypatch):
+    """AF_ALLOW_NOAUTH=1 逃生舱：本地开发/原型仍可无令牌开放。"""
+    client = _client(tmp_path, monkeypatch, {"AF_ALLOW_NOAUTH": "1"})
+    assert client.get("/api/health").status_code == 200
     assert _probe_write(client).status_code != 403
+    assert client.get("/api/live/status").status_code == 200
 
 
 def test_legacy_single_token_backward_compat(tmp_path, monkeypatch):

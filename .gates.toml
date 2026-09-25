@@ -1,5 +1,10 @@
-# AutoForge 质量门禁口径（复制到仓库根，改名 `.gates.toml`）
+# AutoForge 质量门禁口径（仓库根，单源权威）
 # 由 PM/整合 于 2026-09-19 依据 `doc/审计与横评-202609/02-审计-AutoForge.md` 起草。
+#
+# WO-AF-014 门禁基线唯一定义：本文件是**唯一权威源**。
+# 外部 `E:/NAS/AgentOps/gates/AutoForge.gates.toml` 为历史分叉副本，已弃用——
+# 任何门禁口径调整只在此处进行，外部副本不再同步（避免两容器基线分叉）。
+# `gates.sh` 运行时只读本文件（`$REPO/.gates.toml`），不触及外部副本。
 
 source_roots = ["src"]
 
