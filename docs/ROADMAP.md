@@ -1157,7 +1157,7 @@ graph LR
 
 | 版本 | 主题 | 关键交付 | 依赖 | 状态 |
 |------|------|---------|------|------|
-| **v1.10.0** | **投产收口（09-30）** | ① 提交固化 WIP（103 文件分批，中文前缀不 push）；② P0-9 fail-closed（无令牌即拒启动）；③ P1-4 跨自动化环 `union(deps,emit_deps)`；④ `gates.sh` 跑绿 + WO-AF-014 基线单源；⑤ 镜像基于 commit 重建（弃 scp 挂卷危险态）；⑥ token 改 secret；⑦ CI(`.github/workflows` pytest+gates) | — | 🔨 计划中 |
+| **v1.10.0** | **投产收口（09-30）** | ① 提交固化 WIP（103 文件分批，中文前缀不 push）；② P0-9 fail-closed（无令牌即拒启动）；③ P1-4 跨自动化环 `union(deps,emit_deps)`；④ `gates.sh` 跑绿 + WO-AF-014 基线单源；⑤ 镜像基于 commit 重建（弃 scp 挂卷危险态）；⑥ token 改 secret；⑦ CI(`.github/workflows` pytest+gates) | — | 🟢 ② ③ ④ ⑦ 已完成（① 早前完成）；⑤ ⑥ 投产运维，本轮未做 |
 | **v2.0.0** | **产品可信层（吸收 HOMESTAGE 理念，产品名待重定）** | 部署仪式+试演期自动暂停（§1.1 理念）；结构化 Ask 协议（§1.2）；AF-Spec 封闭词表 `extra="forbid"`（§1.3）；诚实报告分层（§1.5 理念） | v1.10.0 | 🔮 |
 | **v2.1.0** | **sim-to-real（吸收 HOMESTAGE 理念，产品名待重定）** | 仿真物理保真（§1.4 理念）；全屋仿真冲突检测（§1.6）；sim↔real trace 对齐测试集（§1.7） | v1.6.0 / v2.0.0 | 🔮 |
 | **v2.2.0** | **DB↔AF ask 对接层** | AF 挂起→DB TTS→语音回注 answer（生态高优先） | v2.0.0 | 🔮 |
@@ -1169,10 +1169,10 @@ graph LR
 - **红线**：AFD 不碰 `af_runtime` 装配与安全闸/`af_scanner` 写路径，杜绝「未提交 WIP 漂线上、不可回滚」再现。
 
 ### 当前最大风险（接手即处理）
-1. **线上代码 ≠ git**（scp 挂卷注入 WIP，d7c2a64 + 未提交文件）→ v1.10.0 ①⑤ 立即处理。
-2. **零提交**（103 文件）→ v1.10.0 ①。
-3. **P0-9 无令牌仍开放**（fail-closed 未做）→ v1.10.0 ②。
-4. **P1-4 跨自动化环漏检**（case_lamp_sync）→ v1.10.0 ③。
+1. **线上代码 ≠ git**（scp 挂卷注入 WIP，d7c2a64 + 未提交文件）→ v1.10.0 ① 已完成；⑤ 镜像重建（投产运维，本轮未做）。
+2. **零提交**（103 文件）→ v1.10.0 ① 已完成。
+3. **P0-9 无令牌仍开放**（fail-closed 未做）→ v1.10.0 ② 已完成（默认 403 + AF_ALLOW_NOAUTH 逃生舱）。
+4. **P1-4 跨自动化环漏检**（case_lamp_sync）→ v1.10.0 ③ 已完成（union(deps,emit_deps) 检测 + 混合跨环 invalid 用例，但注意 union 后 case_lamp_sync 本身也被标 CROSS_DEP_CYCLE，见下）。
 5. **af_orchestrator 106KB 参考实现：作参考/契约源保留，勿当生产管线**（生产走 af_draft+af_apply；闭环依赖其 RepairReport/FixContext 契约）。
 
 ---
