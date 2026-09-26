@@ -1,8 +1,8 @@
 {
   "ir_version": "0.2.1",
   "meta": {
-    "title": "跨自动化混合环（实体边 + 事件边各贡献一半，P1-4 盲区）",
-    "expect": "A 由 switch.lamp_x 状态变化触发并 emit event.lamp_x_changed；B 由 event.lamp_x_changed 触发并写 switch.lamp_x。deps 图（B 写 X、A 触发 X → B→A）与 emit_deps 图（A emit E、B 触发 E → A→B）各自都不是环，但 union 后是环 A→B→A，必须被 CROSS_DEP_CYCLE 拦截。这是 case_lamp_sync 漏检盲区的浓缩版：emit 解耦只贡献事件边、实体写只贡献实体边，单侧图永远看不到完整环。"
+    "title": "跨自动化混合环（实体边 + 事件边各贡献一半，emit 解耦良性模式）",
+    "expect": "A 由 switch.lamp_x 状态变化触发并 emit event.lamp_x_changed；B 由 event.lamp_x_changed 触发并写 switch.lamp_x。deps 图与 emit_deps 图各自都不是环，但 union 后是环 A→B→A。因环上含 emit 事件解耦边，运行时靠状态收敛+熔断避免死循环（即 case_lamp_sync 的良性双向同步模式），P1-4 union 检测仍会标 CROSS_DEP_CYCLE 但降级为告警（WARNING），不阻断 forge build。用于验收「emit 解耦环放行但可见」；真正危险且无解耦的纯实体环见 invalid_case_entity_cycle.json（被 ENTITY_DEP_CYCLE 拦截）。"
   },
   "automations": [
     {

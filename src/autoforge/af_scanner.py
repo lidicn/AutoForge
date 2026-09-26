@@ -57,8 +57,8 @@ CHECKS: dict[str, str] = {
     "UNDECLARED_VAR": "引用了未声明的实例变量",
     "NL_COVERAGE": "⑬ NL 覆盖率检查：有节点没出现在自然语言描述里",
     # ── v0.3.0 跨自动化事件·发布侧（IR §4.3）──
-    "EMIT_SELF_LOOP": "§4.3 emit 发布成环（含自环）：A 发出 event.X 且 B 由 event.X 触发",
-    "CROSS_DEP_CYCLE": "P1-4 跨自动化混合依赖成环（实体写+事件发布联合图）",
+    "EMIT_SELF_LOOP": "§4.3 emit 发布成环（含自环）：仅事件、无设备回灌，放行（告警）",
+    "CROSS_DEP_CYCLE": "P1-4 跨自动化混合依赖成环（含 emit 解耦边）：运行时收敛，放行（告警）",
     "EMIT_STORM_LIMIT": "§4.3 事件风暴风险：emit 节点过多 / 同一事件名重复发布",
     # ── 真机接线预检（forge run --live）──
     "LIVE_TOKEN_REQUIRED": "真机下发缺 HA 令牌",
@@ -107,7 +107,8 @@ CODE_HINT: dict[str, str] = {
     "EXPR_INVALID": "检查算子名/函数名拼写、参数个数，以及嵌套深度（上限 32）/节点数（上限 256）。",
     "UNDECLARED_VAR": "在 `vars` 里声明该变量，或改用已有变量名。",
     "NL_COVERAGE": "该节点未出现在自然语言描述里——补 `name` 字段，让渲染器能叙述到它。",
-    "EMIT_SELF_LOOP": "自动化发出的事件又触发自己（含自环）；改名或加条件避免自触发。",
+    "EMIT_SELF_LOOP": "纯事件环、无设备回灌，运行时安全；当前为放行告警（不阻断编译），如需消除可改名或加条件避免自触发。",
+    "CROSS_DEP_CYCLE": "环含 emit 事件解耦边（即 case_lamp_sync 的良性双向同步模式），运行时靠状态收敛+熔断避免死循环，已放行（告警）；若确为无 emit 解耦的直接互写实体，应重构为 emit 解耦写法（否则会被 ENTITY_DEP_CYCLE 拦截）。",
     "EMIT_STORM_LIMIT": "单条自动化 emit 节点过多/同名重复发布；拆分为多条自动化。",
     "LIVE_TOKEN_REQUIRED": "设置 `AUTOFORGE_HA_TOKEN` 或传 `--ha-token`。",
     "LIVE_CONFIRM_REQUIRED": "真机下发必须显式传 `--confirm`。",
@@ -986,16 +987,27 @@ class StaticScanner:
                 for a, b in zip(cycle, cycle[1:] + [cycle[0]])
             )
             if has_entity_edge and has_emit_edge:
+                # 混合环：环上既有「实体写」边又有「emit 事件」边。
+                # emit 解耦侧把状态变化只广播事件（不写实体），跟随侧只写对方实体，
+                # 运行时靠 HA 状态收敛（已是该状态不产生 state_changed）+ 总线熔断避免死循环，
+                # 属良性双向同步模式（见 examples/ir/case_lamp_sync.json）。
+                # 放行（仅告警，不阻断 forge build）。
                 code = "CROSS_DEP_CYCLE"
-                msg = "跨自动化混合依赖成环（实体+事件）：" + " → ".join(cycle)
+                msg = "跨自动化混合依赖成环（实体写+事件发布，含 emit 解耦）：" + " → ".join(cycle) + "；运行时靠状态收敛安全，已放行"
+                level = WARNING
             elif has_emit_edge:
+                # 纯事件环：仅 emit 事件、无设备回灌，运行时安全，放行（告警）。
                 code = "EMIT_SELF_LOOP"
-                msg = "跨自动化事件发布成环（自触发）：" + " → ".join(cycle)
+                msg = "跨自动化事件发布成环（仅事件、无设备回灌）：" + " → ".join(cycle) + "；已放行"
+                level = WARNING
             else:
+                # 纯实体环：无 emit 解耦，多自动化直接互写同一实体，无状态收敛保障，
+                # 静态保守拦截（code hint 引导改用 emit 解耦写法）。
                 code = "ENTITY_DEP_CYCLE"
-                msg = "跨自动化实体读写依赖成环：" + " → ".join(cycle)
+                msg = "跨自动化实体读写依赖成环（无 emit 解耦，直接互写）：" + " → ".join(cycle)
+                level = ERROR
             out.diagnostics.append(
-                Diagnostic(code, ERROR, msg, cycle[0] if cycle else "")
+                Diagnostic(code, level, msg, cycle[0] if cycle else "")
             )
 
         # ③ 跨自动化实体抢占：多条自动化写同一实体且没有优先级区分

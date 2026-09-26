@@ -1,0 +1,49 @@
+{
+  "ir_version": "0.2.1",
+  "meta": {
+    "title": "跨自动化纯实体环（无 emit 解耦，直接互写，必须拦截）",
+    "expect": "A 由 switch.lamp_x 状态变化触发并写 switch.lamp_y；B 由 switch.lamp_y 状态变化触发并写 switch.lamp_x。deps 图即 A→B→A 实体环，无事件解耦边，运行时无收敛保障（直接互写），必须被 ENTITY_DEP_CYCLE 拦截。这是真正危险的环；正确改法是改用 emit 解耦（见 case_lamp_sync）。"
+  },
+  "automations": [
+    {
+      "ir_version": "0.2.1",
+      "id": "a_write_on_change",
+      "name": "A：开关X变化→写开关Y",
+      "version": 1,
+      "mode": "single",
+      "meta": {
+        "acceptance": "纯实体环（必须拦截）",
+        "expect": "由实体状态变化触发，直接写另一实体（不 emit），故 deps 图有出边"
+      },
+      "nodes": [
+        { "id": "on1", "kind": "on", "name": "X 开了", "trigger": { "type": "state", "entity_id": "switch.lamp_x", "to": "on" } },
+        { "id": "d1", "kind": "do", "name": "写 Y", "adapter": "ha", "action": "switch.turn_on", "params": { "entity_id": "switch.lamp_y" }, "result_var": "r_y" },
+        { "id": "p1", "kind": "pass", "name": "结束" }
+      ],
+      "edges": [
+        { "from": "on1", "to": "d1", "kind": "then" },
+        { "from": "d1", "to": "p1", "kind": "then" }
+      ]
+    },
+    {
+      "ir_version": "0.2.1",
+      "id": "b_write_on_change",
+      "name": "B：开关Y变化→写开关X",
+      "version": 1,
+      "mode": "single",
+      "meta": {
+        "acceptance": "纯实体环（必须拦截）",
+        "expect": "由实体状态变化触发，直接写另一实体（不 emit），故 deps 图有出边"
+      },
+      "nodes": [
+        { "id": "on2", "kind": "on", "name": "Y 开了", "trigger": { "type": "state", "entity_id": "switch.lamp_y", "to": "on" } },
+        { "id": "d2", "kind": "do", "name": "写 X", "adapter": "ha", "action": "switch.turn_on", "params": { "entity_id": "switch.lamp_x" }, "result_var": "r_x" },
+        { "id": "p2", "kind": "pass", "name": "结束" }
+      ],
+      "edges": [
+        { "from": "on2", "to": "d2", "kind": "then" },
+        { "from": "d2", "to": "p2", "kind": "then" }
+      ]
+    }
+  ]
+}

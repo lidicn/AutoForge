@@ -2,7 +2,7 @@
   "ir_version": "0.2.1",
   "meta": {
     "title": "书房吊灯 ↔ 书房射灯 双向状态同步（Zigbee 双开关）",
-    "expect": "吊灯或挂灯任一变化，另一盏无条件镜像。用 emit 事件解耦（状态变化只广播事件，跟随侧订阅事件后写对方），避免跨自动化实体读写成环（ENTITY_DEP_CYCLE 会被安全闸拦截），也避免读对方状态受 HA mesh 抖动影响而丢同步；HA 对已是该状态的调用不产生 state_changed→无死循环；熔断作最后兜底。"
+    "expect": "吊灯或挂灯任一变化，另一盏无条件镜像。用 emit 事件解耦（状态变化只广播事件，跟随侧订阅事件后写对方），避免纯实体互写环（否则会被 ENTITY_DEP_CYCLE 拦截）；union 跨环检测仍会标 CROSS_DEP_CYCLE，但因含 emit 解耦边，降级为告警（WARNING）放行，不阻断 forge build。也避免读对方状态受 HA mesh 抖动影响而丢同步；HA 对已是该状态的调用不产生 state_changed→无死循环；熔断作最后兜底。"
   },
   "automations": [
     {

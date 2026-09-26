@@ -1172,7 +1172,7 @@ graph LR
 1. **线上代码 ≠ git**（scp 挂卷注入 WIP，d7c2a64 + 未提交文件）→ v1.10.0 ① 已完成；⑤ 镜像重建（投产运维，本轮未做）。
 2. **零提交**（103 文件）→ v1.10.0 ① 已完成。
 3. **P0-9 无令牌仍开放**（fail-closed 未做）→ v1.10.0 ② 已完成（默认 403 + AF_ALLOW_NOAUTH 逃生舱）。
-4. **P1-4 跨自动化环漏检**（case_lamp_sync）→ v1.10.0 ③ 已完成（union(deps,emit_deps) 检测 + 混合跨环 invalid 用例，但注意 union 后 case_lamp_sync 本身也被标 CROSS_DEP_CYCLE，见下）。
+4. **P1-4 跨自动化环漏检**（case_lamp_sync）→ v1.10.0 ③ 已完成（union(deps,emit_deps) 检测 + 混合跨环 invalid 用例）。语义澄清：含 emit 事件解耦边的混合环标 CROSS_DEP_CYCLE 但降级为告警（WARNING）放行，不阻断 forge build——即 case_lamp_sync 的良性双向同步模式可正常编译部署；真正危险且无解耦的纯实体环才被 ENTITY_DEP_CYCLE 拦截（ERROR，新增 invalid_case_entity_cycle.json 用例）。
 5. **af_orchestrator 106KB 参考实现：作参考/契约源保留，勿当生产管线**（生产走 af_draft+af_apply；闭环依赖其 RepairReport/FixContext 契约）。
 
 ---

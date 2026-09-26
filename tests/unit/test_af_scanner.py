@@ -205,12 +205,12 @@ def test_13_nl_coverage_missing_node():
 
 
 def test_p1_4_cross_ring_union_detected():
-    """P1-4 盲区：跨自动化混合环（实体边 + 事件边各贡献一半）。
+    """P1-4 union 检测：跨自动化混合环（实体边 + 事件边各贡献一半）。
 
     deps 图（B 写 X、A 触发 X → B→A）与 emit_deps 图（A emit E、B 触发 E → A→B）
-    各自都不是环，但 union 后是环 A→B→A，必须被 CROSS_DEP_CYCLE 拦截。
-    这是 case_lamp_sync 漏检盲区的浓缩：emit 解耦只贡献事件边、实体写只贡献实体边，
-    单侧图永远看不到完整环（修复前 split 图各自查环会漏检）。
+    各自都不是环，但 union 后是环 A→B→A。因环上含 emit 事件解耦边，属良性
+    双向同步模式（case_lamp_sync），P1-4 union 检测仍标 CROSS_DEP_CYCLE，但降级为
+    WARNING，不阻断 forge build（放行可见，运行时靠状态收敛 + 熔断避免死循环）。
     """
     a = _base(
         id="a_emit",
@@ -239,8 +239,42 @@ def test_p1_4_cross_ring_union_detected():
         ],
     )
     scan = StaticScanner(Graph([load_automation(a), load_automation(b)])).scan()
-    assert not scan.ok, "混合跨环必须被拦截"
+    assert scan.ok, "emit 解耦混合环应放行（WARNING 不阻断编译）"
     assert "CROSS_DEP_CYCLE" in scan.codes()
+    assert "CROSS_DEP_CYCLE" not in {d.code for d in scan.errors}
+
+
+def test_p1_4_entity_cycle_blocked():
+    """纯实体环（无 emit 解耦的直接互写）必须被 ENTITY_DEP_CYCLE 拦截。"""
+    a = _base(
+        id="a_write",
+        name="A：X 变化→写 Y",
+        nodes=[
+            {"id": "on1", "kind": "on", "trigger": {"type": "state", "entity_id": "switch.lamp_x", "to": "on"}},
+            {"id": "d1", "kind": "do", "name": "写 Y", "adapter": "ha", "action": "switch.turn_on", "params": {"entity_id": "switch.lamp_y"}, "result_var": "r_y"},
+            {"id": "p1", "kind": "pass"},
+        ],
+        edges=[
+            {"from": "on1", "to": "d1", "kind": "then"},
+            {"from": "d1", "to": "p1", "kind": "then"},
+        ],
+    )
+    b = _base(
+        id="b_write",
+        name="B：Y 变化→写 X",
+        nodes=[
+            {"id": "on2", "kind": "on", "trigger": {"type": "state", "entity_id": "switch.lamp_y", "to": "on"}},
+            {"id": "d2", "kind": "do", "name": "写 X", "adapter": "ha", "action": "switch.turn_on", "params": {"entity_id": "switch.lamp_x"}, "result_var": "r_x"},
+            {"id": "p2", "kind": "pass"},
+        ],
+        edges=[
+            {"from": "on2", "to": "d2", "kind": "then"},
+            {"from": "d2", "to": "p2", "kind": "then"},
+        ],
+    )
+    scan = StaticScanner(Graph([load_automation(a), load_automation(b)])).scan()
+    assert not scan.ok, "纯实体环必须被拦截"
+    assert "ENTITY_DEP_CYCLE" in scan.codes()
 
 
 def test_p1_4_normal_graph_no_false_cycle():
@@ -248,7 +282,7 @@ def test_p1_4_normal_graph_no_false_cycle():
 
     用 case01（自读自写但触发源是人体传感器，而非被写的实体）→ 不构成环。
     注意：case_lamp_sync 这类 emit 解耦双向同步本质确为跨环，union 后会标记
-    CROSS_DEP_CYCLE，属 P1-4 盲区补全的预期副作用（运行时靠状态收敛 + 熔断避免死循环）。
+    CROSS_DEP_CYCLE，但已是放行告警（不阻断编译）。
     """
     graph = load_graph(Path(__file__).parent.parent.parent / "examples" / "ir" / "case01_day_light.json")
     scan = StaticScanner(graph).scan()
