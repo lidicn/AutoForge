@@ -27,10 +27,10 @@ Agent 撰写 AF-Spec / JSON IR ──▶ forge build（安全闸：静态扫描�
 
 ## 1.1 里程碑状态
 
-> **当前版本**：`1.6.0`（实体解析决策智能 ✅ 2026-09-16）——**路线图 v0.2.0–v1.6.0 全部交付，待办清零**。
-> **下一阶段**：串行主链 `v1.1.0–v1.6.0` 已全部交付；**v1.7.0「WebUI 全功能接入」已规划**（见 [`docs/开发计划_WebUI全功能接入.md`](docs/开发计划_WebUI全功能接入.md) + [`docs/ROADMAP.md`](docs/ROADMAP.md) 同名章节）；内核侧候选见 §「不排期项」，待真实需求驱动。
-> 各版本主题与交接卡见 [`docs/ROADMAP.md`](docs/ROADMAP.md)。
-> **回归基线（v1.6.0）**：本机 **488 passed / 10 skipped**（collected 498）；**NAS 容器全量回归 488 passed / 10 skipped / 0 failed**（与本机一致，DoD 双环境全绿）。
+> **当前版本**：`v1.7.1`（WebUI 全功能接入收口 ✅）——**路线图 v0.2.0–v1.7.1 全部交付，待办清零**。
+> **进行中**：`v2.0.1`「投产收口」（文档清点 / token 走 secret / 鉴权 fail-closed / 镜像烘入 / 文档鲜度 / ui-user 冻结），见 [`docs/roadmap/版本路线图.md`](docs/roadmap/版本路线图.md) 与 [`docs/plan/版本开发计划_DCD执行细案.md`](docs/plan/版本开发计划_DCD执行细案.md)。
+> 各版本主题与交接卡见 [`docs/ROADMAP.md`](docs/ROADMAP.md) 与 [`docs/roadmap/`](docs/roadmap/)。
+> **回归基线（v1.7.1）**：**529 passed / 10 skipped**（本机与 NAS 容器双环境全绿，DoD 达成）；v2.0.1 在此基线上增量，未改动内核行为。
 
 | 阶段 | 主题 | 状态 |
 |---|---|---|
@@ -54,7 +54,9 @@ Agent 撰写 AF-Spec / JSON IR ──▶ forge build（安全闸：静态扫描�
 | **v1.5.0** | **经验闭环**（失败归因 + 错误知识库 + 实体共现 + 解析遥测/消歧） | ✅ |
 | **v1.6.0-a** | **实体解析 P0「数据源升级」**（可选 ws 四注册表 + `device_id`/`integration`/area 解析链） | ✅ |
 | **v1.6.0** | **实体解析决策智能**（device 归并 + 集成优选 + 弱信号降权 + 别名沉淀 + 联动验证闸 + 可选 binding） | ✅ |
-| **v1.7.0** | **WebUI 全功能接入**（后端能力完整展现到控制台，分 A/B/C 三批） | 🔨 计划中 |
+| **v1.7.0** | **WebUI 全功能接入**（前端由独立仓库并入主仓 `ui/`，A/B 批次已交付；C 批次经验闭环待做） | ✅ |
+| **v1.7.1** | **WebUI 全功能接入收口 + 回归基线对齐**（529 passed 双环境全绿） | ✅ |
+| **v2.0.1** | **投产收口**（工程卫生与可靠性：文档清点 / token secret / 鉴权 fail-closed / 镜像烘入 / 文档鲜度 / ui-user 冻结） | 🔨 进行中 |
 
 ### v1.0 发布说明（2026-09-15）
 
@@ -215,7 +217,8 @@ forge sim examples/ir/case01_day_light.json
 | [`docs/NAMING.md`](docs/NAMING.md) | 命名约定与历史改名对照 |
 | [`docs/HA_SEMANTIC_DIFF.md`](docs/HA_SEMANTIC_DIFF.md) | 与 HA 的有意偏离清单 |
 | [`docs/G1_ACCEPTANCE.md`](docs/G1_ACCEPTANCE.md) | 8 条验收用例 ↔ 实现点 ↔ 测试落位（含 G4 置信度/canary 映射） |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | ① 已发布里程碑 G1–G7 + 真机接线归档；② **版本路线图 v0.2.0–v1.6.0** 与开发计划 |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | ① 已发布里程碑 G1–G7 + 真机接线归档；② **版本路线图 v0.2.0–v1.7.1** 与开发计划 |
+| [`docs/roadmap/ADM-路线图-AF.md`](docs/roadmap/ADM-路线图-AF.md) | 架构决策记录（ADM）路线图：已决策项与剩余项 |
 | [`docs/交接卡_模板.md`](docs/交接卡_模板.md) | 里程碑交接卡模板（文件清单/行为增量/验证/风险/合并影响） |
 | [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) | 服务层只读 API 契约（Round 1，权威形态 `/openapi.json`） |
 
