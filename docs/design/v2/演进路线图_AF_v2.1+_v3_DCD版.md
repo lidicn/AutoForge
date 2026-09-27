@@ -72,8 +72,8 @@ v2.3 复合编排 ────────────────────�
 | 1.5 | shadow_log 落盘 + 重启回放 | 0.5 天 | 抄 `af_version.py:743-758` 原子替换模式（✅ 已交付） |
 | 1.6 | 契约冻结：build/simulate 返回加 `"schema":"af-stage/1"`，issues_from 严格模式 + 一版过渡期容错 | 1 天 | 决策 C；消费点仅 3 处（✅ 已交付） |
 | 1.7 | premiere 落盘（TrialStore + PremiereStore JSON 写透 + 启动 load） | 0.5 天 | 决策 F 前置（✅ 已交付） |
-| 1.8 | af_watch 聚合层雏形：订阅 shadow/canary/conflict 事件，回灌诚实报告 `verified_in_prod` 分区 | 1.5 天 | 初稿 F4；注意运行态/仿真态实体标识符对齐 |
-| 1.9 | 全量回归 + 采信台真跑 + 评审窗 | 0.5 天 | 铁律 2、3 |
+| 1.8 | af_watch 聚合层雏形：订阅 shadow/canary/conflict 事件，回灌诚实报告 `verified_in_prod` 分区 | 1.5 天 | 初稿 F4；注意运行态/仿真态实体标识符对齐（✅ 已交付；shadow 落点已接，canary/conflict 同款一行喂入即可） |
+| 1.9 | 全量回归 + 采信台真跑 + 评审窗 | 0.5 天 | 铁律 2、3（✅ 已交付；采集台真跑 776 passed / 5 既有环境性失败与 v2.1 无关） |
 
 ### 测试补强（本版必须补的债）
 

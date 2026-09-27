@@ -460,6 +460,20 @@ class ShadowRunner:
             record_id=record.record_id, verdict=record.verdict.value,
             expected_state=record.expected_state, observed_state=observed,
         )
+        # 订阅点：生产态验证结论喂给 af_watch 聚合层（诚实报告 verified_in_prod 分区）。
+        # 异常隔离：聚合失败绝不影响影子比对本身。
+        if record.verdict in (Verdict.MATCHED, Verdict.MISSED):
+            # 生产态验证证据：MATCHED=已验证对，MISSED=验证未过（均归 verified_in_prod 分区）
+            status = "verified" if record.verdict is Verdict.MATCHED else "failed"
+            try:
+                from autoforge import af_watch
+                af_watch.record_shadow(
+                    record.automation_id, status, now,
+                    {"record_id": record.record_id, "action": record.action,
+                     "expected_state": record.expected_state, "observed_state": observed},
+                )
+            except Exception:  # noqa: BLE001
+                pass  # 聚合失败绝不影响影子比对本身
         self.persist()
         return record
 

@@ -796,7 +796,10 @@ def honest_report(out: Mapping[str, Any]) -> dict[str, Any]:
     - non_simulable：断言**无法验证**（status=unverified）→ 显式标黄，绝不脑补默认值。
     - exempted：副作用不可观测、被影子系统**显式豁免验证**的自动化（决策 B 真豁免通道）；
       单列一档，绝不冒充 verified，也不计入 non_simulable（那是「想验但验不到」）。
+    - verified_in_prod：生产态真实验证证据（shadow/canary/conflict 落点，由 af_watch 聚合，
+      经 ``out["verified_in_prod"]`` 回灌）；是「真的跑过且对」的硬证据，与仿真推断分开。
     """
+    from autoforge.af_watch import verified_in_prod_partition as _watch_partition
     expect = out.get("expect") or {}
     items = expect.get("items") or []
     verified = [it for it in items if it.get("status") in ("pass", "fail")]
@@ -831,6 +834,8 @@ def honest_report(out: Mapping[str, Any]) -> dict[str, Any]:
         # 决策 B 真豁免通道：副作用不可观测的自动化单列一档（由影子系统/IR 显式标注喂入，
         # 形如 [{"automation_id": "aN", "action": "notify", "reason": "..."}]）。
         "exempted": list(out.get("exempted", []) or []),
+        # v2.1 F4：生产态真实验证证据（af_watch 聚合，运行时经 out["verified_in_prod"] 回灌）
+        "verified_in_prod": out.get("verified_in_prod", _watch_partition()),
         "fully_verified": bool(items) and not non_simulable and expect.get("failed", 0) == 0,
     }
 

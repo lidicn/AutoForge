@@ -1,6 +1,7 @@
 """ShadowRunner 单测。"""
 import os
 
+from autoforge import af_watch
 from autoforge.af_shadow import ShadowLogStore, Verdict
 from conftest import (
     FakeAdapter, FakeAutomation, FakeExecutor, FakeInstance, FakeNode, FakeStates,
@@ -332,5 +333,22 @@ def test_shadow_log_replay_misses_when_state_changed(tmp_path):
 
     loaded = shadow2.log.get(rec1.record_id)
     assert loaded.verdict is Verdict.MISSED
+
+
+def test_shadow_compare_feeds_af_watch(tmp_path):
+    # PR 1.8：影子比对结论（MATCHED/MISSED）订阅进 af_watch 聚合层
+    af_watch.reset()
+    shadow, inst, _ = _shadow_with_log(tmp_path, later=None)
+    shadow.states.set("light.study", "on")
+    node = FakeNode(action="turn_on", entities=["light.study"], expected={"light.study": "on"})
+    rec = shadow.run_do(inst, node)
+    shadow.clock.advance(301)        # 让比对到期
+    judged = shadow.compare(rec.record_id)  # 落点：record_shadow(verified)
+    assert judged.verdict is Verdict.MATCHED
+
+    part = af_watch.verified_in_prod_partition()
+    assert part["summary"]["total_verified_in_prod"] >= 1
+    assert any(a["automation_id"] == "a1" and a["verified_in_prod"] >= 1
+               for a in part["automations"])
 
 

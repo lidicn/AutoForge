@@ -91,6 +91,24 @@ def test_honest_report_exempted_partition():
     assert honest_report({"expect": {"items": []}, "final_states": {}})["exempted"] == []
 
 
+def test_honest_report_verified_in_prod_partition():
+    # v2.1 F4：生产态真实验证证据（af_watch 聚合）单列 verified_in_prod 分区
+    out = {
+        "expect": {"ok": True, "failed": 0, "items": [{"target": "light.a", "status": "pass"}]},
+        "final_states": {"light.a": "on"},
+        "verified_in_prod": [
+            {"automation_id": "a1", "verified_in_prod": 3, "last_verified_at": 100.0, "shadow": 2, "canary": 1, "conflict": 0},
+        ],
+    }
+    rep = honest_report(out)
+    assert isinstance(rep["verified_in_prod"], list)
+    assert rep["verified_in_prod"][0]["automation_id"] == "a1"
+    assert rep["verified_in_prod"][0]["verified_in_prod"] == 3
+    # 没喂入时回退为 af_watch 默认分区（dict，含 automations，不伪造占位）
+    fallback = honest_report({"expect": {"items": []}, "final_states": {}})["verified_in_prod"]
+    assert isinstance(fallback, dict) and "automations" in fallback
+
+
 def test_simulate_report_has_three_tiers():
     # 验收门：sim 端点返回结构含 verified / inferred / non_simulable 三分区且可枚举
     import json
