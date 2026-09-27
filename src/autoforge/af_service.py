@@ -796,6 +796,11 @@ def honest_report(out: Mapping[str, Any]) -> dict[str, Any]:
         for it in items
         if it.get("status") == "unverified"
     ]
+    # 仿真底座未建模的动作（如 vhass/FakeHA 不认识的服务）→ 同样是「不可仿真」，显式标黄
+    for _act in expect.get("unmodeled_actions") or []:
+        non_simulable.append(
+            {"action": _act, "flag": "yellow", "reason": "仿真底座未建模动作，后果无法验证"}
+        )
     # inferred：final_states 中未被任何 expect target（实体维度）覆盖的实体。
     # target 可能是实体形态（"light.a"）或属性形态（"light.a.brightness"），需按实体前缀匹配；
     # 注意实体 id 本身含点号，不能简单 split(".")[0]。
