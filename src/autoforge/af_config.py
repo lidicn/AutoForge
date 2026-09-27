@@ -20,6 +20,8 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
+from .af_secrets import load_secret
+
 __all__ = ["Config", "get_config"]
 
 
@@ -60,12 +62,16 @@ class Config:
             return 0
 
     def get_ha_token(self) -> str:
-        """HA 长期访问令牌：文件优先，缺省回退环境变量。"""
-        return str(self._creds.get("ha_token") or os.environ.get("AUTOFORGE_HA_TOKEN", ""))
+        """HA 长期访问令牌：credentials.json 文件优先，缺省回退 secret 文件/环境变量。
+
+        v2.0.1/0.1-b：原仅回退 `os.environ`，现经 `load_secret` 把 secret 文件
+        （docker secrets 挂载点）作为凭据主路径之一，env 仅作兼容回退。
+        """
+        return str(self._creds.get("ha_token") or load_secret("AUTOFORGE_HA_TOKEN"))
 
     def get_api_token(self) -> str:
-        """AutoForge API 令牌：文件优先，缺省回退环境变量。"""
-        return str(self._creds.get("api_token") or os.environ.get("AUTOFORGE_API_TOKEN", ""))
+        """AutoForge API 令牌：credentials.json 文件优先，缺省回退 secret 文件/环境变量。"""
+        return str(self._creds.get("api_token") or load_secret("AUTOFORGE_API_TOKEN"))
 
     # ── 原子写（mkstemp + fsync + os.replace，权限在 tmp 上先设）────────────────────
     def _atomic_write(self, path: Path, data: Mapping[str, Any]) -> None:

@@ -23,12 +23,32 @@ services:
       - /vol1/1000/docker/autoforge/ui/dist:/ui
       # 挂源码：免重建镜像即可生效新后端代码（生产化可改回镜像内构建 + 去掉此挂载）
       - /vol1/1000/docker/autoforge/src:/app/src
-    # 可选：仓库根目录放 .env 即可开启真机下发（默认不开）
-    #   AUTOFORGE_LIVE_ENABLED=1
-    #   AUTOFORGE_HA_TOKEN=<HA 长期访问令牌>
-    #   AUTOFORGE_HA_URL=http://192.168.2.200:8123      # 可选
-    #   AUTOFORGE_SESSION_TTL_S=3600                    # 可选
-    env_file:
-      - path: ../.env
-        required: false
+    # ---- 敏感 token：secret 管理（v2.0.1 / PR 0.1-b）----
+    # 不再依赖明文 env_file: ../.env（.env 仍被 .gitignore 忽略，绝不进版本库）。
+    # 代码读取顺序：credentials.json > secret 文件（AUTOFORGE_SECRET_DIR，默认 /run/secrets）> 环境变量。
+    # 非敏感开关用 environment 从宿主机 shell env 注入；敏感 token 二选一：
+    #   (A) docker secrets：取消下方 `secrets:` 引用 + 文件末 `secrets:` 段注释，并在宿主机
+    #       创建 secret 文件（install -m 600 ... /vol1/1000/docker/autoforge/secrets/AUTOFORGE_HA_TOKEN）；
+    #   (B) shell env：取消 `- AUTOFORGE_HA_TOKEN=${AUTOFORGE_HA_TOKEN:-}` 注释，宿主机
+    #       export AUTOFORGE_HA_TOKEN=... 后 docker compose up。
+    # secrets:
+    #   - autoforge_ha_token
+    #   - autoforge_api_tokens
+    #   - autoforge_revoked_tokens
+    environment:
+      - AUTOFORGE_LIVE_ENABLED=${AUTOFORGE_LIVE_ENABLED:-0}
+      - AUTOFORGE_HA_URL=${AUTOFORGE_HA_URL:-}
+      - AUTOFORGE_SESSION_TTL_S=${AUTOFORGE_SESSION_TTL_S:-3600}
+      # - AUTOFORGE_HA_TOKEN=${AUTOFORGE_HA_TOKEN:-}
+      # - AUTOFORGE_API_TOKENS=${AUTOFORGE_API_TOKENS:-}
     restart: unless-stopped
+
+# 顶层 secret 定义（docker secrets 风格；默认全注释——启用前先在宿主机创建对应文件）：
+#   install -m 600 /path/to/ha_token /vol1/1000/docker/autoforge/secrets/AUTOFORGE_HA_TOKEN
+# secrets:
+#   autoforge_ha_token:
+#     file: /vol1/1000/docker/autoforge/secrets/AUTOFORGE_HA_TOKEN
+#   autoforge_api_tokens:
+#     file: /vol1/1000/docker/autoforge/secrets/AUTOFORGE_API_TOKENS
+#   autoforge_revoked_tokens:
+#     file: /vol1/1000/docker/autoforge/secrets/AUTOFORGE_REVOKED_TOKENS

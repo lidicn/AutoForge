@@ -28,6 +28,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from .af_secrets import load_secret
+
 #: 端点 scope 三档
 SCOPES = ("read", "write", "live")
 
@@ -74,11 +76,11 @@ class TokenRegistry:
 
     # ── 配置加载 ──
     def _load_env(self) -> None:
-        legacy = (os.getenv("AUTOFORGE_API_TOKEN") or "").strip()
+        legacy = (load_secret("AUTOFORGE_API_TOKEN") or "").strip()
         if legacy:
             # 旧单密钥：拥有全部 scope，便于平滑升级
             self._tokens[legacy] = TokenInfo(subject="shared", scopes={"read", "write", "live"})
-        raw = (os.getenv("AUTOFORGE_TOKENS") or "").strip()
+        raw = (load_secret("AUTOFORGE_TOKENS") or "").strip()
         if raw:
             try:
                 data = json.loads(raw)
@@ -97,7 +99,7 @@ class TokenRegistry:
                     invalid_reason=invalid_reason,
                 )
         # 启动期紧急封禁（运维封禁已泄露令牌）
-        for t in (os.getenv("AUTOFORGE_REVOKED_TOKENS") or "").split(","):
+        for t in (load_secret("AUTOFORGE_REVOKED_TOKENS") or "").split(","):
             t = t.strip()
             if t:
                 self._revoked.add(t)
