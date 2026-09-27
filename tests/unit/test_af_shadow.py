@@ -101,3 +101,67 @@ def test_decorator_blocks_in_shadow_band_and_open_ask_in_ask_band():
     assert executor._do(inst, node) is None
     assert executor.calls == []
     assert asks and asks[0]["automation_id"] == "a1"
+
+
+# ---- PR 1.3：期望态推导扩表（toggle / set_temperature / set_cover_position / volume_set） ----
+
+
+def test_derives_set_temperature_from_params():
+    clock, conf, states, rec, shadow, inst, node = _setup()
+    node.expected = None
+    node.action = "set_temperature"
+    node.params = {"temperature": 22}
+    node.entities = ["climate.living"]
+    record = shadow.run_do(inst, node)
+    assert record.expected_state == {"climate.living": "22"}
+    assert record.verdict is Verdict.PENDING
+
+
+def test_derives_set_cover_position_from_params():
+    clock, conf, states, rec, shadow, inst, node = _setup()
+    node.expected = None
+    node.action = "set_cover_position"
+    node.params = {"position": 50}
+    node.entities = ["cover.garage"]
+    record = shadow.run_do(inst, node)
+    assert record.expected_state == {"cover.garage": "50"}
+    assert record.verdict is Verdict.PENDING
+
+
+def test_derives_volume_set_from_params():
+    clock, conf, states, rec, shadow, inst, node = _setup()
+    node.expected = None
+    node.action = "volume_set"
+    node.params = {"volume_level": 0.4}
+    node.entities = ["media_player.speaker"]
+    record = shadow.run_do(inst, node)
+    assert record.expected_state == {"media_player.speaker": "0.4"}
+    assert record.verdict is Verdict.PENDING
+
+
+def test_toggle_derives_inverted_current_state_and_matches():
+    clock, conf, states, rec, shadow, inst, node = _setup()
+    node.expected = None
+    states.set("light.study", "on")
+    node.action = "toggle"
+    node.entities = ["light.study"]
+    record = shadow.run_do(inst, node)
+    assert record.expected_state == {"light.study": "off"}
+    # 把真实态翻成 off 后比对应命中（可计入转正证据）
+    states.set("light.study", "off")
+    clock.advance(301)
+    judged = shadow.compare(record.record_id)
+    assert judged.verdict is Verdict.MATCHED
+
+
+def test_toggle_unverifiable_for_non_binary_state():
+    clock, conf, states, rec, shadow, inst, node = _setup()
+    # 当前态非二元（取反映射无覆盖）→ 推导不出 → 不可验证
+    node.expected = None
+    states.set("light.study", "unavailable")
+    node.action = "toggle"
+    node.entities = ["light.study"]
+    record = shadow.run_do(inst, node)
+    assert record.expected_state == {}
+    assert record.verdict is Verdict.UNVERIFIABLE
+    assert shadow.log.streak("a1") == 0

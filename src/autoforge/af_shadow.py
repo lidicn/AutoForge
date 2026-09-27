@@ -25,7 +25,7 @@ from uuid import uuid4
 from autoforge.af_conf import AUTO_MIN, Band, ConfidenceStore
 from autoforge.af_feedback import (
     FeedbackKind, FeedbackRecorder, LaterFn,
-    audit_write, clock_now, conf_read, norm_state,
+    audit_write, clock_now, conf_read, norm_state, read_state,
 )
 
 __all__ = [
@@ -176,10 +176,20 @@ DEFAULT_EFFECTS: dict[str, str] = {
     "unlock": "unlocked",
     "set_hvac_mode": "@params.hvac_mode",
     "set_state": "@params.state",
-    # toggle / set_cover_position 等无法静态推导期望态的动作不在表内 → 不可验证
+    "set_temperature": "@params.temperature",
+    "set_cover_position": "@params.position",
+    "volume_set": "@params.volume_level",
+    # toggle 无法用静态效果表推导：期望态 = 当前态取反，需运行时状态源（见 resolver）
 }
 
-ExpectedStateResolver = Callable[[Any, Sequence[str]], Mapping[str, Any]]
+# toggle 取反映射：当前态 → 期望态；其余非二元态取反不可推导 → 不可验证
+_TOGGLE_INVERT: dict[str, str] = {
+    "on": "off", "off": "on",
+    "open": "closed", "closed": "open",
+    "locked": "unlocked", "unlocked": "locked",
+}
+
+ExpectedStateResolver = Callable[[Any, Sequence[str], Any], Mapping[str, Any]]
 
 
 @dataclass
@@ -194,8 +204,11 @@ class DefaultExpectedStateResolver:
     effects: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_EFFECTS))
     attr: str = "expected"
 
-    def __call__(self, node: Any, entities: Sequence[str]) -> dict[str, str | None]:
-        """返回 ``{entity_id: expected_state}``。"""
+    def __call__(self, node: Any, entities: Sequence[str], states: Any = None) -> dict[str, str | None]:
+        """返回 ``{entity_id: expected_state}``。
+
+        ``states`` 为运行时状态源（可选）：仅 ``toggle`` 推导需要——期望态 = 当前态取反。
+        """
         entities = [str(e) for e in entities]
         explicit = getattr(node, self.attr, None)
         if isinstance(explicit, Mapping) and explicit:
@@ -208,7 +221,19 @@ class DefaultExpectedStateResolver:
             value = norm_state(params.get("expected_state"))
             return {e: value for e in entities}
 
-        template = self.effects.get(str(getattr(node, "action", "") or ""))
+        action = str(getattr(node, "action", "") or "")
+        # toggle：期望态 = 当前态取反（需运行时状态源）；非二元态取反不可推导 → 不可验证
+        if action == "toggle":
+            if states is not None and entities:
+                out: dict[str, str | None] = {}
+                for e in entities:
+                    inv = _TOGGLE_INVERT.get(read_state(states, e))
+                    if inv is not None:
+                        out[e] = inv
+                return out
+            return {}
+
+        template = self.effects.get(action)
         if not template:
             return {}
         if template.startswith("@params."):
@@ -296,7 +321,7 @@ class ShadowRunner:
             if runner.intervention is not None and getattr(node, "kind", "") == "do":
                 runner.intervention.note_node(
                     aid, _instance_id(instance), node,
-                    runner.resolver(node, node.target_entities() or ()),
+                    runner.resolver(node, node.target_entities() or (), runner.states),
                 )
             return _orig(instance, node)
 
@@ -313,7 +338,7 @@ class ShadowRunner:
         """影子执行：记录「如果执行会做什么」，**不调用 adapter.call**。"""
         aid = _automation_id(instance)
         entities = [str(e) for e in (node.target_entities() or ())]
-        expected = dict(self.resolver(node, entities) or {})
+        expected = dict(self.resolver(node, entities, self.states) or {})
         now = clock_now(self.clock)
         record = ShadowRecord(
             record_id=uuid4().hex[:12], automation_id=aid,
@@ -352,8 +377,6 @@ class ShadowRunner:
 
     def compare(self, record_id: str, at: float | None = None) -> ShadowRecord | None:
         """延迟 T 秒后比对目标实体状态是否 == expected_state。"""
-        from autoforge.af_feedback import read_state
-
         record = self.log.get(record_id)
         if record is None or record.verdict is not Verdict.PENDING:
             return record
@@ -432,7 +455,7 @@ class ShadowRunner:
         aid = _automation_id(instance)
         iid = _instance_id(instance)
         entities = [str(e) for e in (node.target_entities() or ())]
-        expected = dict(self.resolver(node, entities) or {})
+        expected = dict(self.resolver(node, entities, self.states) or {})
         action = str(getattr(node, "action", ""))
         params = dict(getattr(node, "params", None) or {})
         prompt = self.policy.ask_prompt_template.format(
