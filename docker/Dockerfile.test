@@ -11,7 +11,8 @@
 # ⚠️ 本机为 Windows，本文件未经实跑验证（见 docs/G1_ACCEPTANCE.md §4.1）。
 
 FROM python:3.14-slim
-
+# 基线对齐（v2.0.1/0.1-d）：与 Dockerfile.api 共用同一基础镜像 + 同一 homesdk wheel，
+# 确保 api / test 两容器基线一致；依赖差异仅由 pyproject extras（dev ⊇ api,ha）决定。
 ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1

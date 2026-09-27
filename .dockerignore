@@ -1,0 +1,24 @@
+# 构建上下文清理（v2.0.1/0.1-d）：避免宿主产物/缓存/密钥/数据漏入镜像，保证 api / test 两镜像基线一致。
+.git
+.gitignore
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.env
+.env.*
+node_modules/
+ui/
+ui-user/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.forge/
+data/
+*.log
+# 注意：docker/homesdk/*.whl 必须保留（Dockerfile.api/test 需 COPY 安装），此处不可排除。

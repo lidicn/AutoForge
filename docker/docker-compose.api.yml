@@ -21,8 +21,10 @@ services:
     volumes:
       - /vol1/1000/docker/autoforge-store:/data
       - /vol1/1000/docker/autoforge/ui/dist:/ui
-      # 挂源码：免重建镜像即可生效新后端代码（生产化可改回镜像内构建 + 去掉此挂载）
-      - /vol1/1000/docker/autoforge/src:/app/src
+      # 基线收口（v2.0.1/0.1-d）：镜像已烘入 src（Dockerfile.api COPY src），运行时不再挂宿主源码，
+      # 避免「镜像基线」与「实际运行」分叉。后端变更须经 `docker compose build` 重烘镜像。
+      # 仅本地热改后端免重建时，可临时取消下行注释（开发期，勿入生产）：
+      # - /vol1/1000/docker/autoforge/src:/app/src
     # ---- 敏感 token：secret 管理（v2.0.1 / PR 0.1-b）----
     # 不再依赖明文 env_file: ../.env（.env 仍被 .gitignore 忽略，绝不进版本库）。
     # 代码读取顺序：credentials.json > secret 文件（AUTOFORGE_SECRET_DIR，默认 /run/secrets）> 环境变量。
