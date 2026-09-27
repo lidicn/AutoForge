@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import os
+
 from autoforge import af_audit
 from autoforge.af_premiere import (
     ConsumeResult,
@@ -207,3 +209,59 @@ def test_af_audit_extended_with_premiere_types():
         af_audit.TRIAL_ASSERT_FAILED,
     ):
         assert t in af_audit.ALL_EVENT_TYPES
+
+
+# ---- PR 1.7：premiere 落盘（JSON 写透 + 启动 load）----
+
+def test_premiere_store_persists_and_reloads(tmp_path):
+    path = str(tmp_path / "premiere.json")
+    s1 = PremiereStore(path=path)
+    code = s1.issue(_sha(101))               # 写透
+    assert os.path.exists(path)
+    # 新实例同一路径 → 恢复既有首演码
+    s2 = PremiereStore(path=path)
+    assert s2.peek(code) is not None
+    assert s2.consume(code, _sha(101))["ok"] is True
+    # 消费已写透：重载后应为已消费（重放拒绝），不破防掉包
+    s3 = PremiereStore(path=path)
+    res = s3.consume(code, _sha(101))
+    assert res["ok"] is False
+    assert res["reason"] == "already_consumed"
+
+
+def test_trial_store_persists_and_reloads(tmp_path):
+    path = str(tmp_path / "trial.json")
+    s1 = TrialStore(path=path)
+    s1.enter_trial(_sha(102), hours=24)       # 写透
+    s2 = TrialStore(path=path)
+    assert s2.is_in_trial(_sha(102)) is True
+    s2.report_assert_failure(_sha(102))       # 暂停写透
+    s3 = TrialStore(path=path)
+    assert s3.get_trial(_sha(102)).paused is True
+
+
+def test_premiere_save_atomic_no_tmp(tmp_path):
+    path = str(tmp_path / "premiere.json")
+    s = PremiereStore(path=path)
+    s.issue(_sha(103))
+    assert os.path.exists(path)
+    assert not os.path.exists(path + ".tmp")   # 原子替换不留半截文件
+
+
+def test_set_persistence_loads_defaults(tmp_path):
+    # 决策 F 前置：启动期把默认仓库指向落盘路径并恢复既有数据
+    ppath = str(tmp_path / "premiere.json")
+    tpath = str(tmp_path / "trial.json")
+    s = PremiereStore(path=ppath)
+    code = s.issue(_sha(104))
+    t = TrialStore(path=tpath)
+    t.enter_trial(_sha(104), hours=24)
+
+    from autoforge.af_premiere import set_persistence, _default_premiere, _default_trial
+    set_persistence(premiere_path=ppath, trial_path=tpath)
+    # 默认实例已加载既有数据
+    assert _default_premiere.peek(code) is not None
+    assert _default_trial.is_in_trial(_sha(104)) is True
+    # 默认实例消费写透到同一文件，重载仍一致
+    assert _default_premiere.consume(code, _sha(104))["ok"] is True
+

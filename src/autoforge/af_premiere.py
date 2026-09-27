@@ -11,6 +11,7 @@ assert 失败 / 抖动自动暂停并推送（pusher 为可注入回调，不执
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import threading
 import time
@@ -29,6 +30,7 @@ __all__ = [
     "report_assert_failure",
     "pause_and_notify",
     "issue_premiere_for",
+    "set_persistence",
 ]
 
 TimeSource = Callable[[], float]
@@ -59,6 +61,25 @@ class PremiereCode:
         self.issued_at = issued_at
         self.expires_at = expires_at
         self.consumed_at = consumed_at
+
+    def to_dict(self) -> dict:
+        return {
+            "code": self.code,
+            "store_diff_sha256": self.store_diff_sha256,
+            "issued_at": self.issued_at,
+            "expires_at": self.expires_at,
+            "consumed_at": self.consumed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PremiereCode":
+        return cls(
+            code=d["code"],
+            store_diff_sha256=d["store_diff_sha256"],
+            issued_at=d["issued_at"],
+            expires_at=d["expires_at"],
+            consumed_at=d.get("consumed_at"),
+        )
 
 
 class ConsumeResult(dict):
@@ -92,11 +113,14 @@ class PremiereStore:
     时间源 ``now`` 可注入，支持时间旅行测试。
     """
 
-    def __init__(self, now: TimeSource = _default_now, ttl_s: int = 300) -> None:
+    def __init__(self, now: TimeSource = _default_now, ttl_s: int = 300, path: Optional[str] = None) -> None:
         self._now = now
         self._ttl_s = ttl_s
         self._lock = threading.Lock()
         self._by_code: dict[str, PremiereCode] = {}
+        self._path = path
+        if path and os.path.exists(path):
+            self.load()
 
     def issue(self, store_diff_sha256: str, ttl_s: Optional[int] = None) -> str:
         ttl = self._ttl_s if ttl_s is None else ttl_s
@@ -109,6 +133,7 @@ class PremiereStore:
                 expires_at=self._now() + ttl,
             )
             self._by_code[code] = rec
+            self.save()
             return code
 
     def _gen_unique_code_locked(self) -> str:
@@ -143,6 +168,7 @@ class PremiereStore:
                     False, "sha_mismatch", code=code, store_diff_sha256=store_diff_sha256
                 )
             rec.consumed_at = self._now()
+            self.save()
             return ConsumeResult(
                 True,
                 "ok",
@@ -153,6 +179,37 @@ class PremiereStore:
 
     def peek(self, code: str) -> Optional[PremiereCode]:
         return self._by_code.get(code)
+
+    # ---- JSON 落盘（原子替换，抄 af_version._save / shadow_log 模式）----
+
+    def save(self, path: Optional[str] = None) -> None:
+        """写透当前首演码仓库（原子替换，崩溃不留半截文件）。"""
+        path = path or self._path
+        if not path:
+            return
+        payload = {
+            "version": 1,
+            "ttl_s": self._ttl_s,
+            "codes": [c.to_dict() for c in self._by_code.values()],
+        }
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+
+    def load(self, path: Optional[str] = None) -> int:
+        """从磁盘恢复首演码仓库（启动期调用）。返回加载条数。"""
+        path = path or self._path
+        if not path or not os.path.exists(path):
+            return 0
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        n = 0
+        for c in data.get("codes", []):
+            rec = PremiereCode.from_dict(c)
+            self._by_code[rec.code] = rec
+            n += 1
+        return n
 
 
 class Trial:
@@ -167,15 +224,34 @@ class Trial:
         self.paused = False
         self.assert_failures = 0
 
+    def to_dict(self) -> dict:
+        return {
+            "store_diff_sha256": self.store_diff_sha256,
+            "started_at": self.started_at,
+            "ends_at": self.ends_at,
+            "paused": self.paused,
+            "assert_failures": self.assert_failures,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Trial":
+        t = cls(d["store_diff_sha256"], d["started_at"], d["ends_at"])
+        t.paused = d.get("paused", False)
+        t.assert_failures = d.get("assert_failures", 0)
+        return t
+
 
 class TrialStore:
     """试演期仓库：内存字典 + 锁。只统计不封禁，assert 失败触发可注入 pusher。"""
 
-    def __init__(self, now: TimeSource = _default_now) -> None:
+    def __init__(self, now: TimeSource = _default_now, path: Optional[str] = None) -> None:
         self._now = now
         self._lock = threading.Lock()
         self._trials: dict[str, Trial] = {}
         self._last_sha: Optional[str] = None
+        self._path = path
+        if path and os.path.exists(path):
+            self.load()
 
     def enter_trial(self, store_diff_sha256: str, hours: int = 24) -> dict:
         with self._lock:
@@ -186,6 +262,7 @@ class TrialStore:
             )
             self._trials[store_diff_sha256] = t
             self._last_sha = store_diff_sha256
+            self.save()
             return {
                 "ok": True,
                 "store_diff_sha256": store_diff_sha256,
@@ -216,7 +293,9 @@ class TrialStore:
                 return {"ok": False, "reason": "not_in_trial"}
             t.assert_failures += 1
             # 只统计不封禁：触发自动暂停回调（pusher 可注入，不执行真实封禁）
-            return self._pause_locked(t, pusher, reason=reason)
+            result = self._pause_locked(t, pusher, reason=reason)
+            self.save()
+            return result
 
     def pause_and_notify(
         self,
@@ -232,7 +311,9 @@ class TrialStore:
             t = self._trials.get(sha)
             if t is None:
                 return {"ok": False, "reason": "not_in_trial"}
-            return self._pause_locked(t, pusher, reason=reason)
+            result = self._pause_locked(t, pusher, reason=reason)
+            self.save()
+            return result
 
     def _pause_locked(self, t: Trial, pusher: Optional[Pusher], *, reason: str) -> dict:
         t.paused = True
@@ -245,6 +326,38 @@ class TrialStore:
         if pusher is not None:
             pusher(payload)  # 不执行真实封禁
         return {"ok": True, **payload}
+
+    # ---- JSON 落盘（原子替换）----
+
+    def save(self, path: Optional[str] = None) -> None:
+        """写透当前试演期仓库（原子替换，崩溃不留半截文件）。"""
+        path = path or self._path
+        if not path:
+            return
+        payload = {
+            "version": 1,
+            "last_sha": self._last_sha,
+            "trials": [t.to_dict() for t in self._trials.values()],
+        }
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+
+    def load(self, path: Optional[str] = None) -> int:
+        """从磁盘恢复试演期仓库（启动期调用）。返回加载条数。"""
+        path = path or self._path
+        if not path or not os.path.exists(path):
+            return 0
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        self._last_sha = data.get("last_sha")
+        n = 0
+        for t in data.get("trials", []):
+            rec = Trial.from_dict(t)
+            self._trials[rec.store_diff_sha256] = rec
+            n += 1
+        return n
 
 
 # ---- 模块级默认实例（af_apply 直接调用下列函数）----
@@ -286,3 +399,19 @@ def pause_and_notify(
 def issue_premiere_for(store_diff_sha256: str, ttl_s: int = 300) -> str:
     """便捷别名：运维取码用（af_apply.issue_premiere 内部调用）。"""
     return issue(store_diff_sha256, ttl_s=ttl_s)
+
+
+def set_persistence(premiere_path: Optional[str] = None, trial_path: Optional[str] = None) -> None:
+    """启动期配置默认仓库落盘路径并加载既有数据（决策 F 前置：premiere 落盘）。
+
+    仅当传入路径时启用持久化；默认内存实例保持向后兼容。
+    """
+    global _default_premiere, _default_trial
+    if premiere_path is not None:
+        _default_premiere._path = premiere_path
+        if os.path.exists(premiere_path):
+            _default_premiere.load()
+    if trial_path is not None:
+        _default_trial._path = trial_path
+        if os.path.exists(trial_path):
+            _default_trial.load()
