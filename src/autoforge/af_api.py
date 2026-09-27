@@ -254,6 +254,8 @@ def build_app(
                     info = registry.authenticate(creds.credentials)
                 except TokenExpired:
                     info = None  # 过期令牌交 requires/authenticated 定夺（此处不重复报错）
+                except Exception:  # P0-9 fail-closed：鉴权后端意外异常不雪崩为 500，按未认证处理
+                    info = None
                 if info:
                     limiter.check(f"subj:{info.subject}")
         except RateLimitExceeded as exc:
@@ -291,6 +293,10 @@ def build_app(
                 info = registry.authenticate(creds.credentials)
             except TokenExpired as exc:
                 raise HTTPException(status_code=403, detail=str(exc)) from exc
+            except Exception:  # P0-9 fail-closed：鉴权过程任何意外异常一律拒绝，不泄露 500
+                raise HTTPException(
+                    status_code=403, detail="鉴权校验异常（fail-closed 拒绝）"
+                ) from None
             if info is None:
                 raise HTTPException(status_code=403, detail="无效或已撤销的 API 令牌")
             if scope not in info.scopes:
@@ -313,6 +319,8 @@ def build_app(
                 return registry.authenticate(creds.credentials)
             except TokenExpired:
                 return None  # 过期令牌视为未认证（如 /api/auth/whoami → 401）
+            except Exception:  # P0-9 fail-closed：校验意外异常视为未认证
+                return None
 
         return dep
 
@@ -820,7 +828,12 @@ def build_app(
         """
         creds = _bearer(request)
         raw = (creds.credentials if creds else None) or token
-        info = registry.authenticate(raw) if raw else None
+        info = None
+        if raw:
+            try:
+                info = registry.authenticate(raw)
+            except Exception:  # P0-9 fail-closed：校验异常视为未授权
+                info = None
         # fail-closed（P0-9）：未认证即拒；仅本地无令牌逃生舱（AF_ALLOW_NOAUTH=1）放行
         if info is None:
             local_escape = (not registry.enabled) and os.environ.get("AF_ALLOW_NOAUTH", "").lower() in (
