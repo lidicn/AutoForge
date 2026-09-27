@@ -43,6 +43,7 @@ class Verdict(str, Enum):
     MISSED = "missed"
     UNVERIFIABLE = "unverifiable"
     EXPIRED = "expired"
+    EXEMPT = "exempt"            # 副作用不可观测，豁免验证并转人审（永不计入 MATCHED streak）
 
 
 @dataclass
@@ -99,6 +100,18 @@ class ShadowLogStore:
     def by_automation(self, automation_id: str) -> list[ShadowRecord]:
         """取某自动化的全部影子记录。"""
         return [r for r in self.records if r.automation_id == automation_id]
+
+    def exempted(self, automation_id: str | None = None) -> list[ShadowRecord]:
+        """人审队列：所有 EXEMPT 裁定记录（可按 automation_id 过滤）。
+
+        EXEMPT = 副作用不可观测、豁免验证并转人审；既不作为转正证据，
+        也不当失败，是中性但需人工确认的分区。
+        """
+        return [
+            r for r in self.records
+            if r.verdict is Verdict.EXEMPT
+            and (automation_id is None or r.automation_id == automation_id)
+        ]
 
     def due(self, now: float) -> list[ShadowRecord]:
         """已到比对时间且仍未判定的记录。"""
@@ -296,6 +309,7 @@ class ShadowRunner:
     log: ShadowLogStore = field(default_factory=ShadowLogStore)
     policy: ShadowPolicy = field(default_factory=ShadowPolicy)
     resolver: ExpectedStateResolver = field(default_factory=DefaultExpectedStateResolver)
+    exempt_actions: frozenset[str] = frozenset()  # 副作用不可观测的动作（如 notify）→ EXEMPT 转人审
     later: LaterFn | None = None
     ask_handler: Callable[..., Any] | None = None
     on_promote: Callable[[str], None] | None = None
@@ -350,8 +364,20 @@ class ShadowRunner:
         )
         self.log.append(record)
         if not expected:
-            record.verdict = Verdict.UNVERIFIABLE
-            record.note = "无法推导期望状态，不计入转正证据"
+            action = str(getattr(node, "action", "") or "")
+            if action in self.exempt_actions or getattr(node, "exempt", False):
+                # 副作用不可观测（如 notify）：不伪造期望态，豁免验证并转人审
+                record.verdict = Verdict.EXEMPT
+                record.note = "副作用不可观测，豁免验证并转人审"
+                audit_write(
+                    self.audit, at=now, kind="shadow_exempted",
+                    automation_id=aid, instance_id=record.instance_id,
+                    node_id=record.node_id, action=action,
+                    params=record.params, record_id=record.record_id,
+                )
+            else:
+                record.verdict = Verdict.UNVERIFIABLE
+                record.note = "无法推导期望状态，不计入转正证据"
         else:
             self._schedule(record)
         self.log.trim(self.policy.max_records)

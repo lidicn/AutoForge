@@ -71,6 +71,26 @@ def test_honest_report_tiers_are_lists():
     assert isinstance(rep["non_simulable"], list)
 
 
+def test_honest_report_exempted_partition():
+    # 决策 B 真豁免通道：副作用不可观测的自动化单列 exempted 档，
+    # 不冒充 verified，也不混入 non_simulable（那是「想验但验不到」）。
+    out = {
+        "expect": {"ok": True, "failed": 0, "items": [{"target": "light.a", "status": "pass"}]},
+        "final_states": {"light.a": "on"},
+        "exempted": [
+            {"automation_id": "a2", "action": "notify", "reason": "副作用不可观测，转人审"},
+        ],
+    }
+    rep = honest_report(out)
+    assert isinstance(rep["exempted"], list)
+    assert len(rep["exempted"]) == 1
+    assert rep["exempted"][0]["automation_id"] == "a2"
+    # exempted 不影响 fully_verified（无 expect 的豁免自动化不拉低验证率）
+    assert rep["fully_verified"] is True
+    # 没喂入时分区为空 list，不伪造占位
+    assert honest_report({"expect": {"items": []}, "final_states": {}})["exempted"] == []
+
+
 def test_simulate_report_has_three_tiers():
     # 验收门：sim 端点返回结构含 verified / inferred / non_simulable 三分区且可枚举
     import json

@@ -787,6 +787,8 @@ def honest_report(out: Mapping[str, Any]) -> dict[str, Any]:
     - verified：断言**实际跑过**的结果（status=pass / fail）。
     - inferred：仿真产出但**没有断言覆盖**的事实（final_states 里未被任何 expect target 覆盖的实体）。
     - non_simulable：断言**无法验证**（status=unverified）→ 显式标黄，绝不脑补默认值。
+    - exempted：副作用不可观测、被影子系统**显式豁免验证**的自动化（决策 B 真豁免通道）；
+      单列一档，绝不冒充 verified，也不计入 non_simulable（那是「想验但验不到」）。
     """
     expect = out.get("expect") or {}
     items = expect.get("items") or []
@@ -819,6 +821,9 @@ def honest_report(out: Mapping[str, Any]) -> dict[str, Any]:
         "verified": verified,
         "inferred": inferred,
         "non_simulable": non_simulable,
+        # 决策 B 真豁免通道：副作用不可观测的自动化单列一档（由影子系统/IR 显式标注喂入，
+        # 形如 [{"automation_id": "aN", "action": "notify", "reason": "..."}]）。
+        "exempted": list(out.get("exempted", []) or []),
         "fully_verified": bool(items) and not non_simulable and expect.get("failed", 0) == 0,
     }
 

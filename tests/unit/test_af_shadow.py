@@ -165,3 +165,96 @@ def test_toggle_unverifiable_for_non_binary_state():
     assert record.expected_state == {}
     assert record.verdict is Verdict.UNVERIFIABLE
     assert shadow.log.streak("a1") == 0
+
+
+# ---- PR 1.4：EXEMPT 豁免通道（verdict 枚举 + streak 语义 + 人审入口 + 审计） ----
+
+
+def test_exempt_verdict_for_side_effect_action():
+    clock, conf, states, rec, shadow, inst, node = _setup(exempt_actions={"notify"})
+    node.expected = None
+    node.action = "notify"
+    node.entities = ["notify.living"]
+    record = shadow.run_do(inst, node)
+    assert record.expected_state == {}
+    assert record.verdict is Verdict.EXEMPT
+    assert "豁免" in record.note
+    # EXEMPT 不计入转正证据（streak 中性、=0）
+    assert shadow.log.streak("a1") == 0
+    # 审计事件落了 shadow_exempted
+    assert "shadow_exempted" in shadow.audit.kinds()
+
+
+def test_exempt_via_node_flag():
+    clock, conf, states, rec, shadow, inst, node = _setup()
+    node.expected = None
+    node.action = "some_unmodeled_service"
+    node.exempt = True  # IR 显式声明该节点副作用不可观测
+    node.entities = ["light.study"]
+    record = shadow.run_do(inst, node)
+    assert record.verdict is Verdict.EXEMPT
+    assert "shadow_exempted" in shadow.audit.kinds()
+
+
+def test_unverifiable_still_default_when_action_not_exempt():
+    clock, conf, states, rec, shadow, inst, node = _setup(exempt_actions={"notify"})
+    node.expected = None
+    node.action = "vacuum_start"  # 未列入豁免清单、又无期望态 → 维持 UNVERIFIABLE
+    node.entities = ["vacuum.living"]
+    record = shadow.run_do(inst, node)
+    assert record.verdict is Verdict.UNVERIFIABLE
+    assert record.verdict is not Verdict.EXEMPT
+
+
+def test_exempt_is_transparent_in_streak():
+    clock, conf, states, rec, shadow, inst, node = _setup(exempt_actions={"notify"})
+    # MATCHED → EXEMPT → MATCHED：EXEMPT 中位数中性，连续命中仍计 2
+    node.expected = None
+    node.action = "turn_on"
+    node.entities = ["light.study"]
+    states.set("light.study", "on")
+    r1 = shadow.run_do(inst, node)
+    r1.verdict = Verdict.MATCHED
+
+    node.action = "notify"
+    node.entities = ["notify.living"]
+    r2 = shadow.run_do(inst, node)
+    assert r2.verdict is Verdict.EXEMPT
+
+    node.action = "turn_on"
+    node.entities = ["light.study"]
+    r3 = shadow.run_do(inst, node)
+    r3.verdict = Verdict.MATCHED
+
+    assert shadow.log.streak("a1") == 2
+
+
+def test_exempted_review_queue_filters_by_automation():
+    clock, conf, states, rec, shadow, inst, node = _setup(exempt_actions={"notify"})
+    node.expected = None
+    node.action = "notify"
+    node.entities = ["notify.living"]
+    shadow.run_do(inst, node)
+    # 另一条自动化（a2）也产生一条 EXEMPT
+    inst2 = FakeInstance(automation=FakeAutomation(id="a2"), id="i2")
+    node2 = _FakeNodeExempt()
+    shadow.run_do(inst2, node2)
+
+    all_exempt = shadow.log.exempted()
+    assert len(all_exempt) == 2
+    only_a1 = shadow.log.exempted("a1")
+    assert len(only_a1) == 1
+    assert only_a1[0].automation_id == "a1"
+
+
+class _FakeNodeExempt:
+    """另一条自动化（a2）的副作用不可观测节点。"""
+    id = "n2"
+    kind = "do"
+    action = "notify"
+    params = {}
+    exempt = True
+
+    def target_entities(self):
+        return ["notify.other"]
+
