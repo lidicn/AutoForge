@@ -32,6 +32,12 @@ INSTANCE_RESTORE_DROPPED = "instance_restore_dropped"
 #: v0.9.0 跨进程：写入版本冲突（expect_version 不匹配）与恢复时租约仍属其他进程
 WRITE_CONFLICT = "write_conflict"
 INSTANCE_LEASE_HELD = "instance_lease_held"
+#: v2 M1 首演码仪式：签发 / 消费 / 试演期开始 / 试演期暂停 / 试演期断言失败
+PREMIERE_ISSUED = "premiere_issued"
+PREMIERE_CONSUMED = "premiere_consumed"
+PREMIERE_TRIAL_STARTED = "premiere_trial_started"
+PREMIERE_TRIAL_PAUSED = "premiere_trial_paused"
+TRIAL_ASSERT_FAILED = "trial_assert_failed"
 
 ALL_EVENT_TYPES = (
     ENTITY_DRIFT,
@@ -46,6 +52,11 @@ ALL_EVENT_TYPES = (
     INSTANCE_RESTORE_DROPPED,
     WRITE_CONFLICT,
     INSTANCE_LEASE_HELD,
+    PREMIERE_ISSUED,
+    PREMIERE_CONSUMED,
+    PREMIERE_TRIAL_STARTED,
+    PREMIERE_TRIAL_PAUSED,
+    TRIAL_ASSERT_FAILED,
 )
 
 

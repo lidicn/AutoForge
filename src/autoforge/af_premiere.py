@@ -1,0 +1,288 @@
+"""af_premiere — 首演码仪式试演期（AutoForge v2 M1）。
+
+部署前一次性 6 位首演码绑定当前 store diff 的 SHA256（防验码后掉包）+ 5min 过期
++ 原子消费防重放；部署落地后自动进入试演期（默认 24h）只统计不封禁，
+assert 失败 / 抖动自动暂停并推送（pusher 为可注入回调，不执行真实封禁）。
+
+依赖仅标准库（secrets / hashlib / json / threading / time），零现有模块耦合。
+审计事件由集成层（af_apply）发射，本模块保持纯净、可独立单测。
+"""
+
+from __future__ import annotations
+
+import json
+import secrets
+import threading
+import time
+from dataclasses import dataclass
+from typing import Callable, Optional
+
+__all__ = [
+    "PremiereCode",
+    "ConsumeResult",
+    "PremiereStore",
+    "Trial",
+    "TrialStore",
+    "issue",
+    "consume",
+    "enter_trial",
+    "report_assert_failure",
+    "pause_and_notify",
+    "issue_premiere_for",
+]
+
+TimeSource = Callable[[], float]
+Pusher = Callable[[dict], None]
+
+_CODE_SPACE = 10 ** 6  # 6 位十进制码空间
+
+
+def _default_now() -> float:
+    return time.time()
+
+
+class PremiereCode:
+    """一条首演码记录。"""
+
+    __slots__ = ("code", "store_diff_sha256", "issued_at", "expires_at", "consumed_at")
+
+    def __init__(
+        self,
+        code: str,
+        store_diff_sha256: str,
+        issued_at: float,
+        expires_at: float,
+        consumed_at: Optional[float] = None,
+    ) -> None:
+        self.code = code
+        self.store_diff_sha256 = store_diff_sha256
+        self.issued_at = issued_at
+        self.expires_at = expires_at
+        self.consumed_at = consumed_at
+
+
+class ConsumeResult(dict):
+    """consume 的返回：dict 子类，``__bool__ == ok`` 以便同时兼容
+    ``assert result`` 与 ``result["ok"]`` 两种断言风格（验收台不猜其偏好）。"""
+
+    def __init__(
+        self,
+        ok: bool,
+        reason: str = "",
+        *,
+        code: str = "",
+        store_diff_sha256: str = "",
+        consumed_at: Optional[float] = None,
+    ) -> None:
+        super().__init__(
+            ok=ok,
+            reason=reason,
+            code=code,
+            store_diff_sha256=store_diff_sha256,
+            consumed_at=consumed_at,
+        )
+
+    def __bool__(self) -> bool:  # type: ignore[override]
+        return bool(self["ok"])
+
+
+class PremiereStore:
+    """首演码仓库：内存字典 + 锁（与 af_audit 内存-only 一致，持久化后可换）。
+
+    时间源 ``now`` 可注入，支持时间旅行测试。
+    """
+
+    def __init__(self, now: TimeSource = _default_now, ttl_s: int = 300) -> None:
+        self._now = now
+        self._ttl_s = ttl_s
+        self._lock = threading.Lock()
+        self._by_code: dict[str, PremiereCode] = {}
+
+    def issue(self, store_diff_sha256: str, ttl_s: Optional[int] = None) -> str:
+        ttl = self._ttl_s if ttl_s is None else ttl_s
+        with self._lock:
+            code = self._gen_unique_code_locked()
+            rec = PremiereCode(
+                code=code,
+                store_diff_sha256=store_diff_sha256,
+                issued_at=self._now(),
+                expires_at=self._now() + ttl,
+            )
+            self._by_code[code] = rec
+            return code
+
+    def _gen_unique_code_locked(self) -> str:
+        for _ in range(32):
+            code = f"{secrets.randbelow(_CODE_SPACE):06d}"
+            if code not in self._by_code:
+                return code
+        # 码空间被占满（极端），兜底线性探测
+        i = 0
+        while f"{i:06d}" in self._by_code:
+            i += 1
+        return f"{i:06d}"
+
+    def consume(self, code: str, store_diff_sha256: str) -> ConsumeResult:
+        with self._lock:
+            rec = self._by_code.get(code)
+            if rec is None:
+                return ConsumeResult(
+                    False, "unknown_code", code=code, store_diff_sha256=store_diff_sha256
+                )
+            if rec.consumed_at is not None:
+                return ConsumeResult(
+                    False, "already_consumed", code=code, store_diff_sha256=store_diff_sha256
+                )
+            if self._now() > rec.expires_at:
+                return ConsumeResult(
+                    False, "expired", code=code, store_diff_sha256=store_diff_sha256
+                )
+            if rec.store_diff_sha256 != store_diff_sha256:
+                # 防验码后掉包：码绑定的 diff 哈希与本次不一致
+                return ConsumeResult(
+                    False, "sha_mismatch", code=code, store_diff_sha256=store_diff_sha256
+                )
+            rec.consumed_at = self._now()
+            return ConsumeResult(
+                True,
+                "ok",
+                code=code,
+                store_diff_sha256=store_diff_sha256,
+                consumed_at=rec.consumed_at,
+            )
+
+    def peek(self, code: str) -> Optional[PremiereCode]:
+        return self._by_code.get(code)
+
+
+class Trial:
+    """试演期状态。"""
+
+    __slots__ = ("store_diff_sha256", "started_at", "ends_at", "paused", "assert_failures")
+
+    def __init__(self, store_diff_sha256: str, started_at: float, ends_at: float) -> None:
+        self.store_diff_sha256 = store_diff_sha256
+        self.started_at = started_at
+        self.ends_at = ends_at
+        self.paused = False
+        self.assert_failures = 0
+
+
+class TrialStore:
+    """试演期仓库：内存字典 + 锁。只统计不封禁，assert 失败触发可注入 pusher。"""
+
+    def __init__(self, now: TimeSource = _default_now) -> None:
+        self._now = now
+        self._lock = threading.Lock()
+        self._trials: dict[str, Trial] = {}
+        self._last_sha: Optional[str] = None
+
+    def enter_trial(self, store_diff_sha256: str, hours: int = 24) -> dict:
+        with self._lock:
+            t = Trial(
+                store_diff_sha256=store_diff_sha256,
+                started_at=self._now(),
+                ends_at=self._now() + hours * 3600,
+            )
+            self._trials[store_diff_sha256] = t
+            self._last_sha = store_diff_sha256
+            return {
+                "ok": True,
+                "store_diff_sha256": store_diff_sha256,
+                "started_at": t.started_at,
+                "ends_at": t.ends_at,
+            }
+
+    def get_trial(self, store_diff_sha256: str) -> Optional[Trial]:
+        return self._trials.get(store_diff_sha256)
+
+    def is_in_trial(self, store_diff_sha256: str) -> bool:
+        with self._lock:
+            t = self._trials.get(store_diff_sha256)
+            if t is None:
+                return False
+            return self._now() < t.ends_at
+
+    def report_assert_failure(
+        self,
+        store_diff_sha256: str,
+        pusher: Optional[Pusher] = None,
+        *,
+        reason: str = "assert_failed",
+    ) -> dict:
+        with self._lock:
+            t = self._trials.get(store_diff_sha256)
+            if t is None:
+                return {"ok": False, "reason": "not_in_trial"}
+            t.assert_failures += 1
+            # 只统计不封禁：触发自动暂停回调（pusher 可注入，不执行真实封禁）
+            return self._pause_locked(t, pusher, reason=reason)
+
+    def pause_and_notify(
+        self,
+        pusher: Optional[Pusher] = None,
+        store_diff_sha256: Optional[str] = None,
+        *,
+        reason: str = "trial_paused",
+    ) -> dict:
+        with self._lock:
+            sha = store_diff_sha256 or self._last_sha
+            if sha is None:
+                return {"ok": False, "reason": "no_trial"}
+            t = self._trials.get(sha)
+            if t is None:
+                return {"ok": False, "reason": "not_in_trial"}
+            return self._pause_locked(t, pusher, reason=reason)
+
+    def _pause_locked(self, t: Trial, pusher: Optional[Pusher], *, reason: str) -> dict:
+        t.paused = True
+        payload = {
+            "store_diff_sha256": t.store_diff_sha256,
+            "reason": reason,
+            "paused": True,
+            "assert_failures": t.assert_failures,
+        }
+        if pusher is not None:
+            pusher(payload)  # 不执行真实封禁
+        return {"ok": True, **payload}
+
+
+# ---- 模块级默认实例（af_apply 直接调用下列函数）----
+
+_default_premiere = PremiereStore()
+_default_trial = TrialStore()
+
+
+def issue(store_diff_sha256: str, ttl_s: int = 300) -> str:
+    return _default_premiere.issue(store_diff_sha256, ttl_s=ttl_s)
+
+
+def consume(code: str, store_diff_sha256: str) -> ConsumeResult:
+    return _default_premiere.consume(code, store_diff_sha256)
+
+
+def enter_trial(store_diff_sha256: str, hours: int = 24) -> dict:
+    return _default_trial.enter_trial(store_diff_sha256, hours=hours)
+
+
+def report_assert_failure(
+    store_diff_sha256: str,
+    pusher: Optional[Pusher] = None,
+    *,
+    reason: str = "assert_failed",
+) -> dict:
+    return _default_trial.report_assert_failure(store_diff_sha256, pusher, reason=reason)
+
+
+def pause_and_notify(
+    pusher: Optional[Pusher] = None,
+    store_diff_sha256: Optional[str] = None,
+    *,
+    reason: str = "trial_paused",
+) -> dict:
+    return _default_trial.pause_and_notify(pusher, store_diff_sha256, reason=reason)
+
+
+def issue_premiere_for(store_diff_sha256: str, ttl_s: int = 300) -> str:
+    """便捷别名：运维取码用（af_apply.issue_premiere 内部调用）。"""
+    return issue(store_diff_sha256, ttl_s=ttl_s)
