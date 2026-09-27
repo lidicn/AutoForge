@@ -38,6 +38,34 @@ MISSING: Any = object()
 _VAR_PREFIXES = ("vars.", "context.", "entity.")
 
 
+#: v2.1 1.1 补域：副作用**不可观测**的动作（如 notify/tts 通知播报）→ 真豁免通道
+#: （决策 B 真豁免：单列 exempted 档，不冒充 verified，也不当 non_simulable）。
+#: 与 scene/script 区分：notify 永远不产生可观测状态变化；scene/script 的间接效果
+#: 是可声明的（见 `INDIRECT_EFFECT_DOMAINS`），故走「展开后验证」而非豁免。
+SIDE_EFFECT_UNOBSERVABLE_DOMAINS = frozenset({"notify", "tts", "conversation"})
+
+
+#: v2.1 1.1 补域：间接触发动作（scene/script）→ 其间接实体效果由 IR 的 `effects`
+#: 字段声明，仿真据此展开，使 expect 可验证（离开 non_simulable）。
+INDIRECT_EFFECT_DOMAINS = frozenset({"scene", "script"})
+
+
+def _action_domain(action: str | None) -> str:
+    """取动作域名（`light.turn_on` → `light`）。"""
+    a = str(action or "")
+    return a.split(".", 1)[0] if "." in a else a
+
+
+def is_side_effect_unobservable(action: str | None) -> bool:
+    """动作副作用是否不可观测（notify/tts 等通知播报）。"""
+    return _action_domain(action) in SIDE_EFFECT_UNOBSERVABLE_DOMAINS
+
+
+def is_indirect_effect_action(action: str | None) -> bool:
+    """动作是否间接触发（scene/script），其效果由 IR `effects` 声明。"""
+    return _action_domain(action) in INDIRECT_EFFECT_DOMAINS
+
+
 def resolve_var(name: str, namespace: Mapping[str, Any]) -> Any:
     """按点号路径解析变量：`turn_on_result.success` / `vars.flag`。不存在返回 `MISSING`。"""
     path = str(name or "")
@@ -248,26 +276,57 @@ def evaluate_graph_expects(
     """
     per_auto: dict[str, Any] = {}
     total = {"declared": 0, "passed": 0, "failed": 0, "unverified": 0}
+    # v2.1 1.1 补域：副作用不可观测动作（notify/tts）的自动化 → 真豁免，其 expect 不进 non_simulable
+    exempted_actions: list[dict] = []
     for auto in graph:
         if not auto.expects():
             continue
         report = evaluate_expects(auto, states, var_sources)
         per_auto[auto.id] = report
-        for key in total:
-            total[key] += report.get(key, 0)
-    unmodeled = sorted(set(unmodeled_actions or ()))
+        auto_exempt = any(
+            n.kind == "do" and is_side_effect_unobservable(n.action)
+            for n in auto.nodes.values()
+        )
+        if auto_exempt:
+            for it in report.get("items", []):
+                it["exempt"] = True
+            action = next(
+                (n.action for n in auto.nodes.values()
+                 if n.kind == "do" and is_side_effect_unobservable(n.action)),
+                None,
+            )
+            exempted_actions.append({
+                "automation_id": auto.id,
+                "action": action,
+                "reason": "副作用不可观测（通知/播报），豁免验证并转人审",
+            })
+            # 豁免自动化的 expect 不计入 non_simulable（已归 exempted 档）
+            total["declared"] += report.get("declared", 0)
+            total["passed"] += report.get("passed", 0)
+            total["failed"] += report.get("failed", 0)
+        else:
+            for key in total:
+                total[key] += report.get(key, 0)
+    all_unmodeled = sorted(set(unmodeled_actions or ()))
+    # v2.1 1.1 补域：未建模动作按诚实性分层
+    # - 间接触发（scene/script）已在仿真里展开 effects → 不属「不可仿真」，移出 unmodeled
+    # - 其余 → 真正不可仿真，留在 non_simulable
+    truly_unmodeled = [
+        a for a in all_unmodeled if not is_indirect_effect_action(a)
+    ]
     return {
         "ok": total["failed"] == 0,
         "fully_verified": (
             total["declared"] > 0
             and total["failed"] == 0
             and total["unverified"] == 0
-            and not unmodeled
+            and not truly_unmodeled
         ),
         "declared": total["declared"],
         "passed": total["passed"],
         "failed": total["failed"],
         "unverified": total["unverified"],
-        "unmodeled_actions": unmodeled,
+        "unmodeled_actions": truly_unmodeled,
+        "exempted_actions": exempted_actions,
         "automations": per_auto,
     }

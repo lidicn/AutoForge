@@ -69,6 +69,18 @@
         "adapter": { "type": "string" },
         "action": { "type": "string" },
         "params": { "type": "object" },
+        "effects": {
+          "type": "array",
+          "description": "v2.1 1.1 补域：scene/script 等间接触发动作的间接实体效果声明（如 scene.activate 点亮哪些灯）。仿真据此展开，使 expect 可验证。",
+          "items": {
+            "type": "object",
+            "required": ["entity_id"],
+            "properties": {
+              "entity_id": { "type": "string" },
+              "state": { "type": "string" }
+            }
+          }
+        },
         "atomic": { "type": "boolean", "default": false },
         "result_var": { "type": "string" },
         "requires_confirm": {

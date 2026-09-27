@@ -65,7 +65,7 @@ v2.3 复合编排 ────────────────────�
 
 | # | 任务 | 工期 | 要点 |
 |---|------|------|------|
-| 1.1 | 补域 P1：scene/script 间接触发展开 + notify 标"副作用不可观测" | 1 天 | 决策 A 清单；不许超清单建模 |
+| 1.1 | 补域 P1：scene/script 间接触发展开 + notify 标"副作用不可观测" | 1 天 | 决策 A 清单；不许超清单建模（✅ 已交付：IR `effects` 展开 + notify/scene 域分层 → 诚实报告 non_simulable 收缩；附带修复 honest_report 摊平 automations 内嵌 expect 项） |
 | 1.2 | 双轨对拍测试：同一组自动化在 FakeHA/HiFi 下仿真结果一致性断言 | 1 天 | 决策 A；已知分歧点：sun 触发器（fake.py:52 vs HiFi 真实太阳几何），对拍时白名单豁免 |
 | 1.3 | shadow 期望态推导扩表：toggle（前态取反）、set_temperature/set_cover_position/volume_set（参数即期望） | 0.5 天 | 决策 B；`af_shadow.py:168-180` 扩约 20 行（✅ 已交付） |
 | 1.4 | EXEMPT 豁免通道：verdict 枚举 + streak 语义 + 人审入口 + 审计事件 + 诚实报告 exempted 分区 | 1 天 | 决策 B；EXEMPT 永不计入 MATCHED streak（✅ 已交付；诚实报告 exempted 分区已就位，喂入由 1.1 标 notify / 1.8 af_watch 接） |

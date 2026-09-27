@@ -276,6 +276,9 @@ class Node:
     adapter: str | None = None
     action: str | None = None
     params: dict[str, Any] = field(default_factory=dict)
+    # v2.1 1.1 补域：scene/script 等「间接触发」动作声明的间接实体效果
+    #（如 scene.activate 点亮哪些灯）。仿真据此展开，使 expect 可验证而非 unverified。
+    effects: tuple[dict[str, Any], ...] = ()
     atomic: bool = False
     result_var: str | None = None
     requires_confirm: bool = False
@@ -312,6 +315,7 @@ class Node:
             adapter=data.get("adapter"),
             action=data.get("action"),
             params=dict(data.get("params") or {}),
+            effects=tuple(data.get("effects") or ()),
             atomic=bool(data.get("atomic", False)),
             result_var=data.get("result_var"),
             requires_confirm=bool(data.get("requires_confirm", False)),

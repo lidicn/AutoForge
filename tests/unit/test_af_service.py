@@ -156,3 +156,67 @@ def test_simulate_returns_stage_schema_marker():
     out = simulate(ir)
     assert out.get("schema") == STAGE_SCHEMA
 
+
+# ---- PR 1.1：补域 P1（scene/script 间接触发展开 + notify 标副作用不可观测） ----
+
+
+def _make_ir(action, *, effects=None, expect=None, seed=None):
+    do = {"id": "do", "kind": "do", "adapter": "ha", "action": action, "params": {}}
+    if effects is not None:
+        do["effects"] = effects
+    return {
+        "ir_version": "0.2.1",
+        "id": "a1",
+        "name": "t",
+        "version": 1,
+        "mode": "restart",
+        "nodes": [
+            {"id": "on", "kind": "on", "trigger": {"type": "state", "entity_id": "light.a", "to": "on"}},
+            do,
+        ],
+        "edges": [{"from": "on", "to": "do", "kind": "then"}],
+        "expect": expect or [],
+    }
+
+
+def test_notify_action_routed_to_exempted_not_non_simulable():
+    # 决策 A：notify 副作用不可观测 → 真豁免（exempted 档），不冒充 verified、不进 non_simulable
+    from autoforge.af_service import simulate
+    ir = _make_ir("notify.send", expect=[{"entity_id": "light.a", "state": "on"}])
+    out = simulate(ir, seed={"light.a": "off"})  # 未验证（unverified）但属 notify → 豁免
+    rep = out["report"]
+    # 真豁免清单含该自动化
+    assert any(e.get("automation_id") == "a1" and e.get("action") == "notify.send"
+               for e in out.get("exempted", []))
+    assert any(e.get("automation_id") == "a1" for e in rep["exempted"])
+    # 不计入 non_simulable（unverified 的 notify expect 被路由走）
+    assert rep["non_simulable"] == []
+
+
+def test_scene_effects_expanded_and_verified():
+    # 决策 A：scene/script 间接触发展开 → 声明 effects 进入仿真状态 → expect 可验证
+    from autoforge.af_service import simulate
+    ir = _make_ir(
+        "scene.activate",
+        effects=[{"entity_id": "light.b", "state": "on"}],
+        expect=[{"entity_id": "light.b", "state": "on"}],
+    )
+    out = simulate(ir, seed={"light.b": "off"})  # 声明展开前为 off
+    rep = out["report"]
+    # effects 展开后 light.b == on → expect 通过（verified，离开 non_simulable）
+    assert any(it.get("target") == "light.b" and it.get("status") == "pass"
+               for it in rep["verified"])
+    assert rep["non_simulable"] == []
+
+
+def test_scene_without_declared_effects_is_verifiable_not_exempt():
+    # 反向：scene 未声明 effects → 仿真按默认状态判定（此处 fail），诚实可验证；
+    # 且 scene 走「展开后验证」而非豁免（exempted 为空）。
+    from autoforge.af_service import simulate
+    ir = _make_ir("scene.activate", expect=[{"entity_id": "light.b", "state": "on"}])
+    out = simulate(ir)  # light.b 默认 off → expect 判 fail
+    rep = out["report"]
+    assert any(it.get("target") == "light.b" and it.get("status") == "fail"
+               for it in rep["verified"])
+    assert rep["exempted"] == []  # scene 不豁免（仅 notify/tts 等副作用不可观测动作豁免）
+

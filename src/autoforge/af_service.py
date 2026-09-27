@@ -23,7 +23,11 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from .af_adapters import DEFAULT_HA_URL, HAAdapter, HAStateProvider, HATransport
 from .af_catalog import DeviceCatalog
 from .af_conf import AUTO_MIN, SHADOW_LOW, ConfidenceStore, decision_for
-from .af_expect import evaluate_graph_expects
+from .af_expect import (
+    evaluate_graph_expects,
+    is_indirect_effect_action,
+    is_side_effect_unobservable,
+)
 from .af_executor import classify_answer
 from .af_fault import FAULT_META, FOUR_FAILURES, FaultKind
 from .af_ir import Graph, IRValidationError, load_graph
@@ -711,6 +715,27 @@ def _replay(runtime: Runtime, states: Any, events: Sequence[Mapping[str, Any]]) 
             runtime.tick()
 
 
+def _apply_indirect_effects(graph, states) -> None:
+    """v2.1 1.1 补域：把 scene/script 等间接触发动作的声明 ``effects`` 展开进仿真状态。
+
+    仅作用于声明了 ``effects`` 且动作域属于间接效果域的 do 节点，使这些自动化的
+    expect 可验证（离开 non_simulable）。不触碰其它动作，向后兼容。
+    """
+    for auto in graph:
+        for node in auto.nodes.values():
+            if node.kind != "do" or not node.effects:
+                continue
+            if not is_indirect_effect_action(node.action):
+                continue
+            for eff in node.effects:
+                eid = eff.get("entity_id")
+                if not eid:
+                    continue
+                st = eff.get("state")
+                if st is not None:
+                    states.set(str(eid), str(st))
+
+
 def _expect_failure_message(report: Any) -> str:
     """从 `expect` 报告里取一条可归因的失败说明（没有失败则空串）。"""
     if not isinstance(report, dict):
@@ -754,6 +779,9 @@ def simulate(
 
     _replay(runtime, states, list(events or []))
 
+    # v2.1 1.1 补域：间接触发展开（scene/script 声明 effects → 仿真状态），使 expect 可验证
+    _apply_indirect_effects(graph, states)
+
     # v1.2.0：后置条件断言求值（变量形态在任一实例的 vars 里成立即通过）
     var_sources = [inst.ctx.vars for inst in runtime.instances.all()]
     expect_report = evaluate_graph_expects(
@@ -768,6 +796,7 @@ def simulate(
         "bus": runtime.bus.stats(),
         "final_states": final_states,
         "expect": expect_report,
+        "exempted": expect_report.get("exempted_actions", []),  # v2.1 1.1：副作用不可观测动作真豁免清单
         "nl": render_graph(graph).text,
         "schema": STAGE_SCHEMA,
     }
@@ -801,13 +830,19 @@ def honest_report(out: Mapping[str, Any]) -> dict[str, Any]:
     """
     from autoforge.af_watch import verified_in_prod_partition as _watch_partition
     expect = out.get("expect") or {}
-    items = expect.get("items") or []
+    # 注意：evaluate_graph_expects 把断言项嵌在 expect["automations"][auto_id]["items"]，
+    # 也兼容调用方直接给出顶层 expect["items"]（手工构造/测试）。两者合并，保证真实
+    # simulate 输出的 verified / non_simulable 分区非空（此前只读顶层 items 导致恒空）。
+    _auto_reports = expect.get("automations") or {}
+    items = list(expect.get("items") or [])
+    for _ar in _auto_reports.values():
+        items.extend(_ar.get("items") or [])
     verified = [it for it in items if it.get("status") in ("pass", "fail")]
     non_simulable = [
         {**it, "flag": "yellow"}
         for it in items
-        if it.get("status") == "unverified"
-    ]
+        if it.get("status") == "unverified" and not it.get("exempt")
+    ]  # 注：副作用不可观测（notify 等）的 expect 标记 exempt → 不进 non_simulable，已归 exempted 档
     # 仿真底座未建模的动作（如 vhass/FakeHA 不认识的服务）→ 同样是「不可仿真」，显式标黄
     for _act in expect.get("unmodeled_actions") or []:
         non_simulable.append(
