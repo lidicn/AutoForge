@@ -753,31 +753,73 @@ def _expect_failure_message(report: Any) -> str:
     return ""
 
 
-def simulate(
+def simulate_track(
+    track: str,
     ir: Mapping[str, Any],
     seed: Mapping[str, str] | None = None,
     events: Sequence[Mapping[str, Any]] | None = None,
     *,
     store: GraphStore | None = None,
+    clock: Any | None = None,
 ) -> dict[str, Any]:
-    """第二道闸：在仿真里回放，**并对 IR 声明的 `expect` 逐条断言**（v1.2.0）。
+    """第二道闸（双轨版）：在 FakeHA 或 HiFi 仿真底座下回放，并对 `expect` 逐条断言。
+
+    `track`：
+        - ``"fake"``：降级内存底座（FakeHAAdapter），动作立即生效；
+        - ``"hifi"``：高仿真底座（HighFidelityHA + HighFidelityAdapter），动作入队后
+          flush 才落位，且 `sun` 用真实太阳几何（PR 1.2 双轨对拍的两轨之一）。
+
+    两轨共享 `fake.py` 唯一效果真值表（`SERVICE_STATE` / `service_effect` /
+    `is_modeled`），故对建模动作的结果应当一致；唯一已知分歧点是 `sun` 触发器
+    （FakeHA 固定 18:00/06:00 vs HiFi 真实几何），对拍时由 `compare_dual_track` 白名单豁免。
 
     返回里的 `expect` 是「跑**对**了吗」的答案：
     - `ok`：没有断言失败；
     - `fully_verified`：**声明过断言且全部验过**（无 fail 且无 unverified）——
       比 `ok` 更严；`ok=True` 只代表「没抓到反例」。
     """
+    if track not in ("fake", "hifi"):
+        raise ValueError(f"未知仿真轨：{track!r}（仅支持 'fake' / 'hifi'）")
     graph = _load_ir(ir)
-    runtime = build_runtime(graph)
-    states = seed_from_graph(graph, seed or {}, clock=runtime.clock)
-    runtime.states = states
-    runtime.instances.states = states
-    runtime.scheduler.states = states
-    runtime.executor.states = states  # canary 漂移检测读同一份状态源
-    adapter = FakeHAAdapter(states)
+    if track == "hifi":
+        from datetime import datetime, timezone
+
+        from .af_time import VirtualTimeSource
+        from .af_vhass.high_fidelity import create_adapter, create_ha_from_graph
+
+        if clock is None:
+            clock = VirtualTimeSource(datetime(2026, 9, 14, 8, 0, tzinfo=timezone.utc))
+        ha = create_ha_from_graph(
+            graph, seed or {}, clock=clock, hifi=True,
+            device_latency=0.0, sun_events=True,
+        )
+        states: Any = ha
+        runtime = build_runtime(graph, states=states, clock=clock)
+        adapter = create_adapter(ha, name="ha")
+    else:
+        runtime = build_runtime(graph, clock=clock)
+        states = seed_from_graph(graph, seed or {}, clock=runtime.clock)
+        runtime.states = states
+        runtime.instances.states = states
+        runtime.scheduler.states = states
+        runtime.executor.states = states  # canary 漂移检测读同一份状态源
+        adapter = FakeHAAdapter(states)
     runtime.adapters.register(adapter)
 
     _replay(runtime, states, list(events or []))
+
+    if track == "hifi":
+        # 高仿真：do 动作入队，需 flush 才落位；循环 flush 让 cover/light transition
+        # 等中间态收敛到最终态（与 FakeHA 立即生效对齐），并同步真实太阳几何。
+        for _ in range(1000):
+            ha.flush()
+            if not ha.queue.pending():
+                break
+        ha.tick()
+        for _ in range(1000):
+            ha.flush()
+            if not ha.queue.pending():
+                break
 
     # v2.1 1.1 补域：间接触发展开（scene/script 声明 effects → 仿真状态），使 expect 可验证
     _apply_indirect_effects(graph, states)
@@ -799,17 +841,29 @@ def simulate(
         "exempted": expect_report.get("exempted_actions", []),  # v2.1 1.1：副作用不可观测动作真豁免清单
         "nl": render_graph(graph).text,
         "schema": STAGE_SCHEMA,
+        "track": track,
     }
     # v2 M4 诚实报告分层：强制三栏，绝不把「没验到」当「验过了」
     out["report"] = honest_report(out)
     # v1.5.0：sim 的 `ok` 恒 True（失败以 `expect` 报告）；`_telemetry.ok` 反映**断言是否通过**。
     return attach_telemetry(
         out,
-        tool="simulate",
+        tool=f"simulate:{track}",
         root=(store.root if store is not None else None),
         ok=bool(expect_report.get("ok", True)),
         message=_expect_failure_message(expect_report),
     )
+
+
+def simulate(
+    ir: Mapping[str, Any],
+    seed: Mapping[str, str] | None = None,
+    events: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    store: GraphStore | None = None,
+) -> dict[str, Any]:
+    """第二道闸（默认 FakeHA 轨）：同 `simulate_track("fake", ...)`，向后兼容别名。"""
+    return simulate_track("fake", ir, seed, events, store=store)
 
 
 # ─────────────────────────────────────────────────────────────────────

@@ -195,8 +195,9 @@ def service_effect(
     vhass 与 FakeHA **共用**此函数，保证两条仿真路径动作语义一致。
     """
     if (domain, service) == ("climate", "set_temperature"):
-        # 沿用既有语义：置 cool 并写入 temperature 属性
-        return "cool", {"temperature": params.get("temperature")}
+        # 与 HiFi ClimateSM 对齐：设定温度不改变开关机状态（off 保持 off，cool 保持 cool），
+        # 仅写 temperature 属性。此前强制返回 "cool" 与高仿真底座不一致，是双轨对拍暴露的真实漂移源。
+        return current, {"temperature": params.get("temperature")}
     if (domain, service) == ("climate", "set_hvac_mode"):
         mode = params.get("hvac_mode") or params.get("state")
         return (str(mode) if mode else current), {}
