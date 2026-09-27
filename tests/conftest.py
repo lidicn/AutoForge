@@ -178,11 +178,12 @@ def make_recorder(conf, clock, audit=None, states=None):
     from autoforge.af_feedback import FeedbackRecorder
     return FeedbackRecorder(conf=conf, clock=clock, audit=audit or FakeAudit(), states=states)
 
-def make_shadow(conf, clock, recorder, states, policy=None, later=None, audit=None, exempt_actions=None):
+def make_shadow(conf, clock, recorder, states, policy=None, later=None, audit=None, exempt_actions=None, log_path=None):
     from autoforge.af_shadow import ShadowPolicy, ShadowRunner
     return ShadowRunner(conf=conf, states=states, recorder=recorder, clock=clock,
                         audit=audit or FakeAudit(), policy=policy or ShadowPolicy(),
-                        later=later, exempt_actions=exempt_actions or frozenset())
+                        later=later, exempt_actions=exempt_actions or frozenset(),
+                        log_path=log_path)
 
 def make_intervention(conf, clock, recorder, states, policy=None, later=None, audit=None):
     from autoforge.af_intervention import InterventionDetector

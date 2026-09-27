@@ -17,6 +17,8 @@ Shadow 日志独立存放（``shadow_log.json``），与正常运行日志隔离
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Mapping, Sequence
@@ -162,10 +164,13 @@ class ShadowLogStore:
         return len(rows)
 
     def save(self, path: str) -> None:
-        """落盘 shadow_log.json。"""
+        """落盘 shadow_log.json（原子替换，崩溃不留半截文件，抄 af_version._save 模式）。"""
         import json
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(self.dump(), fh, ensure_ascii=False, indent=2)
+        payload = json.dumps(self.dump(), ensure_ascii=False, indent=2)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        os.replace(tmp, path)                    # 原子替换
 
     def load_file(self, path: str) -> int:
         """从 shadow_log.json 恢复。"""
@@ -314,6 +319,7 @@ class ShadowRunner:
     ask_handler: Callable[..., Any] | None = None
     on_promote: Callable[[str], None] | None = None
     intervention: Any = None
+    log_path: str | None = None  # shadow_log.json 落盘路径；None = 不持久化
 
     # ---- 装饰 ----------------------------------------------------------- #
 
@@ -322,6 +328,14 @@ class ShadowRunner:
         original = getattr(executor, "_do", None)
         had_own = "_do" in getattr(executor, "__dict__", {})
         runner = self
+
+        # 重启回放：落盘路径存在且文件可读 → 恢复 shadow_log 并补判停机期间到期的记录
+        if self.log_path and os.path.exists(self.log_path):
+            try:
+                self.log.load_file(self.log_path)
+                self.compare_due()
+            except Exception:  # noqa: BLE001
+                pass  # 日志损坏不影响启动，仅丢失历史判定
 
         def _do(instance: Any, node: Any, _orig: Any = original) -> Any:
             aid = _automation_id(instance)
@@ -345,6 +359,13 @@ class ShadowRunner:
     def band_of(self, automation_id: str) -> Band:
         """读运行时 band（来自 ConfidenceStore，不是 IR 静态字段）。"""
         return self.conf.band(automation_id)
+
+    # ---- 落盘 + 重启回放 ----------------------------------------------- #
+
+    def persist(self) -> None:
+        """落盘 shadow_log（仅当配置了 ``log_path``）。"""
+        if self.log_path:
+            self.log.save(self.log_path)
 
     # ---- shadow 拦截 ---------------------------------------------------- #
 
@@ -381,6 +402,7 @@ class ShadowRunner:
         else:
             self._schedule(record)
         self.log.trim(self.policy.max_records)
+        self.persist()
         audit_write(
             self.audit, at=now, kind="shadow_intercepted", automation_id=aid,
             instance_id=record.instance_id, node_id=record.node_id,
@@ -438,6 +460,7 @@ class ShadowRunner:
             record_id=record.record_id, verdict=record.verdict.value,
             expected_state=record.expected_state, observed_state=observed,
         )
+        self.persist()
         return record
 
     def compare_due(self, at: float | None = None) -> list[ShadowRecord]:

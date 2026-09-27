@@ -1,5 +1,7 @@
 """ShadowRunner 单测。"""
-from autoforge.af_shadow import Verdict
+import os
+
+from autoforge.af_shadow import ShadowLogStore, Verdict
 from conftest import (
     FakeAdapter, FakeAutomation, FakeExecutor, FakeInstance, FakeNode, FakeStates,
     make_conf, make_recorder, make_shadow,
@@ -257,4 +259,78 @@ class _FakeNodeExempt:
 
     def target_entities(self):
         return ["notify.other"]
+
+
+# ---- PR 1.5：shadow_log 落盘 + 重启回放 ----
+
+
+def _shadow_with_log(tmp_path, clock=None, later=None, log_path=None):
+    from conftest import FakeClock
+    clock = clock or FakeClock()
+    conf = make_conf({"a1": 0.75})
+    states = FakeStates()
+    rec = make_recorder(conf, clock)
+    path = log_path or str(tmp_path / "shadow_log.json")
+    shadow = make_shadow(conf, clock, rec, states, log_path=path, later=later)
+    inst = FakeInstance(automation=FakeAutomation(id="a1"))
+    return shadow, inst, path
+
+
+def test_shadow_log_persisted_to_disk(tmp_path):
+    shadow, inst, path = _shadow_with_log(tmp_path)
+    node = FakeNode(action="turn_on", entities=["light.study"], expected={"light.study": "on"})
+    shadow.run_do(inst, node)
+    assert os.path.exists(path)
+    # 重新读回，记录数 == 1
+    store = ShadowLogStore()
+    assert store.load_file(path) == 1
+
+
+def test_shadow_log_save_atomic_leaves_no_tmp(tmp_path):
+    shadow, inst, path = _shadow_with_log(tmp_path)
+    node = FakeNode(action="turn_on", entities=["light.study"], expected={"light.study": "on"})
+    shadow.run_do(inst, node)
+    assert os.path.exists(path)
+    assert not os.path.exists(path + ".tmp")  # 原子替换不留半截文件
+
+
+def test_shadow_log_replay_after_restart(tmp_path):
+    # 第一次运行：shadow 拦截，期望 on（states 已是 on），PENDING（later=None 不调度）
+    shadow1, inst1, path = _shadow_with_log(tmp_path, later=None)
+    shadow1.states.set("light.study", "on")
+    node = FakeNode(action="turn_on", entities=["light.study"], expected={"light.study": "on"})
+    rec1 = shadow1.run_do(inst1, node)
+    assert rec1.verdict is Verdict.PENDING
+    assert os.path.exists(path)
+
+    # 模拟重启：时钟已推进过 compare_after，但新 runner 不主动 compare
+    from conftest import FakeClock
+    clock2 = FakeClock()
+    clock2.advance(1000)
+    shadow2, inst2, _ = _shadow_with_log(tmp_path, clock=clock2, later=None, log_path=path)
+    shadow2.states.set("light.study", "on")
+    # 重启回放：install 时恢复 shadow_log 并补判到期记录
+    shadow2.install(FakeExecutor())
+
+    loaded = shadow2.log.get(rec1.record_id)
+    assert loaded is not None
+    assert loaded.verdict is Verdict.MATCHED  # states 仍为 on → 命中
+
+
+def test_shadow_log_replay_misses_when_state_changed(tmp_path):
+    shadow1, inst1, path = _shadow_with_log(tmp_path, later=None)
+    shadow1.states.set("light.study", "on")
+    node = FakeNode(action="turn_on", entities=["light.study"], expected={"light.study": "on"})
+    rec1 = shadow1.run_do(inst1, node)
+
+    from conftest import FakeClock
+    clock2 = FakeClock()
+    clock2.advance(1000)
+    shadow2, inst2, _ = _shadow_with_log(tmp_path, clock=clock2, later=None, log_path=path)
+    shadow2.states.set("light.study", "off")  # 重启后状态变了 → 应判 MISSED
+    shadow2.install(FakeExecutor())
+
+    loaded = shadow2.log.get(rec1.record_id)
+    assert loaded.verdict is Verdict.MISSED
+
 
