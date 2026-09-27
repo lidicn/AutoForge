@@ -1,13 +1,53 @@
 # homesdk 质量门禁基线：只准减少，不准新增。
 # 指纹 = 相对路径#规则#函数限定名（刻意不含行号，改一行不该让基线失效）。
-# 由 `python -m homesdk.gates app --update-baseline` 生成。
+# 由 `python -m homesdk.gates AutoForge --update-baseline` 生成。
+src/autoforge/af_api.py#except-pass-broad#build_app._pair_event_gen
+src/autoforge/af_closedloop/deepfix.py#except-pass-broad#extract_json
+src/autoforge/af_conflict.py#except-pass-broad#ConflictArbiter._emit
+src/autoforge/af_conflict_audit.py#except-pass-broad#ConflictAuditor._persist
+src/autoforge/af_conflict_audit.py#except-pass-broad#ConflictAuditor.locks
+src/autoforge/af_conflict_runtime.py#except-pass-broad#ConflictService.attach._uninstall
+src/autoforge/af_conflict_runtime.py#except-pass-broad#ConflictService.detach
 src/autoforge/af_expect.py#except-pass-broad#_read_attribute
+src/autoforge/af_health.py#except-pass-broad#HealthEngine._band
 src/autoforge/af_live.py#except-pass-broad#start_ticker._write_asks
+src/autoforge/af_orchestrator.py#except-pass-broad#IntentParser.parse
+src/autoforge/af_orchestrator.py#except-pass-broad#_extract_json
+src/autoforge/af_runtime_plugins.py#except-pass-broad#RuntimeExtensions.api_handlers
+src/autoforge/af_runtime_plugins.py#except-pass-broad#RuntimeExtensions.observe
+src/autoforge/af_runtime_plugins.py#except-pass-broad#RuntimeExtensions.persist
+src/autoforge/af_runtime_plugins.py#except-pass-broad#RuntimeExtensions.restore
+src/autoforge/af_runtime_plugins.py#except-pass-broad#RuntimeExtensions.tick
+src/autoforge/af_runtime_plugins.py#except-pass-broad#install._tick_conflict
+src/autoforge/af_runtime_plugins.py#except-pass-broad#install_api
+src/autoforge/af_service.py#except-pass-broad#health
+src/autoforge/af_time.py#except-pass-broad#load_tz
+src/autoforge/af_version.py#except-pass-broad#_audit
+src/autoforge/af_version.py#except-pass-broad#_now
+src/autoforge/af_api.py#fake-ok-const#build_app.api_agent_delete
+src/autoforge/af_api.py#fake-ok-const#build_app.api_agent_rename
+src/autoforge/af_api.py#fake-ok-const#build_app.api_agents_list
+src/autoforge/af_api.py#fake-ok-const#build_app.api_asks
 src/autoforge/af_api.py#fake-ok-const#build_app.api_asks_answer
 src/autoforge/af_api.py#fake-ok-const#build_app.api_asks_pending
+src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_code_create
+src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_code_list
+src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_login
+src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_logout
+src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_me
 src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_revoke
 src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_subjects
 src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_whoami
+src/autoforge/af_api.py#fake-ok-const#build_app.api_automation_archive
+src/autoforge/af_api.py#fake-ok-const#build_app.api_automation_delete
+src/autoforge/af_api.py#fake-ok-const#build_app.api_automation_detail
+src/autoforge/af_api.py#fake-ok-const#build_app.api_automation_disable
+src/autoforge/af_api.py#fake-ok-const#build_app.api_automation_enable
+src/autoforge/af_api.py#fake-ok-const#build_app.api_automation_unarchive
+src/autoforge/af_api.py#fake-ok-const#build_app.api_automations
+src/autoforge/af_api.py#fake-ok-const#build_app.api_pair_confirm
+src/autoforge/af_apply.py#fake-ok-const#apply
+src/autoforge/af_apply.py#fake-ok-const#issue_premiere
 src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.get_state
 src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.list_aliases
 src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.list_entities
@@ -17,9 +57,17 @@ src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.resolve
 src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.resolve_metrics
 src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.set_alias
 src/autoforge/af_catalog.py#fake-ok-const#DeviceCatalog.snapshot
+src/autoforge/af_conflict_runtime.py#fake-ok-const#api_conflicts_reset
+src/autoforge/af_conflict_runtime.py#fake-ok-const#api_conflicts_unlock
+src/autoforge/af_draft.py#fake-ok-const#draft_intent
 src/autoforge/af_experience.py#fake-ok-const#ExperienceStore.export
 src/autoforge/af_experience.py#fake-ok-const#ExperienceStore.summary
+src/autoforge/af_mcp.py#fake-ok-const#_t_pair
+src/autoforge/af_mcp.py#fake-ok-const#_t_request_pair
+src/autoforge/af_premiere.py#fake-ok-const#TrialStore._pause_locked
+src/autoforge/af_premiere.py#fake-ok-const#TrialStore.enter_trial
 src/autoforge/af_service.py#fake-ok-const#_session_view
+src/autoforge/af_service.py#fake-ok-const#asks_pending
 src/autoforge/af_service.py#fake-ok-const#delete_session
 src/autoforge/af_service.py#fake-ok-const#diff
 src/autoforge/af_service.py#fake-ok-const#enable_by_tag
@@ -44,3 +92,4 @@ src/autoforge/af_service.py#fake-ok-const#start_watch
 src/autoforge/af_service.py#fake-ok-const#submit_pending
 src/autoforge/af_store.py#fake-ok-const#GraphStore.import_bundle
 src/autoforge/af_telemetry.py#fake-ok-const#TelemetryStore.usage
+src/autoforge/af_test.py#fake-ok-const#TestChannel.clear
