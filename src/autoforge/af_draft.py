@@ -18,7 +18,11 @@ from typing import Any
 from .af_ir import IR_VERSION, load_graph
 from .af_spec import SpecError
 
-__all__ = ["DraftError", "DraftResult", "draft_intent", "StagingStore"]
+__all__ = ["DraftError", "E_UNKNOWN_DOMAIN", "DraftResult", "draft_intent", "StagingStore"]
+
+# ── 封闭词表（v2 M2：意图 JSON 顶层域编译前即拒，并回灌可机读 fix）──
+E_UNKNOWN_DOMAIN = "E_UNKNOWN_DOMAIN"
+_INTENT_FIELDS = ("name", "mode", "when", "if", "do", "do_list", "ask", "wait")
 
 
 class DraftError(Exception):
@@ -102,6 +106,15 @@ def draft_intent(intent: dict[str, Any], catalog: Any = None) -> dict[str, Any]:
       "do": {"action": "开灯", "target": "客厅灯"}
     }
     """
+    # v2 M2：意图顶层域封闭词表——未知域编译前即拒并回灌可机读 fix
+    unknown = [k for k in intent if k not in _INTENT_FIELDS]
+    if unknown:
+        raise DraftError(
+            E_UNKNOWN_DOMAIN,
+            f"意图包含未知域: {unknown}",
+            fix={"allowed": list(_INTENT_FIELDS), "unknown": unknown},
+        )
+
     name = intent.get("name", "未命名自动化")
     mode = intent.get("mode", "single")
     when = intent.get("when")
@@ -159,44 +172,48 @@ def draft_intent(intent: dict[str, Any], catalog: Any = None) -> dict[str, Any]:
         edges.append({"from": prev, "to": wait_id, "kind": "then"})
         prev = wait_id
 
-    # 5. do 节点（支持单动作和多动作）
-    actions = []
+    # 5. do 节点（支持单动作和多动作；多动作 list 内可混 wait 步骤）
+    raw_actions = []
     if do_list and isinstance(do_list, list):
-        actions = do_list
+        raw_actions = do_list
+    elif do and isinstance(do, list):
+        raw_actions = do
     elif do:
-        actions = [do]
+        raw_actions = [do]
 
     do_ids = []
-    for idx, action in enumerate(actions):
-        do_id = _gen_id("d", counter)
-        do_node = _resolve_do(action, resolved, catalog)
-        do_node["id"] = do_id
-        do_node["kind"] = "do"
-        do_node["name"] = f"动作{idx+1}" if len(actions) > 1 else "动作"
-        nodes.append(do_node)
-        do_ids.append(do_id)
-
-    # 连边：prev → 第一个 do
-    if do_ids:
-        edges.append({"from": prev, "to": do_ids[0], "kind": "yes" if (if_entry and not ask) else "then"})
-        # 多动作顺序执行
-        for i in range(len(do_ids) - 1):
-            edges.append({"from": do_ids[i], "to": do_ids[i+1], "kind": "then"})
-        last_do = do_ids[-1]
-    else:
-        last_do = None
+    for i, item in enumerate(raw_actions):
+        edge_kind = "yes" if (i == 0 and if_entry and not ask) else "then"
+        if isinstance(item, dict) and "wait" in item:
+            nid = _gen_id("w", counter)
+            nodes.append({"id": nid, "kind": "wait", "name": "等待", "duration": item["wait"]})
+            edges.append({"from": prev, "to": nid, "kind": edge_kind})
+            prev = nid
+        else:
+            nid = _gen_id("d", counter)
+            do_node = _resolve_do(item, resolved, catalog)
+            do_node["id"] = nid
+            do_node["kind"] = "do"
+            do_node["name"] = f"动作{i+1}" if len(raw_actions) > 1 else "动作"
+            nodes.append(do_node)
+            edges.append({"from": prev, "to": nid, "kind": edge_kind})
+            prev = nid
+            do_ids.append(nid)
 
     # 6. pass 节点
     pass_id = _gen_id("p", counter)
     nodes.append({"id": pass_id, "kind": "pass", "name": "结束"})
 
-    if last_do:
+    if do_ids:
+        last_do = do_ids[-1]
         edges.append({"from": last_do, "to": pass_id, "kind": "then"})
         # do 失败 → 到 pass
         edges.append({"from": last_do, "to": pass_id, "kind": "on_error"})
     elif ask:
         # 没有 do，ask 同意后直接到 pass
         edges.append({"from": prev, "to": pass_id, "kind": "yes"})
+    else:
+        edges.append({"from": prev, "to": pass_id, "kind": "then"})
 
     # if 条件不满足 → 直接到 pass
     if if_entry:
@@ -223,7 +240,13 @@ def draft_intent(intent: dict[str, Any], catalog: Any = None) -> dict[str, Any]:
     graph = load_graph({"automations": [ir]})
 
     # 存 staging
-    action_desc = f"{do.get('action', '')} {do.get('target', '')}" if do else (f"{len(actions)}个动作" if actions else "询问")
+    if raw_actions:
+        if len(raw_actions) == 1 and isinstance(raw_actions[0], dict):
+            action_desc = f"{raw_actions[0].get('action', '')} {raw_actions[0].get('target', '')}"
+        else:
+            action_desc = f"{len(raw_actions)}个动作"
+    else:
+        action_desc = "询问"
     summary = f"{when.get('entity', '')} {when.get('to', '')} → {action_desc}"
     ref = _staging.put(graph, summary, resolved)
 
@@ -303,12 +326,18 @@ def _resolve_do(do: dict[str, Any], resolved: dict[str, str], catalog: Any) -> d
     if "hvac_mode" in do:
         params["hvac_mode"] = do["hvac_mode"]
 
-    return {
+    node = {
         "adapter": adapter,
         "action": action_name,
         "params": params,
         "result_var": f"{action_name.replace('.', '_')}_result",
     }
+    # 透传安全/策略字段：L2/L3 强制确认、灰度、置信、优先级
+    # （否则节点缺 requires_confirm → scanner 误报 L2_NEEDS_CONFIRM 假阳性，且 intent 无法修正）
+    for _k in ("requires_confirm", "canary", "conf", "priority"):
+        if _k in do:
+            node[_k] = do[_k]
+    return node
 
 
 def get_staged(ref: str) -> dict[str, Any]:
