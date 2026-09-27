@@ -144,7 +144,7 @@ class ClosedLoop:
                     bout = {"ok": False, "message": f"build 调用失败: {exc}"}
                 if isinstance(bout, Mapping):
                     session.build_out = dict(bout)
-                found = _dedupe(found + issues_from(bout))
+                found = _dedupe(found + issues_from(bout, strict=True))
             if not found:
                 break
 
@@ -186,7 +186,7 @@ class ClosedLoop:
                     sim_out = {"ok": False, "message": f"simulate 调用失败: {exc}"}
                 if isinstance(sim_out, Mapping):
                     session.sim = dict(sim_out)
-                sim_issues = issues_from(sim_out, default_code="EXPECT_FAILED")
+                sim_issues = issues_from(sim_out, default_code="EXPECT_FAILED", strict=True)
                 if not sim_issues:
                     break
                 progress = False
@@ -263,12 +263,26 @@ def _dedupe(issues):
     return out
 
 
-def issues_from(obj, *, default_code: str = "UNKNOWN") -> list:
-    """容错解析 build/simulate 返回（结构以补发的契约为准，这里按多形状兜底）。"""
+def issues_from(obj, *, default_code: str = "UNKNOWN", strict: bool = False) -> list:
+    """容错解析 build/simulate 返回（结构以补发的契约为准，这里按多形状兜底）。
+
+    v2.1 契约冻结（决策 C）：生产方返回须带 ``"schema": "af-stage/1"``。
+
+    - ``strict=True`` 且对象声明了冻结 schema → 只认规范键 ``issues`` / ``errors``，
+      不再兜底历史别名 ``problems`` / ``failures``。
+    - 过渡期容错：未声明 ``schema``（旧生产方）仍走宽松多形状解析，保证升级窗口内不破旧调用。
+    - ``strict=False``（默认）→ 保持旧宽松行为，向后兼容。
+    """
     A = load_module()
     raw = []
     if isinstance(obj, Mapping):
-        for k in ("issues", "errors", "problems", "failures"):
+        from autoforge.af_service import STAGE_SCHEMA
+        declared = obj.get("schema")
+        if strict and declared == STAGE_SCHEMA:
+            keys = ("issues", "errors")                  # 冻结后的规范键
+        else:
+            keys = ("issues", "errors", "problems", "failures")  # 过渡期宽松
+        for k in keys:
             v = obj.get(k)
             if isinstance(v, list):
                 raw = list(v)

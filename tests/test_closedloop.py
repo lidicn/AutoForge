@@ -152,6 +152,18 @@ class TestLoop(unittest.TestCase):
         self.assertEqual(len(issues_from({"cases": [{"name": "c1", "ok": False}]})), 1)
         self.assertEqual(issues_from({"issues": []}), [])
 
+    def test_issues_from_strict_mode(self):
+        # 决策 C 契约冻结：冻结 schema 下 strict 只认规范键 issues/errors，忽略历史别名
+        frozen_legacy_alias = {"schema": "af-stage/1", "problems": [{"message": "legacy"}]}
+        self.assertEqual(issues_from(frozen_legacy_alias, strict=True), [])   # 严格模式忽略 problems
+        self.assertEqual(len(issues_from(frozen_legacy_alias, strict=False)), 1)  # 过渡期容错：宽松仍解析
+        # 规范键 issues 在严格模式下被识别
+        canon = {"schema": "af-stage/1", "issues": [{"code": "X", "message": "y"}]}
+        self.assertEqual(len(issues_from(canon, strict=True)), 1)
+        # 未声明 schema 的旧生产方，strict 也走宽松（升级窗口内不破旧调用）
+        legacy = {"errors": [{"code": "E", "message": "e"}]}
+        self.assertEqual(len(issues_from(legacy, strict=True)), 1)
+
 
 class TestDeepFixGate(unittest.TestCase):
     IR = {

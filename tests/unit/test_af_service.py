@@ -109,3 +109,32 @@ def test_simulate_report_has_three_tiers():
     assert isinstance(rep["non_simulable"], list)
     # 向后兼容：旧字段仍在
     assert "expect" in out and "final_states" in out
+
+
+# ---- PR 1.6：契约冻结（build/simulate 返回带 stage schema 标记） ----
+
+
+def _load_example_ir(name: str):
+    import json
+    import os
+
+    here = os.path.dirname(__file__)
+    p = os.path.join(here, "..", "..", "examples", "ir", name)
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_build_returns_stage_schema_marker():
+    # 决策 C 契约冻结：build 返回须带 "schema": "af-stage/1"
+    from autoforge.af_service import STAGE_SCHEMA, build
+    ir = _load_example_ir("case11_expect.json")
+    out = build(ir)
+    assert out.get("schema") == STAGE_SCHEMA
+
+
+def test_simulate_returns_stage_schema_marker():
+    from autoforge.af_service import STAGE_SCHEMA, simulate
+    ir = _load_example_ir("case11_expect.json")
+    out = simulate(ir)
+    assert out.get("schema") == STAGE_SCHEMA
+

@@ -626,6 +626,11 @@ def load_device_guard(store: GraphStore | None) -> DeviceGuardRegistry | None:
         return None
 
 
+#: v2.1 契约冻结（决策 C）：build/simulate 返回必须带的 stage 契约版本标记。
+#: 消费方据此判断是否已冻结；未带 schema 的旧生产方走过渡期宽松解析。
+STAGE_SCHEMA = "af-stage/1"
+
+
 def build(
     ir: Mapping[str, Any],
     known_entities: Iterable[str] | None = None,
@@ -660,6 +665,7 @@ def build(
         "diagnostics": _diagnostics(result),
         "nl": render_graph(graph).text,
         "entity_check": "catalog" if catalog_used else ("provided" if known is not None else "skipped"),
+        "schema": STAGE_SCHEMA,
     }
     # v1.5.0：失败回执附归因 + 历史同类（写→读闭环）
     first_error = result.errors[0].message if result.errors else ""
@@ -763,6 +769,7 @@ def simulate(
         "final_states": final_states,
         "expect": expect_report,
         "nl": render_graph(graph).text,
+        "schema": STAGE_SCHEMA,
     }
     # v2 M4 诚实报告分层：强制三栏，绝不把「没验到」当「验过了」
     out["report"] = honest_report(out)
