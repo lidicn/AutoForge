@@ -56,6 +56,8 @@ asyncio_mode = "auto"
 addopts = "-p no:homeassistant"
 markers = [
     "vhass: 仅在真 vhass（pytest-homeassistant）可用时运行，装不上或非 POSIX 则 skip",
+    """integration: 需要真实 Home Assistant（实时 websocket / REST）的集成测试；
+    离线环境（AUTOFORGE_LIVE_HA 未置 1）自动 skip，仅在带真 HA 的环境运行""",
 ]
 asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [

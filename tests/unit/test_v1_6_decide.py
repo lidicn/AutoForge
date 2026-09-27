@@ -159,8 +159,9 @@ def test_mcp_remember_needs_write_scope(tmp_path):
     assert is_error is True
 
 
-def test_http_alias_endpoints(tmp_path):
+def test_http_alias_endpoints(tmp_path, monkeypatch):
     pytest.importorskip("fastapi")
+    monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
     from fastapi.testclient import TestClient
 
     from autoforge.af_api import build_app

@@ -154,7 +154,8 @@ def test_api_graphs_tag_filter(tmp_path):
 
 
 @pytest.mark.skipif(not _HAVE_FASTAPI, reason="fastapi not installed")
-def test_api_graphs_tags_set(tmp_path):
+def test_api_graphs_tags_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
     client, store = _client(tmp_path)
     body = client.post("/api/graphs/tags", json={"name": "g1", "tags": ["a", "b"]}).json()
     assert body["ok"] is True
@@ -162,7 +163,8 @@ def test_api_graphs_tags_set(tmp_path):
 
 
 @pytest.mark.skipif(not _HAVE_FASTAPI, reason="fastapi not installed")
-def test_api_graphs_enable_disable_by_tag(tmp_path):
+def test_api_graphs_enable_disable_by_tag(tmp_path, monkeypatch):
+    monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
     client, store = _client(tmp_path)
     client.post("/api/graphs/disable", json={"tag": "lighting"})
     ver = store.latest("g1")

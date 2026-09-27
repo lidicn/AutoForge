@@ -81,6 +81,7 @@ def _ids(result: dict) -> list[str]:
 # ─────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.integration
 def test_area_split_combines_room_and_function(catalog):
     """「书房光照」→ 区域「书房」+ 功能「光照」（原样查询无候选）。"""
     result = catalog.resolve("书房光照")
@@ -95,6 +96,7 @@ def test_area_split_combines_room_and_function(catalog):
     assert "组合查询" in result["note"]
 
 
+@pytest.mark.integration
 def test_suffix_stripped_retry(catalog):
     """「油烟机灯光」→ 剥离后缀后按「油烟机」命中灯光实体。"""
     result = catalog.resolve("油烟机灯光")
@@ -103,6 +105,7 @@ def test_suffix_stripped_retry(catalog):
     assert result["candidates"][0]["matched_by"].startswith("suffix_stripped::")
 
 
+@pytest.mark.integration
 def test_readonly_upgrade_finds_controllable(catalog):
     """「客厅电视」原样只命中只读 sensor → 升级为可控 media_player。"""
     result = catalog.resolve("客厅电视")
@@ -111,12 +114,14 @@ def test_readonly_upgrade_finds_controllable(catalog):
     assert "只读统计量" in result["note"]
 
 
+@pytest.mark.integration
 def test_actionable_domain_outranks_readonly(catalog):
     """同置信度下可控设备（switch）必须排在只读统计量（sensor）之前。"""
     result = catalog.resolve("书房吊灯")
     assert _ids(result) == ["switch.lamp_switch", "sensor.lamp_service_name"]
 
 
+@pytest.mark.integration
 def test_duplicate_name_hint(catalog):
     """同名多实体必须显式提示（原实现静默取首个候选）。"""
     result = catalog.resolve("主卧室空调")
@@ -124,6 +129,7 @@ def test_duplicate_name_hint(catalog):
     assert "同名实体" in result["note"]
 
 
+@pytest.mark.integration
 def test_duplicate_hint_collapses_internal_whitespace(tmp_path):
     """HA 集成常见的**双空格**不能逃过同名检测。
 
@@ -143,6 +149,7 @@ def test_duplicate_hint_collapses_internal_whitespace(tmp_path):
     assert "同名实体" in result["note"]
 
 
+@pytest.mark.integration
 def test_readonly_hint_when_no_controllable(catalog):
     """命中全是只读域且找不到可控替代时，note 必须警告不能当 do 目标。"""
     result = catalog.resolve("光照度")
@@ -152,6 +159,7 @@ def test_readonly_hint_when_no_controllable(catalog):
 
 
 @pytest.mark.parametrize("trap", ["次卧空调", "阳台感应灯"])
+@pytest.mark.integration
 def test_trap_queries_still_have_no_candidate(catalog, trap):
     """⚠️ 关键：设错条（次卧空调 / 阳台感应灯）必须仍然查不到，否则实测陷阱失效。"""
     result = catalog.resolve(trap)
@@ -160,6 +168,7 @@ def test_trap_queries_still_have_no_candidate(catalog, trap):
     assert result["candidates"] == []
 
 
+@pytest.mark.integration
 def test_direct_match_keeps_original_behavior(catalog):
     """原本能命中的查询不受兜底影响（stage 必须是 direct）。"""
     result = catalog.resolve("主卧室空调", area="主卧室")

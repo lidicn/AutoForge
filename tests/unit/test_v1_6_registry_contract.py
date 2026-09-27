@@ -204,6 +204,7 @@ def test_build_snapshot_handles_junk():
 # ─────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.integration
 def test_fetch_never_raises():
     """不可达端口 / 坏令牌 —— 都只返回空快照，**绝不把异常丢给调用方**。
 
@@ -293,6 +294,7 @@ def test_resolve_still_works_without_registry(tmp_path, monkeypatch):
 # ─────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.integration
 def test_rest_areas_fallback():
     """兜底成功 → 解析出区域；失败（含 404）→ 空 dict，**不抛**。"""
     ok = rest_areas_fallback("http://127.0.0.1:1", "", timeout=0.2)

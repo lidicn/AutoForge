@@ -219,7 +219,8 @@ def test_cli_import_bad_bundle(tmp_path):
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_api_export_import(tmp_path):
+def test_api_export_import(tmp_path, monkeypatch):
+    monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
     src_root = str(tmp_path / "src")
     _build_store(src_root, tags=["api"])
     app1 = build_app(src_root)

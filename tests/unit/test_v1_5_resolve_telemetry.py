@@ -32,24 +32,28 @@ def _catalog(tmp_path) -> DeviceCatalog:
     return cat
 
 
+@pytest.mark.integration
 def test_bucket_exact_entity_id(tmp_path):
     cat = _catalog(tmp_path)
     res = cat.resolve("light.living_main")
     assert res["bucket"] == "exact"
 
 
+@pytest.mark.integration
 def test_bucket_exact_friendly_name(tmp_path):
     cat = _catalog(tmp_path)
     res = cat.resolve("客厅主灯")
     assert res["bucket"] == "exact"
 
 
+@pytest.mark.integration
 def test_bucket_none(tmp_path):
     cat = _catalog(tmp_path)
     res = cat.resolve("压根不存在的设备zzz")
     assert res["bucket"] == "none"
 
 
+@pytest.mark.integration
 def test_bucket_ambiguous_with_hint(tmp_path):
     """多个 medium 候选（无明确 top）→ ambiguous，且给出消歧提示。"""
     cat = _catalog(tmp_path)
@@ -60,6 +64,7 @@ def test_bucket_ambiguous_with_hint(tmp_path):
     assert len(dis.get("candidates", [])) >= 2
 
 
+@pytest.mark.integration
 def test_funnel_accumulates_and_persists(tmp_path):
     cat = _catalog(tmp_path)
     cat.resolve("light.living_main")  # exact
@@ -75,6 +80,7 @@ def test_funnel_accumulates_and_persists(tmp_path):
     assert (tmp_path / ".catalog" / "resolve_metrics.json").is_file()
 
 
+@pytest.mark.integration
 def test_service_exposes_resolve_metrics(tmp_path):
     from autoforge import af_service as svc
     from autoforge.af_store import GraphStore

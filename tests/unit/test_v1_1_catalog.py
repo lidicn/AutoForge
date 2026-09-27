@@ -64,6 +64,7 @@ def _seed_catalog(root, states: dict | None = None) -> DeviceCatalog:
 # ─────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.integration
 def test_refresh_persists_and_summarizes(tmp_path):
     catalog = _seed_catalog(tmp_path)
     assert catalog.catalog_path.exists()
@@ -80,6 +81,7 @@ def test_refresh_persists_and_summarizes(tmp_path):
     assert again["ok"] and again["added"] == 0 and again["changed"] == 0
 
 
+@pytest.mark.integration
 def test_refresh_removed_counted_on_full(tmp_path):
     catalog = _seed_catalog(tmp_path)
     # 第二次只用更小的集合 → 应报告 removed
@@ -89,6 +91,7 @@ def test_refresh_removed_counted_on_full(tmp_path):
     assert result["total"] == 1 and result["removed"] == 4
 
 
+@pytest.mark.integration
 def test_refresh_narrow_keeps_unmatched(tmp_path):
     catalog = _seed_catalog(tmp_path)
     # 只刷 study 域的 climate：未匹配的旧条目应保留（不把全屋清空）
@@ -99,6 +102,7 @@ def test_refresh_narrow_keeps_unmatched(tmp_path):
     assert catalog.snapshot()["by_domain"]["light"] == 2
 
 
+@pytest.mark.integration
 def test_refresh_unreachable_ha_reports_error(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTOFORGE_HA_URL", "http://127.0.0.1:1")
     out = DeviceCatalog(tmp_path).refresh()
@@ -111,6 +115,7 @@ def test_refresh_unreachable_ha_reports_error(tmp_path, monkeypatch):
 # ─────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.integration
 def test_resolve_friendly_name_exact_and_no_domain_filter(tmp_path):
     catalog = _seed_catalog(tmp_path)
     result = catalog.resolve("书房吊灯")
@@ -127,6 +132,7 @@ def test_resolve_friendly_name_exact_and_no_domain_filter(tmp_path):
     assert only_light["count"] == 1
 
 
+@pytest.mark.integration
 def test_resolve_substring_and_entity_id_fallback(tmp_path):
     catalog = _seed_catalog(tmp_path)
     sub = catalog.resolve("吊灯")
@@ -139,6 +145,7 @@ def test_resolve_substring_and_entity_id_fallback(tmp_path):
     assert low["candidates"][0]["confidence"] == "low"
 
 
+@pytest.mark.integration
 def test_resolve_entity_id_shape_never_fuzzy_scans(tmp_path):
     """entity_id 形态只做精确命中：不在目录即 0 候选（不模糊扫描，防 DoS + 防误配）。"""
     catalog = _seed_catalog(tmp_path)
@@ -150,6 +157,7 @@ def test_resolve_entity_id_shape_never_fuzzy_scans(tmp_path):
     assert "不在目录" in miss["note"]
 
 
+@pytest.mark.integration
 def test_resolve_area_hint_not_hard_filter(tmp_path):
     catalog = _seed_catalog(tmp_path)
     # 区域解析成功 → 收窄
@@ -170,6 +178,7 @@ def test_resolve_empty_catalog_reports_error(tmp_path):
 # ─────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.integration
 def test_resolve_best_only_accepts_unambiguous(tmp_path):
     catalog = _seed_catalog(tmp_path)
     # 唯一候选 → 采纳
@@ -189,6 +198,7 @@ def test_resolve_best_only_accepts_unambiguous(tmp_path):
 # ─────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.integration
 def test_list_entities_filters_and_reports(tmp_path):
     catalog = _seed_catalog(tmp_path)
 
@@ -202,6 +212,7 @@ def test_list_entities_filters_and_reports(tmp_path):
     assert {e["entity_id"] for e in kw["entities"]} == {"light.study_lamp", "switch.study_lamp_switch"}
 
 
+@pytest.mark.integration
 def test_list_entities_pagination_is_transparent(tmp_path):
     catalog = _seed_catalog(tmp_path)
     page = catalog.list_entities(limit=2, offset=0)
@@ -211,6 +222,7 @@ def test_list_entities_pagination_is_transparent(tmp_path):
     assert {e["entity_id"] for e in page["entities"]}.isdisjoint({e["entity_id"] for e in page2["entities"]})
 
 
+@pytest.mark.integration
 def test_list_entities_limit_capped(tmp_path):
     catalog = _seed_catalog(tmp_path)
     out = catalog.list_entities(limit=99999)
@@ -227,6 +239,7 @@ def test_list_entities_empty_catalog(tmp_path):
 # ─────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.integration
 def test_get_state_prefers_live(tmp_path):
     catalog = _seed_catalog(tmp_path)
     live = DeviceCatalog(tmp_path, fetch_all=lambda: {}, fetch_one=lambda eid: "on")
@@ -234,6 +247,7 @@ def test_get_state_prefers_live(tmp_path):
     assert out["ok"] and out["source"] == "live" and out["state"] == "on"
 
 
+@pytest.mark.integration
 def test_get_state_falls_back_to_cache(tmp_path):
     _seed_catalog(tmp_path)
     offline = DeviceCatalog(tmp_path, fetch_one=lambda eid: None)
@@ -243,6 +257,7 @@ def test_get_state_falls_back_to_cache(tmp_path):
     assert "可能不是最新" in out["note"]
 
 
+@pytest.mark.integration
 def test_get_state_unknown_entity(tmp_path):
     _seed_catalog(tmp_path)
     offline = DeviceCatalog(tmp_path, fetch_one=lambda eid: None)
@@ -295,6 +310,7 @@ def _raw(target: str) -> dict:
     }
 
 
+@pytest.mark.integration
 def test_build_uses_catalog_by_default(tmp_path):
     _seed_catalog(tmp_path)
     store = GraphStore(tmp_path)
@@ -311,6 +327,7 @@ def test_build_degrades_when_catalog_empty(tmp_path):
     assert out["entity_check"] == "skipped"
 
 
+@pytest.mark.integration
 def test_build_explicit_known_entities_wins(tmp_path):
     _seed_catalog(tmp_path)
     store = GraphStore(tmp_path)
@@ -327,6 +344,7 @@ def _content(result) -> dict:
     return json.loads(result[0][0]["text"])
 
 
+@pytest.mark.integration
 def test_mcp_catalog_tools(tmp_path):
     _seed_catalog(tmp_path)
     store = GraphStore(tmp_path)
@@ -352,6 +370,7 @@ def test_mcp_tool_names_registered(tmp_path):
         assert expected in names
 
 
+@pytest.mark.integration
 def test_api_catalog_endpoints(tmp_path):
     _seed_catalog(tmp_path)
     client = TestClient(build_app(str(tmp_path)))
@@ -369,13 +388,16 @@ def test_api_catalog_endpoints(tmp_path):
     assert state["ok"] is True and state["source"] == "catalog_cache"
 
 
+@pytest.mark.integration
 def test_api_catalog_refresh_write_endpoint(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTOFORGE_HA_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
     client = TestClient(build_app(str(tmp_path)))
     out = client.post("/api/catalog/refresh").json()
     assert out["ok"] is False  # 无真实 HA，报错而非静默成功
 
 
+@pytest.mark.integration
 def test_cli_entities_resolve_and_list(tmp_path):
     _seed_catalog(tmp_path)
     r1 = runner.invoke(app, ["entities", "resolve", "书房吊灯", "--root", str(tmp_path)])
@@ -388,6 +410,7 @@ def test_cli_entities_resolve_and_list(tmp_path):
     assert r3.exit_code == 0 and "设备总数：5" in r3.stdout
 
 
+@pytest.mark.integration
 def test_cli_entities_refresh_unreachable(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTOFORGE_HA_URL", "http://127.0.0.1:1")
     result = runner.invoke(app, ["entities", "refresh", "--root", str(tmp_path)])

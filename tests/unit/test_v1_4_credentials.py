@@ -31,6 +31,7 @@ def test_revision_bumps_and_persists(tmp_path):
     assert cfg2.connection_revision == 1
 
 
+@pytest.mark.integration
 def test_revision_triggers_token_reload(tmp_path):
     cfg = Config(tmp_path)
     cfg.update_credentials(ha_token="OLD")

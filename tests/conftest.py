@@ -62,6 +62,22 @@ def examples_dir() -> Path:
     return EXAMPLES
 
 
+def pytest_collection_modifyitems(config, items):
+    """离线环境自动 skip 需要真实 HA 的集成测试。
+
+    vhass 插件（pytest-homeassistant）在离线容器里封锁一切 socket，
+    真连 HA 的测试会因此 HASocketBlockedError。这些测试统一打
+    `@pytest.mark.integration`；仅当 AUTOFORGE_LIVE_HA=1 时才运行。
+    """
+    live_ha = os.environ.get("AUTOFORGE_LIVE_HA", "").lower() in ("1", "true", "yes")
+    if live_ha:
+        return
+    skip_reason = "integration test needs live HA; set AUTOFORGE_LIVE_HA=1 to run"
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(pytest.mark.skip(reason=skip_reason))
+
+
 @pytest.fixture
 def vhass_mode() -> str:
     """`ha` = 真 vhass（pytest-homeassistant）；`fake` = 内置 FakeHA 降级。"""
