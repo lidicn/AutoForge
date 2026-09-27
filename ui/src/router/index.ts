@@ -21,6 +21,8 @@ const router = createRouter({
     { path: '/governance', name: 'governance', component: () => import('@/views/GovernanceView.vue') },
     // v1.7.3 运行中 watch 实例
     { path: '/running', name: 'running', component: () => import('@/views/RunningView.vue') },
+    // ── v2 M3 结构化 Ask 原生控件 + clarify 流程 ──
+    { path: '/asks', name: 'asks', component: () => import('@/views/AsksView.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('@/views/NotFoundView.vue') },
   ],
 })

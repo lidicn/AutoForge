@@ -38,18 +38,72 @@ edge d1 -> p1 on_error id e2 label "失败兜底"
 
 from __future__ import annotations
 
+import difflib
 import json
 from typing import Any
 
 from .af_ir import IR_VERSION, Graph, load_graph
 
-__all__ = ["SpecError", "compile_spec", "render_spec", "graph_to_raw"]
+__all__ = [
+    "SpecError",
+    "E_UNKNOWN_PRIMITIVE",
+    "E_UNKNOWN_FIELD",
+    "compile_spec",
+    "render_spec",
+    "graph_to_raw",
+]
 
 _NODE_KINDS = ("on", "if", "do", "ask", "wait", "set", "pass")
 
+# ── 封闭词表（v2 M2：未知原语 / 未知字段编译前即拒，并回灌可机读 fix）──
+E_UNKNOWN_PRIMITIVE = "E_UNKNOWN_PRIMITIVE"
+E_UNKNOWN_FIELD = "E_UNKNOWN_FIELD"
+
+_OPTION_KEYWORDS = (
+    "name",
+    "ir_version",
+    "version",
+    "mode",
+    "confidence",
+    "snapshot",
+    "persist",
+    "meta",
+    "var",
+    "expect",
+)
+_NODE_FIELDS: dict[str, tuple[str, ...]] = {
+    "on": ("for", "debounce", "emit", "name"),
+    "if": ("name", "emit"),
+    "do": ("atomic", "confirm", "requires_confirm", "canary", "result", "emit", "name"),
+    "ask": ("room", "timeout", "session", "emit", "name", "ask"),
+    "wait": ("name", "emit"),
+    "set": ("name", "emit"),
+    "pass": ("name", "emit"),
+}
+_EDGE_FIELDS = ("id", "label")
+_PRIMITIVES = _NODE_KINDS + ("edge",) + _OPTION_KEYWORDS
+
+
+def _fix_for(token: str, allowed: tuple[str, ...]) -> dict[str, Any]:
+    """可机读 fix：列出合法候选 + 最接近建议（difflib，供 Agent 自纠回灌）。"""
+    sug = difflib.get_close_matches(token, allowed, n=1)
+    return {"allowed": list(allowed), "suggested": sug[0] if sug else ""}
+
 
 class SpecError(Exception):
-    """AF-Spec 语法错误。"""
+    """AF-Spec 语法错误，带可机读 code 与 fix（供 Agent 自纠回灌）。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        fix: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.code = code
+        self.fix = fix or {}
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -197,7 +251,11 @@ def _parse_node(kind: str, tokens: list[str], lineno: int) -> dict[str, Any]:
                 i += 1
                 data["emit"] = _json(take("emit"))
             else:
-                break
+                raise SpecError(
+                    f"第 {lineno} 行：{kind} 节点多余 token {tok!r}",
+                    code=E_UNKNOWN_FIELD,
+                    fix=_fix_for(tok, _NODE_FIELDS[kind]),
+                )
 
     if kind == "on":
         data["trigger"] = _json(take("trigger"))
@@ -216,7 +274,11 @@ def _parse_node(kind: str, tokens: list[str], lineno: int) -> dict[str, Any]:
                 i += 1
                 data["name"] = _str(take("name 值"))
             else:
-                raise SpecError(f"第 {lineno} 行：on 节点多余 token {tok!r}")
+                raise SpecError(
+                    f"第 {lineno} 行：on 节点多余 token {tok!r}",
+                    code=E_UNKNOWN_FIELD,
+                    fix=_fix_for(tok, _NODE_FIELDS["on"]),
+                )
     elif kind == "if":
         data["expr"] = _json(take("expr"))
         maybe_name()
@@ -246,7 +308,11 @@ def _parse_node(kind: str, tokens: list[str], lineno: int) -> dict[str, Any]:
                 i += 1
                 data["name"] = _str(take("name 值"))
             else:
-                raise SpecError(f"第 {lineno} 行：do 节点多余 token {tok!r}")
+                raise SpecError(
+                    f"第 {lineno} 行：do 节点多余 token {tok!r}",
+                    code=E_UNKNOWN_FIELD,
+                    fix=_fix_for(tok, _NODE_FIELDS["do"]),
+                )
     elif kind == "ask":
         data["prompt"] = _str(take("prompt"))
         while i < len(tokens):
@@ -254,6 +320,9 @@ def _parse_node(kind: str, tokens: list[str], lineno: int) -> dict[str, Any]:
             if tok in ("room", "timeout", "session"):
                 i += 1
                 data[tok] = _str(take(f"{tok} 值"))
+            elif tok == "ask":  # v2 M3 结构化 Ask 规格（内联 JSON，IR 字段名为 ask）
+                i += 1
+                data["ask"] = _json(take("ask"))
             elif tok == "emit":  # v0.3.0 跨自动化事件·发布侧
                 i += 1
                 data["emit"] = _json(take("emit"))
@@ -261,7 +330,11 @@ def _parse_node(kind: str, tokens: list[str], lineno: int) -> dict[str, Any]:
                 i += 1
                 data["name"] = _str(take("name 值"))
             else:
-                raise SpecError(f"第 {lineno} 行：ask 节点多余 token {tok!r}")
+                raise SpecError(
+                    f"第 {lineno} 行：ask 节点多余 token {tok!r}",
+                    code=E_UNKNOWN_FIELD,
+                    fix=_fix_for(tok, _NODE_FIELDS["ask"]),
+                )
     elif kind == "wait":
         data["duration"] = _str(take("duration"))
         maybe_name()
@@ -299,7 +372,11 @@ def _parse_edge(tokens: list[str], lineno: int) -> dict[str, Any]:
             data[tok] = _str(tokens[i])
             i += 1
         else:
-            raise SpecError(f"第 {lineno} 行：edge 多余 token {tok!r}")
+            raise SpecError(
+                f"第 {lineno} 行：edge 多余 token {tok!r}",
+                code=E_UNKNOWN_FIELD,
+                fix=_fix_for(tok, _EDGE_FIELDS),
+            )
     return data
 
 
@@ -335,7 +412,11 @@ def _parse_option(current: dict[str, Any], keyword: str, tokens: list[str], line
             raise SpecError(f"第 {lineno} 行：expect 语法应为 `expect <断言 JSON>`")
         current.setdefault("expect", []).append(_json(tokens[1]))
     else:
-        raise SpecError(f"第 {lineno} 行：未知关键字 {keyword!r}")
+        raise SpecError(
+            f"第 {lineno} 行：未知关键字 {keyword!r}",
+            code=E_UNKNOWN_PRIMITIVE,
+            fix=_fix_for(keyword, _PRIMITIVES),
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -404,6 +485,8 @@ def _render_node(node: Any) -> str:
         for key in ("room", "timeout", "session"):
             if key in raw:
                 parts += [key, _dumps(raw[key])]
+        if "ask" in raw:
+            parts += ["ask", _dumps(raw["ask"])]
     elif node.kind == "wait":
         parts.append(_dumps(raw["duration"]))
     elif node.kind == "set":

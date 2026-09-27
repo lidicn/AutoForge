@@ -74,7 +74,7 @@ from .af_auth import (
     TokenInfo,
     TokenRegistry,
 )
-from .af_ir import IRValidationError
+from .af_ir import AskSpec, IRValidationError
 from .af_store import GraphStore
 
 __all__ = ["build_app"]
@@ -146,9 +146,10 @@ class SessionBody(BaseModel):
 
 
 class AnswerBody(BaseModel):
-    text: str
+    text: str = ""
     ask_id: str | None = None
     room: str | None = None
+    answer: dict[str, Any] | None = None  # v2 M3 结构化应答（AskAnswer dict）
 
 
 class TickBody(BaseModel):
@@ -494,6 +495,63 @@ def build_app(
     def api_spec_compile(body: SpecBody) -> dict[str, Any]:
         return svc.compile_text(body.text)
 
+    # ── v2 M3 结构化 Ask ──────────────────────────────────────────────
+    # 注意注册顺序：精确路径必须先于 `/api/asks/{name}` 通配，否则会被 {name} 吃掉
+    # （`/api/asks/pending` 曾注册在通配之后而实际不可达）。
+    @app.get("/api/asks", dependencies=[Depends(_read)])
+    def api_asks() -> dict[str, Any]:
+        """聚合所有在途会话的挂起 ask，含 `spec` 与控件 `control` 元数据。
+
+        与 `/api/asks/pending`（watch sidecar，进程间发现用）不同，本端点读**进程内
+        会话**，因此仿真会话下的挂起 ask 也能被发现（sidecar 只在 watch 真机模式写出）。
+        含 prompt/room 等敏感信息，与 session 读端点同级需 read 鉴权。
+        """
+        return svc.asks_pending()
+
+    @app.get("/api/asks/pending")
+    def api_asks_pending() -> dict[str, Any]:
+        """读 watch 进程写出的 pending_asks sidecar（供 DB 轮询发现挂起 ask）。"""
+        root = store.root if store else None
+        if not root:
+            return {"ok": True, "asks": []}
+        sc = Path(root) / "pending_asks.json"
+        if not sc.exists():
+            return {"ok": True, "asks": []}
+        try:
+            data = json.loads(sc.read_text(encoding="utf-8"))
+            return {"ok": True, "asks": data.get("asks", []), "ts": data.get("ts", 0)}
+        except Exception:
+            return {"ok": True, "asks": []}
+
+    # 暴露 ask 节点的原生控件元数据（供前端渲染下拉/滑杆/时间轴等）
+    @app.get("/api/asks/{name}", dependencies=[Depends(_read)])
+    def api_asks(name: str) -> dict[str, Any]:
+        try:
+            rec = svc.get_graph(store, name)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="未找到自动化")
+        # get_graph 返回的是 `ir`（单条 → 单 dict 含 nodes；多条 → {"automations": [...]}）
+        ir = rec.get("ir") or {}
+        if "automations" in ir:
+            nodes = [n for a in (ir.get("automations") or []) for n in (a.get("nodes") or [])]
+        else:
+            nodes = ir.get("nodes") or []
+        asks: list[dict[str, Any]] = []
+        for n in nodes:
+            # IR 字段名为 `ask`（`ask_spec` 是 $defs 定义名，不是节点属性）
+            if n.get("kind") != "ask" or not n.get("ask"):
+                continue
+            spec = AskSpec.from_dict(n["ask"], prompt=n.get("prompt", ""))
+            asks.append(
+                {
+                    "node_id": n.get("id"),
+                    "prompt": n.get("prompt", ""),
+                    "spec": spec.to_dict(),
+                    "control": spec.control(),
+                }
+            )
+        return {"ok": True, "asks": asks}
+
     @app.get("/api/faults")
     def api_faults() -> dict[str, Any]:
         return svc.faults()
@@ -581,7 +639,7 @@ def build_app(
 
     @app.post("/api/sessions/{session_id}/answer", dependencies=[Depends(_write)])
     def api_session_answer(session_id: str, body: AnswerBody) -> dict[str, Any]:
-        return _svc(svc.answer_session, session_id, body.text, body.ask_id, body.room)
+        return _svc(svc.answer_session, session_id, body.text, body.ask_id, body.room, body.answer)
 
     @app.post("/api/sessions/{session_id}/tick", dependencies=[Depends(_write)])
     def api_session_tick(session_id: str, body: TickBody) -> dict[str, Any]:
@@ -615,21 +673,6 @@ def build_app(
         """停止运行中的 watch 进程。"""
         return svc.stop_watch(owner=owner, store_root=store.root if store else None)
 
-    @app.get("/api/asks/pending")
-    def api_asks_pending() -> dict[str, Any]:
-        """读 watch 进程写出的 pending_asks sidecar（供 DB 轮询发现挂起 ask）。"""
-        root = store.root if store else None
-        if not root:
-            return {"ok": True, "asks": []}
-        sc = Path(root) / "pending_asks.json"
-        if not sc.exists():
-            return {"ok": True, "asks": []}
-        try:
-            data = json.loads(sc.read_text(encoding="utf-8"))
-            return {"ok": True, "asks": data.get("asks", []), "ts": data.get("ts", 0)}
-        except Exception:
-            return {"ok": True, "asks": []}
-
     @app.post("/api/asks/answer", dependencies=[Depends(_write)])
     def api_asks_answer(body: dict[str, Any]) -> dict[str, Any]:
         """写答案到 watch 的 answer_inbox（由 watch ticker 注入 runtime）。"""
@@ -647,9 +690,11 @@ def build_app(
         ask_id = body.get("ask_id") or None
         text = body.get("text", "")
         room = body.get("room")
+        answer = body.get("answer")  # v2 M3 结构化应答（AskAnswer dict）
         body = dict(body)
         if key:
-            msg = f"{ask_id}|{text}|{room}".encode("utf-8")
+            answer_json = json.dumps(answer or {}, sort_keys=True, ensure_ascii=False)
+            msg = f"{ask_id}|{text}|{room}|{answer_json}".encode("utf-8")
             body["sig"] = _hmac.new(key.encode("utf-8"), msg, _hashlib.sha256).hexdigest()
         fname = inbox / f"{int(time.time()*1000)}.json"
         fname.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")

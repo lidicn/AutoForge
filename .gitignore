@@ -73,6 +73,9 @@ tmp_*.py
 # 工具缓存目录
 .qoder/
 
+# pytest --basetemp 临时目录（不入库）
+.ptmp/
+
 # 一次性调试脚本（下划线前缀，用完即弃，不入库）
 _*.py
 _*.sh

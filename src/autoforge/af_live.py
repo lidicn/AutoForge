@@ -327,6 +327,13 @@ def start_ticker(
                     "room": sess.room,
                     "prompt": sess.prompt,
                     "automation_id": getattr(sess, "automation_id", ""),
+                    # 与 /api/asks 同构：spec 为 IR 形态，control 为前端控件元数据
+                    "spec": sess.ask_spec.to_dict() if sess.ask_spec else None,
+                    "control": (
+                        sess.ask_spec.control()
+                        if sess.ask_spec
+                        else {"widget": "input", "kind": "text", "prompt": sess.prompt}
+                    ),
                 })
             out = {"asks": asks, "ts": time.time()}
             (sc_dir / "pending_asks.json").write_text(
@@ -334,51 +341,6 @@ def start_ticker(
             )
         except Exception:
             pass
-
-    def _read_inbox() -> None:
-        if not inbox:
-            return
-        import hashlib
-        import hmac
-        import logging
-        import os
-        logger = logging.getLogger("autoforge.live")
-        # R-20：inbox 是命令通道，必须验完整性。密钥取 env AUTOFORGE_INBOX_KEY
-        # （与写侧 af_api.asks_answer 共享）。无密钥/无签名/签名不符 → 拒读、不动作、留 WARN。
-        key = (os.environ.get("AUTOFORGE_INBOX_KEY") or "").strip()
-
-        def _expect_sig(ask_id: Any, text: str, room: Any) -> str:
-            msg = f"{ask_id}|{text}|{room}".encode("utf-8")
-            return hmac.new(key.encode("utf-8"), msg, hashlib.sha256).hexdigest()
-
-        try:
-            for f in sorted(inbox.glob("*.json")):
-                try:
-                    data = json.loads(f.read_text(encoding="utf-8"))
-                    if not isinstance(data, dict):
-                        logger.warning("inbox reject: 非对象 JSON，未动作（保留证据文件）: %s", f.name)
-                        continue
-                    ask_id = data.get("ask_id") or None
-                    text = data.get("text", "")
-                    room = data.get("room")
-                    sig = str(data.get("sig", "") or "")
-                    if not key or not hmac.compare_digest(sig, _expect_sig(ask_id, text, room)):
-                        logger.warning(
-                            "inbox reject: 签名缺失或不符，未动作（保留证据文件）: %s ask_id=%r",
-                            f.name, ask_id,
-                        )
-                        continue
-                    result = runtime.executor.answer(room=room, text=text, ask_id=ask_id)
-                    if result is not None:
-                        f.unlink(missing_ok=True)  # 成功消费后才清理
-                        logger.info("answer consumed: ask_id=%s room=%s → inst=%s", ask_id, room, result.instance_id)
-                    else:
-                        logger.warning("answer not consumed (保留证据文件): ask_id=%s room=%s", ask_id, room)
-                except Exception:
-                    logger.exception("answer processing failed (保留证据文件): %s", f.name)
-                    # 不删除文件，保留审批证据链
-        except Exception:
-            logger.exception("inbox scan failed")
 
     # mimo TickSupervisor: fault classification + backoff + health + SAFE HALT
     global _tick_supervisor
@@ -401,8 +363,68 @@ def start_ticker(
                 logger.error("tick SAFE HALTED: %s", supervisor.health().halted_reason)
                 break
             _write_asks()
-            _read_inbox()
+            read_answer_inbox(runtime)
 
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
     return t
+
+
+def read_answer_inbox(runtime: Any) -> None:
+    """R-20：读 answer_inbox 并把应答注入 runtime。密钥校验（与 af_api 写侧共享 AUTOFORGE_INBOX_KEY）。
+
+    v2 M3：结构化 answer（AskAnswer dict）走 executor.answer_structured（缺省即拒）；否则走自由文本 answer。
+    校验失败/解析失败均不删除文件，保留审批证据链。
+    """
+    import hashlib
+    import hmac
+    import logging
+    import os
+    logger = logging.getLogger("autoforge.live")
+    store = getattr(runtime, "store", None)
+    root = store.root if store else None
+    if not root:
+        return
+    inbox = Path(root) / "answer_inbox"
+    if not inbox.exists():
+        return
+    key = (os.environ.get("AUTOFORGE_INBOX_KEY") or "").strip()
+
+    def _expect_sig(ask_id: Any, text: str, room: Any, answer_json: str) -> str:
+        msg = f"{ask_id}|{text}|{room}|{answer_json}".encode("utf-8")
+        return hmac.new(key.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+
+    try:
+        for f in sorted(inbox.glob("*.json")):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    logger.warning("inbox reject: 非对象 JSON，未动作（保留证据文件）: %s", f.name)
+                    continue
+                ask_id = data.get("ask_id") or None
+                text = data.get("text", "")
+                room = data.get("room")
+                answer = data.get("answer")  # v2 M3 结构化应答（AskAnswer dict）；缺省走自由文本
+                answer_json = json.dumps(answer or {}, sort_keys=True, ensure_ascii=False)
+                sig = str(data.get("sig", "") or "")
+                if not key or not hmac.compare_digest(sig, _expect_sig(ask_id, text, room, answer_json)):
+                    logger.warning(
+                        "inbox reject: 签名缺失或不符，未动作（保留证据文件）: %s ask_id=%r",
+                        f.name, ask_id,
+                    )
+                    continue
+                if answer:
+                    # 结构化应答：校验失败按缺省即拒走 no 边（executor 内处理）
+                    result = runtime.executor.answer_structured(room=room, payload=answer, ask_id=ask_id)
+                else:
+                    result = runtime.executor.answer(room=room, text=text, ask_id=ask_id)
+                if result is not None:
+                    f.unlink(missing_ok=True)  # 成功消费后才清理
+                    logger.info("answer consumed: ask_id=%s room=%s → inst=%s", ask_id, room, result.instance_id)
+                else:
+                    logger.warning("answer not consumed (保留证据文件): ask_id=%s room=%s", ask_id, room)
+            except Exception:
+                logger.exception("answer processing failed (保留证据文件): %s", f.name)
+                # 不删除文件，保留审批证据链
+    except Exception:
+        logger.exception("inbox scan failed")

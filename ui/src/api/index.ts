@@ -46,4 +46,12 @@ export const facade = {
   liveStatus: () => api.liveStatus(),
   liveRun: (ir: unknown, live_allow: string[], confirm: boolean, events?: unknown[]) =>
     api.liveRun(ir, live_allow, confirm, events),
+
+  // ── v2 M3 结构化 Ask（原生控件 + clarify 流程）──
+  asksPending: () => api.asksPending(),
+  asksSidecar: () => api.asksSidecar(),
+  askAnswer: (payload: { ask_id?: string | null; room?: string | null; text?: string; answer?: Record<string, unknown> }) =>
+    api.askAnswer(payload),
+  sessionAnswer: (sid: string, payload: { ask_id?: string | null; room?: string | null; text?: string; answer?: Record<string, unknown> }) =>
+    api.sessionAnswer(sid, payload),
 }

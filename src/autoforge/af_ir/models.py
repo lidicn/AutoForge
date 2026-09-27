@@ -29,6 +29,8 @@ __all__ = [
     "VAR_TYPES",
     "IRValidationError",
     "EmitDecl",
+    "AskSpec",
+    "AskAnswer",
     "Trigger",
     "Node",
     "Edge",
@@ -164,6 +166,98 @@ class EmitDecl:
 
 
 @dataclass(frozen=True)
+class AskSpec:
+    """v2 M3 结构化 Ask 规格：ask 节点的一等公民结构化挂起。
+
+    带病规格**构造期即拒**（IRValidationError），不允许进运行时；运行时据此渲染
+    原生控件元数据并强制收敛纪律（连问≤3轮 / 同房间同时≤2问 / 缺省即拒）。
+
+    `prompt` 不由 IR 的 `ask` 对象携带——它是 ask 节点的节点级字段（schema 已强制
+    必填），由 `Node.from_dict` 投影进来，避免两处真相。
+    """
+
+    KINDS = ("choice", "entity", "time_range", "threshold", "text")
+
+    kind: str
+    prompt: str = ""
+    options: tuple[str, ...] = ()
+    min_: float | None = None
+    max_: float | None = None
+    unit_: str | None = None
+    entity_domain: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind not in self.KINDS:
+            raise IRValidationError(f"AskSpec.kind 非法: {self.kind!r}（合法: {self.KINDS}）")
+        if self.kind == "choice" and len(self.options) < 2:
+            raise IRValidationError("AskSpec kind=choice 至少需要 2 个 options")
+        if self.kind in ("threshold", "time_range"):
+            if self.min_ is None or self.max_ is None:
+                raise IRValidationError(f"AskSpec kind={self.kind} 必须显式给出 min/max")
+            if float(self.min_) > float(self.max_):
+                raise IRValidationError("AskSpec min 必须 ≤ max")
+        if self.kind == "entity" and not self.entity_domain:
+            raise IRValidationError("AskSpec kind=entity 必须给出 entity_domain")
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any], prompt: str = "") -> "AskSpec":
+        return cls(
+            kind=data["kind"],
+            prompt=prompt,  # 投影自 ask 节点的节点级 prompt，不从 ask 对象读
+            options=tuple(str(o) for o in data.get("options") or ()),
+            min_=float(data["min"]) if data.get("min") is not None else None,
+            max_=float(data["max"]) if data.get("max") is not None else None,
+            unit_=data.get("unit"),
+            entity_domain=data.get("entity_domain", ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """回写为 IR 形态（`min/max/unit` 无下划线，与 schema 一致）。"""
+        out: dict[str, Any] = {"kind": self.kind}
+        if self.options:
+            out["options"] = list(self.options)
+        if self.min_ is not None:
+            out["min"] = self.min_
+        if self.max_ is not None:
+            out["max"] = self.max_
+        if self.unit_ is not None:
+            out["unit"] = self.unit_
+        if self.entity_domain:
+            out["entity_domain"] = self.entity_domain
+        return out
+
+    def control(self) -> dict[str, Any]:
+        """前端控件元数据：kind → 原生控件的一一映射。
+
+        映射只此一处（后端是单一真相），前端退化成纯渲染器：新增 kind 或接其他
+        客户端（MCP/CLI）都不必再复制这份映射。
+        """
+        meta: dict[str, Any] = {"widget": "input", "kind": self.kind, "prompt": self.prompt}
+        if self.kind == "choice":
+            meta.update(widget="select", options=list(self.options))
+        elif self.kind == "threshold":
+            meta.update(widget="slider", min=self.min_, max=self.max_, unit=self.unit_)
+        elif self.kind == "time_range":
+            # 分钟域 [0,1439]：前端按 HH:MM 呈现，提交值仍是分钟
+            meta.update(widget="time_range", min=self.min_, max=self.max_, unit="min")
+        elif self.kind == "entity":
+            meta.update(widget="entity_picker", entity_domain=self.entity_domain)
+        return meta
+
+
+@dataclass(frozen=True)
+class AskAnswer:
+    """v2 M3 结构化 Ask 的人类应答（运行时持有，驱动收敛纪律与校验）。"""
+
+    kind: str
+    value: Any = None
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "AskAnswer":
+        return cls(kind=data["kind"], value=data.get("value"))
+
+
+@dataclass(frozen=True)
 class Node:
     """7 种节点之一。字段按 kind 取用，未用到的为 None。"""
 
@@ -191,6 +285,8 @@ class Node:
     session: str = "room"
     room: str | None = None
     timeout: str | None = None
+    # IR 字段名为 `ask`；类型名 AskSpec 只出现在定义里
+    ask: "AskSpec | None" = None
     # wait
     duration: str | None = None
     # set
@@ -224,6 +320,7 @@ class Node:
             session=data.get("session", "room"),
             room=data.get("room"),
             timeout=data.get("timeout"),
+            ask=AskSpec.from_dict(data["ask"], prompt=data.get("prompt", "")) if data.get("ask") else None,
             duration=data.get("duration"),
             var=data.get("var"),
             value=data.get("value"),
@@ -509,6 +606,22 @@ def load_graph(source: str | Path | Mapping[str, Any]) -> Graph:
     if "automations" in data:
         return Graph([Automation.from_dict(a) for a in data["automations"]])
     return Graph([Automation.from_dict(data)])
+
+
+def collect_asks(auto: "Automation") -> list[dict[str, Any]]:
+    """v2 M3：收集自动化中所有 ask 节点的控件元数据（供 /api/asks 暴露原生控件）。"""
+    out: list[dict[str, Any]] = []
+    for node in auto.nodes.values():
+        if node.kind == "ask" and node.ask is not None:
+            out.append(
+                {
+                    "node_id": node.id,
+                    "prompt": node.prompt,
+                    "spec": node.ask.to_dict(),
+                    "control": node.ask.control(),
+                }
+            )
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────

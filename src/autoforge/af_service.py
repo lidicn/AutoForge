@@ -764,6 +764,8 @@ def simulate(
         "expect": expect_report,
         "nl": render_graph(graph).text,
     }
+    # v2 M4 诚实报告分层：强制三栏，绝不把「没验到」当「验过了」
+    out["report"] = honest_report(out)
     # v1.5.0：sim 的 `ok` 恒 True（失败以 `expect` 报告）；`_telemetry.ok` 反映**断言是否通过**。
     return attach_telemetry(
         out,
@@ -772,6 +774,48 @@ def simulate(
         ok=bool(expect_report.get("ok", True)),
         message=_expect_failure_message(expect_report),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# v2 M4 诚实报告分层（honest report）：verified / inferred / non_simulable
+# ─────────────────────────────────────────────────────────────────────
+
+
+def honest_report(out: Mapping[str, Any]) -> dict[str, Any]:
+    """v2 M4 诚实报告分层：把仿真结果强制分成三栏，绝不把「没验到」当「验过了」。
+
+    - verified：断言**实际跑过**的结果（status=pass / fail）。
+    - inferred：仿真产出但**没有断言覆盖**的事实（final_states 里未被任何 expect target 覆盖的实体）。
+    - non_simulable：断言**无法验证**（status=unverified）→ 显式标黄，绝不脑补默认值。
+    """
+    expect = out.get("expect") or {}
+    items = expect.get("items") or []
+    verified = [it for it in items if it.get("status") in ("pass", "fail")]
+    non_simulable = [
+        {**it, "flag": "yellow"}
+        for it in items
+        if it.get("status") == "unverified"
+    ]
+    # inferred：final_states 中未被任何 expect target（实体维度）覆盖的实体。
+    # target 可能是实体形态（"light.a"）或属性形态（"light.a.brightness"），需按实体前缀匹配；
+    # 注意实体 id 本身含点号，不能简单 split(".")[0]。
+    targets = [str(it.get("target", "")) for it in items if it.get("target")]
+
+    def _covered(eid: str) -> bool:
+        return any(t == eid or t.startswith(eid + ".") for t in targets)
+
+    final_states = out.get("final_states") or {}
+    inferred = [
+        {"entity": e, "state": final_states[e], "note": "仿真产出但无断言覆盖"}
+        for e in final_states
+        if not _covered(str(e))
+    ]
+    return {
+        "verified": verified,
+        "inferred": inferred,
+        "non_simulable": non_simulable,
+        "fully_verified": bool(items) and not non_simulable and expect.get("failed", 0) == 0,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1118,6 +1162,7 @@ def _asks_of(runtime: Runtime) -> list[dict[str, Any]]:
             automation_id = runtime.instances.get(session.instance_id).ctx.automation_id
         except KeyError:  # pragma: no cover - 防御
             automation_id = ""
+        spec = session.ask_spec
         out.append(
             {
                 "ask_id": session.instance_id,  # 一个实例同一时刻只有一个挂起 ask
@@ -1126,9 +1171,36 @@ def _asks_of(runtime: Runtime) -> list[dict[str, Any]]:
                 "room": session.room,
                 "prompt": session.prompt,
                 "automation_id": automation_id,
+                "spec": spec.to_dict() if spec is not None else None,
+                # 自由文本 ask（无 spec）也给控件元数据，前端统一消费
+                "control": (
+                    spec.control()
+                    if spec is not None
+                    else {"widget": "input", "kind": "text", "prompt": session.prompt}
+                ),
             }
         )
     return out
+
+
+def asks_pending() -> dict[str, Any]:
+    """v2 M3：聚合所有在途会话的挂起 ask，含 `spec` 与控件 `control` 元数据。
+
+    与 `/api/asks/pending`（watch sidecar，进程间发现用）不同，本函数读**进程内
+    会话**——仿真会话下的挂起 ask 同样可见（sidecar 只在 watch 真机模式写出）。
+    含 prompt/room 等敏感信息，端点需 read 鉴权。
+    """
+    _purge_sessions()
+    with _SESSIONS_LOCK:
+        sessions = list(_SESSIONS.items())
+    out: list[dict[str, Any]] = []
+    for session_id, sess in sessions:
+        runtime: Runtime = sess["runtime"]
+        for ask in _asks_of(runtime):
+            item = dict(ask)
+            item["session_id"] = session_id
+            out.append(item)
+    return {"ok": True, "total": len(out), "asks": out}
 
 
 def _session_view(sess: Mapping[str, Any]) -> dict[str, Any]:
@@ -1198,11 +1270,15 @@ def get_session(session_id: str) -> dict[str, Any]:
 
 def answer_session(
     session_id: str,
-    text: str,
+    text: str = "",
     ask_id: str | None = None,
     room: str | None = None,
+    answer: "Mapping[str, Any] | None" = None,
 ) -> dict[str, Any]:
-    """WO-AF-002：人工应答。统一走 executor.resolve_ask，ask_id 非空且不匹配时 404，绝不 fallback。"""
+    """WO-AF-002：人工应答。统一走 executor.resolve_ask，ask_id 非空且不匹配时 404，绝不 fallback。
+
+    v2 M3：answer 为结构化 AskAnswer dict 时走 answer_structured（缺省即拒）；否则走自由文本 classify。
+    """
     sess = _get_session(session_id)
     runtime: Runtime = sess["runtime"]
 
@@ -1213,7 +1289,16 @@ def answer_session(
         raise ServiceError("没有匹配的待应答 ask（可能已超时或被取消）", status=404)
 
     instance = runtime.instances.get(ask.instance_id)
-    runtime.executor.resume(instance, classify_answer(text))
+    if instance is None:
+        raise ServiceError("ask 对应的实例不存在", status=404)
+    if answer is not None:
+        # 结构化应答：合法 → 落值 + then 边恢复；不合法 → 422，会话保持挂起可重答
+        # （ask 已确认存在，故 validate 失败只可能是校验被拒，不是找不到）
+        if not runtime.executor.validate_answer(room=room, payload=answer, ask_id=ask_id):
+            raise ServiceError("结构化应答未通过校验（缺省即拒，会话保持挂起可重答）", status=422)
+        runtime.executor.answer_structured(room=room, payload=answer, ask_id=ask_id)
+    else:
+        runtime.executor.resume(instance, classify_answer(text))
     return _session_view(sess)
 
 

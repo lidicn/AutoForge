@@ -31,7 +31,7 @@ from .af_instance import (
     Instance,
     InstanceManager,
 )
-from .af_ir import Automation, Node, evaluate
+from .af_ir import Automation, Node, AskSpec, AskAnswer, evaluate
 from .af_ir.expr import ExprError
 from .af_state import StateProvider, UnknownEntity, make_resolver
 from .af_time import TimeSource, SystemTimeSource, parse_duration
@@ -46,6 +46,14 @@ __all__ = [
 
 #: 求值段最大步数——静态图死循环的最后一道防线（静态扫描应提前拦住）
 MAX_STEPS_PER_SEGMENT = 1000
+
+#: v2 收敛纪律：同一实例连续 ask 轮数上限（一次成功的 `do` 即清零）
+MAX_ASK_ROUNDS = 3
+#: v2 收敛纪律：同一房间同一时刻挂起问题数上限（跨实例合计）
+MAX_ASKS_PER_ROOM = 2
+
+#: 收敛违约 / 结构化应答被拒的审计事件类型
+ASK_VIOLATION = "ask_convergence_violation"
 
 #: v0.3.0：`emit` 延迟发布所用的实例定时器 kind（与 `wait`/`ask` 的 timeout 区分）
 EMIT_TIMER_KIND = "emit"
@@ -65,13 +73,17 @@ def classify_answer(text: str) -> str:
 
 @dataclass
 class AskSession:
-    """一个挂起中的 `ask` 会话。按 room 维度匹配，创建时间优先，一次应答仅生效一次。"""
+    """一个挂起中的 `ask` 会话。按 room 维度匹配，创建时间优先，一次应答仅生效一次。
+
+    v2 M3：携带 `ask_spec`（结构化挂起规格），供运行时渲染原生控件元数据并强制收敛纪律。
+    """
 
     instance_id: str
     node_id: str
     room: str | None
     created_at: float
     prompt: str = ""
+    ask_spec: "AskSpec | None" = None
 
 
 @dataclass
@@ -231,6 +243,102 @@ class NodeExecutor:
             return None
         return self.resume(instance, verdict)
 
+    # ─────────────────────────────────────────────────────────────────
+    # v2 M3 结构化 Ask：一等公民结构化应答（自由文本 answer 仍保留）
+    # ─────────────────────────────────────────────────────────────────
+    def answer_structured(self, room: str | None, payload: "AskAnswer | dict", ask_id: str | None = None) -> Instance | None:
+        """结构化应答。payload 为 AskAnswer 或 dict。
+
+        缺省即拒：应答不满足 ask_spec（缺失/越界/类型不符）→ 不脑补默认值，**拒绝并
+        保持挂起**（返回 None），让人用合法值重答。不把"填错值"当成"拒绝执行"走 `no`
+        边——`no` 是图作者定义的"用户明确不要"语义，二者不能混同。
+
+        校验通过 → 值落 `ctx.vars["ask_answer"]`（业务变量区，下游 `if`/`set` 可引用），
+        并以 `then` 边恢复正常流转：结构化值是参数收集（温度/时间段），没有天然的
+        yes/no 语义，不该由运行时猜图作者的意图。
+
+        返回 None 有二义：ask 不存在/实例已终态，或校验被拒。调用方若要区分（如
+        映射 422），先用 `validate_answer()` 预检。
+        """
+        session = self.resolve_ask(ask_id, room)
+        if session is None:
+            return None
+        instance = self.instances.get(session.instance_id)
+        if instance is None:
+            return None
+        if isinstance(payload, dict):
+            payload = AskAnswer.from_dict(payload)
+        if not self._validate_structured(payload, session.ask_spec):
+            self.audit.add(
+                AuditEvent(
+                    type=ASK_VIOLATION,
+                    at=self.clock.now(),
+                    message=(
+                        f"结构化应答未通过校验（缺省即拒，会话保持挂起可重答）："
+                        f"spec={session.ask_spec}, answer={payload}"
+                    ),
+                    automation_id=instance.automation.id,
+                    instance_id=instance.instance_id,
+                    node_id=session.node_id,
+                )
+            )
+            return None
+        instance.ctx.vars["ask_answer"] = {"kind": payload.kind, "value": payload.value}
+        return self.resume(instance, "then")
+
+    def validate_answer(self, room: str | None, payload: "AskAnswer | dict", ask_id: str | None = None) -> bool:
+        """预检结构化应答是否合规（不消费 ask，不恢复实例）。
+
+        供 service 层在调用 `answer_structured` 前区分"ask 不存在"与"校验被拒"，
+        以便前者 404、后者 422。
+        """
+        session = self.resolve_ask(ask_id, room)
+        if session is None:
+            return False
+        if isinstance(payload, dict):
+            payload = AskAnswer.from_dict(payload)
+        return self._validate_structured(payload, session.ask_spec)
+
+    @staticmethod
+    def _validate_structured(payload: "AskAnswer", spec: "AskSpec | None") -> bool:
+        """按 ask_spec 校验结构化应答（缺省即拒）。"""
+        if spec is None:
+            # 自由文本 ask：应答须为非空文本
+            return bool(payload.value)
+        if payload.kind != spec.kind:
+            return False
+        v = payload.value
+        if spec.kind == "choice":
+            return v in spec.options
+        if spec.kind == "threshold":
+            if v is None:
+                return False
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                return False
+            if spec.min_ is not None and fv < spec.min_:
+                return False
+            if spec.max_ is not None and fv > spec.max_:
+                return False
+            return True
+        if spec.kind == "time_range":
+            # min/max 与 threshold 同语义：是**应答值域约束**（可选窗口），不只是控件刻度。
+            # 单位一律分钟 [0,1439]；控件保证选得出合法值，此处再兜底防御非法客户端。
+            if not isinstance(v, (list, tuple)) or len(v) != 2:
+                return False
+            s, e = v
+            if spec.min_ is not None and (s < spec.min_ or e < spec.min_):
+                return False
+            if spec.max_ is not None and (s > spec.max_ or e > spec.max_):
+                return False
+            return s <= e
+        if spec.kind == "entity":
+            return bool(v)
+        if spec.kind == "text":
+            return bool(v)
+        return False
+
     def timeout(self, instance: Instance) -> Instance:
         """`ask` 计时到点（无人应答）→ `on_timeout` 兜底。"""
         return self.resume(instance, "on_timeout")
@@ -376,6 +484,8 @@ class NodeExecutor:
             }
 
         if result.success:
+            # 一次真实动作落地 → 视为新一轮交互上下文，连问计数清零
+            instance.ctx.context["_ask_rounds"] = 0
             return {"then"}
 
         self.audit.add(
@@ -418,7 +528,43 @@ class NodeExecutor:
     # ─────────────────────────────────────────────────────────────────
     # 挂起
     # ─────────────────────────────────────────────────────────────────
+    def _ask_budget_ok(self, instance: Instance, node: Node) -> bool:
+        """收敛纪律（v2）：同一实例连续 ask ≤3 轮；同一房间同一时刻挂起 ≤2（跨实例）。
+
+        "一轮多问"在运行时唯一可观测的形态就是**同房间并发挂起**——仓内不变式是
+        "一实例同时只挂起一个 ask"，单实例不存在"一轮多问"。违约 → 审计 + 实例
+        failed，不挂起（不脑补、不降级）。
+        """
+        rounds = int(instance.ctx.context.get("_ask_rounds", 0))
+        if rounds + 1 > MAX_ASK_ROUNDS:
+            self._ask_violation(instance, node, f"连续 ask 超过 {MAX_ASK_ROUNDS} 轮")
+            return False
+        room = node.room
+        if room:
+            same_room = sum(1 for s in self.pending_asks.values() if s.room == room)
+            if same_room + 1 > MAX_ASKS_PER_ROOM:
+                self._ask_violation(instance, node, f"房间 {room} 同时挂起超过 {MAX_ASKS_PER_ROOM} 个 ask")
+                return False
+        return True
+
+    def _ask_violation(self, instance: Instance, node: Node, reason: str) -> None:
+        self.audit.add(
+            AuditEvent(
+                type=ASK_VIOLATION,
+                at=self.clock.now(),
+                message=f"收敛纪律违反：{reason}",
+                automation_id=instance.automation.id,
+                instance_id=instance.instance_id,
+                node_id=node.id,
+            )
+        )
+        self._fail(instance, f"收敛纪律违反：{reason}")
+
     def _suspend(self, instance: Instance, node: Node) -> None:
+        # 先判后挂：违约直接 failed，不留"已挂起又 failed"的脏状态
+        if node.kind == "ask" and not self._ask_budget_ok(instance, node):
+            return
+
         duration = None
         if node.kind == "wait":
             duration = parse_duration(node.duration)  # type: ignore[arg-type]
@@ -428,12 +574,14 @@ class NodeExecutor:
         self.instances.suspend(instance, node.id, duration, kind=node.kind)
 
         if node.kind == "ask":
+            instance.ctx.context["_ask_rounds"] = int(instance.ctx.context.get("_ask_rounds", 0)) + 1
             self.pending_asks[instance.instance_id] = AskSession(
                 instance_id=instance.instance_id,
                 node_id=node.id,
                 room=node.room,
                 created_at=self.clock.monotonic(),
                 prompt=node.prompt,
+                ask_spec=node.ask,
             )
 
     # ─────────────────────────────────────────────────────────────────

@@ -178,3 +178,72 @@ def test_cli_spec_compile_and_render(tmp_path, examples_dir):
     render_result = CliRunner().invoke(app, ["spec", "render", str(examples_dir / "case01_day_light.json")])
     assert render_result.exit_code == 0, render_result.output
     assert "automation study_day_light" in render_result.output
+
+
+# ─────────────────────────────────────────────────────────────────────
+# v2 M2：封闭词表 forbid（未知原语 / 未知字段编译前即拒 + 可机读 fix）
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_unknown_primitive_returns_code_and_fix():
+    with pytest.raises(SpecError) as exc:
+        compile_spec('automation a\nname "a"\nbogus 1\n')
+    assert exc.value.code == "E_UNKNOWN_PRIMITIVE"
+    # allowed 为合法原语全集；suggested 为近邻建议（无近邻时可为空串）
+    assert exc.value.fix["allowed"]
+    assert exc.value.fix["suggested"] == "" or exc.value.fix["suggested"] in exc.value.fix["allowed"]
+
+
+def test_unknown_node_kind_is_unknown_primitive():
+    with pytest.raises(SpecError) as exc:
+        compile_spec('automation a\nname "a"\nfly f1 "x"\n')
+    assert exc.value.code == "E_UNKNOWN_PRIMITIVE"
+
+
+def test_unknown_field_on_do_node_rejected():
+    with pytest.raises(SpecError) as exc:
+        compile_spec('automation a\nname "a"\ndo d1 ha.light.turn_on {"entity_id":"x"} frobnicate 1\n')
+    assert exc.value.code == "E_UNKNOWN_FIELD"
+    assert "frobnicate" not in exc.value.fix["allowed"]
+    assert "atomic" in exc.value.fix["allowed"]
+
+
+def test_unknown_field_on_on_node_rejected():
+    with pytest.raises(SpecError) as exc:
+        compile_spec('automation a\nname "a"\non o1 {"type":"state","entity_id":"x","to":"on"} wibble 1\n')
+    assert exc.value.code == "E_UNKNOWN_FIELD"
+    assert "wibble" not in exc.value.fix["allowed"]
+
+
+def test_unknown_field_on_ask_node_rejected():
+    with pytest.raises(SpecError) as exc:
+        compile_spec('automation a\nname "a"\nask a1 "go?" zzz 1\n')
+    assert exc.value.code == "E_UNKNOWN_FIELD"
+
+
+def test_unknown_field_on_if_node_via_maybe_name_rejected():
+    with pytest.raises(SpecError) as exc:
+        compile_spec('automation a\nname "a"\nif i1 {"op":"lt","left":{"var":"x","type":"numeric"},"right":{"const":1}} bogusfield 1\n')
+    assert exc.value.code == "E_UNKNOWN_FIELD"
+
+
+def test_unknown_edge_field_rejected():
+    with pytest.raises(SpecError) as exc:
+        compile_spec('automation a\nname "a"\nedge a1 -> b1 then quux 1\n')
+    assert exc.value.code == "E_UNKNOWN_FIELD"
+
+
+def test_legal_spec_still_compiles_after_forbid():
+    # 合法 Spec 不受封闭词表影响（回归）
+    spec = (
+        'automation a\nname "a"\n'
+        'on o1 {"type":"state","entity_id":"s","to":"on"}\n'
+        'if i1 {"op":"lt","left":{"var":"entity.s","type":"numeric"},"right":{"const":200}}\n'
+        'do d1 ha.light.turn_on {"entity_id":"l"} atomic\n'
+        'pass p1\n'
+        'edge o1 -> i1 then\n'
+        'edge i1 -> d1 then\n'
+        'edge d1 -> p1 then\n'
+    )
+    graph = compile_spec(spec)
+    assert graph is not None

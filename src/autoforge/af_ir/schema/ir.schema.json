@@ -37,6 +37,20 @@
     "meta": { "type": "object" }
   },
   "$defs": {
+    "ask_spec": {
+      "description": "v2 M3 结构化 Ask 规格：kind 枚举校验（choice/entity/time_range/threshold/text），运行时携带控件元数据，收敛纪律由运行时强制。prompt 不在此处——它是 ask 节点的节点级字段（schema 已强制必填），由 Node.from_dict 投影进 AskSpec，避免两处真相。",
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["choice", "entity", "time_range", "threshold", "text"] },
+        "options": { "type": "array", "items": { "type": "string" } },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "unit": { "type": "string" },
+        "entity_domain": { "type": "string" }
+      }
+    },
     "node": {
       "type": "object",
       "required": ["id", "kind"],
@@ -71,6 +85,7 @@
         "session": { "enum": ["room", "device", "user", "global"], "default": "room" },
         "room": { "type": "string" },
         "timeout": { "type": "string" },
+        "ask": { "$ref": "#/$defs/ask_spec", "description": "v2 M3 结构化 Ask：ask 节点的一等公民结构化挂起规格" },
 
         "duration": { "type": "string" },
 

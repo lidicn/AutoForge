@@ -8,6 +8,7 @@ import type {
   CredentialsResponse, CredentialsUpdateResponse,
   WhoamiResponse, SubjectsResponse, RevokeResponse,
   LiveStatusResponse, LiveRunResponse,
+  AsksResponse, AskAnswerResponse,
 } from '../types/api'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8787/api'
@@ -110,4 +111,15 @@ export const api = {
   metrics: () => request<any>('GET', '/metrics'),
   experience: (limit = 20) => request<any>('GET', `/experience?limit=${limit}`),
   telemetry: (days = 30) => request<any>('GET', `/telemetry?days=${days}`),
+
+  // ── v2 M3 结构化 Ask（原生控件 + clarify 流程）──
+  // 进程内会话的挂起 ask（仿真会话可见），含后端 AskSpec.control() 的控件元数据
+  asksPending: () => request<AsksResponse>('GET', '/asks'),
+  // watch sidecar（真机 watch 进程写出的挂起 ask），与 /asks 互补
+  asksSidecar: () => request<AsksResponse>('GET', '/asks/pending'),
+  askAnswer: (payload: { ask_id?: string | null; room?: string | null; text?: string; answer?: Record<string, unknown> }) =>
+    request<AskAnswerResponse>('POST', '/asks/answer', payload),
+  // 结构化应答走会话端点：可拿到 422（校验被拒，会话保持挂起可重答）
+  sessionAnswer: (sid: string, payload: { ask_id?: string | null; room?: string | null; text?: string; answer?: Record<string, unknown> }) =>
+    request<any>('POST', `/sessions/${sid}/answer`, payload),
 }

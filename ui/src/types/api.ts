@@ -471,3 +471,49 @@ export interface WatchListResponse {
   watches: WatchInstance[]
   total: number
 }
+
+// ── v2 M3 结构化 Ask（原生控件 + clarify 流程）──
+// 控件映射由后端 AskSpec.control() 输出，前端只做渲染，不复制 kind→widget 映射
+export interface AskControlMeta {
+  widget: 'select' | 'slider' | 'time_range' | 'entity_picker' | 'input'
+  kind: string
+  prompt?: string
+  options?: string[]
+  min?: number | null
+  max?: number | null
+  unit?: string | null
+  entity_domain?: string
+}
+
+export interface AskSpecMeta {
+  kind: string
+  options?: string[]
+  min?: number
+  max?: number
+  unit?: string
+  entity_domain?: string
+}
+
+export interface AskItem {
+  ask_id: string
+  instance_id: string
+  node_id: string
+  room: string | null
+  prompt: string
+  automation_id: string
+  session_id?: string
+  spec?: AskSpecMeta | null
+  control: AskControlMeta
+}
+
+export interface AsksResponse {
+  ok: boolean
+  total: number
+  asks: AskItem[]
+}
+
+export interface AskAnswerResponse {
+  ok: boolean
+  inbox?: string
+}
+
