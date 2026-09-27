@@ -22,6 +22,7 @@ from typing import Any, Mapping
 from .af_adapters import Adapter, CallResult
 from .af_state import StateProvider
 from .af_vhass.fake import SERVICE_STATE
+from .af_undo import restore_call
 
 __all__ = ["CanaryGuard", "CanaryResult", "inverse_action"]
 
@@ -53,36 +54,24 @@ def inverse_action(action: str) -> str | None:
     return INVERSE_ACTION.get(action)
 
 
-# P1-10：依据真实状态推导恢复动作（不用仿真逆推）
-_ON_STATES = frozenset({"on", "open", "locked", "active", "home", "true", "1"})
-_OFF_STATES = frozenset({"off", "closed", "unlocked", "idle", "away", "false", "0", "unavailable", "unknown"})
-
-
-def _state_to_action(domain: str, state: str | None) -> str | None:
-    """P1-10：依据实体的真实状态推导恢复动作。
-
-    只覆盖 on/off 类域（light/switch/fan/binary_sensor 等）。
-    state 为 None 或无法映射 → 返回 None（不回滚，fail-closed）。
-    """
-    if state is None:
-        return None
-    s = str(state).strip().lower()
-    if s in _ON_STATES:
-        return f"{domain}.turn_on"
-    if s in _OFF_STATES:
-        return f"{domain}.turn_off"
-    return None
+# 注：动作前真实状态 → 恢复动作 的推导已统一收口到 `af_undo.restore_call`
+# （DOMAIN_SETTER，属性感知 + fail-closed），本模块回滚直接复用，不再各自维护映射。
 
 
 @dataclass
 class CanaryResult:
-    """一次 canary 动作的结果，携带动作前快照，供漂移判定与回滚。"""
+    """一次 canary 动作的结果，携带动作前快照，供漂移判定与回滚。
+
+    `pre_states`：仅状态（向后兼容）。
+    `pre_snapshot`：状态 + 属性（F7 属性感知恢复用，如 light 的 brightness）。
+    """
 
     action: str
     params: dict[str, Any]
     result: CallResult
     pre_states: dict[str, str | None]
     guard: "CanaryGuard"
+    pre_snapshot: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def expected_state(self) -> str | None:
         domain, _, service = self.action.partition(".")
@@ -108,25 +97,30 @@ class CanaryResult:
         return False
 
     def rollback(self, adapter: Adapter) -> list[CallResult]:
-        """P1-10：依据动作前真实快照（pre_states）恢复每个目标实体。
+        """P1-10 + F7：依据动作前真实快照（pre_snapshot）恢复每个目标实体。
 
-        不用仿真逆推（inverse_action）——只依据变更前抓取的真实状态。
-        pre_state 未知或无法映射 → 跳过该实体（fail-closed，不猜）。
+        不用仿真逆推（inverse_action）——只依据变更前抓取的真实状态 + 属性。
+        复用 `af_undo.restore_call`（DOMAIN_SETTER）做属性感知恢复：
+        light 还原 brightness/color_temp、cover 还原 position、climate 还原
+        temperature/hvac_mode、fan 还原 percentage，switch/lock 还原 on/off。
+        无法映射（域无 setter / 快照缺关键属性）→ 跳过该实体（fail-closed，不猜）。
         """
         import logging
         logger = logging.getLogger("autoforge.canary")
-        domain = self.action.partition(".")[0]
         out: list[CallResult] = []
         for entity_id in self._targets():
-            pre_state = self.pre_states.get(entity_id)
-            restore_action = _state_to_action(domain, pre_state)
-            if restore_action is None:
+            snap = self.pre_snapshot.get(entity_id) or {
+                "state": self.pre_states.get(entity_id),
+                "attributes": {},
+            }
+            call = restore_call(entity_id, snap)
+            if call is None:
                 logger.warning(
-                    "canary 回滚跳过 %s：pre_state=%r 无法映射到恢复动作（domain=%s）",
-                    entity_id, pre_state, domain,
+                    "canary 回滚跳过 %s：无法映射恢复动作（fail-closed）", entity_id,
                 )
                 continue
-            out.append(adapter.call(restore_action, {"entity_id": entity_id}))
+            action, params = call
+            out.append(adapter.call(action, params))
         return out
 
 
@@ -138,16 +132,21 @@ class CanaryGuard:
     auto_rollback: bool = True
 
     def perform(self, adapter: Adapter, action: str, params: Mapping[str, Any]) -> CanaryResult:
-        """执行动作并在动作前抓取目标实体快照。"""
+        """执行动作并在动作前抓取目标实体快照（状态 + 属性）。"""
         targets = params.get("entity_id")
         if isinstance(targets, str):
             targets = [targets]
-        pre = {
-            e: self.states.snapshot([e]).values.get(e)
+        snap = self.states.snapshot(targets or [])
+        pre_states = {e: snap.values.get(e) for e in (targets or [])}
+        pre_snapshot = {
+            e: {"state": snap.values.get(e), "attributes": snap.attributes.get(e, {})}
             for e in (targets or [])
         }
         result = adapter.call(action, dict(params))
-        return CanaryResult(action=action, params=dict(params), result=result, pre_states=pre, guard=self)
+        return CanaryResult(
+            action=action, params=dict(params), result=result,
+            pre_states=pre_states, guard=self, pre_snapshot=pre_snapshot,
+        )
 
     def check_and_rollback(self, adapter: Adapter, res: CanaryResult) -> list[CallResult]:
         """漂移 + 自动回滚：返回回滚产生的调用结果（无漂移则为空）。"""

@@ -212,10 +212,14 @@ class HAAdapter:
         transport: Transport | None = None,
         dry_run: bool = True,
         on_dry_run: Callable[[str, Mapping[str, Any]], None] | None = None,
+        undo_recorder: Callable[[str, Mapping[str, Any], dict[str, dict[str, Any]]], None] | None = None,
     ):
         self.transport = transport
         self.dry_run = dry_run
         self.on_dry_run = on_dry_run
+        # F7：真实下发前的"动作前快照"捕获钩子（由 CLI/API 注入 UndoStore 落盘）。
+        # 仅真实下发（dry_run=False）且 transport 支持 all_states 时生效。
+        self.undo_recorder = undo_recorder
         self.intents: list[tuple[str, dict[str, Any]]] = []
         self.faults = FaultQueue()
 
@@ -246,4 +250,41 @@ class HAAdapter:
             return CallResult.ok({"dry_run": True, "action": action, "params": dict(params)})
         if self.transport is None:
             raise AdapterError("HAAdapter 未注入 transport，无法真实下发（G1 只支持 dry_run）")
+        # F7：真实下发前抓取"动作前快照"交钩子落盘（fail-closed：捕获失败不影响下发）
+        if self.undo_recorder is not None:
+            try:
+                pre = _capture_pre_snapshot(self.transport, params)
+                if pre:
+                    self.undo_recorder(action, params, pre)
+            except Exception:  # 快照捕获异常绝不阻断真实下发
+                import logging
+                logging.getLogger("autoforge.adapter").warning(
+                    "undo 快照捕获异常（已忽略，不下发）", exc_info=True
+                )
         return self.transport(action, params)
+
+
+def _capture_pre_snapshot(transport: Transport, params: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """从 transport 读取目标实体动作前状态 + 属性（fail-closed）。
+
+    依赖 transport 提供 `all_states()`（HATransport 具备）；否则返回空（不记录）。
+    """
+    target = params.get("entity_id")
+    entities = [target] if isinstance(target, str) else list(target or [])
+    if not entities:
+        return {}
+    all_states = getattr(transport, "all_states", None)
+    if not callable(all_states):
+        return {}
+    try:
+        states = all_states()
+    except Exception:
+        return {}
+    if not isinstance(states, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for e in entities:
+        if e in states:
+            st, attrs = states[e]
+            out[str(e)] = {"state": st, "attributes": attrs if isinstance(attrs, dict) else {}}
+    return out

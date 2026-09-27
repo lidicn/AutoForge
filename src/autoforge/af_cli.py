@@ -284,6 +284,8 @@ def _make_runtime(
     ha_token: str = "",
     persist_dir: str | None = None,
     cfg=None,
+    undo: bool = False,
+    store_root: str = DEFAULT_STORE_ROOT,
 ):
     if live or dry_live:
         # live：真时钟 + 真 HA 状态 + 真下发（dry_run=False）
@@ -298,13 +300,25 @@ def _make_runtime(
         runtime.scheduler.states = provider
         runtime.executor.states = provider
         adapter = HAAdapter(transport=transport, dry_run=dry_live)
+        # F7：真实下发前快照捕获（仅真机 live 生效；dry_live 不触发 recorder）
+        undo_deploy_id: str | None = None
+        if undo:
+            from .af_undo import UndoStore, deploy_id as _new_deploy_id
+
+            _store = UndoStore(store_root)
+            undo_deploy_id = _new_deploy_id()
+
+            def _recorder(action, params, pre, _s=_store, _d=undo_deploy_id):
+                _s.record_merge(_d, pre)
+
+            adapter.undo_recorder = _recorder
         if dry_live:
             def _on_dry(action, params):
                 import sys
                 print(f"[DRY-LIVE 意图] {action} {params}", file=sys.stderr, flush=True)
             adapter.on_dry_run = _on_dry
         runtime.adapters.register(adapter)
-        return runtime
+        return runtime, undo_deploy_id
 
     seed: dict[str, str] = {}
     if seed_path:
@@ -337,7 +351,7 @@ def _make_runtime(
     # 用 dry_run 适配器时**连「这个动作没法验证」都无从得知**
     # （2026-09-17 NL 实测 #7 的 `media_pause` 边界即此）。
     runtime.adapters.register(FakeHAAdapter(ha))
-    return runtime
+    return runtime, None
 
 
 def _unmodeled_actions(runtime: Runtime) -> list[str]:
@@ -426,7 +440,7 @@ def sim(
     if live:
         typer.echo("· 注意：sim 是仿真链路，--live 被忽略；真机下发请用 `forge run --live`。")
 
-    runtime = _make_runtime(graph, seed or None, vhass)
+    runtime, _ = _make_runtime(graph, seed or None, vhass)
     typer.echo("\n── 逻辑闸（forge sim）──")
     if events:
         _replay(runtime, json.loads(Path(events).read_text(encoding="utf-8")))
@@ -461,6 +475,10 @@ def run(
         "--live-allow",
         help="真机可写实体白名单（逗号分隔）；缺省复用 --entities，先不开放全量",
     ),
+    undo: bool = typer.Option(
+        False, "--undo",
+        help="F7：记录动作前快照，允许事后 `forge undo <id>` 回滚本次部署（仅 --live 真机下发生效）",
+    ),
     persist_dir: str = typer.Option(
         "", "--persist-dir", help="实例持久化目录（P1：重启后恢复 persist=true 的活跃实例）"
     ),
@@ -470,6 +488,7 @@ def run(
     if not _gate(graph, show_nl=True, entities_path=entities or None, acl_path=acl or None):
         raise typer.Exit(code=EXIT_SCAN_ERROR)
 
+    undo_enabled = undo or os.getenv("AUTOFORGE_UNDO", "") == "1"
     if live or dry_live:
         token = ha_token or os.environ.get("AUTOFORGE_HA_TOKEN", "")
         allow = (
@@ -489,15 +508,18 @@ def run(
         if not pre.ok:
             typer.echo("真机预检未通过，拒绝启动。", err=True)
             raise typer.Exit(code=EXIT_SCAN_ERROR)
-        runtime = _make_runtime(
+        runtime, undo_id = _make_runtime(
             graph, None, vhass, live=live, dry_live=dry_live,
             ha_url=ha_url, ha_token=token,
-            persist_dir=persist_dir or None,
+            persist_dir=persist_dir or None, undo=undo_enabled,
+            store_root=persist_dir or DEFAULT_STORE_ROOT,
         )
     else:
-        runtime = _make_runtime(graph, seed or None, vhass, persist_dir=persist_dir or None)
+        runtime, undo_id = _make_runtime(graph, seed or None, vhass, persist_dir=persist_dir or None)
     if runtime.persist is not None and runtime.restored:
         typer.echo(f"· 已从 {persist_dir} 恢复 {len(runtime.restored)} 个活跃实例")
+    if undo_id:
+        typer.echo(f"· 撤销 ID（如需回滚本次部署：forge undo {undo_id}）：{undo_id}")
     typer.echo("\n── Runtime（forge run）──")
     if events:
         _replay(runtime, json.loads(Path(events).read_text(encoding="utf-8")))
@@ -517,6 +539,10 @@ def watch(
     confirm: bool = typer.Option(False, "--confirm", help="真机下发二次确认（常驻监听必需；--dry-live 不需要）"),
     dry_live: bool = typer.Option(False, "--dry-live", help="真时钟/真 HA 状态常驻，do 只记意图不下发（不动设备）"),
     live_allow: str = typer.Option("", "--live-allow", help="真机可写实体白名单（逗号分隔）"),
+    undo: bool = typer.Option(
+        False, "--undo",
+        help="F7：记录动作前快照，允许事后 `forge undo <id>` 回滚本监听会话的部署（仅真机下发生效）",
+    ),
     tick_s: float = typer.Option(1.0, "--tick-s", help="计时器/超时巡检间隔（秒）"),
     persist_dir: str = typer.Option(
         "", "--persist-dir", help="实例持久化目录（P1：重启后恢复 persist=true 的活跃实例）"
@@ -552,13 +578,17 @@ def watch(
         typer.echo("真机预检未通过，拒绝常驻监听。", err=True)
         raise typer.Exit(code=EXIT_SCAN_ERROR)
 
-    runtime = _make_runtime(
+    undo_enabled = undo or os.getenv("AUTOFORGE_UNDO", "") == "1"
+    runtime, undo_id = _make_runtime(
         graph, None, "fake", live=not dry_live, dry_live=dry_live,
         ha_url=ha_url, ha_token=token,
-        persist_dir=persist_dir or None, cfg=cfg,
+        persist_dir=persist_dir or None, cfg=cfg, undo=undo_enabled,
+        store_root=persist_dir or DEFAULT_STORE_ROOT,
     )
     if runtime.persist is not None and runtime.restored:
         typer.echo(f"· 已从 {persist_dir} 恢复 {len(runtime.restored)} 个活跃实例")
+    if undo_id:
+        typer.echo(f"· 撤销 ID（如需回滚本会话部署：forge undo {undo_id}）：{undo_id}")
     from . import af_live
     from .af_flock import owner_id
 
@@ -611,6 +641,54 @@ def diff(
     result = diff_graphs(old_graph, new_graph)
     typer.echo(f"── 版本 diff（{old.name} → {new.name}）──")
     typer.echo(result.render())
+
+
+@app.command()
+def undo(
+    deploy_id: str = typer.Argument(..., help="forge run --live --undo 打印的撤销 ID"),
+    confirm: bool = typer.Option(False, "--confirm", help="风险域（climate/cover/lock 等）二次确认"),
+    root: str = typer.Option(DEFAULT_STORE_ROOT, "--root", help="UndoStore 根目录（与部署时一致）"),
+    ha_url: str = typer.Option(DEFAULT_HA_URL, "--ha-url", help="HA 地址（撤销真实下发到此）"),
+    ha_token: str = typer.Option("", "--ha-token", help="HA 长期访问令牌（缺省读 AUTOFORGE_HA_TOKEN）"),
+):
+    """回滚一次部署的设备态（F7，决策 E）。
+
+    fail-closed 三道闸：① 未知 deploy_id 拒绝；② 超过时间窗（默认 60s，
+    AUTOFORGE_UNDO_WINDOW_S）拒绝，需重新走审批；③ 含风险域（climate/cover/lock）
+    且未 --confirm 拒绝；④ 不可映射域跳过告警不阻断其余。
+    """
+    from .af_undo import UndoStore
+
+    store = UndoStore(root)
+    if not store.exists(deploy_id):
+        typer.echo(f"[撤销失败] 未知 deploy_id：{deploy_id}", err=True)
+        raise typer.Exit(code=EXIT_IR_ERROR)
+    token = ha_token or os.environ.get("AUTOFORGE_HA_TOKEN", "")
+
+    # 惰性适配器：仅在真正需要下发（revert 通过校验）时才构造 HATransport，
+    # 这样 unknown/expired/risk 被拒的场景不要求 HA_URL 就绪。
+    class _LazyHAAdapter:
+        def call(self, action, params):
+            from .af_adapters import HAAdapter, HATransport
+
+            if not ha_url:
+                raise RuntimeError(
+                    "HA_URL 未配置：撤销需真实下发，请设置 AUTOFORGE_HA_URL 或 --ha-url"
+                )
+            adapter = HAAdapter(
+                transport=HATransport(base_url=ha_url, token=token), dry_run=False
+            )
+            return adapter.call(action, params)
+
+    result = store.revert(deploy_id, _LazyHAAdapter(), confirm=confirm)
+    if not result.get("ok"):
+        typer.echo(
+            f"[撤销被拒] {result.get('reason')}：{result.get('message', '')}", err=True
+        )
+        raise typer.Exit(code=EXIT_IR_ERROR)
+    typer.echo(f"· 已恢复 {len(result['restored'])} 个实体：{result['restored']}")
+    if result.get("skipped"):
+        typer.echo(f"· 跳过（无法映射，fail-closed）：{result['skipped']}")
 
 
 store_app = typer.Typer(no_args_is_help=True, help="G6 版本化存储（Graph 快照 + 置信度）")

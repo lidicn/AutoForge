@@ -399,7 +399,7 @@ def test_cli_fake_base_registers_fakeha_adapter(tmp_path):
         encoding="utf-8",
     )
 
-    runtime = _make_runtime(graph, str(seed_file), "fake")
+    runtime, _ = _make_runtime(graph, str(seed_file), "fake")
     adapter = runtime.adapters.get("ha")
 
     assert isinstance(adapter, FakeHAAdapter)

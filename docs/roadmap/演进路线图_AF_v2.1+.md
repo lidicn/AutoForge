@@ -108,11 +108,12 @@
   - 决策结论（F）：治理正确答案 = "暂停可逆、恢复要人"，非"不封禁"。
   - **PR 序（DCD 强制）**：落盘持久化（细案 §4 PR 2.1）先于接执行闸（2.2）合入——premiere 落盘是自动暂停前置，必须先合入。
 
-- **F7 下发后通用撤销 / 设备态回滚** `[新建，决策 E]`
-  - 现状：canary on/off 回滚丢属性（`canary.py:61`），`af_version` 回滚纯 IR 级，两者正交 → undo 需新建。
+- **F7 下发后通用撤销 / 设备态回滚** `[新建，决策 E]` ✅ **已交付（2026-09-28）**
+  - 现状（交付前）：canary on/off 回滚丢属性（`canary.py:61`），`af_version` 回滚纯 IR 级，两者正交 → undo 需新建。
   - 涉及：`af_apply.py` `af_live.py` `af_canary.py` `af_version.py`。
-  - 细分（按决策 E，最小路径）：① `CanaryResult.pre_states` 扩成 pre_snapshot（状态+属性，Snapshot 已支持 attributes）；② 新增 `DOMAIN_SETTER` 映射（~15 行）：climate→set_temperature、cover→set_cover_position、light→turn_on(带 brightness) 参数化回放；③ 不可映射动作 **fail-closed**（回滚不了就告警，绝不瞎滚，沿用 `canary.py:67-74`）；④ undo 走下发同级 approve band；climate/cover/lock 等风险域二次确认；⑤ 窗口默认 60s（可配 0–300s），CLI `forge undo <deploy_id>` + WebUI 按钮。
-  - 验收：light.turn_on 后 `forge undo` 60s 内恢复前态（含 brightness）；climate/cover 同理；不可映射动作告警不崩。
+  - 交付：① `CanaryResult.pre_states` 扩成 `pre_snapshot`（状态+属性，Snapshot 已支持 attributes）；② 新增 `af_undo.py` 的 `DOMAIN_SETTER` 映射：light→turn_on(带 brightness/color_temp)、switch/fan/lock→on-off、cover→set_cover_position、climate→set_temperature(带 hvac_mode) 参数化回放；③ 不可映射动作 **fail-closed**（回滚不了就告警跳过，绝不瞎滚，沿用决策 E）；④ undo 走下发同级 approve band，risk 域（climate/cover/lock/fan/vacuum）二次确认 `--confirm`；⑤ 窗口默认 60s（AUTOFORGE_UNDO_WINDOW_S 可配 0–300s），CLI `forge undo <deploy_id>` + `--live --undo` 自动落盘 pre-snapshot（落 `.forge/undo_log.json`）；HAAdapter.call 真实下发前钩子 `undo_recorder` 捕获首拍、fail-closed 不影响下发。
+  - 验收（tests/test_undo.py + tests/unit/test_p1_10_canary_real_snapshot.py 共 48 项）：light 含亮度参数化恢复；climate/cover 同；不可映射/状态未知跳过不崩；60s 过期拒绝；风险域缺 confirm 拒绝；全量离线门 1215 passed / 51 skipped 绿。
+  - 残留（非阻塞）：WebUI 撤销按钮（CLI 已就绪，WebUI 按钮待接入，决策 E ⑤ 余「WebUI 按钮」一项）；`forge undo` 真机下发走真实 HA，仅用户显式触发。
   - 决策结论（E）：**做，但不叫"安全红线"——常规安全能力**；60s 窗口 + 风险域二次确认 + fail-closed。
 
 - **F8 冲突仲裁 / canary 默认开启与 band 归一** `[强化]`
