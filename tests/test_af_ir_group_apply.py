@@ -8,7 +8,7 @@
 
 import pytest
 
-from autoforge.af_ir import Automation
+from autoforge.af_ir import Automation, GROUP_IR_VERSION
 from autoforge.af_orchestrator import compose_group
 from autoforge.af_draft import stage_group
 from autoforge import af_service
@@ -64,6 +64,16 @@ def test_compose_group_builds_wrapper(fake_pending):
     g = _group()
     gnode = next(n for n in g.nodes.values() if n.kind == "group")
     assert len(gnode.children) == 3
+
+
+def test_compose_group_stamps_group_ir_version(fake_pending):
+    # 版本语义：group 复合 IR 必须打 0.3.0（决策 D：group 容器节点落地于此版本），
+    # 不能用 0.2.1 承载——旧版本消费者无法理解 mode='group'。
+    g = _group()
+    assert g.raw.get("mode") == "group"
+    assert g.raw.get("ir_version") == GROUP_IR_VERSION
+    assert GROUP_IR_VERSION == "0.3.0"
+    assert g.raw.get("ir_version") != "0.2.1"
 
 
 def test_group_atomic_deploy_all_children(fake_pending):

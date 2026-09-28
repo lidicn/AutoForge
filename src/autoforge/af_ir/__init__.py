@@ -13,6 +13,7 @@ from .expr import (
 from .models import (
     EDGE_KINDS,
     EDGE_PRIORITY,
+    GROUP_IR_VERSION,
     IR_VERSION,
     IRValidationError,
     NODE_KINDS,
@@ -34,6 +35,7 @@ from .models import (
 )
 
 __all__ = [
+    "GROUP_IR_VERSION",
     "IR_VERSION",
     "SUPPORTED_IR_VERSIONS",
     "is_supported_ir_version",

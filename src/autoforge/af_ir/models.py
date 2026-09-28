@@ -23,6 +23,7 @@ from jsonschema import Draft202012Validator
 
 __all__ = [
     "IR_VERSION",
+    "GROUP_IR_VERSION",
     "SUPPORTED_IR_VERSIONS",
     "is_supported_ir_version",
     "NODE_KINDS",
@@ -49,6 +50,11 @@ IR_VERSION = "0.2.1"
 #: IR 版本枚举单一真值源（决策 D：v2.3 引入 group 容器节点时在此追加 "0.3.0"，
 #: schema 的 ir_version.enum 必须与之保持同步——灰度兼容旧 IR，旧版本不被拒绝）。
 SUPPORTED_IR_VERSIONS: tuple[str, ...] = ("0.2.1", "0.3.0")
+
+#: group 容器节点（v2.3/F9，决策 D）落地版本：compose_group 产出的复合 IR 打此版本，
+#: 与 SUPPORTED_IR_VERSIONS / schema 的 ir_version.enum 同源。勿用 0.2.1 承载 group
+#: ——旧版本消费者无法理解 mode='group'，版本号必须诚实反映所用能力。
+GROUP_IR_VERSION = "0.3.0"
 
 
 def is_supported_ir_version(version: str) -> bool:
