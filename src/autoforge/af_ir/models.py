@@ -48,7 +48,7 @@ IR_VERSION = "0.2.1"
 
 #: IR 版本枚举单一真值源（决策 D：v2.3 引入 group 容器节点时在此追加 "0.3.0"，
 #: schema 的 ir_version.enum 必须与之保持同步——灰度兼容旧 IR，旧版本不被拒绝）。
-SUPPORTED_IR_VERSIONS: tuple[str, ...] = ("0.2.1",)
+SUPPORTED_IR_VERSIONS: tuple[str, ...] = ("0.2.1", "0.3.0")
 
 
 def is_supported_ir_version(version: str) -> bool:
@@ -56,7 +56,7 @@ def is_supported_ir_version(version: str) -> bool:
     return version in SUPPORTED_IR_VERSIONS
 
 #: 7 种节点（fn 为远期预留，G1 不实现）
-NODE_KINDS = ("on", "if", "do", "ask", "wait", "set", "pass")
+NODE_KINDS = ("on", "if", "do", "ask", "wait", "set", "pass", "group")
 
 #: 6 种边（`on_error` 是 v0.2 新增的第 6 种）
 EDGE_KINDS = ("then", "yes", "no", "default", "on_timeout", "on_cancel", "on_error")
@@ -311,6 +311,8 @@ class Node:
     emit: EmitDecl | None = None
     # 保留位
     reserved: dict[str, Any] = field(default_factory=dict)
+    # group 容器节点（v2.3/F9）：子自动化列表，原子部署单元
+    children: tuple["Automation", ...] = ()
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Node":
@@ -341,6 +343,7 @@ class Node:
             value=data.get("value"),
             from_=data.get("from"),
             emit=EmitDecl.from_dict(data["emit"]) if data.get("emit") else None,
+            children=tuple(Automation.from_dict(c, child=True) for c in data.get("children") or ()),
             reserved={k: data[k] for k in _RESERVED_NODE_KEYS if k in data},
         )
 
@@ -452,8 +455,8 @@ class Automation:
 
     # ── 构造 ──────────────────────────────────────────────────────────
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Automation":
-        validate_automation(data)
+    def from_dict(cls, data: Mapping[str, Any], *, child: bool = False) -> "Automation":
+        validate_automation(data, root_key="child_automation" if child else None)
         nodes = {n["id"]: Node.from_dict(n) for n in data["nodes"]}
         _check_unique_ids(data.get("id", "?"), data["nodes"], nodes)
         edges = tuple(Edge.from_dict(e) for e in data.get("edges", ()))
@@ -591,9 +594,17 @@ def _schema() -> dict[str, Any]:
     return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
-def validate_automation(data: Mapping[str, Any]) -> None:
-    """按 JSON Schema 校验单条 Automation，失败抛 IRValidationError。"""
-    validator = Draft202012Validator(_schema())
+def validate_automation(data: Mapping[str, Any], *, root_key: str | None = None) -> None:
+    """按 JSON Schema 校验单条 Automation，失败抛 IRValidationError。
+
+    root_key 非空时校验 `#/$defs/<root_key>`（如 `child_automation`），用于 group
+    子自动化——子自动化不需顶层 `ir_version`。
+    """
+    schema = _schema()
+    validator = Draft202012Validator(schema)
+    if root_key:
+        # evolve 保留全文档 resolver，使子 $def 内的 `#/$defs/node` 等引用可正确解析
+        validator = validator.evolve(schema=schema["$defs"][root_key])
     errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
     if errors:
         detail = "; ".join(

@@ -163,11 +163,27 @@ def render_automation(auto: Automation) -> NLResult:
     lines.append(f"· 触发策略：{_MODE_NOTE.get(auto.mode, auto.mode)}")
 
     entries = auto.entry_nodes()
-    if not entries:
+    has_group = any(n.kind == "group" for n in auto.nodes.values())
+    if not entries and not has_group:
         warnings.append(f"{auto.id}：没有入口节点（on）")
 
     for entry in entries:
         _walk(auto, entry, lines, covered, set(), depth=0)
+
+    # v2.3/F9：group 容器节点渲染为复合段，子自动化逐一展开（覆盖率检查计入）
+    for gnode in auto.nodes.values():
+        if gnode.kind != "group":
+            continue
+        lines.append(f"【组合 {gnode.name or gnode.id}】（{len(gnode.children)} 条子自动化 · 原子部署单元）")
+        covered.add(gnode.id)
+        for i, child in enumerate(gnode.children, 1):
+            res = render_automation(child)
+            child_lines = res.text.split("\n")
+            for j, ln in enumerate(child_lines):
+                prefix = f"  {i}. " if j == 0 else "     "
+                lines.append(prefix + ln)
+            covered |= {f"{gnode.id}:{child.id}:{n}" for n in res.covered}
+            warnings += [f"{gnode.id}:{w}" for w in res.warnings]
 
     # v1.2.0：后置条件断言必须写进 NL——「跑完应当如何」是给人签核的一部分
     # （同 emit 的理由：批准的与跑的必须一致）

@@ -125,7 +125,7 @@
   - 验收：tests/test_conflict_band.py（band 源 + shadow 旁路 + ask 拒绝自动下发 + observe 放行 + auto 正常仲裁）全过；全量离线门 **1220 passed / 51 skipped 绿**。
 
 ### v2.3 复合编排（真正新建，决策 D）
-- **F9 多意图 / 复合 IR `group` 容器节点** `[新建，决策 D]` ⏳ **前置已部分交付（2026-09-28）：ir_version 枚举化 + 决策门采集方案就位；group 节点受决策门约束待生产采集判定**
+- **F9 多意图 / 复合 IR `group` 容器节点** `[新建，决策 D → DCD 裁定方案 B]` 🟡 **执行中（2026-09-28）**：DCD 裁定撤销决策门（门真值在本 ADM 生态结构性不可采集，见 `decisions/20260928-AutoForge-F9-group决策门-裁定.md`），group 按架构价值直接建、并入 F10。Slice1（IR 基础）已交付：schema 加 `group` kind+`children`+`ir_version "0.3.0"`、`additionalProperties` 前向兼容（字段白名单+未知字段忽略）、`af_ir` 模型、`af_nl` 渲染；全量离线门绿（1212）。Slice2（编排 build/simulate + `af_apply` 原子部署/单 ref 回滚/组合冲突预检=F10②）待做。
   - 现状：`af_orchestrator` 无 parallel/sequence/subgraph（`af_orchestrator.py:804` `"parallel"` 仅单条 mode）。
   - 涉及：`af_ir/schema/ir.schema.json` `af_ir/models.py:45` `af_orchestrator.py:2057`（compose）。
   - 细分（按决策 D）：① **扩展 IR schema 新增 `group` 容器节点**（字段 `mode: sequence|parallel`、`children:[节点]`），**不建新 DSL、不做独立图组合层**（复用"一切可编译/仿真/渲染回 NL"管线，唯一真相锚）；② **前置修复（方向已校准）**：ir.schema.json 顶层**当前已是** `additionalProperties:false`，该限制会致旧校验器硬拒含 group 的新图——前置工作是**放宽它**（改 `true` 或新增字段白名单 + 未知字段忽略策略），同步 `ir_version` 由 `const "0.2.1"` 改枚举 `["0.2.1","0.3.0"]`（否则灰度期新图被旧校验器拒）；③ 编译/仿真/下发对 group 支持；④ 冲突域跨子图合并。
@@ -135,7 +135,7 @@
     - **ir_version 枚举化**：schema `ir_version` 由 `const "0.2.1"` 改为 `enum ["0.2.1"]`（灰度兼容，单一真值源 `af_ir.SUPPORTED_IR_VERSIONS` + `is_supported_ir_version`）；group 节点落地时在此追加 `"0.3.0"` 即可，无需改校验逻辑。
     - **决策门数据采集方案就位**：`af_draft.draft_intent` 新增可选 `session_id`，接入 `ComposeMetrics`（进程级多意图会话计数，`compose_metrics_summary()` 暴露 `sessions/multi_intent_sessions/multi_intent_ratio`）；不传 `session_id` 时零采样。生产在 compose/LLM 层对同一用户请求传稳定 `session_id` 即可评估门。
     - **生产接线就位（2026-09-28）**：`af_mcp._t_draft`（LLM/agent 唯一的 draft 工具入口）已把 `args.get("session_id")` 透传给 `draft_intent`；draft 工具描述已告知 agent「同一用户 compose 请求内多次调用传相同 `session_id`」。工具 inputSchema 无 `additionalProperties:false`，透传不被拒。不传则零采样（默认无侵入）。至此决策门采集闭环完整：生产只需在单次用户请求内用稳定 `session_id` 聚合多次 draft 调用，即可由 `compose_metrics_summary()` 评估多意图占比。
-    - **未做（受决策门约束）**：`group` 容器节点本体、"放宽 additionalProperties 以容纳 group" 同批前置——均归属 group 实现阶段，须先由生产多意图占比采集判定（≥5% 才推进）；本回合不先行放宽（避免无端弱化校验 + 无 group 可容纳）。
+    - **未做（受决策门约束→已撤销）**：原「决策门 <5% 则推迟」经 DCD 裁定撤销（门真值结构性不可采集）；`group` 节点本体按架构价值直接建。Slice1 已交付 `additionalProperties` 前向兼容 + schema group+children + `ir_version "0.3.0"` + 模型/NL；`group` 节点本体（编排/仿真/原子部署/组合冲突预检）归 Slice2（并入 F10②）。
   - 验收（前置）：tests/test_af_ir_version.py（schema 枚举同源 / 非法版本被拒）、tests/test_af_draft_compose.py（多意图占比统计 / 无 session_id 零采样）全过。
 
 - **F10 复合部署与跨自动化一致性** `[新建]`

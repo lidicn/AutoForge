@@ -5,9 +5,9 @@
   "description": "AutoForge 的 Graph 序列化格式（唯一真相）。7 节点 / 6 边。emit 已于 v0.3.0 实现（跨自动化事件·发布侧，节点字段形态）；fn 仍为 P1 保留位（允许出现，但 Runtime 读到即报未实现）；persist 已于 P1 实现（实例持久化与崩溃恢复）。",
   "type": "object",
   "required": ["ir_version", "id", "name", "version", "mode", "nodes", "edges"],
-  "additionalProperties": false,
+  "additionalProperties": true,
   "properties": {
-    "ir_version": { "type": "string", "enum": ["0.2.1"], "description": "IR 版本枚举（决策 D：v2.3 引入 group 容器节点时追加 '0.3.0' 即可灰度兼容旧 IR；单一真值源见 af_ir.SUPPORTED_IR_VERSIONS）" },
+    "ir_version": { "type": "string", "enum": ["0.2.1", "0.3.0"], "description": "IR 版本枚举（决策 D/v2.3：group 容器节点落地于 0.3.0；单一真值源见 af_ir.SUPPORTED_IR_VERSIONS；旧 0.2.1 图仍可被新运行时读取，灰度兼容）" },
     "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
     "name": { "type": "string", "minLength": 1 },
     "version": { "type": "integer", "minimum": 1 },
@@ -54,10 +54,10 @@
     "node": {
       "type": "object",
       "required": ["id", "kind"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$" },
-        "kind": { "enum": ["on", "if", "do", "ask", "wait", "set", "pass"] },
+        "kind": { "enum": ["on", "if", "do", "ask", "wait", "set", "pass", "group"] },
         "name": { "type": "string" },
 
         "trigger": { "$ref": "#/$defs/trigger" },
@@ -120,7 +120,12 @@
             "delay": { "type": "string" }
           }
         },
-        "fn": { "type": "object" }
+        "fn": { "type": "object" },
+        "children": {
+          "description": "group 容器节点的子自动化列表（v2.3/F9，IR §group）。每个元素是完整自动化（id/name/mode/nodes/edges），作为原子部署单元；详见 #/$defs/child_automation。",
+          "type": "array",
+          "items": { "$ref": "#/$defs/child_automation" }
+        }
       },
       "allOf": [
         {
@@ -148,6 +153,38 @@
           "then": { "required": ["var"] }
         }
       ]
+    },
+    "child_automation": {
+      "description": "group 节点的子自动化（v2.3/F9）。完整自动化，作为原子部署/单 ref 回滚/组合冲突预检的单位。递归引用 #/$defs/node 以允许嵌套 group。",
+      "type": "object",
+      "required": ["id", "name", "mode", "nodes", "edges"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "integer", "minimum": 1 },
+        "mode": { "enum": ["single", "restart", "queued", "parallel"] },
+        "snapshot": { "type": "boolean", "default": true },
+        "enabled": { "type": "boolean", "default": true },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/node" }
+        },
+        "edges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/edge" }
+        },
+        "expect": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/expect" }
+        },
+        "vars": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/var_decl" }
+        },
+        "meta": { "type": "object" }
+      }
     },
     "trigger": {
       "type": "object",
