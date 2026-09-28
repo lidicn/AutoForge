@@ -17,6 +17,7 @@ from .af_draft import get_staged, DraftError
 from .af_spec import graph_to_raw
 from . import af_audit, af_premiere
 from . import af_service
+from .af_ir import Automation
 
 
 def _store_diff_sha(ref: str) -> str:
@@ -152,3 +153,111 @@ def apply(
         )
 
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v2.3 / F9 group 复合部署（决策 D 方案 B，并入 F10②）
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _intent_of_action(action: str) -> str:
+    a = (action or "").lower()
+    if "turn_off" in a:
+        return "off"
+    if "turn_on" in a:
+        return "on"
+    if a.endswith(".lock"):
+        return "lock"
+    if a.endswith(".unlock"):
+        return "unlock"
+    if "set" in a:
+        return "set"
+    return "act"
+
+
+def _child_entity_ops(child: "Automation") -> list[tuple[str, str]]:
+    ops: list[tuple[str, str]] = []
+    for n in child.nodes.values():
+        if n.kind == "on":
+            trig = n.trigger
+            e = getattr(trig, "entity_id", None) if trig is not None else None
+            if e:
+                ops.append((e, "trigger"))
+        elif n.kind == "do":
+            params = n.params if isinstance(n.params, dict) else {}
+            e = params.get("entity_id")
+            if e:
+                ops.append((e, _intent_of_action(n.action)))
+    return ops
+
+
+def _composite_conflict_precheck(children: list["Automation"]) -> list[dict[str, Any]]:
+    """F10② 组合冲突预检：跨子自动化检测共享 / 相反实体操作。"""
+    by_entity: dict[str, list[tuple[str, str]]] = {}
+    for c in children:
+        for e, intent in _child_entity_ops(c):
+            by_entity.setdefault(e, []).append((c.id, intent))
+    findings: list[dict[str, Any]] = []
+    for e, ops in by_entity.items():
+        if len(ops) <= 1:
+            continue
+        intents = {i for _, i in ops}
+        if ("on" in intents and "off" in intents) or ("lock" in intents and "unlock" in intents):
+            findings.append({
+                "entity": e, "type": "conflict", "ops": ops,
+                "message": f"组合冲突预检：实体 {e} 在子自动化间被相反操作（{sorted(intents)}）",
+            })
+        else:
+            findings.append({
+                "entity": e, "type": "shared", "ops": ops,
+                "message": f"组合共享实体：{e} 被多子自动化引用（{sorted(intents)}），请确认无相互覆盖",
+            })
+    return findings
+
+
+def apply_group(group_auto: Any, store: Any = None, *,
+                simulate: bool = True, stage: str = "apply") -> dict[str, Any]:
+    """原子部署 group 复合自动化（v2.3/F9，决策 D 方案 B 并入 F10②）。
+
+    - 先仿真全部子自动化（无副作用）；任一失败 → 整体 ok=False 且不入队（原子回滚单位 = group ref）。
+    - 全量通过 → 依次入待批队列，统一打 group_ref 标签（单 ref 回滚）。
+    - 组前做组合冲突预检（F10②）。
+    """
+    if not isinstance(group_auto, Automation):
+        group_auto = Automation.from_dict(group_auto)
+    gnode = next((n for n in group_auto.nodes.values() if n.kind == "group"), None)
+    if gnode is None:
+        return {"ok": False, "error": {"code": "NO_GROUP", "message": "不是 group 复合 IR"}}
+    children = list(gnode.children)
+    conflicts = _composite_conflict_precheck(children)
+
+    # 1. 全量仿真（原子性闸门）
+    for child in children:
+        if not simulate:
+            continue
+        sim = af_service.simulate(child.raw, store=store)
+        if not sim.get("ok"):
+            return {
+                "ok": False,
+                "stage": "simulate",
+                "error": {"code": "CHILD_SIM_FAILED", "message": f"子自动化 {child.id} 仿真失败", "child": child.id, "sim": sim},
+                "deployed": [],
+                "conflicts": conflicts,
+            }
+
+    # 2. 全量入队（单 ref 回滚单位）
+    group_ref = group_auto.id
+    deployed: list[str] = []
+    if stage in ("apply", "save"):
+        for child in children:
+            save_payload = {"ir": child.raw, "name": child.name, "group_ref": group_ref}
+            res = af_service.submit_pending(store, "af_apply", save_payload, submitted_by="af_apply")
+            if not res.get("ok"):
+                for d in deployed:
+                    try:
+                        store.rollback_pending(d)
+                    except Exception:
+                        pass
+                return {"ok": False, "stage": "save", "error": {"code": "SUBMIT_FAILED", "child": child.id}, "deployed": [], "conflicts": conflicts}
+            deployed.append(child.id)
+
+    return {"ok": True, "ref": group_ref, "children": [c.id for c in children], "deployed": deployed, "conflicts": conflicts, "stage": stage}

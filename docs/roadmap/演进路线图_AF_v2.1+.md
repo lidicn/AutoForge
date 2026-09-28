@@ -125,7 +125,7 @@
   - 验收：tests/test_conflict_band.py（band 源 + shadow 旁路 + ask 拒绝自动下发 + observe 放行 + auto 正常仲裁）全过；全量离线门 **1220 passed / 51 skipped 绿**。
 
 ### v2.3 复合编排（真正新建，决策 D）
-- **F9 多意图 / 复合 IR `group` 容器节点** `[新建，决策 D → DCD 裁定方案 B]` 🟡 **执行中（2026-09-28）**：DCD 裁定撤销决策门（门真值在本 ADM 生态结构性不可采集，见 `decisions/20260928-AutoForge-F9-group决策门-裁定.md`），group 按架构价值直接建、并入 F10。Slice1（IR 基础）已交付：schema 加 `group` kind+`children`+`ir_version "0.3.0"`、`additionalProperties` 前向兼容（字段白名单+未知字段忽略）、`af_ir` 模型、`af_nl` 渲染；全量离线门绿（1212）。Slice2（编排 build/simulate + `af_apply` 原子部署/单 ref 回滚/组合冲突预检=F10②）待做。
+- **F9 多意图 / 复合 IR `group` 容器节点** `[新建，决策 D → DCD 裁定方案 B]` 🟢 **已交付（2026-09-28）**：DCD 裁定撤销决策门（门真值在本 ADM 生态结构性不可采集，见 `decisions/20260928-AutoForge-F9-group决策门-裁定.md`），group 按架构价值直接建、并入 F10。Slice1（IR 基础：schema `group`+`children` / `ir_version "0.3.0"` / `additionalProperties` 前向兼容 / 模型 / NL 渲染）+ Slice2（compose_group 组合 + apply_group 原子部署/单 ref 回滚 + 组合冲突预检=F10②）均交付；新增测试 11 项，全量离线门绿（1216）。详见决策书执行回填 §9。
   - 现状：`af_orchestrator` 无 parallel/sequence/subgraph（`af_orchestrator.py:804` `"parallel"` 仅单条 mode）。
   - 涉及：`af_ir/schema/ir.schema.json` `af_ir/models.py:45` `af_orchestrator.py:2057`（compose）。
   - 细分（按决策 D）：① **扩展 IR schema 新增 `group` 容器节点**（字段 `mode: sequence|parallel`、`children:[节点]`），**不建新 DSL、不做独立图组合层**（复用"一切可编译/仿真/渲染回 NL"管线，唯一真相锚）；② **前置修复（方向已校准）**：ir.schema.json 顶层**当前已是** `additionalProperties:false`，该限制会致旧校验器硬拒含 group 的新图——前置工作是**放宽它**（改 `true` 或新增字段白名单 + 未知字段忽略策略），同步 `ir_version` 由 `const "0.2.1"` 改枚举 `["0.2.1","0.3.0"]`（否则灰度期新图被旧校验器拒）；③ 编译/仿真/下发对 group 支持；④ 冲突域跨子图合并。

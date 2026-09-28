@@ -21,6 +21,7 @@ import json
 import re
 import time
 import uuid
+from .af_ir import Automation
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
@@ -722,6 +723,27 @@ def build_graph(draft: AutomationDraft) -> dict:
     if draft.expect:
         graph["expect"] = sub([dict(x) for x in draft.expect])
     return graph
+
+
+def compose_group(name: str, children: list, group_id: str | None = None,
+                  ir_version: str = IR_VERSION) -> "Automation":
+    """把多条已构建自动化（Automation 或 IR dict）组合成一个 group 复合 IR（v2.3/F9）。
+
+    返回的 Automation 顶层只有一个 group 节点，children 为各子自动化的完整 IR；
+    作为原子部署单元（单 ref 回滚）与组合冲突预检（F10②）的载体。
+    """
+    gid = group_id or ("grp_" + uuid.uuid4().hex[:6])
+    child_dicts = [c.raw if isinstance(c, Automation) else c for c in children]
+    group_node = {"id": "g1", "kind": "group", "name": name or "组合", "children": child_dicts}
+    return Automation.from_dict({
+        "ir_version": ir_version,
+        "id": gid,
+        "name": name or "组合",
+        "version": 1,
+        "mode": "single",
+        "nodes": [group_node],
+        "edges": [],
+    })
 
 
 def render_node(n: Mapping[str, Any]) -> str:
