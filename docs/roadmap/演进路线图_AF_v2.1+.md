@@ -116,11 +116,13 @@
   - 残留（非阻塞）：WebUI 撤销按钮（CLI 已就绪，WebUI 按钮待接入，决策 E ⑤ 余「WebUI 按钮」一项）；`forge undo` 真机下发走真实 HA，仅用户显式触发。
   - 决策结论（E）：**做，但不叫"安全红线"——常规安全能力**；60s 窗口 + 风险域二次确认 + fail-closed。
 
-- **F8 冲突仲裁 / canary 默认开启与 band 归一** `[强化]`
-  - 现状：conflict/canary/conf 三套 band/priority 并存（`af_conf.band` `canary` `conflict.py:131`），默认 OFF。
+- **F8 冲突仲裁 / canary 默认开启与 band 归一** `[强化]` ✅ **部分交付（2026-09-28）：① band 单一真值源 + ③ G4 联动已落地；② 产销默认开启属部署配置待投产步骤开启**
+  - 现状（交付前）：conflict/canary/conf 三套 band/priority 并存（`af_conf.band` `canary` `conflict.py:131`），默认 OFF。
   - 涉及：`af_conflict*.py` `af_canary*.py` `af_conf.py`。
   - 细分：① 统一"优先级/分级"单一真值源（与决策 C stage schema 协同）；② 投产默认开启冲突仲裁；③ 与 G4 auto/shadow/ask 联动。
   - 决策结论（C 协同）：stage schema 冻结后，band 语义以统一 schema 为准，避免三套漂移。
+  - 交付：① `af_conf` 新增 `BAND_PRIORITY / PASSIVE_BANDS / CONFIRM_REQUIRED_BANDS` 单一真值源，`af_conflict_runtime.ConflictService.dispatch` 改用统一 band 判定（不再硬编码 `"shadow"`）；③ **ask 域防御纵深**——冲突仲裁拒绝 ask-band 自动下发（`ask_band_requires_confirmation`，G4 联动，G2 编译期已拦截写设备此处兜底），shadow 仍只读旁路；canary 在 live/观察期路径本就默认开启（`af_executor`/`af_runtime` 已挂 `CanarySupervisor`）。② 投产默认开启属**部署配置**：生产经 env_file 注入 `AUTOFORGE_CONFLICT_ARBITER=enforce`（或 `observe` 观察期）开启；按"文档阶段不部署"铁律，代码默认 OFF 以保持离线测试门绿、不破坏"测试由采信台真跑"。
+  - 验收：tests/test_conflict_band.py（band 源 + shadow 旁路 + ask 拒绝自动下发 + observe 放行 + auto 正常仲裁）全过；全量离线门 **1220 passed / 51 skipped 绿**。
 
 ### v2.3 复合编排（真正新建，决策 D）
 - **F9 多意图 / 复合 IR `group` 容器节点** `[新建，决策 D]`

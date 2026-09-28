@@ -7,6 +7,11 @@
 * WAIT 挂起 + Scheduler.call_later(0, retry) 续跑；被抢占的在飞实例走 on_error 边。
 * 提供 WebUI 用的 5 个端点装配函数（FastAPI 兼容，零新依赖）。
 
+F8 band 归一（决策 A/C 协同）：冲突仲裁的"放行/被动/须确认"判定统一走 `af_conf` 的
+`BAND_PRIORITY / PASSIVE_BANDS / CONFIRM_REQUIRED_BANDS` 单一真值源，与 G4 的
+auto/shadow/ask 三级自主同口径——`shadow` 只读比对不参与冲突，`ask` 只出提案、
+禁止自动下发（防御纵深，G2 编译期已拦截写设备，此处兜底）。
+
 时序：
     request() -> ALLOW  -> adapter.call -> note_af_action -> release()
     request() -> REJECT / CIRCUIT_OPEN -> _soft_fail(...)（on_error / default 边）
@@ -23,9 +28,11 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
 try:  # 包内加载 / 单文件加载两种方式都可用
     from .af_conflict import ConflictArbiter, RequestDecision, SystemTimeSource
     from .af_conflict_audit import ConflictAuditor, event_to_dict
+    from .af_conf import PASSIVE_BANDS, CONFIRM_REQUIRED_BANDS
 except ImportError:  # pragma: no cover
     from af_conflict import ConflictArbiter, RequestDecision, SystemTimeSource
     from af_conflict_audit import ConflictAuditor, event_to_dict
+    from af_conf import PASSIVE_BANDS, CONFIRM_REQUIRED_BANDS
 
 if TYPE_CHECKING:  # 仅类型标注，运行时零依赖
     from .af_conf import ConfidenceStore
@@ -277,8 +284,14 @@ class ConflictService:
 
         if not entity_ids or not automation_id:
             return original(instance, node)          # 只读/无实体节点不参与锁
-        if self._is_passive(automation_id) or self._adapter_is_dry(executor, node):
-            return original(instance, node)          # shadow / dry_run 不参与冲突
+        band = self._safe_band(automation_id)
+        if band in PASSIVE_BANDS:                      # shadow：只读比对，不执行真实动作（F8 ① 单一真值源）
+            return original(instance, node)
+        if band in CONFIRM_REQUIRED_BANDS and self.settings.mode != "observe":
+            # ask：只出提案须人工确认，禁止自动下发（F8 ③ 与 G4 auto/shadow/ask 联动 + 防御纵深）
+            return self._abort(executor, instance, node, RequestDecision.REJECT, "ask_band_requires_confirmation")
+        if self._adapter_is_dry(executor, node):
+            return original(instance, node)          # dry_run 不参与冲突
 
         observe = self.settings.mode == "observe"
         try:
@@ -395,11 +408,12 @@ class ConflictService:
             except Exception as exc:
                 self._audit_degraded("note_af_action", exc, eid, automation_id)
 
-    def _is_passive(self, automation_id: str) -> bool:
+    def _safe_band(self, automation_id: str) -> str:
+        """统一 band 真值源读取（故障优先：缺省 auto，绝不因 band 查询异常而阻断下发）。"""
         try:
-            return self.conf.band(automation_id) == "shadow"     # shadow 不执行真实动作
+            return str(self.conf.band(automation_id))
         except Exception:
-            return False
+            return "auto"
 
     def _adapter_is_dry(self, executor: Any, node: Any) -> bool:
         try:

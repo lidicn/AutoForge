@@ -32,6 +32,14 @@ NEGATIVE_DROP = 0.25      # 负样本（用户干预/手动修改）下降
 
 Band = Literal["auto", "shadow", "ask"]
 
+#: band 单一真值源（F8 ①：冲突仲裁 / canary / G4 共用，避免三套 band/priority 漂移）。
+#: 数值越大越自主；与决策 C stage schema 冻结后口径一致。
+BAND_PRIORITY: dict[Band, int] = {"ask": 0, "shadow": 1, "auto": 2}
+#: 只读比对、不执行真实动作的 band（shadow 比对期不抢设备）
+PASSIVE_BANDS: frozenset[Band] = frozenset({"shadow"})
+#: 只出提案、必须人工确认的 band（ask 不允许自动下发，防御纵深）
+CONFIRM_REQUIRED_BANDS: frozenset[Band] = frozenset({"ask"})
+
 
 def decision_for(conf: float) -> Band:
     """把置信度映射成自主级别。"""
@@ -40,6 +48,21 @@ def decision_for(conf: float) -> Band:
     if conf >= SHADOW_LOW:
         return "shadow"
     return "ask"
+
+
+def band_priority(band: Band) -> int:
+    """band 自主度排序（F8 ① 单一真值源；越大越自主）。"""
+    return BAND_PRIORITY.get(band, 0)
+
+
+def is_passive_band(band: Band) -> bool:
+    """该 band 只读比对、不执行真实动作（shadow）。"""
+    return band in PASSIVE_BANDS
+
+
+def requires_confirm_band(band: Band) -> bool:
+    """该 band 只出提案、必须人工确认（ask）；冲突仲裁据此拒绝自动下发。"""
+    return band in CONFIRM_REQUIRED_BANDS
 
 
 def decay(conf: float, hours: float, events: int = 0) -> float:
