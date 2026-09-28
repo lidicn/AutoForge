@@ -141,7 +141,7 @@
 - **F10 复合部署与跨自动化一致性** `[新建 → 🟢 已交付（2026-09-28，DCD 方案 B 并入）]`
   - 现状：单 IR 部署，`af_version.wrap_deployer` 单文件快照（`af_version.py:657`）。
   - 涉及：`af_version.py` `af_apply.py` `af_pending.py` `af_orchestrator.py`（compose_group）。
-  - 细分：① 复合图原子部署（全成功或全回滚）→ `af_apply.apply_group`：先全量仿真、任一失败整体 ok=False 且不入队（单 group ref 回滚单位），全量通过再入待批队列；生产 `af_apply.apply(ref)` 现检测到 group IR（mode='group'）即短路到 apply_group，经既有 staging 管线（`af_draft.stage_group` 以单自动化 Graph 形式暂存）零模型改动接入；② 跨自动化一致性校验（共享实体冲突预检）→ `af_apply.cross_automation_conflicts`（group 子自动化复用）+ `af_apply.check_store_cross_conflicts`（store 级扫描，只读）。
+  - 细分：① 复合图原子部署（全成功或全回滚）→ `af_apply.apply_group`：先全量仿真、任一失败整体 ok=False 且不入队（单 group ref 回滚单位），全量通过再入待批队列；生产 `af_apply.apply(ref)` 现检测到 group IR（mode='group'）即短路到 apply_group，经既有 staging 管线（`af_draft.stage_group` 以单自动化 Graph 形式暂存）零模型改动接入。**2026-09-28 已部署 NAS 并经真机冒烟验证**：`apply(ref)`→`apply_group` 路由生效、group IR 打 `0.3.0`（决策 D 落地版本）、冲突随结果返回（告警非硬闸）；回滚镜像 `autoforge-api:pre-group-backup`；交接卡 `docs/handoff/handoff_v2.3_group_production.md`；② 跨自动化一致性校验（共享实体冲突预检）→ `af_apply.cross_automation_conflicts`（group 子自动化复用）+ `af_apply.check_store_cross_conflicts`（store 级扫描，只读）。
   - 注：F9 group 容器节点（DCD 裁定方案 B）即本特征的载体，随 F10 一并交付；详见 `decisions/20260928-AutoForge-F9-group决策门-裁定.md` 执行回填 §9。
 
 ### v2.4 经验闭环与预测
