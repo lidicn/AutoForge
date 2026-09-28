@@ -295,10 +295,15 @@ def _t_get_entity_state(store: GraphStore, args: dict[str, Any]) -> dict[str, An
 
 
 def _t_draft(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    """意图 JSON → IR，返回 ref。"""
+    """意图 JSON → IR，返回 ref。
+
+    session_id（可选）：同一用户 compose 请求内多次调用传相同 id，
+    用于统计多意图会话占比（v2.3 决策门，见 af_draft.ComposeMetrics）。
+    不传则不采样（默认零影响）。
+    """
     from .af_draft import draft_intent, DraftError
     try:
-        return draft_intent(args["intent"])
+        return draft_intent(args["intent"], session_id=args.get("session_id"))
     except DraftError as e:
         return {"ok": False, "error": {"code": e.code, "message": str(e), "fix": e.fix}}
 
@@ -376,7 +381,7 @@ _TOOLS_WITH_CONTEXT = frozenset({_t_whoami, _t_save, _t_import, _t_enable})
 TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
     (
         "af_draft",
-        "【黄金路径第1步】传意图 JSON，自动生成 IR 并返回 ref。实体写中文名/别名，服务端自动解析。参数：intent(object 必填)。",
+        "【黄金路径第1步】传意图 JSON，自动生成 IR 并返回 ref。实体写中文名/别名，服务端自动解析。参数：intent(object 必填)、session_id(str 可选)：同一用户 compose 请求内多次调用传相同 id，用于 v2.3 决策门统计多意图会话占比。",
         {
             "type": "object",
             "properties": {

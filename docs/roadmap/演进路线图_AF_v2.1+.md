@@ -134,6 +134,7 @@
   - **前置交付（2026-09-28，安全切片）**：
     - **ir_version 枚举化**：schema `ir_version` 由 `const "0.2.1"` 改为 `enum ["0.2.1"]`（灰度兼容，单一真值源 `af_ir.SUPPORTED_IR_VERSIONS` + `is_supported_ir_version`）；group 节点落地时在此追加 `"0.3.0"` 即可，无需改校验逻辑。
     - **决策门数据采集方案就位**：`af_draft.draft_intent` 新增可选 `session_id`，接入 `ComposeMetrics`（进程级多意图会话计数，`compose_metrics_summary()` 暴露 `sessions/multi_intent_sessions/multi_intent_ratio`）；不传 `session_id` 时零采样。生产在 compose/LLM 层对同一用户请求传稳定 `session_id` 即可评估门。
+    - **生产接线就位（2026-09-28）**：`af_mcp._t_draft`（LLM/agent 唯一的 draft 工具入口）已把 `args.get("session_id")` 透传给 `draft_intent`；draft 工具描述已告知 agent「同一用户 compose 请求内多次调用传相同 `session_id`」。工具 inputSchema 无 `additionalProperties:false`，透传不被拒。不传则零采样（默认无侵入）。至此决策门采集闭环完整：生产只需在单次用户请求内用稳定 `session_id` 聚合多次 draft 调用，即可由 `compose_metrics_summary()` 评估多意图占比。
     - **未做（受决策门约束）**：`group` 容器节点本体、"放宽 additionalProperties 以容纳 group" 同批前置——均归属 group 实现阶段，须先由生产多意图占比采集判定（≥5% 才推进）；本回合不先行放宽（避免无端弱化校验 + 无 group 可容纳）。
   - 验收（前置）：tests/test_af_ir_version.py（schema 枚举同源 / 非法版本被拒）、tests/test_af_draft_compose.py（多意图占比统计 / 无 session_id 零采样）全过。
 
