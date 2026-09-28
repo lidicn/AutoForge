@@ -145,10 +145,17 @@
   - 注：F9 group 容器节点（DCD 裁定方案 B）即本特征的载体，随 F10 一并交付；详见 `decisions/20260928-AutoForge-F9-group决策门-裁定.md` 执行回填 §9。
 
 ### v2.4 经验闭环与预测
-- **F11 af_experience 消费闭环接 executor/predict** `[强化]`
+- **F11 af_experience 消费闭环接 executor/predict** `[强化 → 🟡 ①已交付（2026-09-29）]`
   - 现状：`af_experience.py` 纯采集+导出，无消费方（`observe:56`）。
   - 涉及：`af_experience.py` `af_executor.py` `af_predict.py`。
   - 细分：① 经验库接进 executor 实体解析/动作选择；② 接进 `af_predict` 作为先验。
+  - **① 已交付（2026-09-29），并修正路线图前提**：源码核实 `af_executor` **既不解析实体也不选择动作**（只有漂移软失效 `_soft_fail` + `adapters.get()` 键直查），故「接进 executor」在当前代码**没有落点**；真正的实体解析在 `af_catalog.resolve/_score`。因此按源码实际接入：
+    - `af_experience` 补**定向读 API**（此前只有 top-N/全量，消费方无法定向查）：`entity_count()` / `entity_counts()` / `co_occurrences()`。
+    - `DeviceCatalog` 新增 `_experience_counts()`（按 `experience.json` 的 mtime/size 缓存；无文件/不可读→空表，先验静默退化）。
+    - `resolve()` 排序键在「⑤ 相似度」之后、「entity_id 兜底」之前插入 **⑥ 经验先验**：以上全部同级时，历史上被成功使用次数多的实体优先。**仅破同分**，不覆盖置信度/可动作域/集成优选/离线降权/相似度任何一级（有单测锁定"置信度优先于经验"）。
+    - 未做「动作选择」先验：executor 的 adapter 是硬键直查、无评分面，且经验库只记频次不记 action→成功率，语义上限不足——需先定义"动作选择"语义再谈。
+  - 测试：`tests/unit/test_f11_experience_prior.py`（6 项：定向读 API、无经验退化、先验破同分正反、置信度不被先验越过）；全量离线门 1253 passed / 51 skipped 绿。
+  - ② 接 `af_predict` 作为先验：待做（落点已在 `af_orchestrator.score_ir` / `af_conf.band`，需与 F12 的 G4 band 归一协同）。
 
 - **F12 af_predict 与 G4 分级联动** `[强化，决策 C 协同]`
   - 现状：`af_predict.py` 自注"纯新增"，与 auto/shadow/ask 两套口径（`af_predict.py:327`）。

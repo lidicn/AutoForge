@@ -123,6 +123,26 @@ class ExperienceStore:
         items.sort(key=lambda it: (-it["count"], it["entity_id"]))
         return items[: max(0, int(limit))]
 
+    def entity_counts(self) -> dict[str, int]:
+        """全量「实体被成功使用次数」快照（供消费方做先验 / 破同分）。"""
+        data = self._load()
+        return {k: int(v) for k, v in (data.get("entities") or {}).items()}
+
+    def entity_count(self, entity_id: str) -> int:
+        """单实体被成功观测的次数（`0` = 无经验记录）。"""
+        return int((self._load().get("entities") or {}).get(entity_id, 0))
+
+    def co_occurrences(self, entity_id: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        """与给定实体共现过的其他实体，按共现次数降序（无向去序存储，此处定向还原）。"""
+        out: list[dict[str, Any]] = []
+        for pair, n in (self._load().get("pairs") or {}).items():
+            left, _, right = str(pair).partition("|")
+            other = right if left == entity_id else (left if right == entity_id else None)
+            if other:
+                out.append({"entity_id": other, "count": int(n)})
+        out.sort(key=lambda it: (-it["count"], it["entity_id"]))
+        return out[: max(0, int(limit))]
+
     def patterns(self) -> dict[str, Any]:
         return self._load()["patterns"]
 

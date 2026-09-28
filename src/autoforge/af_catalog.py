@@ -690,6 +690,32 @@ class DeviceCatalog:
                     return area, remainder
         return None
 
+    def _experience_counts(self) -> dict[str, int]:
+        """经验库「实体被成功使用次数」快照（v2.4/F11① 先验数据源）。
+
+        按 `experience.json` 的 mtime/size 缓存，避免每次解析重复读盘。
+        **无经验文件 / 不可读 / 尚未观测 → 空表**：先验静默退化为不生效，
+        解析行为与接入前完全一致（不因经验库缺失而改变既有排序纪律）。
+        """
+        try:
+            from .af_experience import ExperienceStore  # 懒导入：经验库为可选依赖，避免任何循环导入
+        except Exception:
+            return {}
+        try:
+            store = ExperienceStore(self.root)
+            stat = store.path.stat()
+        except OSError:
+            return {}
+        cached = getattr(self, "_exp_cache", None)
+        if cached is not None and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+            return cached[2]
+        try:
+            counts = store.entity_counts()
+        except Exception:
+            counts = {}
+        self._exp_cache = (stat.st_mtime, stat.st_size, counts)
+        return counts
+
     def resolve(
         self,
         name: str,
@@ -833,6 +859,7 @@ class DeviceCatalog:
                     cands, stage = upgraded, "readonly_upgrade"
                     derived = fallback_desc
                     break
+        exp = self._experience_counts()
         cands.sort(
             key=lambda c: (
                 _CONF_RANK.get(c[2], 3),      # ① 置信度优先（不改 fail-closed 纪律）
@@ -848,6 +875,10 @@ class DeviceCatalog:
                 _TIER_RANK[_tier_of(c[0])],   # ③ 集成优选：本地 > 云 > 轮询 > 未知
                 1 if _is_offline(c[0]) else 0,  # ④ 弱信号降权：离线靠后（**只排序不过滤**）
                 c[3],                         # ⑤ 原相似度打分
+                # ⑥ 经验先验（v2.4/F11①）：以上**全部相同时**，历史上被成功使用次数
+                #    多的实体优先。仅破同分，不覆盖置信度/可动作/集成优选/离线降权/
+                #    相似度任何一级——无经验文件或未观测即退化为 0，行为与接入前一致。
+                -exp.get(str(c[0].get("entity_id") or ""), 0),
                 str(c[0].get("entity_id")),
             )
         )
