@@ -23,6 +23,8 @@ from jsonschema import Draft202012Validator
 
 __all__ = [
     "IR_VERSION",
+    "SUPPORTED_IR_VERSIONS",
+    "is_supported_ir_version",
     "NODE_KINDS",
     "EDGE_KINDS",
     "EDGE_PRIORITY",
@@ -43,6 +45,15 @@ __all__ = [
 ]
 
 IR_VERSION = "0.2.1"
+
+#: IR 版本枚举单一真值源（决策 D：v2.3 引入 group 容器节点时在此追加 "0.3.0"，
+#: schema 的 ir_version.enum 必须与之保持同步——灰度兼容旧 IR，旧版本不被拒绝）。
+SUPPORTED_IR_VERSIONS: tuple[str, ...] = ("0.2.1",)
+
+
+def is_supported_ir_version(version: str) -> bool:
+    """该 IR 版本是否被当前运行时接受（与 schema 的 ir_version.enum 同源）。"""
+    return version in SUPPORTED_IR_VERSIONS
 
 #: 7 种节点（fn 为远期预留，G1 不实现）
 NODE_KINDS = ("on", "if", "do", "ask", "wait", "set", "pass")

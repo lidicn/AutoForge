@@ -125,12 +125,17 @@
   - 验收：tests/test_conflict_band.py（band 源 + shadow 旁路 + ask 拒绝自动下发 + observe 放行 + auto 正常仲裁）全过；全量离线门 **1220 passed / 51 skipped 绿**。
 
 ### v2.3 复合编排（真正新建，决策 D）
-- **F9 多意图 / 复合 IR `group` 容器节点** `[新建，决策 D]`
+- **F9 多意图 / 复合 IR `group` 容器节点** `[新建，决策 D]` ⏳ **前置已部分交付（2026-09-28）：ir_version 枚举化 + 决策门采集方案就位；group 节点受决策门约束待生产采集判定**
   - 现状：`af_orchestrator` 无 parallel/sequence/subgraph（`af_orchestrator.py:804` `"parallel"` 仅单条 mode）。
   - 涉及：`af_ir/schema/ir.schema.json` `af_ir/models.py:45` `af_orchestrator.py:2057`（compose）。
   - 细分（按决策 D）：① **扩展 IR schema 新增 `group` 容器节点**（字段 `mode: sequence|parallel`、`children:[节点]`），**不建新 DSL、不做独立图组合层**（复用"一切可编译/仿真/渲染回 NL"管线，唯一真相锚）；② **前置修复（方向已校准）**：ir.schema.json 顶层**当前已是** `additionalProperties:false`，该限制会致旧校验器硬拒含 group 的新图——前置工作是**放宽它**（改 `true` 或新增字段白名单 + 未知字段忽略策略），同步 `ir_version` 由 `const "0.2.1"` 改枚举 `["0.2.1","0.3.0"]`（否则灰度期新图被旧校验器拒）；③ 编译/仿真/下发对 group 支持；④ 冲突域跨子图合并。
   - 验收：两条有依赖自动化编排为含 group 的单 IR，simulate 正确演化，下发按依赖顺序；嵌套 group 支持子图。
   - 决策结论（D）：**扩展 IR schema，不建新 DSL**；v2.3 排期 + **需求决策门**：统计 compose 会话多意图请求占比 **<5% 则 v2.3 整体推迟**（最贵一项，不许为架构美感做）。
+  - **前置交付（2026-09-28，安全切片）**：
+    - **ir_version 枚举化**：schema `ir_version` 由 `const "0.2.1"` 改为 `enum ["0.2.1"]`（灰度兼容，单一真值源 `af_ir.SUPPORTED_IR_VERSIONS` + `is_supported_ir_version`）；group 节点落地时在此追加 `"0.3.0"` 即可，无需改校验逻辑。
+    - **决策门数据采集方案就位**：`af_draft.draft_intent` 新增可选 `session_id`，接入 `ComposeMetrics`（进程级多意图会话计数，`compose_metrics_summary()` 暴露 `sessions/multi_intent_sessions/multi_intent_ratio`）；不传 `session_id` 时零采样。生产在 compose/LLM 层对同一用户请求传稳定 `session_id` 即可评估门。
+    - **未做（受决策门约束）**：`group` 容器节点本体、"放宽 additionalProperties 以容纳 group" 同批前置——均归属 group 实现阶段，须先由生产多意图占比采集判定（≥5% 才推进）；本回合不先行放宽（避免无端弱化校验 + 无 group 可容纳）。
+  - 验收（前置）：tests/test_af_ir_version.py（schema 枚举同源 / 非法版本被拒）、tests/test_af_draft_compose.py（多意图占比统计 / 无 session_id 零采样）全过。
 
 - **F10 复合部署与跨自动化一致性** `[新建]`
   - 现状：单 IR 部署，`af_version.wrap_deployer` 单文件快照（`af_version.py:657`）。

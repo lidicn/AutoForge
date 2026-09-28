@@ -18,7 +18,16 @@ from typing import Any
 from .af_ir import IR_VERSION, load_graph
 from .af_spec import SpecError
 
-__all__ = ["DraftError", "E_UNKNOWN_DOMAIN", "DraftResult", "draft_intent", "StagingStore"]
+__all__ = [
+    "DraftError",
+    "E_UNKNOWN_DOMAIN",
+    "DraftResult",
+    "draft_intent",
+    "StagingStore",
+    "ComposeMetrics",
+    "compose_metrics_summary",
+    "reset_compose_metrics",
+]
 
 # ── 封闭词表（v2 M2：意图 JSON 顶层域编译前即拒，并回灌可机读 fix）──
 E_UNKNOWN_DOMAIN = "E_UNKNOWN_DOMAIN"
@@ -74,6 +83,56 @@ _staging = StagingStore()
 
 
 # ─────────────────────────────────────────────────────────────────────
+# 决策门数据采集（F9 / 决策 D）：compose 会话多意图占比
+# ─────────────────────────────────────────────────────────────────────
+# v2.3 是否真正落地 group 容器节点，取决于「单次 compose 会话产出 ≥2 条自动化
+# 的占比」是否 ≥5%（否则推迟）。本采集器由 draft_intent 在 session_id 传入时
+# 累加，暴露聚合指标供生产评估决策门；不传 session_id 时零影响（默认无采样）。
+
+
+class ComposeMetrics:
+    """多意图 compose 会话计数器（进程级，线程不安全但仅计数近似）。
+
+    一个 session_id = 一次用户 compose 请求；每次 draft_intent(session_id=...)
+    视为该会话产出的 1 条自动化。summary() 给出多意图会话占比，供决策门判定。
+    """
+
+    def __init__(self) -> None:
+        self._per_session: dict[str, int] = {}
+
+    def record(self, session_id: str) -> None:
+        self._per_session[session_id] = self._per_session.get(session_id, 0) + 1
+
+    def summary(self) -> dict[str, object]:
+        counts = list(self._per_session.values())
+        sessions = len(counts)
+        multi = sum(1 for c in counts if c >= 2)
+        return {
+            "sessions": sessions,
+            "multi_intent_sessions": multi,
+            "single_intent_sessions": sessions - multi,
+            "total_automations": sum(counts),
+            "multi_intent_ratio": (multi / sessions) if sessions else 0.0,
+        }
+
+    def reset(self) -> None:
+        self._per_session.clear()
+
+
+_compose_metrics = ComposeMetrics()
+
+
+def compose_metrics_summary() -> dict[str, object]:
+    """返回当前进程累计的多意图 compose 会话统计（决策门评估用）。"""
+    return _compose_metrics.summary()
+
+
+def reset_compose_metrics() -> None:
+    """仅供测试/运维重置累计（不破坏既有 ref）。"""
+    _compose_metrics.reset()
+
+
+# ─────────────────────────────────────────────────────────────────────
 # 实体解析（占位，实际接 af_catalog）
 # ─────────────────────────────────────────────────────────────────────
 
@@ -94,7 +153,11 @@ def _gen_id(prefix: str, counter: list[int]) -> str:
     return f"{prefix}{counter[0]}"
 
 
-def draft_intent(intent: dict[str, Any], catalog: Any = None) -> dict[str, Any]:
+def draft_intent(
+    intent: dict[str, Any],
+    catalog: Any = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
     """把意图 JSON 编译成 IR，存 staging 区，返回 ref。
 
     意图 JSON 格式：
@@ -105,6 +168,9 @@ def draft_intent(intent: dict[str, Any], catalog: Any = None) -> dict[str, Any]:
       "if": {"lt": {"var": "照度", "const": 200}},
       "do": {"action": "开灯", "target": "客厅灯"}
     }
+
+    session_id：可选。同一用户 compose 请求内多次调用传相同 session_id，
+    供 ComposeMetrics 统计多意图会话占比（决策门评估，见 ComposeMetrics）。
     """
     # v2 M2：意图顶层域封闭词表——未知域编译前即拒并回灌可机读 fix
     unknown = [k for k in intent if k not in _INTENT_FIELDS]
@@ -249,6 +315,10 @@ def draft_intent(intent: dict[str, Any], catalog: Any = None) -> dict[str, Any]:
         action_desc = "询问"
     summary = f"{when.get('entity', '')} {when.get('to', '')} → {action_desc}"
     ref = _staging.put(graph, summary, resolved)
+
+    # 决策门采样：仅当调用方传入 session_id（同一次 compose 请求内稳定）才累加
+    if session_id is not None:
+        _compose_metrics.record(session_id)
 
     return {
         "ok": True,

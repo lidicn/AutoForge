@@ -7,7 +7,7 @@
   "required": ["ir_version", "id", "name", "version", "mode", "nodes", "edges"],
   "additionalProperties": false,
   "properties": {
-    "ir_version": { "type": "string", "const": "0.2.1" },
+    "ir_version": { "type": "string", "enum": ["0.2.1"], "description": "IR 版本枚举（决策 D：v2.3 引入 group 容器节点时追加 '0.3.0' 即可灰度兼容旧 IR；单一真值源见 af_ir.SUPPORTED_IR_VERSIONS）" },
     "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
     "name": { "type": "string", "minLength": 1 },
     "version": { "type": "integer", "minimum": 1 },

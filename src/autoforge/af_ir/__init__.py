@@ -16,6 +16,8 @@ from .models import (
     IR_VERSION,
     IRValidationError,
     NODE_KINDS,
+    SCHEMA_PATH,
+    SUPPORTED_IR_VERSIONS,
     VAR_TYPES,
     AskAnswer,
     AskSpec,
@@ -25,6 +27,7 @@ from .models import (
     Node,
     Trigger,
     VarDecl,
+    is_supported_ir_version,
     load_automation,
     load_graph,
     validate_automation,
@@ -32,6 +35,9 @@ from .models import (
 
 __all__ = [
     "IR_VERSION",
+    "SUPPORTED_IR_VERSIONS",
+    "is_supported_ir_version",
+    "SCHEMA_PATH",
     "NODE_KINDS",
     "EDGE_KINDS",
     "EDGE_PRIORITY",
