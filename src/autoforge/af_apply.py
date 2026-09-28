@@ -17,7 +17,7 @@ from .af_draft import get_staged, DraftError
 from .af_spec import graph_to_raw
 from . import af_audit, af_premiere
 from . import af_service
-from .af_ir import Automation
+from .af_ir import Automation, load_graph
 
 
 def _store_diff_sha(ref: str) -> str:
@@ -190,10 +190,14 @@ def _child_entity_ops(child: "Automation") -> list[tuple[str, str]]:
     return ops
 
 
-def _composite_conflict_precheck(children: list["Automation"]) -> list[dict[str, Any]]:
-    """F10② 组合冲突预检：跨子自动化检测共享 / 相反实体操作。"""
+def cross_automation_conflicts(automations: list["Automation"]) -> list[dict[str, Any]]:
+    """F10② 跨自动化一致性校验：检测一组自动化之间的共享 / 相反实体操作。
+
+    既用于 group 子自动化（compose_group → apply_group），也可用于 store 内任意
+    自动化集合（check_store_cross_conflicts）。输入为 Automation 列表。
+    """
     by_entity: dict[str, list[tuple[str, str]]] = {}
-    for c in children:
+    for c in automations:
         for e, intent in _child_entity_ops(c):
             by_entity.setdefault(e, []).append((c.id, intent))
     findings: list[dict[str, Any]] = []
@@ -214,6 +218,30 @@ def _composite_conflict_precheck(children: list["Automation"]) -> list[dict[str,
     return findings
 
 
+def check_store_cross_conflicts(store: Any) -> list[dict[str, Any]]:
+    """F10② 跨自动化一致性校验（store 级）：扫描 store 内全部自动化，检测共享 / 相反实体操作。
+
+    逐条读取归档（history → load_record → load_graph → graph_to_raw → Automation），
+    失败项跳过，最终对全部 Automation 跑 cross_automation_conflicts。只读、无副作用。
+    """
+    autos: list[Automation] = []
+    for rec in store.history():
+        name = rec.get("name") if isinstance(rec, dict) else None
+        if not name:
+            continue
+        try:
+            rec_full = store.load_record(name)
+            graph = load_graph(rec_full["graph"])
+        except Exception:
+            continue
+        for ir in graph_to_raw(graph):
+            try:
+                autos.append(Automation.from_dict(ir))
+            except Exception:
+                continue
+    return cross_automation_conflicts(autos)
+
+
 def apply_group(group_auto: Any, store: Any = None, *,
                 simulate: bool = True, stage: str = "apply") -> dict[str, Any]:
     """原子部署 group 复合自动化（v2.3/F9，决策 D 方案 B 并入 F10②）。
@@ -228,7 +256,7 @@ def apply_group(group_auto: Any, store: Any = None, *,
     if gnode is None:
         return {"ok": False, "error": {"code": "NO_GROUP", "message": "不是 group 复合 IR"}}
     children = list(gnode.children)
-    conflicts = _composite_conflict_precheck(children)
+    conflicts = cross_automation_conflicts(children)
 
     # 1. 全量仿真（原子性闸门）
     for child in children:

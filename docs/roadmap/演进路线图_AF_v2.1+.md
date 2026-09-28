@@ -138,10 +138,11 @@
     - **未做（受决策门约束→已撤销）**：原「决策门 <5% 则推迟」经 DCD 裁定撤销（门真值结构性不可采集）；`group` 节点本体按架构价值直接建。Slice1 已交付 `additionalProperties` 前向兼容 + schema group+children + `ir_version "0.3.0"` + 模型/NL；`group` 节点本体（编排/仿真/原子部署/组合冲突预检）归 Slice2（并入 F10②）。
   - 验收（前置）：tests/test_af_ir_version.py（schema 枚举同源 / 非法版本被拒）、tests/test_af_draft_compose.py（多意图占比统计 / 无 session_id 零采样）全过。
 
-- **F10 复合部署与跨自动化一致性** `[新建]`
+- **F10 复合部署与跨自动化一致性** `[新建 → 🟢 已交付（2026-09-28，DCD 方案 B 并入）]`
   - 现状：单 IR 部署，`af_version.wrap_deployer` 单文件快照（`af_version.py:657`）。
-  - 涉及：`af_version.py` `af_apply.py` `af_pending.py`。
-  - 细分：① 复合图原子部署（全成功或全回滚）；② 跨自动化一致性校验（共享实体冲突预检）。
+  - 涉及：`af_version.py` `af_apply.py` `af_pending.py` `af_orchestrator.py`（compose_group）。
+  - 细分：① 复合图原子部署（全成功或全回滚）→ `af_apply.apply_group`：先全量仿真、任一失败整体 ok=False 且不入队（单 group ref 回滚单位），全量通过再入待批队列；② 跨自动化一致性校验（共享实体冲突预检）→ `af_apply.cross_automation_conflicts`（group 子自动化复用）+ `af_apply.check_store_cross_conflicts`（store 级扫描，只读）。
+  - 注：F9 group 容器节点（DCD 裁定方案 B）即本特征的载体，随 F10 一并交付；详见 `decisions/20260928-AutoForge-F9-group决策门-裁定.md` 执行回填 §9。
 
 ### v2.4 经验闭环与预测
 - **F11 af_experience 消费闭环接 executor/predict** `[强化]`
