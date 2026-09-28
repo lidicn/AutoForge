@@ -740,7 +740,7 @@ def compose_group(name: str, children: list, group_id: str | None = None,
         "id": gid,
         "name": name or "组合",
         "version": 1,
-        "mode": "single",
+        "mode": "group",
         "nodes": [group_node],
         "edges": [],
     })

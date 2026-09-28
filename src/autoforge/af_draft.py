@@ -413,3 +413,14 @@ def _resolve_do(do: dict[str, Any], resolved: dict[str, str], catalog: Any) -> d
 def get_staged(ref: str) -> dict[str, Any]:
     """从 staging 区取 IR。"""
     return _staging.get(ref)
+
+
+def stage_group(group_auto: Any, summary: str | None = None) -> str:
+    """F9/v2.3：将 group 复合 Automation 暂存为可被 apply(ref) 路由的 IR。
+
+    group 以单自动化 Graph（mode='group'）形式进入既有 staging 管线，apply(ref)
+    检测到 group 后短路到 apply_group 原子部署。零模型改动。
+    """
+    raw = group_auto.raw if hasattr(group_auto, "raw") else group_auto
+    graph = load_graph({"automations": [raw]})
+    return _staging.put(graph, summary or f"组合：{raw.get('name', '')}", {})

@@ -10,8 +10,9 @@ import pytest
 
 from autoforge.af_ir import Automation
 from autoforge.af_orchestrator import compose_group
+from autoforge.af_draft import stage_group
 from autoforge import af_service
-from autoforge.af_apply import apply_group
+from autoforge.af_apply import apply_group, apply
 
 CHILD_OFF = {
     "id": "off_lights", "name": "关所有灯", "version": 1, "mode": "single",
@@ -106,3 +107,35 @@ def test_group_conflict_precheck(fake_pending):
     conflicts = [c for c in res["conflicts"] if c["type"] == "conflict"]
     assert conflicts, "应检出 light.all 相反操作冲突"
     assert conflicts[0]["entity"] == "light.all"
+
+
+def test_apply_ref_routes_group_atomically(fake_pending):
+    # 生产路径：stage_group → apply(ref) 应短路到 apply_group 原子部署
+    ref = stage_group(_group())
+    res = apply(ref, stage="apply", store=object())
+    assert res["ok"]
+    assert res["children"] == ["off_lights", "lock_door", "ac_off"]
+    assert res["ref"].startswith("grp_")
+    # 单 group ref 回滚单位：所有入队项打同一 group_ref
+    assert len(fake_pending) == 3
+    assert all(p.get("group_ref") == res["ref"] for p in fake_pending)
+
+
+def test_apply_ref_group_conflict_reported(fake_pending):
+    # 冲突组经生产路径 apply(ref) → 仍原子部署，但组合冲突预检（F10②）告警返回
+    a = dict(CHILD_OFF)
+    b = {
+        "id": "on_lights", "name": "开夜灯", "version": 1, "mode": "single",
+        "nodes": [
+            {"id": "onx", "kind": "on", "trigger": {"type": "state", "entity_id": "input_boolean.good_night", "to": "on"}},
+            {"id": "dx", "kind": "do", "adapter": "ha", "action": "light.turn_on", "params": {"entity_id": "light.all"}},
+        ],
+        "edges": [{"from": "onx", "to": "dx", "kind": "then"}],
+    }
+    ref = stage_group(compose_group("灯冲突", [a, b]))
+    res = apply(ref, stage="apply", store=object())
+    # 冲突是「告警」而非硬闸（DCD 裁定 §7.3）：部署照常进行，冲突随结果返回
+    assert res["ok"]
+    assert len(fake_pending) == 2
+    conflicts = [c for c in res.get("conflicts", []) if c["type"] == "conflict"]
+    assert conflicts and conflicts[0]["entity"] == "light.all"

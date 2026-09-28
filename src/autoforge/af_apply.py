@@ -104,6 +104,13 @@ def apply(
                 "summary": summary,
             }
 
+    # 1.3 group 复合 IR 短路到原子部署（F9/v2.3，并入 F10②）
+    # premiere 闸门已在上方消费；此处直接走 apply_group（全成功或全回滚，单 group ref 回滚单位）。
+    # group 以单自动化 Graph（mode='group'）形式进入既有 staging 管线，零模型改动。
+    if ir_list and ir_list[0].get("mode") == "group":
+        group_auto = Automation.from_dict(ir_list[0])
+        return apply_group(group_auto, store, stage=stage)
+
     result: dict[str, Any] = {"ok": True, "ref": ref, "summary": summary}
 
     # 2. build（安全闸）

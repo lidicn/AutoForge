@@ -11,7 +11,7 @@
     "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
     "name": { "type": "string", "minLength": 1 },
     "version": { "type": "integer", "minimum": 1 },
-    "mode": { "enum": ["single", "restart", "queued", "parallel"] },
+    "mode": { "enum": ["single", "restart", "queued", "parallel", "group"] },
     "snapshot": { "type": "boolean", "default": true },
     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
     "persist": { "type": "boolean", "default": false },
