@@ -398,12 +398,21 @@ class Predictor:
         window_minutes: float = 5,
         *,
         state: Mapping[str, Any] | None = None,
+        prior: float | None = None,
+        prior_weight: float | None = None,
     ) -> float:
         """预测未来 `window_minutes` 分钟内触发概率（0-1）。冷启动返回 0.0。
 
         `now` 必须 tz-aware（naive 直接 ValueError，B3-AF-04 口径）。
+        `prior` / `prior_weight` 为可选的**经验派生先验**（F11②，来自 `af_experience`
+        `empirical_prior`）：贝叶斯合成多一项证据；两者任一缺失或权重<=0 → 行为与接入前一致。
         """
-        return float(self.explain(automation_id, now, window_minutes, state=state)["p"])
+        return float(
+            self.explain(
+                automation_id, now, window_minutes, state=state,
+                prior=prior, prior_weight=prior_weight,
+            )["p"]
+        )
 
     def explain(
         self,
@@ -412,6 +421,8 @@ class Predictor:
         window_minutes: float = 5,
         *,
         state: Mapping[str, Any] | None = None,
+        prior: float | None = None,
+        prior_weight: float | None = None,
     ) -> dict:
         """概率的全部中间量（可解释性 / 单测断言用）。"""
         aid = _require_id(automation_id)
@@ -433,6 +444,8 @@ class Predictor:
             "p_minute": 0.0,
             "p_hour_prior": 0.0,
             "prior_strength": self._prior_strength,
+            "experience_prior_mean": None,
+            "experience_prior_weight": 0.0,
             "p": 0.0,
         }
 
@@ -507,7 +520,15 @@ class Predictor:
         p_hour = acc / total if total > 0 else 0.0
 
         k = self._prior_strength
-        p = (hits + k * p_hour) / (trials + k) if (trials + k) > 0 else 0.0
+        # 经验先验（v2.4/F11②）：调用方可注入 (prior_mean, prior_weight) 作为经验派生先验，
+        # 与既有 k·p_hour 平滑同构（贝叶斯合成多一项证据）。先验缺失或权重<=0 → 公式与接入前
+        # 完全一致（零回归）。经验库当前在 src 无调用方，消费闭环待 F12 预触发调用方接入。
+        pw = float(prior_weight) if (prior_weight is not None and float(prior_weight) > 0) else 0.0
+        if pw > 0 and prior is not None and 0.0 <= float(prior) <= 1.0:
+            pm = float(prior)
+            p = (hits + k * p_hour + pw * pm) / (trials + k + pw) if (trials + k + pw) > 0 else 0.0
+        else:
+            p = (hits + k * p_hour) / (trials + k) if (trials + k) > 0 else 0.0
         p = min(1.0, max(0.0, p))
 
         info.update(
@@ -516,6 +537,8 @@ class Predictor:
             hits=hits,
             p_minute=p_minute,
             p_hour_prior=p_hour,
+            experience_prior_mean=(float(prior) if (prior is not None and pw > 0) else None),
+            experience_prior_weight=pw,
             band_minutes=[start, start + window],
             p=p,
         )

@@ -11,7 +11,7 @@
 import json
 
 from autoforge.af_catalog import DeviceCatalog
-from autoforge.af_experience import ExperienceStore
+from autoforge.af_experience import ExperienceStore, EXPERIENCE_PRIOR_WEIGHT_CAP
 from autoforge.af_ir import load_graph
 
 IR = {
@@ -79,6 +79,48 @@ def test_co_occurrences_directional(tmp_path):
     assert store.co_occurrences("light.x") == [{"entity_id": "binary_sensor.m", "count": 1}]
     assert store.co_occurrences("binary_sensor.m") == [{"entity_id": "light.x", "count": 1}]
     assert store.co_occurrences("light.unknown") == []
+
+
+# ── 经验→先验派生（F11②）────────────────────────────────────────────
+def test_empirical_prior_zero_without_experience(tmp_path):
+    """零经验 → (0.0, 0.0)，调用方据此不注入先验。"""
+    store = ExperienceStore(tmp_path)
+    assert store.empirical_prior([], []) == (0.0, 0.0)
+    assert store.empirical_prior(["light.never", "switch.x"], ["ha", "xiaomi"]) == (0.0, 0.0)
+
+
+def test_empirical_prior_rises_and_saturates(tmp_path):
+    g = load_graph(IR)
+    # 从 IR 字典提取实体/适配器（Graph 无 reads()/writes()，那在 Automation 上）
+    entities: set = set()
+    adapters: set = set()
+    for node in IR["nodes"]:
+        if node["kind"] == "on" and node.get("trigger"):
+            entities.add(node["trigger"].get("entity_id"))
+        if node["kind"] == "do":
+            adapters.add(node.get("adapter"))
+            eid = (node.get("params") or {}).get("entity_id")
+            if eid:
+                entities.add(eid)
+    entities.discard(None)
+    store = ExperienceStore(tmp_path)
+    store.observe(g, ok=True)
+    store.observe(g, ok=True)
+    mean1, w1 = store.empirical_prior(entities, adapters)
+    assert 0.0 < mean1 < 1.0
+    assert w1 > 0
+    # 更多使用 → mean 更接近 1、weight 更大
+    for _ in range(30):
+        store.observe(g, ok=True)
+    mean2, w2 = store.empirical_prior(entities, adapters)
+    assert mean2 > mean1
+    assert w2 >= w1
+    assert mean2 < 1.0  # 饱和仍严格 < 1
+    # 权重封顶（防高频经验碾压真实时序证据）
+    for _ in range(300):
+        store.observe(g, ok=True)
+    _, w3 = store.empirical_prior(entities, adapters)
+    assert w3 <= EXPERIENCE_PRIOR_WEIGHT_CAP
 
 
 # ── 先验接入 catalog 排序（F11① 的消费面）──────────────────────────────

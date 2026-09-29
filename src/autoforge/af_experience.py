@@ -10,9 +10,10 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .af_flock import FileLock
 from .af_store import atomic_write_text
@@ -20,6 +21,10 @@ from .af_store import atomic_write_text
 __all__ = ["ExperienceStore", "EXPERIENCE_FILENAME"]
 
 EXPERIENCE_FILENAME = "experience.json"
+#: F11② 经验先验饱和尺度：total 经验证据达到该量级时 mean→1（仍严格 <1）
+EXPERIENCE_PRIOR_SCALE = 8.0
+#: F11② 经验先验权重上限：伪计数封顶，防止单点高频经验碾压真实时序证据
+EXPERIENCE_PRIOR_WEIGHT_CAP = 20.0
 
 
 class ExperienceStore:
@@ -142,6 +147,35 @@ class ExperienceStore:
                 out.append({"entity_id": other, "count": int(n)})
         out.sort(key=lambda it: (-it["count"], it["entity_id"]))
         return out[: max(0, int(limit))]
+
+    def empirical_prior(
+        self,
+        entities: Iterable[str],
+        adapters: Iterable[str],
+    ) -> tuple[float, float]:
+        """经验先验（v2.4/F11②）：把一个 automation 的实体/适配器成功使用频次转成贝叶斯先验。
+
+        返回 ``(mean, weight)``：
+        - ``mean`` ∈ [0,1)：使用越频繁 → 越接近 1，表达「该 automation 是现实中活跃、反复出现的
+          例行」；``0`` 表示零经验（调用方据此**不注入**先验，行为与接入前完全一致）。
+        - ``weight`` ≥ 0：经验证据量（伪计数），喂给 ``af_predict`` 的概率合成做平滑；封顶于
+          ``EXPERIENCE_PRIOR_WEIGHT_CAP``，避免单点高频经验碾压真实时序证据。
+
+        **语义是「活跃度/确立度」先验，而非触发率估计**：经验库只记成功使用的频次，不记触发
+        时刻，故不能直接预测「何时触发」，只能表达「这条 routine 是否真实存在、值得信任」。
+        零经验 → ``(0.0, 0.0)``。
+        """
+        total = 0
+        for e in entities:
+            total += self.entity_count(str(e))
+        patterns = self._load().get("patterns") or {}
+        for a in adapters:
+            total += int((patterns.get("adapters") or {}).get(str(a), 0))
+        if total <= 0:
+            return (0.0, 0.0)
+        mean = 1.0 - math.exp(-total / EXPERIENCE_PRIOR_SCALE)
+        weight = min(float(total), EXPERIENCE_PRIOR_WEIGHT_CAP)
+        return (mean, weight)
 
     def patterns(self) -> dict[str, Any]:
         return self._load()["patterns"]

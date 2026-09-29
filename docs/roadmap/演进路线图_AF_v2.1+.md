@@ -145,7 +145,7 @@
   - 注：F9 group 容器节点（DCD 裁定方案 B）即本特征的载体，随 F10 一并交付；详见 `decisions/20260928-AutoForge-F9-group决策门-裁定.md` 执行回填 §9。
 
 ### v2.4 经验闭环与预测
-- **F11 af_experience 消费闭环接 executor/predict** `[强化 → 🟡 ①已交付（2026-09-29）]`
+- **F11 af_experience 消费闭环接 executor/predict** `[强化 → 🟢 ①已交付（2026-09-29）；②能力已交付（2026-09-29），消费闭环待 F12]`
   - 现状：`af_experience.py` 纯采集+导出，无消费方（`observe:56`）。
   - 涉及：`af_experience.py` `af_executor.py` `af_predict.py`。
   - 细分：① 经验库接进 executor 实体解析/动作选择；② 接进 `af_predict` 作为先验。
@@ -155,7 +155,12 @@
     - `resolve()` 排序键在「⑤ 相似度」之后、「entity_id 兜底」之前插入 **⑥ 经验先验**：以上全部同级时，历史上被成功使用次数多的实体优先。**仅破同分**，不覆盖置信度/可动作域/集成优选/离线降权/相似度任何一级（有单测锁定"置信度优先于经验"）。
     - 未做「动作选择」先验：executor 的 adapter 是硬键直查、无评分面，且经验库只记频次不记 action→成功率，语义上限不足——需先定义"动作选择"语义再谈。
   - 测试：`tests/unit/test_f11_experience_prior.py`（6 项：定向读 API、无经验退化、先验破同分正反、置信度不被先验越过）；全量离线门 1253 passed / 51 skipped 绿。
-  - ② 接 `af_predict` 作为先验：待做（落点已在 `af_orchestrator.score_ir` / `af_conf.band`，需与 F12 的 G4 band 归一协同）。
+  - ② 接 `af_predict` 作为先验：**能力已交付（2026-09-29），并修正路线图前提**。
+    - 源码核实：`af_predict.Predictor` 在 `src` **无任何实例化/调用方**（纯新增独立模块，符合其设计 doc 不 import `af_conf`/`af_experience`），故**不存在"消费闭环"落点**——与 F11① 当初 `af_executor` 无落点是同类情况。路线图上写的落点 `score_ir` 也**不是**耦合面（`score_ir` 只吃 IR 结构，不碰经验/band；G4 band 在 `af_conf.ConfidenceStore`）。因此本项按源码实际做：
+      - `af_experience.empirical_prior(entities, adapters) -> (mean, weight)`：经验频次→贝叶斯先验（**「活跃度/确立度」先验，非触发率估计**——经验库只记成功频次、不记触发时刻；零经验→`(0.0,0.0)`；mean 饱和严格<1、weight 封顶防碾压真实时序证据）。
+      - `af_predict.Predictor.predict/explain` 接受可选 `prior`/`prior_weight`，概率合成处做**同构贝叶斯合成**（与既有 `k·p_hour` 平滑同构，多一项证据）；先验缺失或权重<=0 → 公式与接入前完全一致（零回归）；`explain` 暴露 `experience_prior_mean/weight`。
+    - **消费闭环待 F12**：调用方（预触发服务）须把 `af_experience.empirical_prior` 的结果喂给 `Predictor.predict`，并连同 G4 band 一并注入（F12「预测预触发与 G4 band 联动」）。因 `af_predict` 当前无调用方，本次不部署即无生产行为变化（纯增量）。
+    - 测试：`tests/unit/test_f11_experience_prior.py`(+2 经验先验)、`tests/unit/test_f11_predict_prior.py`(4 项：先验缺失=基线/方向性拉向均值/说明字段/冷启动忽略)；全量离线门 1259 passed / 51 skipped 绿。
 
 - **F12 af_predict 与 G4 分级联动** `[强化，决策 C 协同]`
   - 现状：`af_predict.py` 自注"纯新增"，与 auto/shadow/ask 两套口径（`af_predict.py:327`）。
