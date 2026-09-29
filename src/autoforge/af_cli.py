@@ -314,8 +314,7 @@ def _make_runtime(
             adapter.undo_recorder = _recorder
         if dry_live:
             def _on_dry(action, params):
-                import sys
-                print(f"[DRY-LIVE 意图] {action} {params}", file=sys.stderr, flush=True)
+                logging.getLogger(__name__).debug("[DRY-LIVE 意图] %s %s", action, params)
             adapter.on_dry_run = _on_dry
         runtime.adapters.register(adapter)
         return runtime, undo_deploy_id

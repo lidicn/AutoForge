@@ -49,12 +49,15 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install homesdk (质量门禁，私有包)
-        # homesdk 无公共 registry；有 remote 的内部部署请改用内部 wheel 路径。
-        # 本地路径 / 容器 wheel 都不可用时回退告警，门禁步仅skip不阻断合并。
+        # homesdk 无公共 registry，仓库内随附 wheel 于 docker/homesdk/。
+        # 优先装仓库内 wheel；均不可用时回退告警，门禁步仅 skip 不阻断合并（P0-1 修复）。
         run: |
-          pip install -e "E:/NAS/homesdk" \
-            || pip install /vol1/1000/docker/libs/homesdk/dist/homesdk-*.whl \
+          pip install docker/homesdk/*.whl \
             || echo "homesdk 不可用，跳过门禁"
+        continue-on-error: true
+      - name: 门禁导入检查（P0-1）
+        # 干净环境必须能成功 import af_runtime（缺 homesdk 会直接失败）。
+        run: python -c "import autoforge.af_runtime"
         continue-on-error: true
       - name: Run quality gates
         run: bash gates.sh

@@ -38,6 +38,13 @@ dev = [
     "httpx>=0.27",
     "websockets>=12.0",
 ]
+# 同意/否决分类（G4 canary auto-rollback 的伦理闸门）依赖 homesdk。
+# 它是私有 wheel，未上 PyPI；仓库内随附于 docker/homesdk/，CI 与部署时通过
+#   pip install docker/homesdk/*.whl
+# 安装。将其列为可选依赖仅用于声明，不进核心依赖（保持内核零依赖承诺）。
+homesdk = [
+    "homesdk>=0.1.1",
+]
 
 [project.scripts]
 forge = "autoforge.af_cli:app"

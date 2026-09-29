@@ -10,13 +10,41 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections import deque
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterable, Mapping
 
-from .af_audit import BREAKER_OPEN, BREAKER_RECOVER, AuditEvent, AuditLog
+from .af_audit import BREAKER_OPEN, BREAKER_RECOVER, AuditEvent, AuditLog, HANDLER_FAILED
 from .af_time import TimeSource, SystemTimeSource
+
+logger = logging.getLogger(__name__)
+
+
+def _env_number(
+    name: str, default: float, *, lo: float | None = None, hi: float | None = None
+) -> float:
+    """读取数值型环境变量，解析失败 / 越界时回落默认（fail-safe 而非 fail-crash）。
+
+    P1-7 修复：原实现直接 `int(os.getenv(...))`，运维写错（如 "12s"、空串、超范围）
+    会让 EventBus 构造即抛 ValueError，服务起不来。
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        val = float(raw)
+    except (ValueError, TypeError):
+        logger.warning("%s 解析失败（值=%r），回落默认 %s", name, raw, default)
+        return default
+    if lo is not None and val < lo:
+        logger.warning("%s=%s 低于下限 %s，回落默认 %s", name, val, lo, default)
+        return default
+    if hi is not None and val > hi:
+        logger.warning("%s=%s 高于上限 %s，回落默认 %s", name, val, hi, default)
+        return default
+    return val
 
 __all__ = [
     "BusEvent",
@@ -130,15 +158,15 @@ class EventBus:
         # R-53：熔断参数可经 env 覆盖（AUTOFORGE_BREAKER_*），未显式传时读 env，缺省与原硬编码一致。
         self.breaker_threshold = (
             breaker_threshold if breaker_threshold is not None
-            else int(os.getenv("AUTOFORGE_BREAKER_THRESHOLD", "12"))
+            else int(_env_number("AUTOFORGE_BREAKER_THRESHOLD", 12, lo=1, hi=1000))
         )
         self.breaker_window = (
             breaker_window_s if breaker_window_s is not None
-            else float(os.getenv("AUTOFORGE_BREAKER_WINDOW_S", "10"))
+            else _env_number("AUTOFORGE_BREAKER_WINDOW_S", 10, lo=0.1)
         )
         self.breaker_cooldown = (
             breaker_cooldown_s if breaker_cooldown_s is not None
-            else float(os.getenv("AUTOFORGE_BREAKER_COOLDOWN_S", "15"))
+            else _env_number("AUTOFORGE_BREAKER_COOLDOWN_S", 15, lo=0.1)
         )
 
         self._seen: set[tuple[str, str, str | None]] = set()
@@ -151,7 +179,8 @@ class EventBus:
         self._subs: dict[str, list[Callable[[BusEvent], None]]] = {}
         self.counts: dict[str, int] = {ACCEPTED: 0, DUPLICATE: 0, THROTTLED: 0, BREAKER_BLOCKED: 0}
         #: v0.3.0：已成功发布的自定义事件（只读观测，供验证与后续服务层使用）
-        self.emitted: list[BusEvent] = []
+        # P1-1 修复：有界 deque，避免常驻进程无限增长。
+        self.emitted: deque[BusEvent] = deque(maxlen=1000)
 
     # ── 订阅 ──────────────────────────────────────────────────────────
     def subscribe(self, key: str, handler: Callable[[BusEvent], None]) -> None:
@@ -178,6 +207,7 @@ class EventBus:
 
         if event.event is None:
             # 实体状态事件：去重后做熔断 + 节流（防自动化隐式循环 / 抖动）
+            self._maybe_recover(event.entity_id)
             self._record_change(event.entity_id, now)
             if self.is_open(event.entity_id):
                 self.counts[BREAKER_BLOCKED] += 1
@@ -187,6 +217,18 @@ class EventBus:
                 self.counts[THROTTLED] += 1
                 self._log_drop(THROTTLED, event)
                 return THROTTLED
+        else:
+            # P1-5 修复：自定义事件此前完全跳过熔断，与 publish_custom 注释
+            # "事件风暴由熔断兜底"自相矛盾。改为按事件名维度单独熔断
+            # （key = event.<name>），既保留风暴兜底，又不污染实体维度的熔断计数
+            # （避免自动化联动风暴自伤实体维度）。阈值与实体一致，但维度隔离。
+            name_key = f"{EVENT_ENTITY_PREFIX}{event.event}"
+            self._maybe_recover(name_key)
+            self._record_change(name_key, now)
+            if self.is_open(name_key):
+                self.counts[BREAKER_BLOCKED] += 1
+                self._log_drop(BREAKER_BLOCKED, event)
+                return BREAKER_BLOCKED
 
         self._last_accepted[event.entity_id] = now
         self._last_state[event.entity_id] = event.state
@@ -195,13 +237,7 @@ class EventBus:
         return ACCEPTED
 
     def _log_drop(self, result: str, event: "BusEvent") -> None:
-        import sys
-
-        print(
-            f"[BUS-DROP] {result} {event.entity_id}={event.state!r} src={event.source}",
-            file=sys.stderr,
-            flush=True,
-        )
+        logger.info("[BUS-DROP] %s %s=%r src=%s", result, event.entity_id, event.state, event.source)
 
     def publish_all(self, events: Iterable[BusEvent]) -> list[str]:
         return [self.publish(e) for e in events]
@@ -221,11 +257,23 @@ class EventBus:
 
     # ── 熔断状态 ──────────────────────────────────────────────────────
     def is_open(self, entity_id: str) -> bool:
+        """纯查询：该实体当前是否处于熔断态。
+
+        P2-7 修复：原本在此处做"冷却到期→删除状态+记恢复审计"的副作用，
+        导致 `stats()` 调用 `open_entities()`（逐个 `is_open`）会顺带"治愈"熔断，
+        且观测接口与语义判断耦合。现改为纯查询，副作用由 `_maybe_recover` 承担。
+        """
         until = self._open_until.get(entity_id)
         if until is None:
             return False
+        return self.clock.monotonic() < until
+
+    def _maybe_recover(self, entity_id: str) -> None:
+        """副作用：若熔断冷却已结束，清除状态并记恢复审计。仅在发布路径显式调用。"""
+        until = self._open_until.get(entity_id)
+        if until is None:
+            return
         if self.clock.monotonic() >= until:
-            # 冷却结束 → 恢复
             del self._open_until[entity_id]
             self._changes.pop(entity_id, None)
             self.audit.add(
@@ -236,14 +284,17 @@ class EventBus:
                     entity_id=entity_id,
                 )
             )
-            return False
-        return True
 
     def open_entities(self) -> list[str]:
         return [e for e in list(self._open_until) if self.is_open(e)]
 
     # ── 内部 ──────────────────────────────────────────────────────────
     def _is_duplicate(self, event: BusEvent) -> bool:
+        # P1-6 修复：自定义事件 dedup_key 含唯一 event_id，永远不会被判重，却会占用
+        # 共享 4096 LRU 槽位、把真实实体事件的去重窗口挤掉。自定义事件本就不去重，
+        # 直接放行且不污染共享缓存。
+        if event.event is not None:
+            return False
         key = event.dedup_key
         if key in self._seen:
             return True
@@ -290,9 +341,25 @@ class EventBus:
 
     def _dispatch(self, event: BusEvent) -> None:
         # 精确订阅：实体维度 + 事件类型维度，无通配符
+        # P1-3 修复：逐个 handler 隔离异常，任一订阅者抛错不影响其他订阅者
+        # （与「自动化之间隔离」的设计意图一致），并记审计事件。
         for key in (event.entity_id, event.source):
             for handler in list(self._subs.get(key, ())):
-                handler(event)
+                try:
+                    handler(event)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("事件总线回调异常（已隔离，不影响其他订阅者）: key=%s", key)
+                    self.audit.add(
+                        AuditEvent(
+                            type=HANDLER_FAILED,
+                            at=self.clock.now(),
+                            message=(
+                                f"订阅回调 {getattr(handler, '__qualname__', repr(handler))} "
+                                f"抛出异常：{exc!r}"
+                            ),
+                            entity_id=event.entity_id,
+                        )
+                    )
 
     def stats(self) -> dict[str, Any]:
         return {

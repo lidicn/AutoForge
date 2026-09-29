@@ -160,8 +160,15 @@ def _fn_contains(args: list[Any]) -> bool:
 
 
 def _fn_time_between(args: list[Any]) -> bool:
-    """ISO 时间戳是否落在 [start, end) 窗口内；end<=start 视为跨午夜窗口。"""
+    """ISO 时间戳是否落在 [start, end) 窗口内；end<=start 视为跨午夜窗口。
+
+    P2-2 修复：HA 推送的 ISO 多为 UTC（带 Z / +00:00），而用户写的 hh:mm 是本地语义。
+    原先直接取 `moment.hour`（UTC 小时）→ 固定 +8h 偏差。这里把带时区的时间戳归一到
+    系统本地时区再比较（与 TimeSource.local_now() 一致）；naive 时间戳按原样处理。
+    """
     moment = _as_iso(args[0], "time_between")
+    if moment.tzinfo is not None:
+        moment = moment.astimezone()  # 无参 astimezone：归一到系统本地时区
     start = _parse_hhmm(args[1], "time_between")
     end = _parse_hhmm(args[2], "time_between")
     minutes = moment.hour * 60 + moment.minute

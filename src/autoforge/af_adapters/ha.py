@@ -243,8 +243,7 @@ class HAAdapter:
             return CallResult.fail(error, fault=kind, action=action, params=dict(params))
         if self.dry_run:
             self.intents.append((action, dict(params)))
-            import sys
-            print(f"[HAAdapter.dry_run] {action} {dict(params)}", file=sys.stderr, flush=True)
+            logging.getLogger(__name__).debug("[HAAdapter.dry_run] %s %s", action, dict(params))
             if self.on_dry_run is not None:
                 self.on_dry_run(action, params)
             return CallResult.ok({"dry_run": True, "action": action, "params": dict(params)})

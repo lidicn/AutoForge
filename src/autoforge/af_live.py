@@ -18,11 +18,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Optional
+
+logger = logging.getLogger(__name__)
 
 from .af_adapters import DEFAULT_HA_URL
 from .af_bus import BusEvent
@@ -281,9 +284,8 @@ def run_watch(
         published += 1
         total_fired += len(fired)
         if fired:
-            import sys
             for inst in fired:
-                print(f"[FIRE] {ev.entity_id}={ev.state} → 实例 {inst.instance_id} 节点 {inst.current_node_id}", file=sys.stderr, flush=True)
+                logger.debug("[FIRE] %s=%s → 实例 %s 节点 %s", ev.entity_id, ev.state, inst.instance_id, inst.current_node_id)
         if on_event is not None:
             on_event(ev, runtime)
         if tick_each and (i + 1) % tick_each == 0:

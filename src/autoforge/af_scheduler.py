@@ -10,9 +10,12 @@
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Iterable
+
+logger = logging.getLogger(__name__)
 
 from .af_audit import INSTANCE_REJECTED, QUOTA_EXCEEDED, AuditEvent, AuditLog
 from .af_bus import EVENT_ENTITY_PREFIX, BusEvent
@@ -102,11 +105,10 @@ class Scheduler:
         #    - `wait`：语义拍板 A——时间到了走 `then` 正常继续（wait 是"延时"，不是超时）
         #    - `ask`（或未知 kind）：无人应答到点 → `on_timeout` 兜底
         due = self.instances.due_timers()
-        import sys
-        print(f"[TICK] due_timers={len(due)} instances", file=sys.stderr, flush=True)
+        logger.debug("[TICK] due_timers=%d instances", len(due))
         for instance in due:
             kind = instance.timer.kind if instance.timer is not None else "timeout"
-            print(f"[TICK] inst={instance.instance_id} kind={kind} node={instance.ctx.current_node}", file=sys.stderr, flush=True)
+            logger.debug("[TICK] inst=%s kind=%s node=%s", instance.instance_id, kind, instance.ctx.current_node)
             if kind == EMIT_TIMER_KIND:
                 fired.append(self.executor.emit_due(instance))
             elif kind == "wait":
@@ -150,6 +152,16 @@ class Scheduler:
             now = self.clock.monotonic()
             last = self._debounce.get(key)
             if last is not None and (now - last) < parse_duration(node.debounce):
+                # P2-4 修复：去抖抑制此前静默 return None，无任何观测记录。
+                self.audit.add(
+                    AuditEvent(
+                        type=INSTANCE_DEBOUNCED,
+                        at=self.clock.now(),
+                        message=f"自动化 {auto.id} 节点 {node.id} 去抖抑制（{parse_duration(node.debounce)}s 内重复触发）",
+                        automation_id=auto.id,
+                        node_id=node.id,
+                    )
+                )
                 return None
             self._debounce[key] = now
 
@@ -201,9 +213,7 @@ class Scheduler:
 
     def _reject(self, auto: Automation, reason: str) -> None:
         self.rejections.append(f"{reason}:{auto.id}")
-        import sys
-
-        print(f"[SCHED-REJECT] {auto.id}: {reason}", file=sys.stderr, flush=True)
+        logger.info("[SCHED-REJECT] %s: %s", auto.id, reason)
         self.audit.add(
             AuditEvent(
                 type=INSTANCE_REJECTED,
@@ -290,13 +300,17 @@ class Scheduler:
         P1-7 修复：`to is None` 时保守返回 False（fail-closed），
         不再 fail-open 当作「仍然成立」。无明确目标态的 for 条件不可靠，
         用户应指定 `to` 才能用持续条件。
+
+        P1-2 修复：`snapshot()` 本身在 `try` 之外会抛 `UnknownEntity`
+        （实体被删除/重命名时），冒泡会拖垮整次 tick。此处把快照获取
+        一并纳入异常捕获，实体不可见时保守判为「不成立」。
         """
         if pending.to is None:
             return False
-        snapshot = self.states.snapshot([pending.entity_id])
         try:
+            snapshot = self.states.snapshot([pending.entity_id])
             return snapshot.get(pending.entity_id) == pending.to
-        except KeyError:
+        except Exception:
             return False
 
     def _update_pending(self, auto: Automation, node: Node, event: BusEvent, satisfied: bool) -> None:
@@ -322,6 +336,10 @@ class Scheduler:
         now = getattr(self.clock, 'local_now', self.clock.now)()
         today = now.date().isoformat()
         hhmm = f"{now.hour:02d}:{now.minute:02d}"
+        # P1-1 修复：_time_fired 按 (auto,node,date) 累加，跨天不清理会无限增长。
+        # 每次进入时剔除非今日的桶（集合很小，开销可忽略）。
+        if self._time_fired:
+            self._time_fired = {m for m in self._time_fired if m[2] == today}
         for auto in self.graph:
             # P1-5 修复：停用的自动化不触发时间事件
             if not getattr(auto, "enabled", True):
@@ -340,7 +358,7 @@ class Scheduler:
                         continue
                     instance = self._try_fire(auto, node, None)
                     if instance is not None:
-                        lease.confirm(instance.id)
+                        lease.confirm(instance.instance_id)
                         fired.append(instance)
                     else:
                         lease.release()  # B3-AF-03: 失败释放，当天可重试

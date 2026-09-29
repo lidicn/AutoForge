@@ -76,6 +76,9 @@ def test_breaker_opens_after_burst_and_recovers():
     assert len(events) == 1 and events[0].entity_id == "binary_sensor.x"
 
     bus.clock.advance(31)
+    # P2-7：is_open 现已改为纯查询（不再顺带治愈），恢复是显式副作用，
+    # 由 publish 路径的 _maybe_recover 或显式调用触发。
+    bus._maybe_recover("binary_sensor.x")
     assert bus.is_open("binary_sensor.x") is False
     assert any(e.type == BREAKER_RECOVER for e in bus.audit)
 

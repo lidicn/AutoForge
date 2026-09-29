@@ -10,6 +10,7 @@ G1 记录四类必填事件（IR §9.4 的失败类型）加上总线/配额类�
 from __future__ import annotations
 
 import json
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,8 @@ BREAKER_OPEN = "breaker_open"
 BREAKER_RECOVER = "breaker_recover"
 QUOTA_EXCEEDED = "quota_exceeded"
 INSTANCE_REJECTED = "instance_rejected"
+#: P2-4：触发被去抖（debounce）抑制，此前无任何观测记录
+INSTANCE_DEBOUNCED = "instance_debounced"
 INSTANCE_EXPIRED = "instance_expired"
 #: P1 实例持久化：崩溃恢复时成功挂回 / 因图变更被丢弃
 INSTANCE_RESTORED = "instance_restored"
@@ -32,6 +35,8 @@ INSTANCE_RESTORE_DROPPED = "instance_restore_dropped"
 #: v0.9.0 跨进程：写入版本冲突（expect_version 不匹配）与恢复时租约仍属其他进程
 WRITE_CONFLICT = "write_conflict"
 INSTANCE_LEASE_HELD = "instance_lease_held"
+#: P1-3：事件总线订阅回调异常隔离（单个 handler 抛错不影响其他订阅者）
+HANDLER_FAILED = "handler_failed"
 #: v2 M1 首演码仪式：签发 / 消费 / 试演期开始 / 试演期暂停 / 试演期断言失败
 PREMIERE_ISSUED = "premiere_issued"
 PREMIERE_CONSUMED = "premiere_consumed"
@@ -48,10 +53,12 @@ ALL_EVENT_TYPES = (
     QUOTA_EXCEEDED,
     INSTANCE_REJECTED,
     INSTANCE_EXPIRED,
+    INSTANCE_DEBOUNCED,
     INSTANCE_RESTORED,
     INSTANCE_RESTORE_DROPPED,
     WRITE_CONFLICT,
     INSTANCE_LEASE_HELD,
+    HANDLER_FAILED,
     PREMIERE_ISSUED,
     PREMIERE_CONSUMED,
     PREMIERE_TRIAL_STARTED,
@@ -88,9 +95,13 @@ class AuditEvent:
 
 @dataclass
 class AuditLog:
-    """内存审计日志（G1 不落盘；结构保持不变，G2 可直接换持久化实现）。"""
+    """内存审计日志（G1 不落盘；结构保持不变，G2 可直接换持久化实现）。
 
-    events: list[AuditEvent] = field(default_factory=list)
+    P1-1 修复：用有界 deque（保留最近 5000 条）防止常驻进程无限增长——
+    审计数组随运行时间线性膨胀，且 `Runtime.stats()` 每次全量序列化，会成为性能杀手。
+    """
+
+    events: deque[AuditEvent] = field(default_factory=lambda: deque(maxlen=5000))
 
     def add(self, event: AuditEvent) -> AuditEvent:
         self.events.append(event)

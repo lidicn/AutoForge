@@ -36,6 +36,10 @@ from .af_ir.expr import ExprError
 from .af_state import StateProvider, UnknownEntity, make_resolver
 from .af_time import TimeSource, SystemTimeSource, parse_duration
 
+import logging
+
+logger = logging.getLogger("autoforge.executor")
+
 __all__ = [
     "AskSession",
     "NodeExecutor",
@@ -172,26 +176,54 @@ class NodeExecutor:
             self.instances.resume(instance)  # 恢复时重新取快照
 
         # P1-11：canary 观察期结束 → 检查漂移并回滚
+        # P1-4 修复：pending_canary 现在是可序列化字典。崩溃恢复后据此重建 CanaryResult
+        # （用实时 states 作为 guard，pre_snapshot 作为回滚基准），避免 default=str 静默字符串化
+        # 后 `wrapped, adapter = "<...>"` 解包成字符、回滚静默失效。
         pending_canary = instance.ctx.context.pop("pending_canary", None)
         if pending_canary is not None and kind == "on_timeout":
             try:
-                wrapped, adapter = pending_canary
-                if wrapped.has_drift():
-                    rolled = wrapped.rollback(adapter)
+                if not isinstance(pending_canary, dict):
+                    raise ValueError(f"pending_canary 格式非法（应为 dict，实为 {type(pending_canary).__name__}）：{pending_canary!r}")
+                adapter = self.adapters.get(pending_canary.get("adapter") or "")
+                if adapter is None:
                     self.audit.add(
                         AuditEvent(
                             type=ENTITY_DRIFT,
                             at=self.clock.now(),
-                            message=f"canary 观察期检测到漂移 {wrapped.action}，已自动回滚（{len(rolled)} 次反向下发）",
+                            message=f"canary 观察期恢复：适配器 {pending_canary.get('adapter')!r} 缺失，跳过漂移回滚（安全失败，不阻断流程）",
                             automation_id=instance.automation.id,
                             instance_id=instance.instance_id,
                             node_id=node.id,
-                            data={"params": dict(wrapped.params)},
                         )
                     )
+                else:
+                    from types import SimpleNamespace
+
+                    from .af_canary import CanaryResult
+
+                    wrapped = CanaryResult(
+                        action=pending_canary.get("action", ""),
+                        params=pending_canary.get("params", {}),
+                        result=None,  # 恢复路径不依赖 result，has_drift/rollback 只用到 guard.states 与 pre_snapshot
+                        pre_states=pending_canary.get("pre_snapshot", {}),
+                        guard=SimpleNamespace(states=self.states),
+                        pre_snapshot=pending_canary.get("pre_snapshot", {}),
+                    )
+                    if wrapped.has_drift():
+                        rolled = wrapped.rollback(adapter)
+                        self.audit.add(
+                            AuditEvent(
+                                type=ENTITY_DRIFT,
+                                at=self.clock.now(),
+                                message=f"canary 观察期检测到漂移 {wrapped.action}，已自动回滚（{len(rolled)} 次反向下发）",
+                                automation_id=instance.automation.id,
+                                instance_id=instance.instance_id,
+                                node_id=node.id,
+                                data={"params": dict(wrapped.params)},
+                            )
+                        )
             except Exception:
-                import logging
-                logging.getLogger("autoforge.executor").exception("canary 漂移检查失败")
+                logging.getLogger("autoforge.executor").exception("canary 漂移检查失败（已隔离，不阻断流程）")
 
         edge = auto.pick_edge(node.id, {kind, "default"})
         if edge is None:
@@ -397,11 +429,9 @@ class NodeExecutor:
         if node.kind == "if":
             try:
                 value = evaluate(node.expr or {}, self._resolver(instance))
-                import sys
-                print(f"[IF] {node.id} expr={node.expr} → value={value}", file=sys.stderr, flush=True)
+                logger.debug("[IF] %s expr=%s → value=%r", node.id, node.expr, value)
             except (UnknownEntity, ExprError, KeyError, ValueError) as exc:
-                import sys
-                print(f"[IF] {node.id} ERROR: {exc}", file=sys.stderr, flush=True)
+                logger.warning("[IF] %s ERROR: %r", node.id, exc)
                 return self._soft_fail(instance, node, exc)
             return {"then"} if value else {"no", "default"}
 
@@ -452,8 +482,14 @@ class NodeExecutor:
                     except (ValueError, TypeError):
                         pass
             if canary_duration and canary_duration > 0:
-                # 挂起观察：存 CanaryResult + adapter，duration 到点后 resume 检查漂移
-                instance.ctx.context["pending_canary"] = (wrapped, adapter)
+                # 挂起观察：存可序列化元数据（P1-4 修复：原存 (wrapped, adapter) 对象不可序列化，
+                # 崩溃恢复后 default=str 静默字符串化 → 解包成字符 → 回滚静默失效）。恢复路径据此重建。
+                instance.ctx.context["pending_canary"] = {
+                    "action": node.action or "",
+                    "params": dict(node.params),
+                    "pre_snapshot": wrapped.pre_snapshot,
+                    "adapter": node.adapter or "",
+                }
                 self.instances.suspend(instance, node.id, canary_duration, kind="canary_observe")
                 return None
             # 无 duration → 立即检查漂移（原行为）
@@ -566,10 +602,16 @@ class NodeExecutor:
             return
 
         duration = None
-        if node.kind == "wait":
-            duration = parse_duration(node.duration)  # type: ignore[arg-type]
-        elif node.timeout:
-            duration = parse_duration(node.timeout)
+        try:
+            if node.kind == "wait":
+                duration = parse_duration(node.duration)  # type: ignore[arg-type]
+            elif node.timeout:
+                duration = parse_duration(node.timeout)
+        except (ValueError, TypeError) as exc:
+            # P2-1 修复：duration/timeout 非法（如 "abch"）原会冒泡到 run() → tick 失败 →
+            # 整个调度循环停摆。此处就地软失效（走 on_error/default），不污染调度循环。
+            self._soft_fail(instance, node, exc)
+            return
 
         self.instances.suspend(instance, node.id, duration, kind=node.kind)
 

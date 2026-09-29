@@ -156,8 +156,14 @@ class Instance:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """序列化自检：不可序列化的对象会在这里炸出来（防闭包/Socket 混入）。"""
-        return json.loads(json.dumps(self.ctx.to_dict(), ensure_ascii=False, default=str))
+        """序列化自检：上下文必须可 JSON 序列化（防闭包 / Socket / 生成器混入）。
+
+        P2-3 修复：移除 `default=str`。原写法会把不可序列化对象**静默字符串化**
+        （如 canary 挂起的 `(wrapped, adapter)` 元组），上线后序列化"成功"但恢复时
+        解包崩溃、回滚静默失效。改为严格序列化——一旦混入非 JSON 对象，立刻抛异常
+        （fail-fast），把问题暴露在测试/启动阶段而非运行时。
+        """
+        return json.loads(json.dumps(self.ctx.to_dict(), ensure_ascii=False))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -321,6 +327,23 @@ class InstanceManager:
             if i.ctx.state == SUSPENDED and i.timer is not None and i.timer.due_at <= now
         ]
 
+    def reap_terminal(self, ttl_seconds: float = 300.0) -> list[Instance]:
+        """P1-1 修复：终态实例（done/cancelled/failed/expired）在保留窗口后从内存摘除，
+        防止常驻进程内存随实例数单调增长。
+
+        Runtime 可在 tick 中周期性调用；`expire_stale` 也会顺带调用以清理历史终态实例。
+        保留窗口默认 300s，保证刚完成/刚失败的实例仍可在可观测窗口内被查询。
+        """
+        now = self.clock.monotonic()
+        dead = [
+            i
+            for i in self._instances.values()
+            if i.is_terminal and (now - i.created_monotonic) >= ttl_seconds
+        ]
+        for instance in dead:
+            self.remove(instance)
+        return dead
+
     def expire_stale(self) -> list[Instance]:
         """超过 TTL（默认 24h）或超配额的实例强制销毁。"""
         now = self.clock.monotonic()
@@ -331,6 +354,11 @@ class InstanceManager:
         ]
         for instance in stale:
             self.expire(instance)
+        # P1-1 修复：过期实例立即从内存摘除（已审计 EXPIRED，不可观测为 active）
+        for instance in stale:
+            self.remove(instance)
+        # 顺带清理历史终态实例（保留 300s 可观测窗口）
+        self.reap_terminal()
         return stale
 
     # ── vars ──────────────────────────────────────────────────────────

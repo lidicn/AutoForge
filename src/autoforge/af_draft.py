@@ -21,7 +21,6 @@ from .af_spec import SpecError
 __all__ = [
     "DraftError",
     "E_UNKNOWN_DOMAIN",
-    "DraftResult",
     "draft_intent",
     "StagingStore",
     "ComposeMetrics",

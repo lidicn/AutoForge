@@ -342,7 +342,7 @@ def build_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
         allow_credentials=True,
     )
@@ -533,7 +533,7 @@ def build_app(
 
     # 暴露 ask 节点的原生控件元数据（供前端渲染下拉/滑杆/时间轴等）
     @app.get("/api/asks/{name}", dependencies=[Depends(_read)])
-    def api_asks(name: str) -> dict[str, Any]:
+    def api_ask_name(name: str) -> dict[str, Any]:
         try:
             rec = svc.get_graph(store, name)
         except FileNotFoundError:
