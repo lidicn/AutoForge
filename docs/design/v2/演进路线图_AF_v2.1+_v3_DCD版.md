@@ -140,4 +140,37 @@ v2.3 复合编排 ────────────────────�
 - **最贵项目设了取消门**：复合编排（v2.3）先修 IR 版本机制，主体过 G3 需求门，<5% 多意图占比就推迟。
 - **治理哲学的一次明确表态**：试演期从"只统计不封禁"改为"失败即暂停、恢复必须人工"——暂停可逆就不是粗暴，放任失败自动化继续触发才是失职。
 
+---
+
+## 九、ADM 联动篇（DCD 2026-09-29 增补）
+
+> 依据：`decisions/20260929-ADM三仓联动七问-裁定.md` + `20260929-ADM协议选型MCP与ACP-裁定.md`
+> AF 角色：**自动化中枢（执行/验证权威）**，纯被动服务端——不主动调 MA/DB，由 DB 轮询驱动。
+
+### 9.1 AF 的联动现状（实测）
+
+- DB→AF：每 5s 轮询 `GET /api/asks/pending` + `POST /api/asks/answer`（ASK 通道，唯一联动线）；
+- AF→外部：**零出站调用**（AF src 无 8086/8095 引用）；
+- AF MCP server：`af_mcp.py` 在树，工具面待按联动需求补齐。
+
+### 9.2 AF 的联动档位
+
+| 档 | 联动功能 | 就绪门槛 | 说明 |
+|----|---------|---------|------|
+| 一（加固） | 契约测试：DB→AF ask 通道 schema 固化进 CI | 现在可做 | 防漂移 |
+| 一（加固） | homesdk auth/http 接入（被调侧配置规范化） | 现在可做 | 配合 homesdk 首验 |
+| 二（实验） | **DB 通过 MCP 在 AF 建自动化**（`af_mcp` 补 draft/verify/deploy 工具面） | AF v2.3.0 后 | ask 通道升级为完整 MCP 编排 |
+| 二（实验） | **AF 消费 MA 洞察建联动自动化**（例：MA"净水器出水少"→ AF 编"提醒喝水"自动化 → DB 播报） | AF v2.3.0 + MA vMA-1.2.2 后 | AF 首次需要出站读 MA（经 MCP client），打破零出站——需单独评审 |
+| 三（挂门） | AutoForge→AutoFlow 交接协议 | AF 成熟信号 | 议题三裁定不变 |
+
+### 9.3 关键修正（DCD 2026-09-29 修订）
+
+"播报昨日书房开机时长"类表达动作**不归 AF**。且"MA→AF→DB"不是同步调用链，是**事件流**：MA 发 `ma/insights` 事实事件，AF 订阅后生成自动化提案（进审批，不自动部署），DB 订阅后过 Sentinel 闸门播出——**三方不持调用链，只对事件反应**。
+
+**AF 需新增 MQTT 桥**（当前 af_bus 是进程内总线，无 MQTT）：发布 `af/automation/fired|failed`、订阅 `ma/insights`。排入 v2.3.0 后（第二档）。详见 `decisions/20260929-联动协议修订-事件流与收件箱.md`。
+
+### 9.4 MQTT 在线探测规范（三仓统一，见 homesdk 联动篇 §L2）
+
+AF 遵循：发布 retained `adm/autoforge/status = online|offline`（LWT 保离线）+ `adm/autoforge/caps`（能力摘要 JSON，变更时发布）。
+
 —— 关键决策部 · Directorate of Critical Decisions (DCD)

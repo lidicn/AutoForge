@@ -41,6 +41,10 @@ services:
       - AUTOFORGE_LIVE_ENABLED=${AUTOFORGE_LIVE_ENABLED:-0}
       - AUTOFORGE_HA_URL=${AUTOFORGE_HA_URL:-}
       - AUTOFORGE_SESSION_TTL_S=${AUTOFORGE_SESSION_TTL_S:-3600}
+      # DCD 20260929 P3：ask 通道端到端送达生效前提——AF 必须启用，且与豆包管家共享同一 key（HMAC 对称）。
+      # 值由宿主机 env / .env 注入；deploy 前确保 AUTOFORGE_INBOX_KEY 已设，否则读侧（af_live.py:410）拒收全部 inbox 答案。
+      # ⚠️ compose 自动加载的 .env 在「compose 同目录」（即本文件所在 docker/.env），不是仓库根；放错位置会取到空值。也可用 `docker compose --env-file .env` 显式指定。
+      - AUTOFORGE_INBOX_KEY=${AUTOFORGE_INBOX_KEY:-}
       # - AUTOFORGE_HA_TOKEN=${AUTOFORGE_HA_TOKEN:-}
       # - AUTOFORGE_API_TOKENS=${AUTOFORGE_API_TOKENS:-}
     restart: unless-stopped

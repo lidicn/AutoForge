@@ -22,7 +22,7 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Mapping
+from typing import Any, Callable, Iterable, Iterator, Mapping, Optional
 
 from .af_adapters import DEFAULT_HA_URL
 from .af_bus import BusEvent
@@ -363,14 +363,14 @@ def start_ticker(
                 logger.error("tick SAFE HALTED: %s", supervisor.health().halted_reason)
                 break
             _write_asks()
-            read_answer_inbox(runtime)
+            read_answer_inbox(runtime, inbox_dir=inbox)
 
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
     return t
 
 
-def read_answer_inbox(runtime: Any) -> None:
+def read_answer_inbox(runtime: Any, inbox_dir: Optional[str] = None) -> None:
     """R-20：读 answer_inbox 并把应答注入 runtime。密钥校验（与 af_api 写侧共享 AUTOFORGE_INBOX_KEY）。
 
     v2 M3：结构化 answer（AskAnswer dict）走 executor.answer_structured（缺省即拒）；否则走自由文本 answer。
@@ -382,10 +382,13 @@ def read_answer_inbox(runtime: Any) -> None:
     import os
     logger = logging.getLogger("autoforge.live")
     store = getattr(runtime, "store", None)
-    root = store.root if store else None
-    if not root:
-        return
-    inbox = Path(root) / "answer_inbox"
+    if inbox_dir:
+        inbox = Path(inbox_dir)
+    else:
+        root = store.root if store else None
+        if not root:
+            return
+        inbox = Path(root) / "answer_inbox"
     if not inbox.exists():
         return
     key = (os.environ.get("AUTOFORGE_INBOX_KEY") or "").strip()
@@ -420,7 +423,7 @@ def read_answer_inbox(runtime: Any) -> None:
                     result = runtime.executor.answer(room=room, text=text, ask_id=ask_id)
                 if result is not None:
                     f.unlink(missing_ok=True)  # 成功消费后才清理
-                    logger.info("answer consumed: ask_id=%s room=%s → inst=%s", ask_id, room, result.instance_id)
+                    logger.warning("answer consumed: ask_id=%s room=%s → inst=%s", ask_id, room, result.instance_id)
                 else:
                     logger.warning("answer not consumed (保留证据文件): ask_id=%s room=%s", ask_id, room)
             except Exception:

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from autoforge.af_evo import (
     AUTO_MIN,
     SHADOW_LOW,
+    EvoPolicy,
     EvoProposal,
     EvoScanner,
     EvoStatus,
@@ -19,6 +20,27 @@ from autoforge.af_evo import (
     action_signature,
     trigger_similarity,
 )
+
+
+# F13①：suggested_ir 已是真 IR 文档（v0.3.0），提案元数据在 meta._evo。
+# 以下 helper 从真 IR 形态提取原本 envelope 承载的信息。
+def ir_meta(ir):
+    return (ir.get("meta") or {}).get("_evo", {})
+
+
+def ir_do(ir):
+    return [n for n in ir.get("nodes", []) if n.get("kind") != "on"]
+
+
+def ir_on(ir):
+    return next((n for n in ir.get("nodes", []) if n.get("kind") == "on"), None)
+
+
+def ir_children(ir):
+    for n in ir.get("nodes", []):
+        if n.get("kind") == "group":
+            return n.get("children", [])
+    return []
 
 
 # ======================================================================
@@ -157,18 +179,18 @@ def test_merge_redundant_similar_trigger_same_action():
     assert len(merge) == 1
     p = merge[0]
     assert p.related_ids == ("auto.a", "auto.b")
-    assert set(p.suggested_ir["revision_of"]) == {"auto.a", "auto.b"}
-    assert "auto.a" in p.suggested_ir["graph"]
+    assert set(ir_meta(p.suggested_ir)["revision_of"]) == {"auto.a", "auto.b"}
+    assert p.suggested_ir["id"] == "auto_a"
 
 
 def test_merge_keeps_primary_and_removes_secondary():
     s = scanner([auto("auto.b"), auto("auto.a")])
     p = [x for x in s.scan() if x.strategy is EvoStrategy.MERGE_REDUNDANT][0]
     assert p.automation_id == "auto.a"
-    assert p.suggested_ir["remove"] == ["auto.b"]
-    merged = p.suggested_ir["graph"]["auto.a"]
-    assert merged["automation_id"] == "auto.a"
-    assert len(merged["trigger"]) == 1          # 触发去重后只剩一条
+    assert ir_meta(p.suggested_ir)["remove"] == ["auto.b"]
+    merged = p.suggested_ir                      # 单自动化提案即真 IR 文档
+    assert merged["id"] == "auto_a"
+    assert ir_on(merged) is not None            # 触发去重后只剩一条 on 节点
 
 
 def test_merge_skipped_when_actions_differ():
@@ -237,7 +259,7 @@ def test_split_triggers_above_five_do_nodes():
     out = scanner([_big("auto.big", 6)]).scan()
     splits = [p for p in out if p.strategy is EvoStrategy.SPLIT_OVERSIZED]
     assert len(splits) == 1
-    assert splits[0].suggested_ir["detail"]["parts"] == 2
+    assert ir_meta(splits[0].suggested_ir)["detail"]["parts"] == 2
 
 
 def test_split_not_at_five_do_nodes_boundary():
@@ -248,10 +270,10 @@ def test_split_not_at_five_do_nodes_boundary():
 def test_split_part_layout_keeps_primary_id():
     p = [x for x in scanner([_big("auto.big", 6)]).scan()
          if x.strategy is EvoStrategy.SPLIT_OVERSIZED][0]
-    graph = p.suggested_ir["graph"]
-    assert set(graph) == {"auto.big", "auto.big#part2"}
-    assert [len(graph[k]["do"]) for k in ("auto.big", "auto.big#part2")] == [3, 3]
-    assert p.suggested_ir["remove"] == []
+    graph = ir_children(p.suggested_ir)
+    assert {c["id"] for c in graph} == {"auto_big", "auto_big_part2"}
+    assert [len(ir_do(c)) for c in graph] == [3, 3]
+    assert ir_meta(p.suggested_ir)["remove"] == []
 
 
 def test_split_skipped_without_do_nodes():
@@ -270,7 +292,7 @@ def test_adjust_trigger_above_threshold():
     out = [p for p in s.scan() if p.strategy is EvoStrategy.ADJUST_TRIGGER]
     assert len(out) == 1
     assert abs(out[0].meta["intervention_rate"] - 0.4) < 1e-9
-    do = out[0].suggested_ir["graph"]["auto.hot"]["do"]
+    do = ir_do(out[0].suggested_ir)
     assert do[0]["kind"] == "ask" and len(do) == 3
 
 
@@ -303,7 +325,7 @@ def test_add_fallback_when_on_error_missing():
     out = scanner([auto("auto.a", do=[node("n1", on_error=None)])]).scan()
     got = [p for p in out if p.strategy is EvoStrategy.ADD_FALLBACK]
     assert len(got) == 1
-    assert got[0].suggested_ir["detail"]["patched_nodes"] == ["n1"]
+    assert ir_meta(got[0].suggested_ir)["detail"]["patched_nodes"] == ["n1"]
 
 
 def test_add_fallback_injects_default_on_error():
@@ -311,7 +333,7 @@ def test_add_fallback_injects_default_on_error():
     pol = EvoPolicy(default_on_error={"kind": "notify", "target": "person.admin"})
     s = scanner([auto("auto.a", do=[node("n1", on_error=None)])], policy=pol)
     p = [x for x in s.scan() if x.strategy is EvoStrategy.ADD_FALLBACK][0]
-    got = p.suggested_ir["graph"]["auto.a"]["do"][0]["on_error"]
+    got = ir_do(p.suggested_ir)[0]["on_error"]
     assert got == {"kind": "notify", "target": "person.admin"}
 
 
@@ -331,7 +353,7 @@ def test_add_fallback_per_node_mode():
                 policy=EvoPolicy(fallback_per_node=True))
     got = [p for p in s.scan() if p.strategy is EvoStrategy.ADD_FALLBACK]
     assert len(got) == 2
-    assert {tuple(p.suggested_ir["detail"]["patched_nodes"]) for p in got} == {("n1",), ("n2",)}
+    assert {tuple(ir_meta(p.suggested_ir)["detail"]["patched_nodes"]) for p in got} == {("n1",), ("n2",)}
 
 
 # ======================================================================
@@ -340,7 +362,8 @@ def test_add_fallback_per_node_mode():
 
 def test_promote_shadow_on_three_consecutive_hits():
     stats = FakeStats(shadow={"auto.s": [1, 1, 1]})
-    out = scanner([auto("auto.s")], executor_stats=stats).scan()
+    out = scanner([auto("auto.s")], executor_stats=stats,
+                  policy=EvoPolicy(require_shadow_band=False)).scan()
     got = [p for p in out if p.strategy is EvoStrategy.PROMOTE_SHADOW]
     assert len(got) == 1
     assert got[0].meta["shadow_streak"] == 3
@@ -348,18 +371,21 @@ def test_promote_shadow_on_three_consecutive_hits():
 
 def test_promote_shadow_boundary_two_hits():
     stats = FakeStats(shadow={"auto.s": [1, 1]})
-    out = scanner([auto("auto.s")], executor_stats=stats).scan()
+    out = scanner([auto("auto.s")], executor_stats=stats,
+                  policy=EvoPolicy(require_shadow_band=False)).scan()
     assert not [p for p in out if p.strategy is EvoStrategy.PROMOTE_SHADOW]
 
 
 def test_promote_shadow_requires_trailing_streak():
     stats = FakeStats(shadow={"auto.s": [1, 1, 1, 0, 1]})
-    out = scanner([auto("auto.s")], executor_stats=stats).scan()
+    out = scanner([auto("auto.s")], executor_stats=stats,
+                  policy=EvoPolicy(require_shadow_band=False)).scan()
     assert not [p for p in out if p.strategy is EvoStrategy.PROMOTE_SHADOW]
 
 
 def test_promote_shadow_missing_stats_warns_and_skips():
-    s = scanner([auto("auto.s")], executor_stats=object())
+    s = scanner([auto("auto.s")], executor_stats=object(),
+                policy=EvoPolicy(require_shadow_band=False))
     out = s.scan()
     assert not [p for p in out if p.strategy is EvoStrategy.PROMOTE_SHADOW]
     assert [w for w in s.warnings if "shadow" in w]
@@ -367,9 +393,10 @@ def test_promote_shadow_missing_stats_warns_and_skips():
 
 def test_promote_shadow_targets_auto_min():
     stats = FakeStats(shadow={"auto.s": [1, 1, 1, 1]})
-    p = [x for x in scanner([auto("auto.s")], executor_stats=stats).scan()
+    p = [x for x in scanner([auto("auto.s")], executor_stats=stats,
+                             policy=EvoPolicy(require_shadow_band=False)).scan()
          if x.strategy is EvoStrategy.PROMOTE_SHADOW][0]
-    detail = p.suggested_ir["detail"]
+    detail = ir_meta(p.suggested_ir)["detail"]
     assert detail["confidence_target"] == AUTO_MIN == 0.85
     assert detail["band_target"] == "auto"
 
@@ -473,7 +500,8 @@ def test_submit_failure_marks_error_fail_open():
 def test_submitted_conf_capped_below_shadow_low():
     stats = FakeStats(shadow={"auto.s": [1] * 20})
     mgr = FakeProposalManager()
-    s = scanner([auto("auto.s")], executor_stats=stats, proposal_manager=mgr)
+    s = scanner([auto("auto.s")], executor_stats=stats, proposal_manager=mgr,
+                policy=EvoPolicy(require_shadow_band=False))
     p = [x for x in s.scan() if x.strategy is EvoStrategy.PROMOTE_SHADOW][0]
     assert p.confidence > 0.9
     assert mgr.calls[0]["conf"] == 0.59 < SHADOW_LOW

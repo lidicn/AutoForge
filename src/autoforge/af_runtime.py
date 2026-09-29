@@ -100,9 +100,9 @@ class Runtime:
             try:
                 from autoforge.af_runtime_ext import install as _install_grading
                 self.grading = _install_grading(self)
-                self.audit.append({"kind": "conf_grading_enabled", "at": self.clock.now()})
+                self.audit.add(AuditEvent(type="conf_grading_enabled", at=self.clock.now(), message="conf grading enabled"))
             except Exception as _e:
-                self.audit.append({"kind": "conf_grading_init_failed", "error": str(_e), "at": self.clock.now()})
+                self.audit.add(AuditEvent(type="conf_grading_init_failed", at=self.clock.now(), message=str(_e)))
                 self.grading = None
 
     # ── 事件 ──────────────────────────────────────────────────────────

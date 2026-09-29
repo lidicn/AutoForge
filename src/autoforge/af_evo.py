@@ -478,7 +478,7 @@ class EvoPolicy:
     fallback_per_node: bool = False            # True = 每个缺口节点单独一条提案
     # 升档
     promote_shadow_hits: int = 3               # 连续命中 >= 3
-    require_shadow_band: bool = False          # band 口径未定，见 §7
+    require_shadow_band: bool = True           # F13②：默认要求 shadow 档才允许 promote（对齐 G4 band 闸门）
     promote_confidence_target: float = AUTO_MIN
     # 健康度闸门
     low_health_only: bool = False
@@ -501,19 +501,133 @@ class EvoPolicy:
 #  suggested_ir 构造（可换装点）
 # ======================================================================
 
-def default_ir_builder(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """缺省 ir_builder：产出 graph-delta 信封（自描述、可审计）。
+# 真 IR 形态重排（F13①）：把 automation_ir 的 trigger/do 轻量形态
+# 对齐 ir.schema.json v0.3.0 的 nodes/edges 文档。
+_TRIGGER_FIELDS = ("type", "entity_id", "from", "to", "event", "at", "op", "offset", "sources")
 
-    换成裸 Automation IR 只需给 ``EvoScanner`` 注入别的 builder。
+
+def _clean_node_id(raw: str, fallback: str) -> str:
+    """清洗为合法节点 id（schema 顶层要求 ``^[a-z][a-z0-9_]*$``，全小写）。"""
+    s = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in (raw or "")).lower()
+    if not s or not s[0].isalpha():
+        s = "n_" + (s or "")
+    return s[:64]
+
+
+def _clean_trigger(trig: Mapping[str, Any]) -> dict[str, Any]:
+    """只保留 schema trigger $def 允许的字段（additionalProperties:false）。
+
+    evo 内部触发条件用 ``kind`` 表示类型，schema 用 ``type``，这里做映射。
     """
+    t = dict(trig)
+    if "kind" in t and "type" not in t:
+        t["type"] = t.pop("kind")
+    out: dict[str, Any] = {}
+    for k in _TRIGGER_FIELDS:
+        if k in t and t[k] is not None:
+            out[k] = t[k]
+    return out
+
+
+def _ir_from_automation_ir(
+    aid: str, ir: dict[str, Any], *, evo_meta: dict[str, Any]
+) -> dict[str, Any]:
+    """把单条 ``automation_ir`` 结果重排为合规 IR 文档（v0.3.0）。"""
+    name = ir.get("name") or aid
+    try:
+        version = int(ir.get("version", 1) or 1)
+    except (TypeError, ValueError):
+        version = 1
+    mode = ir.get("mode") or "single"
+    _trig = ir.get("trigger")
+    if isinstance(_trig, Mapping) and not isinstance(_trig, list):
+        _trig = [_trig]          # 容忍单条 dict 触发（standalone ir_builder）
+    triggers = [m for m in (_as_mapping(t) for t in (_trig or [])) if m]
+    _do = ir.get("do")
+    if isinstance(_do, Mapping) and not isinstance(_do, list):
+        _do = [_do]              # 容忍单条 dict do（standalone ir_builder）
+    do_nodes = [m for m in (_as_mapping(n) for n in (_do or [])) if m]
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    on_ids: list[str] = []
+    for i, trig in enumerate(triggers):
+        on_id = _clean_node_id(f"{aid}__on{i + 1}", f"on{i + 1}")
+        nodes.append({"id": on_id, "kind": "on", "trigger": _clean_trigger(trig)})
+        on_ids.append(on_id)
+    do_ids: list[str] = []
+    for j, dn in enumerate(do_nodes):
+        did = _clean_node_id(
+            dn.get("node_id") or dn.get("id") or f"{aid}__do{j + 1}", f"do{j + 1}"
+        )
+        node: dict[str, Any] = {"id": did, "kind": str(dn.get("kind", "do"))}
+        for k, v in dn.items():
+            if k in ("node_id", "id"):
+                continue
+            node[k] = v
+        if node["kind"] == "do" and "adapter" not in node:
+            node["adapter"] = "homeassistant"   # 真 IR 要求 do 节点标明适配器
+        nodes.append(node)
+        do_ids.append(did)
+    if on_ids and do_ids:
+        edges.append({"from": on_ids[0], "to": do_ids[0], "kind": "then"})
+    if len(do_ids) > 1:
+        for k in range(1, len(do_ids)):
+            edges.append({"from": do_ids[k - 1], "to": do_ids[k], "kind": "then"})
+    meta = dict(ir.get("meta") or {})
+    meta["_evo"] = evo_meta
     return {
-        "strategy": str(payload.get("strategy", "")),
-        "automation_id": payload.get("primary_id"),
+        "ir_version": "0.3.0",
+        "id": _clean_node_id(aid, "evo"),
+        "name": name,
+        "version": version,
+        "mode": mode,
+        "nodes": nodes,
+        "edges": edges,
+        "meta": meta,
+    }
+
+
+def default_ir_builder(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """缺省 ir_builder：直接产出真 IR 文档（对齐 ir.schema.json v0.3.0）。
+
+    F13①：不再包 graph-delta 信封，``suggested_ir`` 即为合规 IR——
+    单自动化重排为 nodes/edges 文档；多自动化（split）以 ``kind:group``
+    节点承载（children 为各 part 合规 IR，对齐 v0.3.0 group 锚）；提案元数据
+    （revision_of/remove/changes）移入 ``meta._evo`` 保留审计链路。
+    ProposalManager.build_ir 可直接 ``return dict(suggested_ir)`` 消费。
+    """
+    graph = dict(payload.get("graph", {}) or {})
+    strategy = str(payload.get("strategy", ""))
+    primary = payload.get("primary_id")
+    evo_meta = {
+        "strategy": strategy,
         "revision_of": list(payload.get("revision_of", []) or []),
-        "graph": dict(payload.get("graph", {}) or {}),
         "remove": list(payload.get("remove", []) or []),
         "changes": list(payload.get("changes", []) or []),
         "detail": dict(payload.get("detail", {}) or {}),
+    }
+    autos = list(graph.values())
+    if len(autos) <= 1:
+        return _ir_from_automation_ir(
+            primary or "evo", autos[0] if autos else {}, evo_meta=evo_meta
+        )
+    children = [
+        _ir_from_automation_ir(aid, ir, evo_meta=evo_meta) for aid, ir in graph.items()
+    ]
+    group_node = {
+        "id": _clean_node_id(f"{primary or 'evo'}__group", "group"),
+        "kind": "group",
+        "children": children,
+    }
+    return {
+        "ir_version": "0.3.0",
+        "id": _clean_node_id(primary or "evo_group", "evo_group"),
+        "name": f"evo-{strategy}",
+        "version": 1,
+        "mode": "single",
+        "nodes": [group_node],
+        "edges": [],
+        "meta": {"_evo": evo_meta},
     }
 
 

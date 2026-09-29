@@ -7,9 +7,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 from autoforge.af_canary_supervisor import (
     DEFAULT_CANARY_SPEC, CanaryPolicy, CanarySupervisor,
@@ -23,6 +26,7 @@ from autoforge.af_feedback import (
 from autoforge.af_intervention import InterventionDetector, InterventionPolicy
 from autoforge.af_proposal import Proposal, ProposalManager, ProposalStatus, StaticGuardPolicy
 from autoforge.af_shadow import ShadowBinding, ShadowPolicy, ShadowRunner
+from autoforge.af_pretrigger import PreTriggerService
 
 __all__ = ["ConfGrading", "install", "make_later", "api_handlers", "mcp_tools"]
 
@@ -57,6 +61,7 @@ class ConfGrading:
     canary: CanarySupervisor
     proposals: ProposalManager
     binding: ShadowBinding | None = None
+    pretrigger: Any = None
     persist_dir: str | None = None
 
     # ---- 生命周期 ------------------------------------------------------- #
@@ -124,7 +129,7 @@ def install(
     exporter = FeedbackExporter(recorder=recorder)
 
     intervention = InterventionDetector(
-        conf=conf, recorder=recorder, clock=clock, audit=audit, states=states,
+        conf=conf, recorder=recorder, clock=clock, audit=audit,
         policy=intervention_policy or InterventionPolicy(), later=later,
     )
     intervention.mark_managed_from_graph(graph)
@@ -164,6 +169,27 @@ def install(
     )
     grading.restore()
 
+    # F12 预测性触发消费闭环：组装 + 记录真实触发（包裹 on_spawn）+ 周期扫描
+    pretrigger = PreTriggerService(
+        runtime,
+        conf=conf,
+        experience=None,  # 接入点：ExperienceStore 可由调用方注入（F11② 先验）
+        threshold=0.8,
+        interval_seconds=90.0,
+        persist_dir=persist_dir,
+    )
+    grading.pretrigger = pretrigger
+
+    _prev_spawn = runtime.instances.on_spawn
+    def _on_spawn(inst):
+        if _prev_spawn is not None:
+            _prev_spawn(inst)
+        try:
+            pretrigger.record_fire(inst)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("pretrigger record_fire 失败：%s", exc)
+    runtime.instances.on_spawn = _on_spawn
+
     # SSE 订阅：HA 事件流 → 人工干预检测
     if subscribe is not None:
         subscribe(grading.observe)
@@ -181,6 +207,7 @@ def install(
             later(3600.0, _tick)
 
         later(3600.0, _tick)
+        pretrigger.start(later)  # F12 周期扫描（每 interval_seconds 一次）
 
     return grading
 
@@ -233,6 +260,13 @@ def api_handlers(grading: ConfGrading) -> dict[tuple[str, str], Callable[..., An
         return {"automation_id": automation_id,
                 "conf": grading.shadow.conf.values.get(automation_id)}
 
+    def _pretrigger_status() -> dict[str, Any]:
+        svc = grading.pretrigger
+        if svc is None:
+            return {"enabled": False}
+        return {"enabled": True, "stats": svc.stats(),
+                "threshold": svc.threshold, "interval_seconds": svc.interval_seconds}
+
     return {
         ("POST", "/api/proposals"): _post_proposals,
         ("GET", "/api/proposals"): _list_proposals,
@@ -241,6 +275,7 @@ def api_handlers(grading: ConfGrading) -> dict[tuple[str, str], Callable[..., An
         ("GET", "/api/feedback"): _feedback,
         ("GET", "/api/conf"): _conf,
         ("POST", "/api/conf/{id}/promote"): _promote,
+        ("GET", "/api/pretrigger"): _pretrigger_status,
     }
 
 
@@ -251,4 +286,7 @@ def mcp_tools(grading: ConfGrading) -> dict[str, Callable[..., Any]]:
         "af_approve_proposal": lambda proposal_id, by="agent": grading.proposals.approve(proposal_id, by=by).to_json(),
         "af_reject_proposal": lambda proposal_id, reason=None, by="agent": grading.proposals.reject(proposal_id, by=by, reason=reason).to_json(),
         "af_export_feedback": lambda **kw: grading.exporter.query(FeedbackFilter(**kw)),
+        "af_pretrigger_status": lambda: (
+            grading.pretrigger.stats() if grading.pretrigger else {"enabled": False}
+        ),
     }

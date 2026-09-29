@@ -552,7 +552,19 @@ class Predictor:
         *,
         state: Mapping[str, Any] | None = None,
         window_minutes: float | None = None,
+        prior: float | None = None,
+        prior_weight: float | None = None,
     ) -> bool:
+        """概率 **>** 阈值时提前触发，并标记 `predicted=True` 防重复。
+
+        返回语义：
+            True  = 本次发起了提前触发，且 executor 调用成功（已标记）
+            False = 未发起（概率不足 / 已标记过 / executor 失败 / 先验注入无效）
+
+        `prior` / `prior_weight` 为可选的**经验派生先验**（F11②，来自 `af_experience`
+        `empirical_prior`）：由调用方（F12 预触发服务）注入，本模块**不 import af_conf /
+        af_experience**，保持纯新增契约。`prior` 缺省或 `prior_weight<=0` → 行为与旧版一致。
+        """
         """概率 **>** 阈值时提前触发，并标记 `predicted=True` 防重复。
 
         返回语义：
@@ -574,7 +586,10 @@ class Predictor:
         now = ensure_aware(self._clock.local_now(), who="clock.local_now")
         window = self._pre_window if window_minutes is None else _require_window(window_minutes)
 
-        info = self.explain(aid, now, window, state=query_state)
+        info = self.explain(
+            aid, now, window, state=query_state,
+            prior=prior, prior_weight=prior_weight,
+        )
         probability = float(info["p"])
         if probability <= thr:
             logger.debug("%s 概率 %.3f 未超过阈值 %.3f", aid, probability, thr)

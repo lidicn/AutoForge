@@ -21,6 +21,25 @@ jobs:
       - name: Run tests
         run: pytest tests/ -q
 
+  contracts:
+    name: adm-linkage-contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run ADM linkage contract tests
+        # DCD v4.1 七问裁定 第一档①：三主通道接口契约测试进 CI，防跨仓协议漂移。
+        # 已落地：DB→AF（ASK 队列，tests/contract/test_af_ask_contract.py）、
+        #         AF→MA（指标回灌，tests/contract/test_af_ma_metrics_contract.py）。
+        # 本步独立于全量 suite，避免被历史不稳定/需真 HA 的用例淹没，使联动契约成为可见硬闸门。
+        run: pytest tests/contract -v
+
   gates:
     name: quality-gates
     runs-on: ubuntu-latest

@@ -162,16 +162,26 @@
     - **消费闭环待 F12**：调用方（预触发服务）须把 `af_experience.empirical_prior` 的结果喂给 `Predictor.predict`，并连同 G4 band 一并注入（F12「预测预触发与 G4 band 联动」）。因 `af_predict` 当前无调用方，本次不部署即无生产行为变化（纯增量）。
     - 测试：`tests/unit/test_f11_experience_prior.py`(+2 经验先验)、`tests/unit/test_f11_predict_prior.py`(4 项：先验缺失=基线/方向性拉向均值/说明字段/冷启动忽略)；全量离线门 1259 passed / 51 skipped 绿。
 
-- **F12 af_predict 与 G4 分级联动** `[强化，决策 C 协同]`
+- **F12 af_predict 与 G4 分级联动** `[强化，决策 C 协同]` ✅ **已交付（2026-09-29，NAS 部署 + 真机冒烟 PRETRIGGER_OK）**
   - 现状：`af_predict.py` 自注"纯新增"，与 auto/shadow/ask 两套口径（`af_predict.py:327`）。
   - 涉及：`af_predict.py` `af_shadow.py` `af_conf.py`。
   - 细分：① 预测预触发与 G4 band 联动（stage schema 冻结后统一口径）；② pre_trigger at-most-once 与 conflict 协调。
   - 决策结论（C 协同）：两套置信口径随 stage schema 冻结归一。
+  - 部署要点：镜像烘焙模式（scp `af_pretrigger.py`/`af_predict.py`/`af_runtime_ext.py`/`tests/test_af_pretrigger.py` 到 `/src` 后 `docker compose -f docker/docker-compose.api.yml build autoforge-api` 重建镜像 + `up -d`）；只读层（`AUTOFORGE_LIVE_ENABLED=0`）；部署态 `compose` 加 `AUTOFORGE_CONF_GRADING=1`（F12 依赖 G4 须开启）。
 
-- **F13 af_evo 提案真 IR 内联与 band 口径** `[强化]`
-  - 现状：`af_evo.py` `suggested_ir` 是 delta 信封，真 IR schema 未内联；`require_shadow_band` 默认 False（`EvoPolicy:454`）。
+- **F13 af_evo 提案真 IR 内联与 band 口径** `[强化]` ✅ **已交付（2026-09-29，本地全量门 217 passed/2 skipped 绿 + 48 项 evo 专项全过）**
+  - 现状（交付前）：`af_evo.py` `suggested_ir` 是 delta 信封，真 IR schema 未内联；`require_shadow_band` 默认 False（`EvoPolicy:454`）。
   - 涉及：`af_evo.py` `af_ir/schema/ir.schema.json`。
-  - 细分：① evo 提案直接产真 IR delta（对准 v0.3.0 group 锚）；② 默认要求 shadow band 才允许 promote。
+  - 细分：① evo 提案直接产真 IR（对准 ir.schema.json v0.3.0）；② 默认要求 shadow band 才允许 promote（对齐 G4 band 闸门）。
+  - 交付：
+    - **F13②** `EvoPolicy.require_shadow_band` 默认 `False`→`True`（`af_evo.py:481`）；`_detect_promote` 在 `_band_of(aid) != "shadow"` 时跳过（与 G4 `af_conf.ConfidenceStore` 的 band 闸门口径一致，evo 升档不再绕过人审档位）。
+    - **F13①** `default_ir_builder` 重写，不再包 graph-delta 信封——`suggested_ir` 即合规 IR 文档（v0.3.0）：
+      - 单自动化：`_ir_from_automation_ir` 重排为 `nodes/edges`（on 节点 + trigger、do 节点 + `adapter:"homeassistant"`），顶层 `id`/`ir_version`/`name`/`version`/`mode`/`meta` 齐备；`trigger` 经 `_clean_trigger` 做 `kind`→`type` 映射 + `additionalProperties:false` 字段白名单；
+      - 多自动化（split）：`kind:"group"` 节点承载，`children` 为各 part 合规 IR（`root_key="child_automation"` 校验通过）；
+      - 提案元数据（revision_of/remove/changes/detail）移入 `meta._evo` 保留审计链路；`ProposalManager.build_ir` 可直接 `return dict(suggested_ir)` 消费。
+    - 新增 `_clean_node_id`（全小写 + 非法字符→`_` + 首字符非字母补 `n_` + 截断 64）保证所有节点 id 匹配 schema `^[a-z][a-z0-9_]*$`。
+  - 测试：`tests/test_af_evo_f13.py`（4 项：require_shadow_band 默认 True / merge 合规 IR / adjust+fallback+promote 合规 IR + split group IR）；既有 `tests/test_af_evo_strategies.py`（43 项）同步把 9 处 envelope 断言改为真 IR 提取 + id 清洗 + 4 处 promote 测试显式 `EvoPolicy(require_shadow_band=False)` 保留原逻辑验证；共 48 项 af_evo 全过，ir/evo 广域 217 passed/2 skipped。
+  - 部署（待窗口）：scp `src/autoforge/af_evo.py` + 两个测试文件到 NAS `/src`，镜像烘焙重建 `autoforge-api`；evo scan 产出真 IR、ProposalManager 消费闭环真机冒烟。
 
 ### v2.5 NL 双向结构化保真
 - **F14 NL→IR 结构化可逆编译器** `[新建/强化]`
