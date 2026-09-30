@@ -360,12 +360,17 @@ def start_ticker(
             if stop.wait(interval_s):
                 break
             # B3-AF-01 + mimo: TickSupervisor 包装，异常分类/退避/SAFE HALT
-            outcome = supervisor.run_once(fn)
-            if outcome.status.value == "halted":
-                logger.error("tick SAFE HALTED: %s", supervisor.health().halted_reason)
-                break
-            _write_asks()
-            read_answer_inbox(runtime, inbox_dir=inbox)
+            # 韧性（审计 AF-第二轮 缺陷2）：整轮包 try/except，任一未捕获异常只记日志并
+            # 下一轮重试，不再静默杀死 daemon 线程（否则时间驱动自动化悄然停摆且无解信号）。
+            try:
+                outcome = supervisor.run_once(fn)
+                if outcome.status.value == "halted":
+                    logger.error("tick SAFE HALTED: %s", supervisor.health().halted_reason)
+                    break
+                _write_asks()
+                read_answer_inbox(runtime, inbox_dir=inbox)
+            except Exception:
+                logger.exception("ticker 循环异常，下一轮重试（线程保活）")
 
     t = threading.Thread(target=_loop, daemon=True)
     t.start()

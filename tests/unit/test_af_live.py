@@ -7,6 +7,7 @@ import threading
 from autoforge.af_bus import BusEvent
 from autoforge.af_live import (
     HAEventStream,
+    get_tick_supervisor,
     iter_sse_blocks,
     parse_ha_event,
     run_watch,
@@ -227,3 +228,59 @@ def test_start_ticker_calls_tick_until_stopped():
     stop.set()
     t.join(timeout=1.0)
     assert rt.ticks >= 1
+
+
+# ── 审计 AF-第二轮 接缝回归（缺陷1 + 缺陷2）──────────────────────────────
+def test_start_ticker_safe_halt_no_uncaught_exception(monkeypatch):
+    """SAFE HALT 消费侧应走 break（logger 已定义），不应抛未捕获异常静默杀死线程。
+
+    复现审计场景：tick 持续抛异常 → TickSupervisor 进入 SAFE HALT → 消费侧
+    `logger.error(...)` + break。若模块级 logger 未定义（旧缺陷1），此处会抛
+    NameError 并被 threading.excepthook 捕获，caught 非空 → 测试失败。
+    """
+    caught = []
+
+    def _hook(args):
+        caught.append(args.exc_type)
+
+    monkeypatch.setattr(threading, "excepthook", _hook)
+
+    class _BoomRt(_FakeRuntime):
+        def tick(self):
+            self.ticks += 1
+            raise RuntimeError("模拟致命 tick 故障")
+
+    rt = _BoomRt()
+    stop = threading.Event()
+    t = start_ticker(rt, 0.01, stop)
+    t.join(timeout=3.0)
+    assert not t.is_alive(), "SAFE HALT 后线程应干净退出"
+    assert get_tick_supervisor().health().halted is True, "supervisor 应进入 SAFE HALT"
+    stop.set()
+    assert caught == [], f"tick 线程不应有未捕获异常，实际: {caught}"
+
+
+def test_start_ticker_survives_unexpected_exception(monkeypatch):
+    """消费侧意外异常（非 SAFE HALT）不应杀死 daemon 线程（审计缺陷2 韧性修复）。
+
+    注入 read_answer_inbox 抛 RuntimeError：修复后整轮 try/except 捕获并下一轮
+    重试，线程保持存活且继续 tick；修复前 _loop 无 try/except，线程会静默死亡。
+    """
+    import autoforge.af_live as _live
+
+    def _boom_read(runtime, inbox_dir=None):
+        raise RuntimeError("注入的意外异常")
+
+    monkeypatch.setattr(_live, "read_answer_inbox", _boom_read)
+
+    rt = _FakeRuntime()
+    stop = threading.Event()
+    t = start_ticker(rt, 0.01, stop, sidecar_dir=None)
+    import time as _t
+
+    _t.sleep(0.08)
+    alive_after_exception = t.is_alive()
+    stop.set()
+    t.join(timeout=1.0)
+    assert alive_after_exception is True, "消费侧意外异常不应杀死 tick 线程"
+    assert rt.ticks >= 1, "线程保活期间应继续 tick"
