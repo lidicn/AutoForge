@@ -103,6 +103,7 @@ def test_known_domains_are_ha_compatible():
         "light", "switch", "fan", "input_boolean",
         "climate", "media_player", "lock", "cover",
         "scene", "script", "notify", "persistent_notification",
+        "vacuum", "valve", "water_heater",
     }
     for domain, _ in KNOWN_ACTIONS:
         assert domain in ha_domains, (

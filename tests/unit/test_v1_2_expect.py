@@ -305,11 +305,11 @@ def test_fakeha_tracks_unmodeled_actions():
     states = seed_from_graph(load_graph(_raw()))
     adapter = FakeHAAdapter(states)
     adapter.call("light.turn_on", {"entity_id": "light.study_main"})  # 已建模
-    adapter.call("vacuum.start", {"entity_id": "vacuum.x"})  # 未建模
-    assert adapter.unmodeled == ["vacuum.start"]
+    adapter.call("mythical.domain_x", {"entity_id": "mythical.thing"})  # 未建模（从未登记）
+    assert adapter.unmodeled == ["mythical.domain_x"]
     assert states.get("light.study_main") == "on"
     # 未建模的不伪造状态
-    assert states.get("vacuum.x") is None
+    assert states.get("mythical.thing") is None
 
 
 def test_seed_from_graph_includes_expect_entities():

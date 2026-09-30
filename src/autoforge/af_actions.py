@@ -51,6 +51,11 @@ _KNOWN_DOMAIN_SERVICES: dict[str, frozenset[str]] = {
     # F1 P1：副作用不可观测域（发手机/推送，shadow 走 EXEMPT verdict）
     "notify":                  frozenset({"notify"}),
     "persistent_notification": frozenset({"create"}),
+
+    # F1 P2/P3：高频设备域（扫地机/阀门/热水器）
+    "vacuum":        frozenset({"start", "pause", "stop", "return_to_base", "locate"}),
+    "valve":         frozenset({"open_valve", "close_valve"}),
+    "water_heater":  frozenset({"turn_on", "turn_off", "set_temperature"}),
 }
 
 

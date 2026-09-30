@@ -57,6 +57,16 @@ _ACTION_VERBS: dict[str, str] = {
     "script.turn_off": "停止脚本",
     "notify.notify": "发送通知",
     "persistent_notification.create": "弹一条通知",
+    "vacuum.start": "开始清扫",
+    "vacuum.pause": "暂停清扫",
+    "vacuum.stop": "停止清扫",
+    "vacuum.return_to_base": "回基站",
+    "vacuum.locate": "定位扫地机",
+    "valve.open_valve": "打开阀门",
+    "valve.close_valve": "关闭阀门",
+    "water_heater.turn_on": "打开热水器",
+    "water_heater.turn_off": "关闭热水器",
+    "water_heater.set_temperature": "把热水器温度设为",
 }
 
 _CMP_SYMBOL = {"eq": "等于", "ne": "不等于", "lt": "低于", "lte": "不高于", "gt": "高于", "gte": "不低于"}

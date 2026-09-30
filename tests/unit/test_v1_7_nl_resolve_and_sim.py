@@ -242,10 +242,10 @@ def test_unmodeled_still_recorded():
     states = FakeHA()
     adapter = FakeHAAdapter(states)
 
-    adapter.call("vacuum.start", {"entity_id": "vacuum.x"})
+    adapter.call("mythical.domain_x", {"entity_id": "mythical.thing"})
 
-    assert "vacuum.start" in adapter.unmodeled
-    assert states.get("vacuum.x") is None
+    assert "mythical.domain_x" in adapter.unmodeled
+    assert states.get("mythical.thing") is None
 
 
 def test_seed_supports_state_and_attributes():

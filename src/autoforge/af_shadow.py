@@ -205,6 +205,14 @@ DEFAULT_EFFECTS: dict[str, str] = {
     "set_cover_position": "@params.position",
     "volume_set": "@params.volume_level",
     "volume_mute": "@params.is_volume_muted",
+    # F1 P2/P3：高频设备域期望态
+    "start": "cleaning",
+    "pause": "paused",
+    "stop": "idle",
+    "return_to_base": "docked",
+    "locate": "on",
+    "open_valve": "open",
+    "close_valve": "closed",
     # toggle 无法用静态效果表推导：期望态 = 当前态取反，需运行时状态源（见 resolver）
 }
 

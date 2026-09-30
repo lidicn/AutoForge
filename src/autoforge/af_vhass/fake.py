@@ -163,6 +163,16 @@ SERVICE_STATE: dict[tuple[str, str], str] = {
     ("script", "turn_off"): "off",        # script 停止
     ("notify", "notify"): "on",           # notify.notify：副作用不可观测（发手机），
     ("persistent_notification", "create"): "on",  #    但 FakeHA 给一个"已触发"状态让仿真不跳过
+    # ── F1 P2/P3：高频设备域补全（vacuum 扫地机 / valve 阀门 / water_heater 热水器）─────
+    ("vacuum", "start"): "cleaning",
+    ("vacuum", "pause"): "paused",
+    ("vacuum", "stop"): "idle",
+    ("vacuum", "return_to_base"): "docked",
+    ("vacuum", "locate"): "on",
+    ("valve", "open_valve"): "open",
+    ("valve", "close_valve"): "closed",
+    ("water_heater", "turn_on"): "on",
+    ("water_heater", "turn_off"): "off",
 }
 
 #: 已建模、但**新状态由参数或当前状态决定**的服务（不能在上表里给死值）。
@@ -178,6 +188,7 @@ DYNAMIC_SERVICES: frozenset[tuple[str, str]] = frozenset(
         ("switch", "toggle"),
         ("fan", "toggle"),
         ("input_boolean", "toggle"),
+        ("water_heater", "set_temperature"),
     }
 )
 
