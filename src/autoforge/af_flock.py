@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -62,12 +63,15 @@ class FileLock:
         self.poll_s = max(poll_s, 0.001)
         self.info = dict(info) if info else {}
         self._fd: int | None = None
+        self._owner_thread: int | None = None  # 持有线程 ident，同线程可重入
 
     # ── 非阻塞 ──
     def try_acquire(self) -> bool:
         """尝试拿锁；成功 True，被占用 False。"""
-        if self._fd is not None:
-            return True  # 已持有（同一线程内重入语义：宽松处理）
+        cur = threading.get_ident()
+        # 同线程内重入语义：宽松处理（同线程重入不重新 flock）
+        if self._fd is not None and self._owner_thread == cur:
+            return True
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT)
         try:
@@ -80,6 +84,7 @@ class FileLock:
             os.close(fd)
             return False
         self._fd = fd
+        self._owner_thread = cur
         self._stamp()
         return True
 
@@ -99,6 +104,7 @@ class FileLock:
         if self._fd is None:
             return
         fd, self._fd = self._fd, None
+        self._owner_thread = None
         try:
             if _POSIX:
                 _fcntl.flock(fd, _fcntl.LOCK_UN)

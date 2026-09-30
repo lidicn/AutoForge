@@ -21,6 +21,7 @@ mimo Clock 设计增量（2026-09-22）：
 from __future__ import annotations
 
 import math
+import re
 
 import time
 from dataclasses import dataclass, field
@@ -101,10 +102,19 @@ def assert_clock_consistent(c) -> None:
 
 
 def matches_at(local_now: datetime, at: str) -> bool:
-    """time 触发判定：只接受本地时间。B3-AF-04 回归测试点。"""
+    """time 触发判定：只接受本地时间。B3-AF-04 回归测试点。
+
+    N-P2-2 修复：严格校验 HH:MM 格式（正则 + 范围），非法输入直接 ValueError，
+    让调用点（IR 静态闸）能在建图期拦下，而非运行时静默不匹配。
+    """
     ensure_aware(local_now, who="matches_at.local_now")
+    if not isinstance(at, str) or not re.fullmatch(r"\d{2}:\d{2}", at):
+        raise ValueError(f"at 必须是 'HH:MM' 格式，收到 {at!r}")
     hh, mm = at.split(":")
-    return (local_now.hour, local_now.minute) == (int(hh), int(mm))
+    h, m = int(hh), int(mm)
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        raise ValueError(f"at 必须合法 HH:MM（00-23:00-59），收到 {at!r}")
+    return (local_now.hour, local_now.minute) == (h, m)
 
 
 class SystemTimeSource:
@@ -148,11 +158,16 @@ class VirtualTimeSource:
     这样依赖 `monotonic()` 的计时器在仿真里也能被 `async_fire_time_changed` 驱动。
 
     mimo Clock 增量：`jump()` 只动墙钟不动单调钟，用于测 NTP 校时/人为改时钟场景。
+
+    v2.5 修复（N-P2-1）：增加独立 `_tz`，`local_now()` 返回 `_current.astimezone(_tz)`，
+    与生产 `SystemTimeSource.local_now()` 语义对齐；否则仿真 time 触发的 hhmm 判定会因
+    UTC/本地时区差导致假绿灯（+08 机器上 UTC 07:00 ≠ 本地 07:00）。
     """
 
     start: datetime = field(default_factory=lambda: datetime(2026, 9, 14, 8, 0, 0, tzinfo=timezone.utc))
     _current: datetime = field(init=False)
     _mono: float = field(default=0.0, init=False)
+    _tz: Any = field(default_factory=load_tz, init=False)
 
     def __post_init__(self) -> None:
         if self.start.tzinfo is None:
@@ -164,14 +179,18 @@ class VirtualTimeSource:
         return self._current
 
     def local_now(self) -> datetime:
-        """B3-AF-04：仿真时间即本地时间（仿真测试断言基于仿真时间本身）。"""
-        return self._current
+        """仿真时间的本地投影：把 _current 归一到仿真时区（默认 Asia/Shanghai / +08:00）。
+
+        生产对应：SystemTimeSource.local_now() = datetime.now(self._tz)。
+        仿真中 start 可能是 UTC（self._current.tzinfo=UTC），需要 astimezone(_tz) 后再取 hhmm。
+        """
+        return self._current.astimezone(self._tz)
 
     def utc_now(self) -> datetime:
         return self._current.astimezone(timezone.utc)
 
     def today(self) -> date:
-        return self._current.date()
+        return self.local_now().date()
 
     def wall_after(self, seconds: float) -> datetime:
         return self._current + timedelta(seconds=seconds)

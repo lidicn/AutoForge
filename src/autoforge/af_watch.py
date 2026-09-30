@@ -44,17 +44,26 @@ class WatchEvent:
 
 
 class WatchAggregator:
-    """生产态验证事件聚合器（内存）。"""
+    """生产态验证事件聚合器（内存）。
+
+    N-P2-7 修复：环形缓冲（最多保留 MAX_EVENTS_PER_AUTO 条 / 自动化），避免常驻进程内存单调增长。
+    """
+
+    # 每个自动化保留最近 N 条事件——超过丢弃最旧。实测 shadow compare 每次都落点，
+    # 长跑不裁剪必然线性膨胀。
+    MAX_EVENTS_PER_AUTO = 500
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._events: list[WatchEvent] = []
         self._by_auto: dict[str, list[WatchEvent]] = {}
 
     def ingest(self, ev: WatchEvent) -> None:
         with self._lock:
-            self._events.append(ev)
-            self._by_auto.setdefault(ev.automation_id, []).append(ev)
+            bucket = self._by_auto.setdefault(ev.automation_id, [])
+            bucket.append(ev)
+            # N-P2-7 修复：超过上限裁掉最旧
+            if len(bucket) > self.MAX_EVENTS_PER_AUTO:
+                del bucket[: len(bucket) - self.MAX_EVENTS_PER_AUTO]
 
     def record(
         self,
@@ -79,16 +88,17 @@ class WatchAggregator:
             for aid, evs in self._by_auto.items():
                 verified = [e for e in evs if e.status == "verified"]
                 last = max((e.at for e in verified), default=None)
+                conflict_count = sum(1 for e in evs if e.kind == KIND_CONFLICT)  # N-P2-6 修复：逐事件计数
                 autos.append({
                     "automation_id": aid,
                     "verified_in_prod": len(verified),
                     "last_verified_at": last,
                     "shadow": sum(1 for e in evs if e.kind == KIND_SHADOW),
                     "canary": sum(1 for e in evs if e.kind == KIND_CANARY),
-                    "conflict": sum(1 for e in evs if e.kind == KIND_CONFLICT),
+                    "conflict": conflict_count,
                 })
                 total_verified += len(verified)
-                total_conflict += len(evs) if any(e.kind == KIND_CONFLICT for e in evs) else 0
+                total_conflict += conflict_count  # N-P2-6 修复：累加逐事件冲突数
             autos.sort(key=lambda a: a["automation_id"])
             return {
                 "automations": autos,
@@ -122,6 +132,10 @@ def verified_in_prod_partition() -> dict[str, Any]:
 
 
 def reset() -> None:
-    """清空默认聚合器（测试隔离用）。"""
-    global _default
-    _default = WatchAggregator()
+    """清空默认聚合器（测试隔离用；进程内线程安全）。
+
+    N-P3-1 修复：在锁内 clear() 现有实例，而非无锁替换 _default 引用——
+    避免并发 record_* 期间写入旧实例、读新实例导致事件丢失。
+    """
+    with _default._lock:
+        _default._by_auto.clear()

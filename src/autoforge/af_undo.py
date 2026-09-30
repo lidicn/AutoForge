@@ -23,10 +23,12 @@ import logging
 import os
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from .af_adapters import CallResult
+from .af_time import SystemTimeSource, TimeSource
 
 __all__ = [
     "DOMAIN_SETTER",
@@ -117,15 +119,17 @@ def _climate(snapshot: Mapping[str, Any], entity_id: str) -> tuple[str, dict[str
     hvac = attrs.get("hvac_mode")
     if temp is None and hvac is None:
         return None  # 无可恢复设定：fail-closed
-    params: dict[str, Any] = {"entity_id": entity_id}
+    # 有 temperature → climate.set_temperature（可附带 hvac_mode）
     if temp is not None:
         try:
-            params["temperature"] = float(temp)
+            params: dict[str, Any] = {"entity_id": entity_id, "temperature": float(temp)}
         except (TypeError, ValueError):
             return None
-    if hvac is not None:
-        params["hvac_mode"] = str(hvac)
-    return ("climate.set_temperature", params)
+        if hvac is not None:
+            params["hvac_mode"] = str(hvac)
+        return ("climate.set_temperature", params)
+    # 仅 hvac_mode：单独调 climate.set_hvac_mode，避免缺 temperature 必填参数
+    return ("climate.set_hvac_mode", {"entity_id": entity_id, "hvac_mode": str(hvac)})
 
 
 def _lock(snapshot: Mapping[str, Any], entity_id: str) -> tuple[str, dict[str, Any]] | None:
@@ -175,11 +179,12 @@ class UndoStore:
     默认落盘 `{store_root}/undo_log.json`；`window_s` 控制可撤销时间窗。
     """
 
-    def __init__(self, store_root: str = ".forge", window_s: float | None = None):
+    def __init__(self, store_root: str = ".forge", window_s: float | None = None, clock: TimeSource | None = None):
         self.root = Path(store_root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "undo_log.json"
         self.window_s = min(MAX_WINDOW_S, float(window_s if window_s is not None else DEFAULT_WINDOW_S))
+        self._clock = clock or SystemTimeSource()  # B 增强：注入 TimeSource，生产缺省时用 SystemTimeSource
         self._records: dict[str, dict[str, Any]] = {}
         self._load()
 
@@ -199,7 +204,7 @@ class UndoStore:
     def record(self, deploy_id: str, entities: Mapping[str, Mapping[str, Any]]) -> None:
         """记录本次部署的"动作前快照"（entity_id → {state, attributes}）。"""
         self._records[deploy_id] = {
-            "ts": time.time(),
+            "ts": self._clock.now().timestamp(),
             "entities": {
                 e: {"state": s.get("state"), "attributes": s.get("attributes", {})}
                 for e, s in entities.items()
@@ -248,7 +253,7 @@ class UndoStore:
         rec = self._records.get(deploy_id)
         if rec is None:
             return {"ok": False, "reason": "unknown_deploy_id", "deploy_id": deploy_id}
-        if self.window_s > 0 and (time.time() - float(rec.get("ts", 0))) > self.window_s:
+        if self.window_s > 0 and (self._clock.now().timestamp() - float(rec.get("ts", 0))) > self.window_s:
             return {
                 "ok": False,
                 "reason": "expired",
@@ -268,6 +273,7 @@ class UndoStore:
                 "message": "含风险域（climate/cover/lock 等），请加 --confirm 二次确认",
             }
         restored: list[str] = []
+        failed: list[str] = []
         skipped: list[str] = []
         results: list[CallResult] = []
         for entity_id, snapshot in entities.items():
@@ -281,13 +287,19 @@ class UndoStore:
             except Exception as exc:  # 适配器异常不阻断其余回滚
                 logger.exception("undo 恢复调用失败：%s %s", action, params)
                 results.append(CallResult.fail(f"undo 调用异常：{exc}", action=action, params=params))
+                failed.append(entity_id)
                 continue
             results.append(res)
-            restored.append(entity_id)
+            if getattr(res, "success", True):
+                restored.append(entity_id)
+            else:
+                failed.append(entity_id)
+        all_ok = not failed
         return {
-            "ok": True,
+            "ok": all_ok,
             "deploy_id": deploy_id,
             "restored": restored,
+            "failed": failed,
             "skipped": skipped,
             "results": results,
         }
@@ -295,7 +307,7 @@ class UndoStore:
     def purge_expired(self, window_s: float | None = None) -> int:
         """清理超时间窗的记录（避免无限增长）。返回清理条数。"""
         window = self.window_s if window_s is None else float(window_s)
-        now = time.time()
+        now = self._clock.now().timestamp()
         before = len(self._records)
         self._records = {
             did: rec for did, rec in self._records.items()

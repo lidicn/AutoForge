@@ -16,6 +16,7 @@ import enum
 import logging
 import random
 import threading
+import time as _time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Sequence
@@ -183,8 +184,8 @@ class TickSupervisor:
         with self._lock:
             if self._health.halted:
                 return TickOutcome(TickStatus.HALTED, FaultClass.FATAL, None, 0.0, 0.0)
+            self._health.ticks_total += 1  # N-P2-5 修复：计数进锁
         t0 = self._clock.monotonic()
-        self._health.ticks_total += 1
         try:
             body()
         except Exception as exc:  # 刻意不捕获 BaseException：让 CancelledError/退出信号穿透
@@ -202,8 +203,9 @@ class TickSupervisor:
         wait: Callable[[float], bool] | None = None,
     ) -> TickHealth:
         """wait(interval) -> True 表示被要求停止。可注入假 wait 做单测（不真 sleep）。"""
+        # N-P2-4 修复：stop=None 且 wait=None 时用 time.sleep 兜底，不再 throw RuntimeError
         _wait = wait or (
-            lambda s: (stop.wait(s) if stop else (_ for _ in ()).throw(RuntimeError("no wait")))
+            (lambda s: (stop.wait(s) or False)) if stop else (lambda s: (_time.sleep(s), False)[1])
         )
         while True:
             if stop is not None and stop.is_set():
@@ -242,40 +244,43 @@ class TickSupervisor:
 
     # ---- 内部 ----
     def _on_success(self, dur: float) -> None:
-        h = self._health
-        h.ok_total += 1
-        h.consecutive_oks += 1
-        h.consecutive_failures = 0
-        h.last_ok_mono = self._clock.monotonic()
-        h.ewma_tick_ms = (
-            dur * 1000 if not h.ewma_tick_ms else 0.8 * h.ewma_tick_ms + 0.2 * dur * 1000
-        )
+        # N-P2-5 修复：计数进锁
+        with self._lock:
+            h = self._health
+            h.ok_total += 1
+            h.consecutive_oks += 1
+            h.consecutive_failures = 0
+            h.last_ok_mono = self._clock.monotonic()
+            h.ewma_tick_ms = (
+                dur * 1000 if not h.ewma_tick_ms else 0.8 * h.ewma_tick_ms + 0.2 * dur * 1000
+            )
         self._back.reset()
 
     def _on_failure(self, exc: BaseException, cls: FaultClass, dur: float) -> TickOutcome:
-        h = self._health
-        h.fail_total += 1
-        h.last_error = repr(exc)
-        h.last_fault = cls
-        h.faults[cls.value] = h.faults.get(cls.value, 0) + 1
-        h.consecutive_oks = 0
+        # N-P2-5 修复：计数进锁
+        with self._lock:
+            h = self._health
+            h.fail_total += 1
+            h.last_error = repr(exc)
+            h.last_fault = cls
+            h.faults[cls.value] = h.faults.get(cls.value, 0) + 1
+            h.consecutive_oks = 0
 
-        if cls is FaultClass.DEGRADED:
-            h.degraded_total += 1
-            self._on_degrade(exc)  # 隔离单实例，不退避
-            return TickOutcome(TickStatus.DEGRADED, cls, exc, dur, 0.0)
+            if cls is FaultClass.DEGRADED:
+                h.degraded_total += 1
+                self._on_degrade(exc)  # 隔离单实例，不退避
+                return TickOutcome(TickStatus.DEGRADED, cls, exc, dur, 0.0)
 
-        h.consecutive_failures += 1
-        if cls is FaultClass.FATAL or h.consecutive_failures >= self._policy.escalate_after:
-            with self._lock:
+            h.consecutive_failures += 1
+            if cls is FaultClass.FATAL or h.consecutive_failures >= self._policy.escalate_after:
                 h.halted = True
                 h.halted_reason = (
                     f"escalated after {h.consecutive_failures} failures"
                     if cls is not FaultClass.FATAL
                     else repr(exc)
                 )
-            self._on_halt(exc)  # 回调负责把写端口降级 dry
-            return TickOutcome(TickStatus.HALTED, cls, exc, dur, 0.0)
+                self._on_halt(exc)  # 回调负责把写端口降级 dry
+                return TickOutcome(TickStatus.HALTED, cls, exc, dur, 0.0)
 
         delay = self._back.next_delay()
         self._on_fault(exc, cls, delay)
