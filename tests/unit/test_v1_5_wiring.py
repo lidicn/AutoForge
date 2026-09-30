@@ -51,7 +51,8 @@ def test_dispatch_experience_and_telemetry(tmp_path):
     assert json.loads(content[0]["text"])["ok"] is True
 
 
-def test_http_endpoints(tmp_path):
+def test_http_endpoints(tmp_path, monkeypatch):
+    monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 

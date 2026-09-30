@@ -56,6 +56,16 @@ _KNOWN_DOMAIN_SERVICES: dict[str, frozenset[str]] = {
     "vacuum":        frozenset({"start", "pause", "stop", "return_to_base", "locate"}),
     "valve":         frozenset({"open_valve", "close_valve"}),
     "water_heater":  frozenset({"turn_on", "turn_off", "set_temperature"}),
+
+    # F1 P4：冷门域补全（加湿器/报警面板/自动化/cover 位置）
+    "humidifier": frozenset({"turn_on", "turn_off", "set_humidity"}),
+    "alarm_control_panel": frozenset({
+        "alarm_arm_away", "alarm_arm_home", "alarm_arm_night",
+        "alarm_disarm", "alarm_trigger",
+    }),
+    "automation": frozenset({"turn_on", "turn_off", "trigger"}),
+    "group":      frozenset({"turn_on", "turn_off"}),
+    "cover":      frozenset({"open_cover", "close_cover", "stop_cover", "set_cover_position"}),
 }
 
 

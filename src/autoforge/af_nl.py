@@ -67,6 +67,21 @@ _ACTION_VERBS: dict[str, str] = {
     "water_heater.turn_on": "打开热水器",
     "water_heater.turn_off": "关闭热水器",
     "water_heater.set_temperature": "把热水器温度设为",
+    # F1 P4：冷门域中文动词
+    "humidifier.turn_on": "打开加湿器",
+    "humidifier.turn_off": "关闭加湿器",
+    "humidifier.set_humidity": "把湿度设为",
+    "alarm_control_panel.alarm_arm_away": "布防（离家）",
+    "alarm_control_panel.alarm_arm_home": "布防（在家）",
+    "alarm_control_panel.alarm_arm_night": "夜间布防",
+    "alarm_control_panel.alarm_disarm": "撤防",
+    "alarm_control_panel.alarm_trigger": "触发报警",
+    "automation.turn_on": "启用自动化",
+    "automation.turn_off": "禁用自动化",
+    "automation.trigger": "手动触发",
+    "group.turn_on": "打开组",
+    "group.turn_off": "关闭组",
+    "cover.set_cover_position": "把遮阳帘位置设为",
 }
 
 _CMP_SYMBOL = {"eq": "等于", "ne": "不等于", "lt": "低于", "lte": "不高于", "gt": "高于", "gte": "不低于"}

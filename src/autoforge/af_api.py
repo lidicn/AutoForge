@@ -402,7 +402,7 @@ def build_app(
             api_token=body.api_token,
         )
 
-    @app.get("/api/graphs")
+    @app.get("/api/graphs", dependencies=[Depends(_read)])
     def api_graphs(tag: str | None = Query(default=None)) -> dict[str, Any]:
         result = svc.list_graphs(store)
         if tag:
@@ -422,7 +422,7 @@ def build_app(
         return svc.enable_by_tag(store, body.tag, False)
 
     # ── v0.7.0 模板导出与备份恢复 ──
-    @app.get("/api/store/export")
+    @app.get("/api/store/export", dependencies=[Depends(_read)])
     def api_store_export() -> dict[str, Any]:
         """导出整个 store 为 bundle（含 tags + 校验和）。读端点，不强制鉴权。"""
         return svc.export_store(store)
@@ -432,7 +432,7 @@ def build_app(
         """导入 bundle（写操作，需鉴权）。冲突策略 skip/overwrite/rename。"""
         return _svc(svc.import_store, store, body.bundle, body.strategy)
 
-    @app.get("/api/graphs/{name}")
+    @app.get("/api/graphs/{name}", dependencies=[Depends(_read)])
     def api_graph(name: str, version: int | None = Query(default=None)) -> dict[str, Any]:
         try:
             return svc.get_graph(store, name, version)
@@ -463,30 +463,30 @@ def build_app(
         except IRValidationError as exc:
             raise HTTPException(status_code=400, detail=f"IR 校验失败：{exc}") from exc
 
-    @app.get("/api/conf/{name}")
+    @app.get("/api/conf/{name}", dependencies=[Depends(_read)])
     def api_conf(name: str) -> dict[str, Any]:
         try:
             return svc.get_conf(store, name)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.get("/api/metrics")
+    @app.get("/api/metrics", dependencies=[Depends(_read)])
     def api_metrics() -> dict[str, Any]:
         """运行指标（执行/审计/置信度），读端点不强制鉴权。"""
         return svc.get_metrics(store)
 
     # ── v1.5.0 经验闭环：遥测 + 实体共现（读端点）──
-    @app.get("/api/experience")
+    @app.get("/api/experience", dependencies=[Depends(_read)])
     def api_experience(limit: int = Query(default=10)) -> dict[str, Any]:
         """实体共现经验摘要（**只在成功落盘后采集**，失败样本不污染）。"""
         return svc.get_experience(store, limit=int(limit))
 
-    @app.get("/api/experience/export")
+    @app.get("/api/experience/export", dependencies=[Depends(_read)])
     def api_experience_export(limit: int = Query(default=200)) -> dict[str, Any]:
         """实体共现经验结构化导出（喂 MA：AF 采集事实 → MA 生成假设）。"""
         return svc.export_experience(store, limit=int(limit))
 
-    @app.get("/api/telemetry")
+    @app.get("/api/telemetry", dependencies=[Depends(_read)])
     def api_telemetry(days: int = Query(default=30)) -> dict[str, Any]:
         """token/结果遥测 + 错误类别分布（四维：tool/category/ok/day）。"""
         return svc.get_telemetry(store, days=int(days))
@@ -500,7 +500,7 @@ def build_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"未找到自动化 {body.automation_id!r}") from exc
 
-    @app.get("/api/diff")
+    @app.get("/api/diff", dependencies=[Depends(_read)])
     def api_diff(
         name: str = Query(...),
         old: int = Query(...),
@@ -511,7 +511,7 @@ def build_app(
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.get("/api/spec/{name}")
+    @app.get("/api/spec/{name}", dependencies=[Depends(_read)])
     def api_spec(name: str, version: int | None = Query(default=None)) -> dict[str, Any]:
         try:
             return svc.spec_of(store, name, version)
@@ -579,23 +579,23 @@ def build_app(
             )
         return {"ok": True, "asks": asks}
 
-    @app.get("/api/faults")
+    @app.get("/api/faults", dependencies=[Depends(_read)])
     def api_faults() -> dict[str, Any]:
         return svc.faults()
 
     # ── v1.1.0 实体事实内建（设备目录 + 解析）──────────────────────────
-    @app.get("/api/catalog")
+    @app.get("/api/catalog", dependencies=[Depends(_read)])
     def api_catalog() -> dict[str, Any]:
         """设备目录摘要（按域统计 + 区域列表 + 新鲜度），读端点不强制鉴权。"""
         return svc.catalog_snapshot(store)
 
-    @app.get("/api/catalog/resolve-metrics")
+    @app.get("/api/catalog/resolve-metrics", dependencies=[Depends(_read)])
     def api_catalog_resolve_metrics() -> dict[str, Any]:
         """v1.5.0：解析成功率漏斗（五档 exact/medium/low/ambiguous/none）。"""
         return svc.catalog_resolve_metrics(store)
 
     # ── v1.6.0 P0：别名沉淀（人工/agent 选对后写精确映射，下次直中）──
-    @app.get("/api/catalog/aliases")
+    @app.get("/api/catalog/aliases", dependencies=[Depends(_read)])
     def api_catalog_aliases() -> dict[str, Any]:
         """列出已沉淀的「设备名 → entity_id」映射。"""
         return svc.catalog_list_aliases(store)
@@ -616,7 +616,7 @@ def build_app(
         body = body or CatalogRefreshBody()
         return svc.catalog_refresh(store, full=body.full, domain=body.domain, area=body.area)
 
-    @app.get("/api/entities/resolve")
+    @app.get("/api/entities/resolve", dependencies=[Depends(_read)])
     def api_entities_resolve(
         name: str = Query(..., description="自然语言设备名，如「书房吊灯」"),
         area: str = Query(default=""),
@@ -626,7 +626,7 @@ def build_app(
         """自然语言设备名 → Top-N 候选 entity_id（写 IR 前必调）。读端点。"""
         return svc.catalog_resolve(store, name, area=area, domain=domain, top_n=top_n)
 
-    @app.get("/api/entities")
+    @app.get("/api/entities", dependencies=[Depends(_read)])
     def api_entities(
         domain: str = Query(default=""),
         area: str = Query(default=""),
@@ -637,7 +637,7 @@ def build_app(
         """全屋实体目录·过滤浏览（强制分页 + 透明截断回报）。读端点。"""
         return svc.catalog_list(store, domain=domain, area=area, keyword=keyword, limit=limit, offset=offset)
 
-    @app.get("/api/entities/{entity_id}/state")
+    @app.get("/api/entities/{entity_id}/state", dependencies=[Depends(_read)])
     def api_entity_state(entity_id: str) -> dict[str, Any]:
         """单实体当前状态（实时优先，失败回退目录缓存并标注 source）。读端点。"""
         return svc.catalog_state(store, entity_id)
@@ -690,7 +690,7 @@ def build_app(
         return _svc(svc.live_run, body.ir, body.live_allow, body.events, body.confirm, store)
 
     # ── v1.7.3：运行中 watch 实例列表（只读）──
-    @app.get("/api/watch/list")
+    @app.get("/api/watch/list", dependencies=[Depends(_read)])
     def api_watch_list() -> dict[str, Any]:
         """列出当前在跑的 watch 实例（读 persist dir 的 watch.lock.info）。"""
         return svc.list_watches(store.root if store else None)

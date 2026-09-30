@@ -173,6 +173,20 @@ SERVICE_STATE: dict[tuple[str, str], str] = {
     ("valve", "close_valve"): "closed",
     ("water_heater", "turn_on"): "on",
     ("water_heater", "turn_off"): "off",
+    # ── F1 P4：冷门域补全（加湿器/报警面板/自动化/开关覆盖/cover 具体位置）───────
+    ("humidifier", "turn_on"): "on",
+    ("humidifier", "turn_off"): "off",
+    # humidifier.set_humidity 是动态域 → 登记在 DYNAMIC_SERVICES（不写静态返回值）
+    ("alarm_control_panel", "alarm_arm_away"): "armed_away",
+    ("alarm_control_panel", "alarm_arm_home"): "armed_home",
+    ("alarm_control_panel", "alarm_arm_night"): "armed_night",
+    ("alarm_control_panel", "alarm_disarm"): "disarmed",
+    ("alarm_control_panel", "alarm_trigger"): "triggered",
+    ("automation", "turn_on"): "on",
+    ("automation", "turn_off"): "off",
+    ("automation", "trigger"): "on",
+    ("group", "turn_on"): "on",
+    ("group", "turn_off"): "off",
 }
 
 #: 已建模、但**新状态由参数或当前状态决定**的服务（不能在上表里给死值）。
@@ -189,6 +203,8 @@ DYNAMIC_SERVICES: frozenset[tuple[str, str]] = frozenset(
         ("fan", "toggle"),
         ("input_boolean", "toggle"),
         ("water_heater", "set_temperature"),
+        ("humidifier", "set_humidity"),
+        ("cover", "set_cover_position"),
     }
 )
 
@@ -224,6 +240,12 @@ def service_effect(
         return current, {"preset_mode": params.get("preset_mode")}
     if (domain, service) == ("media_player", "volume_set"):
         return current, {"volume_level": params.get("volume_level")}
+    # ── F1 P4：冷门域动态参数处理 ─────────────────────────────────────────
+    if (domain, service) == ("humidifier", "set_humidity"):
+        return current, {"humidity": params.get("humidity")}
+    if (domain, service) == ("cover", "set_cover_position"):
+        pos = params.get("position")
+        return (str(pos) if pos is not None else current), {"position": pos}
     if (domain, service) == ("media_player", "volume_mute"):
         return current, {"is_volume_muted": params.get("is_volume_muted")}
     # ── F1 P1：notify 域副作用不可观测（发手机/推送），

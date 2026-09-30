@@ -213,6 +213,15 @@ DEFAULT_EFFECTS: dict[str, str] = {
     "locate": "on",
     "open_valve": "open",
     "close_valve": "closed",
+    # F1 P4：冷门域期望态
+    "set_humidity": "@params.humidity",
+    "alarm_arm_away": "armed_away",
+    "alarm_arm_home": "armed_home",
+    "alarm_arm_night": "armed_night",
+    "alarm_disarm": "disarmed",
+    "alarm_trigger": "triggered",
+    "trigger": "on",
+    "set_cover_position": "@params.position",
     # toggle 无法用静态效果表推导：期望态 = 当前态取反，需运行时状态源（见 resolver）
 }
 

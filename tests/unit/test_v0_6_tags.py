@@ -138,7 +138,10 @@ except ImportError:
     _HAVE_FASTAPI = False
 
 
-def _client(tmp_path):
+def _client(tmp_path, *, noauth: bool = True):
+    import os
+    if noauth:
+        os.environ.setdefault("AF_ALLOW_NOAUTH", "1")
     store = GraphStore(str(tmp_path / "store"))
     store.save(_graph(enabled=True), "g1", tags=["lighting"])
     store.save(_graph(enabled=True), "g2", tags=["other"])

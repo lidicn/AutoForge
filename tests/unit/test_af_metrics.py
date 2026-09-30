@@ -196,7 +196,8 @@ def test_cli_metrics_push_dry_run():
 
 # ── API ─────────────────────────────────────────────────────────────────
 
-def test_api_metrics():
+def test_api_metrics(monkeypatch):
+    monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
     from fastapi.testclient import TestClient
 
     from autoforge.af_api import build_app

@@ -18,6 +18,10 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+# 注意：v1.10.0 默认 fail-closed。独立测试若需要无令牌可达 API，
+# 请自行 monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")；不要全局 setdefault——
+# 会污染那些故意测 fail-closed 行为的测试（如 test_v0_8_auth.py）。
+
 from autoforge.af_ir import load_graph  # noqa: E402
 from autoforge.af_runtime import Runtime, build_runtime  # noqa: E402
 from autoforge.af_vhass import FakeHA, FakeHAAdapter, seed_from_graph  # noqa: E402

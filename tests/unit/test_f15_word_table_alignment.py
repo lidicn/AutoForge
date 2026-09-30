@@ -104,6 +104,7 @@ def test_known_domains_are_ha_compatible():
         "climate", "media_player", "lock", "cover",
         "scene", "script", "notify", "persistent_notification",
         "vacuum", "valve", "water_heater",
+        "humidifier", "alarm_control_panel", "automation", "group",
     }
     for domain, _ in KNOWN_ACTIONS:
         assert domain in ha_domains, (

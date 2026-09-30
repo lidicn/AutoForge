@@ -88,6 +88,7 @@ def test_rate_limiter_fixed_window():
 
 def test_no_tokens_fail_closed(tmp_path, monkeypatch):
     """未配置任何令牌：默认 fail-closed，受保护写/真机端点 403（读/健康仍公开）。"""
+    monkeypatch.delenv("AF_ALLOW_NOAUTH", raising=False)  # 显式清逃生舱，确保测的是 fail-closed 路径
     client = _client(tmp_path, monkeypatch, {})
     assert client.get("/api/health").status_code == 200
     assert _probe_write(client).status_code == 403
