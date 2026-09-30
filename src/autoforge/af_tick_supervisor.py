@@ -220,7 +220,8 @@ class TickSupervisor:
 
     # ---- 健康 ----
     def health_state(self, stall_after_s: float = 30.0) -> str:
-        """供 /health 与外部 watchdog 调用（watchdog 在主线程，能重启本线程）。"""
+        """供 /health 观测。主线程 watchdog（`af_live.tick_watchdog_pass`）**仅**在意外终止时重启本线程；
+        SAFE HALT（`safe_halt`）绝不自动重启——需人工 resume（D1 方案 C，DCD 20261001）。"""
         if self._health.halted:
             return "safe_halt"
         if self._health.consecutive_failures:

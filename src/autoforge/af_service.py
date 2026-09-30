@@ -179,11 +179,17 @@ def health(store: "GraphStore | None" = None) -> dict[str, Any]:
             store_ok = False
     # mimo TickSupervisor: expose tick health if a watch is running
     tick_health = None
+    ticker_alive = None
+    tick_exit_reason = None
     try:
-        from .af_live import get_tick_supervisor
+        from .af_live import get_tick_supervisor, get_ticker_thread, get_tick_exit_reason
         sup = get_tick_supervisor()
         if sup is not None:
             tick_health = sup.health().snapshot(sup._clock)
+        th = get_ticker_thread()
+        if th is not None:
+            ticker_alive = th.is_alive()
+            tick_exit_reason = get_tick_exit_reason()
     except Exception:
         pass  # tick_health is best-effort, must not break /api/health
     return {
@@ -194,6 +200,8 @@ def health(store: "GraphStore | None" = None) -> dict[str, Any]:
         "readonly": True,
         "store_ok": store_ok,
         "tick_health": tick_health,
+        "ticker_alive": ticker_alive,
+        "tick_exit_reason": tick_exit_reason,
     }
 
 

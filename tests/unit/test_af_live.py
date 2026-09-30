@@ -284,3 +284,53 @@ def test_start_ticker_survives_unexpected_exception(monkeypatch):
     t.join(timeout=1.0)
     assert alive_after_exception is True, "消费侧意外异常不应杀死 tick 线程"
     assert rt.ticks >= 1, "线程保活期间应继续 tick"
+
+
+# ── D1（DCD 20261001·H，方案 C）：tick watchdog 区分退出原因 ──────────────
+class _FakeDeadThread:
+    def __init__(self, alive: bool = False) -> None:
+        self._alive = alive
+
+    def is_alive(self) -> bool:
+        return self._alive
+
+
+def _set_watchdog_state(monkeypatch, *, thread, reason):
+    import autoforge.af_live as al
+
+    monkeypatch.setattr(al, "_ticker_thread", thread, raising=False)
+    monkeypatch.setattr(al, "_tick_exit_reason", reason, raising=False)
+    return al
+
+
+def test_watchdog_does_not_restart_after_safe_halt(monkeypatch):
+    """硬验收：SAFE HALT 后 watchdog **绝不**重启（否则会抵消安全闸，退化成方案 B）。"""
+    calls = []
+    al = _set_watchdog_state(monkeypatch, thread=_FakeDeadThread(alive=False), reason="safe_halt")
+    result = al.tick_watchdog_pass(restart=lambda: calls.append(1))
+    assert result == "held_safe_halt"
+    assert calls == [], "SAFE HALT 停机不得被 watchdog 重启"
+
+
+def test_watchdog_restarts_on_unexpected_death(monkeypatch):
+    """意外终止 → watchdog 自愈重启（方案 C 唯一可重启分支）。"""
+    calls = []
+    al = _set_watchdog_state(monkeypatch, thread=_FakeDeadThread(alive=False), reason="unexpected")
+    result = al.tick_watchdog_pass(restart=lambda: calls.append(1))
+    assert result == "restarted"
+    assert calls == [1]
+    assert al._tick_exit_reason == "running"
+
+
+def test_watchdog_no_action_when_thread_alive(monkeypatch):
+    al = _set_watchdog_state(monkeypatch, thread=_FakeDeadThread(alive=True), reason="unexpected")
+    result = al.tick_watchdog_pass(restart=lambda: (_ for _ in ()).throw(AssertionError("不应重启")))
+    assert result == "alive"
+
+
+def test_watchdog_honors_manual_stop(monkeypatch):
+    calls = []
+    al = _set_watchdog_state(monkeypatch, thread=_FakeDeadThread(alive=False), reason="stop")
+    result = al.tick_watchdog_pass(restart=lambda: calls.append(1))
+    assert result == "stopped"
+    assert calls == []

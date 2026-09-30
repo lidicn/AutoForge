@@ -40,15 +40,67 @@ __all__ = [
     "start_ticker",
     "WatchCoordinator",
     "get_tick_supervisor",
+    "get_ticker_thread",
+    "get_tick_exit_reason",
+    "tick_watchdog_pass",
 ]
 
 # mimo TickSupervisor: current active tick supervisor (for /api/health)
 _tick_supervisor = None
 
+# D1（DCD 20261001《AF 三题》·H，方案 C）：tick 线程退出原因 + 守护判定。
+#   退出仅剩三条语义明确路径：stop（人工停）/ SAFE HALT（安全闸，绝不自动重启）/
+#   UNEXPECTED（try/except 未覆盖的意外终止——唯一可重启的情形）。
+TICK_EXIT_RUNNING = "running"
+TICK_EXIT_STOP = "stop"
+TICK_EXIT_SAFE_HALT = "safe_halt"
+TICK_EXIT_UNEXPECTED = "unexpected"
+_ticker_thread = None
+_tick_exit_reason = TICK_EXIT_RUNNING
+
 
 def get_tick_supervisor():
     """Return current active TickSupervisor (None when no watch running)."""
     return _tick_supervisor
+
+
+def get_ticker_thread():
+    """当前 tick 守护线程（None 表示未启动）。"""
+    return _ticker_thread
+
+
+def get_tick_exit_reason() -> str:
+    """tick 线程退出原因快照（running/stop/safe_halt/unexpected）。"""
+    return _tick_exit_reason
+
+
+def tick_watchdog_pass(*, restart=None) -> str:
+    """主线程侧一次守护巡检（方案 C：区分退出原因，绝不让 SAFE HALT 被自愈抵消）。
+
+    返回处置标签：
+      alive         —— 线程仍存活，无需动作
+      running       —— 尚未启动过 ticker
+      held_safe_halt —— 因 SAFE HALT 停机：**不重启**（安全红线）
+      stopped       —— 人工 stop：**不重启**
+      restarted     —— 意外终止且提供 restart → 已重启
+      unrecovered   —— 意外终止但未提供 restart 回调
+    """
+    global _tick_exit_reason
+    th = _ticker_thread
+    if th is None:
+        return "running"
+    if th.is_alive():
+        return "alive"
+    if _tick_exit_reason == TICK_EXIT_SAFE_HALT:
+        return "held_safe_halt"
+    if _tick_exit_reason == TICK_EXIT_STOP:
+        return "stopped"
+    # 唯一自愈分支：意外终止
+    if restart is not None:
+        _tick_exit_reason = TICK_EXIT_RUNNING
+        restart()
+        return "restarted"
+    return "unrecovered"
 
 SSE_STREAM_PATH = "/api/stream"
 
@@ -346,6 +398,7 @@ def start_ticker(
 
     # mimo TickSupervisor: fault classification + backoff + health + SAFE HALT
     global _tick_supervisor
+    global _ticker_thread, _tick_exit_reason
     from .af_time import SystemTimeSource
     _clock = getattr(runtime, "clock", None) or SystemTimeSource()
     supervisor = TickSupervisor(
@@ -356,23 +409,38 @@ def start_ticker(
     _tick_supervisor = supervisor
 
     def _loop() -> None:
-        while not stop.is_set():
-            if stop.wait(interval_s):
-                break
-            # B3-AF-01 + mimo: TickSupervisor 包装，异常分类/退避/SAFE HALT
-            # 韧性（审计 AF-第二轮 缺陷2）：整轮包 try/except，任一未捕获异常只记日志并
-            # 下一轮重试，不再静默杀死 daemon 线程（否则时间驱动自动化悄然停摆且无解信号）。
-            try:
-                outcome = supervisor.run_once(fn)
-                if outcome.status.value == "halted":
-                    logger.error("tick SAFE HALTED: %s", supervisor.health().halted_reason)
+        global _tick_exit_reason
+        _tick_exit_reason = TICK_EXIT_RUNNING
+        try:
+            while not stop.is_set():
+                if stop.wait(interval_s):
+                    _tick_exit_reason = TICK_EXIT_STOP
                     break
-                _write_asks()
-                read_answer_inbox(runtime, inbox_dir=inbox)
-            except Exception:
-                logger.exception("ticker 循环异常，下一轮重试（线程保活）")
+                # B3-AF-01 + mimo: TickSupervisor 包装，异常分类/退避/SAFE HALT
+                # 韧性（审计 AF-第二轮 缺陷2）：整轮包 try/except，任一未捕获异常只记日志并
+                # 下一轮重试，不再静默杀死 daemon 线程（否则时间驱动自动化悄然停摆且无解信号）。
+                try:
+                    outcome = supervisor.run_once(fn)
+                    if outcome.status.value == "halted":
+                        # D1·C：SAFE HALT 是有意安全闸——标记退出原因，watchdog 绝不自动重启
+                        _tick_exit_reason = TICK_EXIT_SAFE_HALT
+                        logger.error("tick SAFE HALTED: %s", supervisor.health().halted_reason)
+                        break
+                    _write_asks()
+                    read_answer_inbox(runtime, inbox_dir=inbox)
+                except Exception:
+                    logger.exception("ticker 循环异常，下一轮重试（线程保活）")
+            else:
+                # while 条件变 False（stop 被 set）自然结束
+                _tick_exit_reason = TICK_EXIT_STOP
+        except BaseException:
+            # 逃逸出内层 catch 的终止：标记意外，交由 watchdog 自愈（区别于 SAFE HALT）
+            _tick_exit_reason = TICK_EXIT_UNEXPECTED
+            logger.exception("ticker 线程意外终止")
+            raise
 
     t = threading.Thread(target=_loop, daemon=True)
+    _ticker_thread = t
     t.start()
     return t
 
