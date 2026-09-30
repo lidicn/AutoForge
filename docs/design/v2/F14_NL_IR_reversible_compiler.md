@@ -96,8 +96,8 @@ NL Text ──▶ IR Builder ──▶ IR dict (af-stage/1) ◀── IR Schema 
 |---|---|---|---|
 | P1 | Fidelity Verifier（往返校验器） | F5 schema + F15 真源 | 对 **30 条** IR 样本，核心字段 **L0 完全相等** + `condition` **L1 结构等价**（归一化后 `IR→NL→IR ≡ 原 IR`）。判据经 DCD 20261001·F 裁定（分层 + 30 条 + P1 准入）|
 | P2 | NL Builder（NL→IR 正向） | P1 + KNOWN_ACTIONS | 30 条 NL 文本样本全部成功构建合法 IR ✅（`af_nl_build.build_ir_from_nl`，受限文法零 LLM；每条过 `load_automation` + `verify_roundtrip.ok`；覆盖 ≥16 域） |
-| P3 | AskSpec 跨层复用 | P1 | AskSpec hash 一致、控件类型匹配 |
-| P4 | 不可逆字段处理 | P1 | L2/L3 字段正确标注、NL 渲染用 `[运行时]` 占位符 |
+| P3 | AskSpec 跨层复用 | P1 | AskSpec hash 一致、控件类型匹配 ✅（`build_ir_from_nl` 产 `af_ir.models.AskSpec` 单对象；`verify_roundtrip` 对 ask 做结构相等比较；`control()` kind→widget 全覆盖；`tests/f14/test_ask_irreversible.py`）|
+| P4 | 不可逆字段处理 | P1 | L2/L3 字段正确标注、NL 渲染用 `[运行时]` 占位符 ✅（`af_irreversible`：`_non_reversible` 标注 + `RUNTIME_ONLY_FIELDS`；运行时字段留 raw 不进核心；`af_nl` 渲染 `[运行时]` 占位；NL Builder 绝不写运行时字段）|
 
 **验收用例草案**（从现有测试和产品需求抽取）：
 
@@ -145,4 +145,4 @@ IR → NL → IR ≡ 原 IR: ✅
 
 ---
 
-**审批状态**：✅ 已批准（DCD 20261001《AF 三题》·F，判据=方案 C 分层 L0/L1 + 30 样本，**本裁定即视为 P1 准入**）| **进度**：P1 Fidelity Verifier 已交付（`af_fidelity.py` + `af_ir/condition_norm.py` + `tests/f14/`）；P2 NL Builder 已交付（`af_nl_build.py` + `tests/f14/test_nl_build.py`，30 样本双过 `load_automation`+`verify_roundtrip`）；P3–P4 待排
+**审批状态**：✅ 已批准（DCD 20261001《AF 三题》·F，判据=方案 C 分层 L0/L1 + 30 样本，**本裁定即视为 P1 准入**）| **进度**：P1 Fidelity Verifier 已交付（`af_fidelity.py` + `af_ir/condition_norm.py` + `tests/f14/`）；P2 NL Builder 已交付（`af_nl_build.py` + `tests/f14/test_nl_build.py`，30 样本双过 `load_automation`+`verify_roundtrip`）；P3 AskSpec 跨层复用 ✅ + P4 不可逆字段标注 ✅（`af_irreversible.py` + `af_nl` `[运行时]` 占位 + `af_fidelity` ask 结构比较 + `tests/f14/test_ask_irreversible.py`）。**F14 P1–P4 全部交付。**

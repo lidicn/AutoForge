@@ -69,6 +69,12 @@ def _node_projection(node) -> dict[str, Any]:
         d["params"] = node.params
     if node.prompt:
         d["prompt"] = node.prompt
+    if node.room is not None:
+        d["room"] = node.room
+    if node.session and node.session != "room":
+        d["session"] = node.session
+    if node.timeout is not None:
+        d["timeout"] = node.timeout
     if node.duration is not None:
         d["duration"] = node.duration
     if node.var is not None:
@@ -106,6 +112,14 @@ def _node_core(node) -> dict[str, Any]:
         "params": _canon(node.params or {}),
         "condition": normalize_condition(node.expr),
         "targets": tuple(sorted(node.target_entities())),
+        # P3：ask 结构元数据跨层一致（§2.1 nodes[].ask 结构相等）——含控件规格与挂起字段
+        "ask": _canon({
+            "prompt": node.prompt,
+            "room": node.room,
+            "session": node.session,
+            "timeout": node.timeout,
+            "spec": None if node.ask is None else node.ask.to_dict(),
+        }),
     }
 
 
@@ -139,6 +153,8 @@ def fidelity_equal(a: Automation, b: Automation) -> bool:
         if na["params"] != nb["params"]:  # 语义相等（键序无关已 sort）
             return False
         if na["targets"] != nb["targets"]:
+            return False
+        if na["ask"] != nb["ask"]:  # P3：ask 控件元数据结构相等
             return False
         if na["condition"] != nb["condition"]:  # L1 结构等价
             return False

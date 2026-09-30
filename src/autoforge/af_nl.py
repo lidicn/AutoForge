@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
 from .af_ir import Automation, Graph, Node, Trigger
+from .af_irreversible import nl_runtime_note
 from .af_time import format_duration, parse_duration
 
 __all__ = ["NLResult", "render_automation", "render_graph"]
@@ -304,10 +305,17 @@ def _emit_text(emit: Any) -> str:
 
 
 def _node_text(auto: Automation, node: Node) -> str:
-    """节点文案；节点带 `emit` 时追加"发出事件"描述（v0.3.0）。"""
+    """节点文案；节点带 `emit` 时追加"发出事件"描述（v0.3.0）。
+
+    P4：节点携带运行时/不可逆字段（`stage`/`diff_sha` 等）时追加 `[运行时]` 占位说明——
+    承认其存在但不假装可逆（F14 §2.2/§2.3）。
+    """
     base = _node_text_base(auto, node)
     if node.emit is not None:
-        return f"{base}，并{_emit_text(node.emit)}"
+        base = f"{base}，并{_emit_text(node.emit)}"
+    note = nl_runtime_note(node.raw)
+    if note:
+        base = f"{base}{note}"
     return base
 
 

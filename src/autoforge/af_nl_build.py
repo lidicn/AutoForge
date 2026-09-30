@@ -17,6 +17,9 @@
   动作（do）：
     <中文动词> <entity_id>   —— 由 entity_id 的域在 _ACTION_VERBS 反转表里消歧到 domain.service
     <中文动词>               —— 仅当该动词唯一映射到 EXEMPT_DOMAINS（如 notify）时可省略实体
+  询问（ask，P3 跨层复用）：
+    确认 "<prompt>"                      —— choice(是/否)
+    询问 "<prompt>" [选项 A / B / C]      —— 有选项→choice，无选项→text（产 af_ir.models.AskSpec）
 
 文法边界（明确不支持，遇到即抛 ValueError，绝不猜测、绝不产出非法 IR）：
   - 模糊语义解析："晚上 8 点后"（时间窗）、"客厅灯"（房间名→实体）等 §4 理想示例里的
@@ -33,6 +36,7 @@ import re
 from typing import Any
 
 from .af_actions import KNOWN_ACTIONS, EXEMPT_DOMAINS, known_services_for
+from .af_ir import AskSpec
 from .af_nl import _ACTION_VERBS
 
 __all__ = ["build_ir_from_nl"]
@@ -64,12 +68,16 @@ def build_ir_from_nl(text: str) -> dict[str, Any]:
         condition, rest = _parse_condition(rest)
         rest = _trim_seps(rest)
 
-    do_node, rest = _parse_action(rest)
+    # P3：终止片段可为 ask（询问/确认，产 AskSpec）或 do（动作）
+    if rest.startswith("询问") or rest.startswith("确认"):
+        terminal, rest = _parse_ask(rest)
+    else:
+        terminal, rest = _parse_action(rest)
     rest = rest.strip()
     if rest:
         raise ValueError(f"存在无法解析的多余文本：{rest!r}")
 
-    return _assemble(trigger, condition, do_node)
+    return _assemble(trigger, condition, terminal)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -194,8 +202,37 @@ def _parse_action(rest: str) -> tuple[dict[str, Any], str]:
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _parse_ask(rest: str) -> tuple[dict[str, Any], str]:
+    """P3：`确认 "<prompt>"` / `询问 "<prompt>" [选项 A/B/C]` → ask 节点（产 AskSpec）。
+
+    控件映射与渲染层共用**同一个** `af_ir.models.AskSpec` 类（跨层单对象，非复制）：
+    - 确认 → choice(是/否)（对应 input_boolean 型 yes/no 控件）；
+    - 询问 + 选项 → choice(给定选项)；
+    - 询问 无选项 → text（自由输入）。
+    """
+    rest = rest.strip()
+    head = "确认" if rest.startswith("确认") else "询问"
+    body = rest[len(head):].strip().lstrip("：:").strip()
+    options: tuple[str, ...] = ()
+    if " 选项 " in body:
+        prompt_part, _, opt_part = body.partition(" 选项 ")
+        options = tuple(o.strip() for o in opt_part.split("/") if o.strip())
+        body = prompt_part.strip()
+    prompt = body.strip("“”\"' ")
+    if not prompt:
+        raise ValueError("询问/确认缺少提示文本")
+    if head == "确认":
+        spec = AskSpec(kind="choice", options=("是", "否"), prompt=prompt)
+    elif len(options) >= 2:
+        spec = AskSpec(kind="choice", options=options, prompt=prompt)
+    else:
+        spec = AskSpec(kind="text", prompt=prompt)
+    return {"id": "n_ask", "kind": "ask", "prompt": prompt, "ask": spec.to_dict()}, ""
+
+
 def _assemble(trigger: dict[str, Any], condition: dict[str, Any] | None,
-              do_node: dict[str, Any]) -> dict[str, Any]:
+              terminal: dict[str, Any]) -> dict[str, Any]:
+    tid = terminal["id"]
     nodes: list[dict[str, Any]] = [{"id": "n_on", "kind": "on", "trigger": trigger}]
     edges: list[dict[str, str]] = []
     prev = "n_on"
@@ -203,10 +240,10 @@ def _assemble(trigger: dict[str, Any], condition: dict[str, Any] | None,
         nodes.append({"id": "n_if", "kind": "if", "expr": condition})
         edges.append({"from": prev, "to": "n_if", "kind": "then"})
         prev = "n_if"
-    nodes.append(do_node)
-    edges.append({"from": prev, "to": "n_do", "kind": "then"})
+    nodes.append(terminal)
+    edges.append({"from": prev, "to": tid, "kind": "then"})
     nodes.append({"id": "n_pass", "kind": "pass"})
-    edges.append({"from": "n_do", "to": "n_pass", "kind": "then"})
+    edges.append({"from": tid, "to": "n_pass", "kind": "then"})
 
     return {
         "ir_version": "0.2.1",
