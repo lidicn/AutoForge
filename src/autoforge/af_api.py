@@ -60,7 +60,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import af_service as svc
 from .af_pending import PendingStore
@@ -92,7 +92,7 @@ class BuildBody(BaseModel):
 class SimBody(BaseModel):
     ir: dict[str, Any]
     seed: dict[str, str] | None = None
-    events: list[dict[str, Any]] | None = None
+    events: list[dict[str, Any]] | None = Field(default=None, max_length=10000)
 
 
 class InterveneBody(BaseModel):

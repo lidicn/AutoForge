@@ -623,12 +623,17 @@ def load_automation(data: Mapping[str, Any]) -> Automation:
     return Automation.from_dict(data)
 
 
-def load_graph(source: str | Path | Mapping[str, Any]) -> Graph:
+def load_graph(source: str | Path | Mapping[str, Any], *,
+               max_nodes_per_graph: int = 5000,
+               max_edges_per_graph: int = 5000) -> Graph:
     """从路径或 dict 加载 Graph。
 
     支持两种形态：
     - 单条 automation：`{"id": ..., "nodes": [...]}`
     - 多条容器：`{"automations": [ ... ]}`（跨自动化分析用，如依赖环检测）
+
+    Hardening：默认锁 nodes ≤ 5000 / edges ≤ 5000，防止超大图把仿真/内存撑爆。
+    可通过参数覆盖（部署环境可根据真实 IR 规模调整）。
     """
     if isinstance(source, (str, Path)):
         data = json.loads(Path(source).read_text(encoding="utf-8"))
@@ -636,8 +641,24 @@ def load_graph(source: str | Path | Mapping[str, Any]) -> Graph:
         data = dict(source)
 
     if "automations" in data:
-        return Graph([Automation.from_dict(a) for a in data["automations"]])
-    return Graph([Automation.from_dict(data)])
+        autos = [Automation.from_dict(a) for a in data["automations"]]
+    else:
+        autos = [Automation.from_dict(data)]
+
+    # Hardening: IR scale cap —— 锁死每条 automation 的 nodes/edges 规模
+    total_nodes = sum(len(a.nodes) for a in autos)
+    total_edges = sum(len(a.edges) for a in autos)
+    if total_nodes > max_nodes_per_graph:
+        raise ValueError(
+            f"Graph too large: {total_nodes} nodes exceeds max_nodes_per_graph={max_nodes_per_graph} "
+            f"(set larger via load_graph(max_nodes_per_graph=N) if legitimate)"
+        )
+    if total_edges > max_edges_per_graph:
+        raise ValueError(
+            f"Graph too large: {total_edges} edges exceeds max_edges_per_graph={max_edges_per_graph}"
+        )
+
+    return Graph(autos)
 
 
 def collect_asks(auto: "Automation") -> list[dict[str, Any]]:
