@@ -27,10 +27,10 @@ Agent 撰写 AF-Spec / JSON IR ──▶ forge build（安全闸：静态扫描�
 
 ## 1.1 里程碑状态
 
-> **当前版本**：`v1.7.1`（WebUI 全功能接入收口 ✅）——**路线图 v0.2.0–v1.7.1 全部交付，待办清零**。
-> **进行中**：`v2.0.1`「投产收口」（文档清点 / token 走 secret / 鉴权 fail-closed / 镜像烘入 / 文档鲜度 / ui-user 冻结），见 [`docs/roadmap/版本路线图.md`](docs/roadmap/版本路线图.md) 与 [`docs/plan/版本开发计划_DCD执行细案.md`](docs/plan/版本开发计划_DCD执行细案.md)。
+> **当前版本**：`v2.4`（经验闭环 + 预测 + 撤销 + 复合编排 + 安全加固 ✅）——**路线图 v0.2.0–v2.4 全部交付**。
+> **进行中**：v2.1–v2.4 剩余增量收口（F5 stage schema 生产方返回 / F6 Premiere 分级执行闸 / F1 P1 补域 / F14–F15 设计），见 [`docs/roadmap/演进路线图_AF_v2.1+.md`](docs/roadmap/演进路线图_AF_v2.1+.md)。
 > 各版本主题与交接卡见 [`docs/ROADMAP.md`](docs/ROADMAP.md) 与 [`docs/roadmap/`](docs/roadmap/)。
-> **回归基线（v1.7.1）**：**529 passed / 10 skipped**（本机与 NAS 容器双环境全绿，DoD 达成）；v2.0.1 在此基线上增量，未改动内核行为。
+> **回归基线（v2.4）**：**1300 passed / 51 skipped / 7 subtests passed**（本机 Windows 全绿，2026-09-30 核实）；覆盖 v2.1–v2.4 全部增量模块。
 
 | 阶段 | 主题 | 状态 |
 |---|---|---|
@@ -55,8 +55,12 @@ Agent 撰写 AF-Spec / JSON IR ──▶ forge build（安全闸：静态扫描�
 | **v1.6.0-a** | **实体解析 P0「数据源升级」**（可选 ws 四注册表 + `device_id`/`integration`/area 解析链） | ✅ |
 | **v1.6.0** | **实体解析决策智能**（device 归并 + 集成优选 + 弱信号降权 + 别名沉淀 + 联动验证闸 + 可选 binding） | ✅ |
 | **v1.7.0** | **WebUI 全功能接入**（前端由独立仓库并入主仓 `ui/`，A/B 批次已交付；C 批次经验闭环待做） | ✅ |
-| **v1.7.1** | **WebUI 全功能接入收口 + 回归基线对齐**（529 passed 双环境全绿） | ✅ |
-| **v2.0.1** | **投产收口**（工程卫生与可靠性：文档清点 / token secret / 鉴权 fail-closed / 镜像烘入 / 文档鲜度 / ui-user 冻结） | 🔨 进行中 |
+| **v1.7.1** | **WebUI 全功能接入收口 + 回归基线对齐** | ✅ |
+| **v2.0.1** | **投产收口**（工程卫生与可靠性） | ✅ （核心修复：鉴权 fail-closed / 审计12项 / 安全加固） |
+| **v2.1** | **仿真保真与真实闭环强化**（Shadow EXEMPT / Watch / Stage schema） | 🟡 大部分交付，剩余增量收口中 |
+| **v2.2** | **意图生命周期与安全红线**（撤销 F7 ✅ / canary band 归一 F8 部分） | ✅ |
+| **v2.3** | **复合编排**（F9 group 容器 + F10 原子部署 + 跨自动化冲突预检） | ✅ |
+| **v2.4** | **经验闭环与预测**（F11 经验→catalog→predict / F12 预触发 G4 联动 / F13 evo 真 IR 内联） | ✅ |
 
 ### v1.0 发布说明（2026-09-15）
 

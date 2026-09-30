@@ -73,3 +73,24 @@ filterwarnings = [
 
 [tool.ruff]
 line-length = 100
+
+[tool.importlinter]
+# import-linter pyproject.toml 配置（lint-imports CLI）
+# 注：import-linter 2.15 的 forbidden/layers 契约在本仓库容易误报合法耦合
+# （如仿真胶水层 harness 依赖 Runtime、af_bus 审计回调等）。
+# 真正的架构门禁使用 scripts/check_imports.py（grimp API 直接锁零反向依赖 baseline）。
+# pyproject.toml 保留此配置是为了让 lint-imports CLI 至少能跑通。
+# 观察一版本后，再决定是否升级为 CI 失败门禁。
+root_package = "autoforge"
+include_external_packages = false
+
+[[tool.importlinter.contracts]]
+name = "Service boundary never imported by kernel"
+type = "forbidden"
+source_modules = [
+  "autoforge.af_ir", "autoforge.af_flock", "autoforge.af_fault",
+  "autoforge.af_time", "autoforge.af_adapters", "autoforge.af_auth",
+]
+forbidden_modules = [
+  "autoforge.af_service", "autoforge.af_api",
+]

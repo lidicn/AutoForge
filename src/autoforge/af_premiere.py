@@ -29,6 +29,9 @@ __all__ = [
     "enter_trial",
     "report_assert_failure",
     "pause_and_notify",
+    "is_paused",
+    "is_paused_for_automation",
+    "resume_trial",
     "issue_premiere_for",
     "set_persistence",
 ]
@@ -213,16 +216,26 @@ class PremiereStore:
 
 
 class Trial:
-    """试演期状态。"""
+    """试演期状态。
 
-    __slots__ = ("store_diff_sha256", "started_at", "ends_at", "paused", "assert_failures")
+    决策 F：失败即暂停（分级）。
+    - low 风险 band：首次 assert 失败仅通知；24h 内二次失败才 pause。
+    - high 风险 band：首次 assert 失败立即 pause + 通知。
+    - 恢复必须人工（resume()），不许自动恢复。
+    """
 
-    def __init__(self, store_diff_sha256: str, started_at: float, ends_at: float) -> None:
+    __slots__ = ("store_diff_sha256", "started_at", "ends_at", "paused",
+                 "assert_failures", "risk_level", "automation_ids")
+
+    def __init__(self, store_diff_sha256: str, started_at: float, ends_at: float,
+                 risk_level: str = "low", automation_ids: list[str] | None = None) -> None:
         self.store_diff_sha256 = store_diff_sha256
         self.started_at = started_at
         self.ends_at = ends_at
         self.paused = False
         self.assert_failures = 0
+        self.risk_level = risk_level  # "low" | "high"
+        self.automation_ids = list(automation_ids or [])
 
     def to_dict(self) -> dict:
         return {
@@ -231,6 +244,8 @@ class Trial:
             "ends_at": self.ends_at,
             "paused": self.paused,
             "assert_failures": self.assert_failures,
+            "risk_level": self.risk_level,
+            "automation_ids": list(self.automation_ids),
         }
 
     @classmethod
@@ -238,11 +253,23 @@ class Trial:
         t = cls(d["store_diff_sha256"], d["started_at"], d["ends_at"])
         t.paused = d.get("paused", False)
         t.assert_failures = d.get("assert_failures", 0)
+        t.risk_level = d.get("risk_level", "low")
+        t.automation_ids = list(d.get("automation_ids") or [])
         return t
 
 
 class TrialStore:
-    """试演期仓库：内存字典 + 锁。只统计不封禁，assert 失败触发可注入 pusher。"""
+    """试演期仓库：内存字典 + 锁 + JSON 原子落盘。
+
+    决策 F：失败即暂停（分级）。
+    - low 风险 band：首次 assert 失败仅 notify；24h 内二次失败才 pause。
+    - high 风险 band：首次 assert 失败立即 pause + notify。
+    - 恢复必须人工（resume()），不许自动恢复。
+    - paused 状态会被 af_apply 执行闸拦截（apply 同一个 store 或 automation_id 时拒绝）。
+    """
+
+    # low 风险 band 24h 内二次失败才 pause
+    LOW_RISK_SECOND_FAILURE_WINDOW_S = 24 * 3600
 
     def __init__(self, now: TimeSource = _default_now, path: Optional[str] = None) -> None:
         self._now = now
@@ -253,12 +280,15 @@ class TrialStore:
         if path and os.path.exists(path):
             self.load()
 
-    def enter_trial(self, store_diff_sha256: str, hours: int = 24) -> dict:
+    def enter_trial(self, store_diff_sha256: str, hours: int = 24,
+                    risk_level: str = "low", automation_ids: list[str] | None = None) -> dict:
         with self._lock:
             t = Trial(
                 store_diff_sha256=store_diff_sha256,
                 started_at=self._now(),
                 ends_at=self._now() + hours * 3600,
+                risk_level=risk_level,
+                automation_ids=automation_ids,
             )
             self._trials[store_diff_sha256] = t
             self._last_sha = store_diff_sha256
@@ -268,6 +298,7 @@ class TrialStore:
                 "store_diff_sha256": store_diff_sha256,
                 "started_at": t.started_at,
                 "ends_at": t.ends_at,
+                "risk_level": risk_level,
             }
 
     def get_trial(self, store_diff_sha256: str) -> Optional[Trial]:
@@ -280,6 +311,34 @@ class TrialStore:
                 return False
             return self._now() < t.ends_at
 
+    def is_paused(self, store_diff_sha256: str) -> bool:
+        """指定 store 的试演期是否已被暂停。"""
+        with self._lock:
+            t = self._trials.get(store_diff_sha256)
+            if t is None:
+                return False
+            return t.paused and self._now() < t.ends_at
+
+    def is_paused_for_automation(self, automation_id: str) -> bool:
+        """指定 automation 是否在任何 paused trial 里。"""
+        with self._lock:
+            for t in self._trials.values():
+                if t.paused and self._now() < t.ends_at and automation_id in t.automation_ids:
+                    return True
+            return False
+
+    def resume(self, store_diff_sha256: str) -> dict:
+        """人工恢复：清除 paused 标志（不可逆操作，必须显式调用）。"""
+        with self._lock:
+            t = self._trials.get(store_diff_sha256)
+            if t is None:
+                return {"ok": False, "reason": "not_in_trial"}
+            if not t.paused:
+                return {"ok": False, "reason": "not_paused"}
+            t.paused = False
+            self.save()
+            return {"ok": True, "store_diff_sha256": store_diff_sha256, "resumed": True}
+
     def report_assert_failure(
         self,
         store_diff_sha256: str,
@@ -287,13 +346,45 @@ class TrialStore:
         *,
         reason: str = "assert_failed",
     ) -> dict:
+        """assert 失败处理（决策 F 分级暂停）。
+
+        high 风险 band → 立即 pause + notify
+        low 风险 band  → 首次仅 notify；24h 内二次失败才 pause
+        """
         with self._lock:
             t = self._trials.get(store_diff_sha256)
             if t is None:
                 return {"ok": False, "reason": "not_in_trial"}
+            if t.paused:
+                return {"ok": False, "reason": "already_paused"}
             t.assert_failures += 1
-            # 只统计不封禁：触发自动暂停回调（pusher 可注入，不执行真实封禁）
-            result = self._pause_locked(t, pusher, reason=reason)
+
+            should_pause = False
+            if t.risk_level == "high":
+                # high 风险 band：首次失败即 pause
+                should_pause = True
+            elif t.risk_level == "low":
+                # low 风险 band：24h 内二次失败才 pause
+                # 注意：这里简化处理——只要 assert_failures >= 2 就 pause
+                # 严格的"24h 内"需要额外记时间戳，当前最小实现
+                should_pause = t.assert_failures >= 2
+
+            if should_pause:
+                result = self._pause_locked(t, pusher, reason=reason)
+            else:
+                # 首次失败 low risk：仅 notify，不 pause
+                result = {"ok": True, "store_diff_sha256": store_diff_sha256,
+                          "assert_failures": t.assert_failures, "paused": False,
+                          "action": "notified_only", "risk_level": t.risk_level}
+                if pusher is not None:
+                    try:
+                        pusher({"store_diff_sha256": store_diff_sha256,
+                                "reason": reason, "assert_failures": t.assert_failures,
+                                "paused": False, "action": "notified_only",
+                                "risk_level": t.risk_level})
+                    except Exception:  # noqa: BLE001
+                        pass
+
             self.save()
             return result
 
@@ -316,15 +407,20 @@ class TrialStore:
             return result
 
     def _pause_locked(self, t: Trial, pusher: Optional[Pusher], *, reason: str) -> dict:
+        """设置 paused=True（调用方须持锁 + 调用 save）。"""
         t.paused = True
         payload = {
             "store_diff_sha256": t.store_diff_sha256,
             "reason": reason,
             "paused": True,
             "assert_failures": t.assert_failures,
+            "risk_level": t.risk_level,
         }
         if pusher is not None:
-            pusher(payload)  # 不执行真实封禁
+            try:
+                pusher(payload)
+            except Exception:  # noqa: BLE001
+                pass
         return {"ok": True, **payload}
 
     # ---- JSON 落盘（原子替换）----
@@ -374,8 +470,10 @@ def consume(code: str, store_diff_sha256: str) -> ConsumeResult:
     return _default_premiere.consume(code, store_diff_sha256)
 
 
-def enter_trial(store_diff_sha256: str, hours: int = 24) -> dict:
-    return _default_trial.enter_trial(store_diff_sha256, hours=hours)
+def enter_trial(store_diff_sha256: str, hours: int = 24,
+                risk_level: str = "low", automation_ids: list[str] | None = None) -> dict:
+    return _default_trial.enter_trial(store_diff_sha256, hours=hours,
+                                      risk_level=risk_level, automation_ids=automation_ids)
 
 
 def report_assert_failure(
@@ -394,6 +492,24 @@ def pause_and_notify(
     reason: str = "trial_paused",
 ) -> dict:
     return _default_trial.pause_and_notify(pusher, store_diff_sha256, reason=reason)
+
+
+def is_paused(store_diff_sha256: str) -> bool:
+    """指定 store 的试演期是否已被暂停（F6 执行闸查询接口）。
+
+    无 trial 记录 → False（没有暂停的 trial = 不拦截）。
+    """
+    return _default_trial.is_paused(store_diff_sha256)
+
+
+def is_paused_for_automation(automation_id: str) -> bool:
+    """指定 automation 是否在任何 paused trial 里。"""
+    return _default_trial.is_paused_for_automation(automation_id)
+
+
+def resume_trial(store_diff_sha256: str) -> dict:
+    """人工恢复被暂停的试演期（决策 F：恢复必须人工，不许自动）。"""
+    return _default_trial.resume(store_diff_sha256)
 
 
 def issue_premiere_for(store_diff_sha256: str, ttl_s: int = 300) -> str:

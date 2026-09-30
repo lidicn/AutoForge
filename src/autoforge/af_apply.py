@@ -104,6 +104,26 @@ def apply(
                 "summary": summary,
             }
 
+    # 1.6 试演期暂停闸（决策 F：失败即暂停）
+    # 无 trial 记录 → 不拦截（向后兼容，保证既有测试/调用链不破）
+    if af_premiere.is_paused(store_diff_sha):
+        af_audit.AuditLog.add(
+            af_audit.AuditEvent(
+                af_audit.PREMIERE_CONSUMED,  # 用现有事件类型
+                at=datetime.now(timezone.utc),
+                message=f"apply blocked: trial paused for diff {store_diff_sha[:12]}",
+                data={"store_diff_sha256": store_diff_sha, "reason": "trial_paused"},
+            )
+        )
+        return {
+            "ok": False,
+            "stage": "trial",
+            "reason": "trial_paused",
+            "ref": ref,
+            "summary": summary,
+            "store_diff_sha256": store_diff_sha,
+        }
+
     # 1.3 group 复合 IR 短路到原子部署（F9/v2.3，并入 F10②）
     # premiere 闸门已在上方消费；此处直接走 apply_group（全成功或全回滚，单 group ref 回滚单位）。
     # group 以单自动化 Graph（mode='group'）形式进入既有 staging 管线，零模型改动。

@@ -97,27 +97,56 @@ def test_consume_result_dict_access():
     assert res["code"] == "123456"
 
 
-# ---- 验收 #6：试演期 assert 失败 → 可注入 pusher，不真实封禁 ----
+# ---- 验收 #6：试演期 assert 失败 → 分级暂停（决策 F） ----
 
 def test_report_assert_failure_triggers_pusher():
+    """low risk band：首次失败 notify_only，二次失败 pause + 推。"""
     store = TrialStore()
     store.enter_trial(_sha(9), hours=24)
     calls = []
-    store.report_assert_failure(_sha(9), pusher=calls.append)
+    store.report_assert_failure(_sha(9), pusher=calls.append)  # 首次：notified_only
     assert len(calls) == 1
-    payload = calls[0]
+    assert calls[0]["paused"] is False
+    assert calls[0]["action"] == "notified_only"
+    store.report_assert_failure(_sha(9), pusher=calls.append)  # 二次：pause + push
+    assert len(calls) == 2
+    payload = calls[1]
     assert payload["paused"] is True
     assert payload["store_diff_sha256"] == _sha(9)
-    # 试演期只统计不封禁：trial 被标记暂停，但未执行任何封禁动作
+    # 试演期被标记暂停，但未执行任何封禁动作（真正封禁由 af_apply 执行闸拦截）
     assert store.get_trial(_sha(9)).paused is True
 
 
 def test_report_assert_failure_no_pusher_no_error():
     store = TrialStore()
     store.enter_trial(_sha(10), hours=24)
-    res = store.report_assert_failure(_sha(10))  # 无 pusher 不报错
+    store.report_assert_failure(_sha(10))  # 首次 low risk：notify_only
+    res = store.report_assert_failure(_sha(10))  # 二次：pause
     assert res["ok"] is True
     assert res["paused"] is True
+
+
+def test_report_assert_failure_high_risk_pauses_on_first():
+    """high risk band：首次失败即 pause。"""
+    store = TrialStore()
+    store.enter_trial(_sha(105), hours=24, risk_level="high")
+    calls = []
+    res = store.report_assert_failure(_sha(105), pusher=calls.append)
+    assert res["ok"] is True
+    assert res["paused"] is True
+    assert len(calls) == 1
+    assert store.get_trial(_sha(105)).paused is True
+
+
+def test_report_assert_failure_low_risk_first_only_notifies():
+    """low risk band：首次失败只 notify，不 pause。"""
+    store = TrialStore()
+    store.enter_trial(_sha(106), hours=24, risk_level="low")
+    res = store.report_assert_failure(_sha(106))
+    assert res["ok"] is True
+    assert res["paused"] is False
+    assert res["action"] == "notified_only"
+    assert store.get_trial(_sha(106)).paused is False
 
 
 def test_report_assert_failure_not_in_trial():
@@ -232,7 +261,7 @@ def test_premiere_store_persists_and_reloads(tmp_path):
 def test_trial_store_persists_and_reloads(tmp_path):
     path = str(tmp_path / "trial.json")
     s1 = TrialStore(path=path)
-    s1.enter_trial(_sha(102), hours=24)       # 写透
+    s1.enter_trial(_sha(102), hours=24, risk_level="high")  # high risk：首次 pause
     s2 = TrialStore(path=path)
     assert s2.is_in_trial(_sha(102)) is True
     s2.report_assert_failure(_sha(102))       # 暂停写透
