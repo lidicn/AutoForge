@@ -316,8 +316,13 @@ class TokenRegistry:
 
 
 def _rand6() -> str:
-    """6 位配对/授权码（纯数字，便于口述转告 agent）。"""
-    return "".join(secrets.choice("0123456789") for _ in range(6))
+    """8 位配对/授权码（纯数字，熵 10^8，不可离线枚举；10^6 空间 0.5s 已被证实可达）。
+
+    N-P0-sec（安全审计 fp-authcode-bruteforce）：原 6 位被证实可 0.5s 穷举。
+    8 位仍为纯数字（便于口述/匹配已有 UX），但空间扩大 100x，单进程枚举约 50s。
+    调用点零 ^[0-9]{6}$ 正则约束——与 6 位老码向后兼容（老码仍可 validate/consume）。
+    """
+    return "".join(secrets.choice("0123456789") for _ in range(8))
 
 
 @dataclass
@@ -427,6 +432,9 @@ class AuthCode:
     created_at: float
     expires_at: float | None  # None = 长期（可撤销）
     revoked: bool = False
+    consumed: bool = False
+    failed_attempts: int = 0
+    locked_until: float | None = None
 
 
 class AuthCodeStore:
@@ -461,6 +469,11 @@ class AuthCodeStore:
             encoding="utf-8",
         )
 
+    #: 失败计数阈值：超过后软锁定 LOCKOUT_S 秒
+    FAILURE_THRESHOLD = 10
+    #: 锁定时长（秒）
+    LOCKOUT_S = 300
+
     def create(self, kind: str, ttl_minutes: int | None = None) -> AuthCode:
         now = time.time()
         expires_at = None if kind == "long" else now + (ttl_minutes or 5) * 60
@@ -470,6 +483,9 @@ class AuthCodeStore:
             "created_at": now,
             "expires_at": expires_at,
             "revoked": False,
+            "consumed": False,
+            "failed_attempts": 0,
+            "locked_until": None,
         }
         with self._lock:
             self._codes[rec["code"]] = rec
@@ -486,6 +502,9 @@ class AuthCodeStore:
                     "created_at": c["created_at"],
                     "expires_at": c.get("expires_at"),
                     "revoked": c.get("revoked", False),
+                    "consumed": c.get("consumed", False),
+                    "failed_attempts": c.get("failed_attempts", 0),
+                    "locked_until": c.get("locked_until"),
                 }
                 for c in self._codes.values()
             ]
@@ -500,15 +519,60 @@ class AuthCodeStore:
             return True
 
     def validate(self, code: str) -> bool:
-        """有效（存在、未撤销、未过期）返回 True。"""
+        """有效（存在、未撤销、未过期、未锁定、未消耗）返回 True。
+
+        N-P0-sec 修复：validate 现在**仅查询**，不修改状态（消耗/失败计数由调用方显式调 consume/record_failure）。
+        """
         with self._lock:
             rec = self._codes.get(code)
-            if rec is None or rec.get("revoked"):
+            if rec is None or rec.get("revoked") or rec.get("consumed"):
+                return False
+            # 软锁定：失败过多后短时间内拒绝对这枚码的验证
+            locked_until = rec.get("locked_until")
+            if locked_until is not None and time.time() < locked_until:
                 return False
             exp = rec.get("expires_at")
             if exp is not None and time.time() > exp:
                 return False
             return True
+
+    def consume(self, code: str) -> bool:
+        """一次性消耗有效授权码。返回是否消耗成功（码存在且未消耗过）。
+
+        N-P0-sec 核心修复：授权码**必须 consume 才生效**，防止无限重试。
+        """
+        with self._lock:
+            rec = self._codes.get(code)
+            if rec is None:
+                return False
+            if rec.get("consumed") or rec.get("revoked"):
+                return False
+            rec["consumed"] = True
+            self._persist()
+            return True
+
+    def record_failure(self, code: str) -> bool:
+        """记录一次错误授权码尝试。
+
+        仅对**已存在**但验证失败的码有效（未知码不落盘，避免服务端暴露有效码集合）。
+        超过 FAILURE_THRESHOLD 次后进入 LOCKOUT_S 秒软锁定。
+
+        返回：True = 本次失败使码进入锁定（调用方应提示用户稍后再试）。
+        """
+        with self._lock:
+            rec = self._codes.get(code)
+            if rec is None:
+                return False  # 未知码不落盘，无侧信道
+            if rec.get("consumed") or rec.get("revoked"):
+                return False
+            rec["failed_attempts"] = rec.get("failed_attempts", 0) + 1
+            locked = False
+            if rec["failed_attempts"] >= self.FAILURE_THRESHOLD:
+                if rec.get("locked_until") is None:
+                    rec["locked_until"] = time.time() + self.LOCKOUT_S
+                    locked = True
+            self._persist()
+            return locked
 
 
 class RateLimiter:

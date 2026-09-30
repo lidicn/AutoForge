@@ -1,4 +1,4 @@
-﻿"""AutoForge MCP server（零依赖，stdio 传输，兼容 MCP 2024-11-05）。
+"""AutoForge MCP server（零依赖，stdio 传输，兼容 MCP 2024-11-05）。
 
 **为什么零依赖**：`mcp` 包在本机/NAS 双环境装不稳（外部网络受限），且 MCP 的 stdio
 协议本质就是「逐行 JSON-RPC 2.0」，自实现最稳、双环境都能跑、测试可纯子进程驱动。
@@ -164,8 +164,8 @@ def _t_import(store: GraphStore, args: dict[str, Any], current: dict[str, Any] |
 
 def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
     # v1.4.0：部署前写操作先入待批队列，人审后由服务层回放落盘。
-    # MCP 面绝不注册 approve（agent 不能自批；批准只在 HTTP / CLI 服务层）。
-    # v1.9.0 用户 WebUI：授权码路径 A/B——持有效授权码 → 直接部署；否则入待批队列。
+    # v1.9.0 用户 WebUI：部署授权码路径——持高熵一次性消耗的有效码可走快速通道（人审替代路径）。
+    # v2.5 安全加固（fp-authcode-bruteforce）：码须一次性 consume 才生效，无限重试验证已被堵死。
     owner = (current or {}).get("subject", "") or ""
     payload = {
         "ir": args["ir"],
@@ -181,7 +181,8 @@ def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | N
     if auth_code:
         acs = _MCP_AUTH_STORE or AuthCodeStore(Path(store.root) / ".auth" / "auth_codes.json")
         if acs.validate(auth_code):
-            # 路径 A：持有效授权码 → 直接部署（提交后自动批准回放落盘）
+            # 路径 A：持有效授权码 → 先一次性 consume（防重放），直接部署
+            acs.consume(auth_code)
             res = svc.submit_pending(
                 store, "af_save", payload,
                 submitted_by=owner or "mcp", authenticated_subject=owner or None,
@@ -190,12 +191,13 @@ def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | N
             applied = svc.approve_pending(store, op_id, reviewer=f"auth_code:{auth_code[:2]}" + "***")
             applied["deployed_via"] = "auth_code"
             return applied
-        # 无效授权码：仍入待批队列（路径 B），并标注提示
+        # 无效/已消耗/已锁定授权码：入待批队列（路径 B），并记录失败计数（10 次后锁定）
+        acs.record_failure(auth_code)
         pending = svc.submit_pending(
             store, "af_save", payload,
             submitted_by=owner or "mcp", authenticated_subject=owner or None,
         )
-        pending["warning"] = "auth_code 无效或已过期，已转为待人工审批"
+        pending["warning"] = "auth_code 无效或已消耗，已转为待人工审批（连续 10 次错误该码将锁定 5 分钟）"
         return pending
     return svc.submit_pending(store, "af_save", payload, submitted_by=owner or "mcp", authenticated_subject=owner or None)
 
@@ -709,7 +711,8 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
         "af_save",
         "【写】把 IR 归档为新版本（**先过第一道闸**：未通过静态扫描则拒绝）。参数：name(str 必填)、"
         "ir(dict 必填)、note(str 可选，版本备注)、tags(list[str] 可选，覆盖式标签)、"
-        "expect_version(int 可选，乐观锁，不匹配报冲突)。需 write 权限。返回 {ok,name,version,tags,warnings}。",
+        "expect_version(int 可选，乐观锁，不匹配报冲突)、auth_code(str 可选，部署授权码——8 位纯数字，"
+        "一次性消耗，连续 10 次错误该码锁定 5 分钟)。需 write 权限。返回 {ok,name,version,tags,warnings}。",
         {
             "type": "object",
             "properties": {
@@ -718,6 +721,9 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
                 "note": {"type": "string", "description": "版本备注"},
                 "tags": {"type": "array", "items": {"type": "string"}, "description": "标签（覆盖式）"},
                 "expect_version": {"type": "integer", "description": "乐观锁：期望的当前最新版本"},
+                "auth_code": {"type": "string", "pattern": "^[0-9]{8}$",
+                              "description": "部署授权码（用户在 WebUI 生成）；8 位纯数字；一次性消耗，"
+                                             "连续 10 次错误该码锁定 5 分钟"},
             },
             "required": ["name", "ir"],
         },
