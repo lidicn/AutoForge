@@ -62,3 +62,24 @@ jobs:
       - name: Run quality gates
         run: bash gates.sh
         continue-on-error: true
+
+  architecture:
+    name: layering-gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: 架构反向依赖硬门（check_imports.py，grimp baseline-lock）
+        # L0 内核 → L1 运行时 → L2 服务，禁反向依赖；违规即 fail（已稳定，作硬闸门）。
+        run: python scripts/check_imports.py
+      - name: import-linter 契约（渐进 B→A：先告警）
+        # DCD 后续优化三项裁定 · 分层 import-linter：观察一版本 continue-on-error，
+        # 稳定后再升失败门禁（去掉本行 continue-on-error）。
+        run: lint-imports
+        continue-on-error: true
