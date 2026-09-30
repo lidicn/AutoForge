@@ -84,3 +84,24 @@ def test_api_asks_pending_not_shadowed_by_name_route(tmp_path, monkeypatch):
     # 若被 {name} 通配捕获会走 get_graph("pending") → 404；200 说明路由顺序正确
     assert r.status_code == 200
     assert r.json()["ok"] is True
+
+
+def test_readonly_mode_rejects_write_endpoints(tmp_path):
+    """单写者租约降级只读（DCD 裁定一 A）：写端点应 503，而非走到鉴权 403。"""
+    client = TestClient(build_app(store_root=str(tmp_path), readonly=True))
+    r = client.post("/api/graphs/enable", json={"tag": "t", "enable": True})
+    assert r.status_code == 503
+
+
+def test_readonly_mode_blocks_unauth_build_endpoint(tmp_path):
+    """建自动化（/api/build，无 _write 守卫）在只读模式同样被拒。"""
+    client = TestClient(build_app(store_root=str(tmp_path), readonly=True))
+    r = client.post("/api/build", json={"ir": {"name": "x"}})
+    assert r.status_code == 503
+
+
+def test_writable_mode_write_endpoints_not_503(tmp_path):
+    """非只读：写端点走正常鉴权链路（fail-closed 403），不触发只读拦截。"""
+    client = TestClient(build_app(store_root=str(tmp_path), readonly=False))
+    r = client.post("/api/graphs/enable", json={"tag": "t", "enable": True})
+    assert r.status_code != 503

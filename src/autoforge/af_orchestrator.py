@@ -905,17 +905,152 @@ class HeuristicIntentParser:
         return out
 
 
+# ---------------------------------------------------------------------
+# 7-B. 意图解析的设备目录预筛（Token 优化①：相关性排序 + 有界 + 透明回报）
+# ---------------------------------------------------------------------
+#: 送入 LLM 的设备目录条数上限。审计实测：目录 30 条≈1265 token、120 条≈3984 token、
+#: 300 条≈9434 token，而单次请求真正相关的设备通常只有个位数，故先本地相关性排序再取有界前缀。
+DEFAULT_INTENT_CATALOG_LIMIT = 40
+
+#: 设备类（DEVICE_PATTERNS 的 kind）→ 设备名关键词。用意是补「词面重合」的漏：
+#: 用户说「开灯」而设备未必叫「灯」（如「氛围照明」「飞利浦吸顶灯」），靠这里捞回来。
+#: 刻意**不映射到大域**（如 sensor / binary_sensor）——那会把上百个无关传感器
+#: 一起排到前面，反而把真正的目标设备挤出窗口。
+_KIND_NAME_HINTS: dict[str, tuple[str, ...]] = {
+    "motion": ("人体", "存在", "occupancy", "motion", "presence"),
+    "temp": ("温度", "temperature"),
+    "illum": ("光照", "照度", "亮度", "illuminance"),
+    "door": ("门", "窗", "door", "window"),
+    "climate": ("空调", "climate", "温控"),
+    "light": ("灯", "light", "照明"),
+    "lock": ("锁", "lock"),
+    "hum": ("湿度", "humidity"),
+}
+
+#: 仅对这些**精确、小众**的域给加权（light/climate/lock 不会淹没候选）。
+_KIND_DOMAIN_HINTS: dict[str, tuple[str, ...]] = {
+    "light": ("light",),
+    "climate": ("climate",),
+    "lock": ("lock",),
+}
+
+#: 这些信号意味着句子含启发式**表达不了**的语义（阈值 / 时序 / 复合条件 / 定时 / 模式）。
+#: 一旦出现就必须交给 LLM——否则启发式会返回一个「看似合理但丢了条件」的半成品。
+_DEFER_TO_LLM = re.compile(
+    r"\d|每天|每周|定时|延时|分钟|秒钟|之后|并且|同时|除非|否则|渐变|慢慢"
+    r"|高于|低于|超过|不足|不到|模式|场景|转换|切换"
+)
+
+#: 超过该长度的句子几乎必含启发式无法承载的信息，直接走 LLM。
+_HEURISTIC_FIRST_MAX_LEN = 20
+
+
+def _heuristic_confident(text: str, parsed: dict) -> bool:
+    """判断启发式结果是否足以直接返回（跳过 LLM，token 成本为 0）。
+
+    刻意保守：只有「短句 + 无复杂语义信号 + 确实产出了动作」才放行。
+    任何拿不准的都退回 LLM——宁可不省 token，也不能丢语义。
+    """
+    if not isinstance(parsed, dict):
+        return False
+    if parsed.get("intent_kind") != "build":
+        return False
+    if not parsed.get("actions"):
+        return False
+    if len(text or "") > _HEURISTIC_FIRST_MAX_LEN:
+        return False
+    if _DEFER_TO_LLM.search(text or ""):
+        return False
+    return True
+
+
+def _select_intent_catalog(
+    catalog: Sequence[Mapping[str, Any]], text: str, limit: int
+) -> tuple[list[dict], int, int]:
+    """按与请求的相关性排序后取有界前缀，返回 ``(rows, total, shown)``。
+
+    修复原 ``list(catalog)[:120]`` 的三处问题：
+
+    1. **无排序**——相关设备若排在 catalog 第 121 位之后就被静默丢掉
+       （典型家庭 300~1500 实体，原写法让 LLM 只能看到其中一小撮且不一定相关）；
+    2. **无界**——120 条恒定≈3984 token，无论请求多简单都照付；
+    3. **无回报**——谁都不知道目录被裁过，与项目「列表透明回报」纪律相悖。
+
+    排序保证「相关项必定在前」，剩余名额按 catalog 原顺序补足，
+    以便在召回不到时仍保留兜底候选。
+    """
+    items = list(catalog)
+    total = len(items)
+    if total == 0 or limit <= 0:
+        return [], total, 0
+    text_s = text or ""
+    kinds = [k for pat, k in DEVICE_PATTERNS if re.search(pat, text_s)]
+    name_hints = {h.lower() for k in kinds for h in _KIND_NAME_HINTS.get(k, ())}
+    domains = {d for k in kinds for d in _KIND_DOMAIN_HINTS.get(k, ())}
+
+    scored: list[tuple[int, int, Mapping[str, Any]]] = []
+    for idx, entity in enumerate(items):
+        name = _name_of(entity)
+        area = _area_of(entity) or ""
+        domain = _domain_of(str(entity.get("entity_id") or ""))
+        lowered = name.lower()
+        score = 0
+        if area and area in text_s:
+            score += 3          # 房间命中
+        if name and name in text_s:
+            score += 5          # 设备名词面命中（最强信号）
+        if any(h in lowered for h in name_hints):
+            score += 4          # 设备类关键词命中（跨域捞回）
+        if domain and domain in domains:
+            score += 2          # 精确小域命中（弱加权，避免淹没名单）
+        scored.append((score, idx, entity))
+
+    scored.sort(key=lambda row: (-row[0], row[1]))  # 分数降序、原序稳定
+    rows = [
+        {
+            "entity_id": entity.get("entity_id"),
+            "name": _name_of(entity),
+            "area": _area_of(entity),
+            "domain": _domain_of(str(entity.get("entity_id"))),
+        }
+        for _score, _idx, entity in scored[:limit]
+    ]
+    return rows, total, len(rows)
+
+
 class IntentParser:
-    def __init__(self, llm: LLMClient | None):
+    def __init__(
+        self,
+        llm: LLMClient | None,
+        catalog_limit: int = DEFAULT_INTENT_CATALOG_LIMIT,
+        heuristic_first: bool = False,
+    ):
         self.llm = llm
         self.fallback = HeuristicIntentParser()
+        #: 送入 LLM 的设备目录上限（Token 优化①）
+        self.catalog_limit = catalog_limit
+        #: Token 优化④：简单句先试启发式、够用就跳过 LLM（0 token）。
+        #: **默认关闭**：实测发现启发式只产出「合成占位 ref」（如「书房主灯」），
+        #: 不会去目录里绑定真实实体，会丢掉实体消歧 / 追问流程——在带目录的生产场景里
+        #: 它产出的自动化不如 LLM（已用相关性裁剪后的目录）选得准。仅在确实**没有目录**
+        #: 的纯 NL→意图草图场景才值得开启。宁可不省 token，也不能丢语义。
+        self.heuristic_first = heuristic_first
 
     def parse(self, text: str, catalog: Sequence[Mapping[str, Any]] = (), history: Sequence[Mapping] = ()) -> dict:
+        # Token 优化④：启发式先跑，确认足够时才返回（0 token）。拿不准一律按原路径上 LLM。
+        if self.heuristic_first:
+            guess = self.fallback.parse(text, catalog)
+            if _heuristic_confident(text, guess):
+                return guess
         if self.llm is not None:
-            names = [{"entity_id": e.get("entity_id"), "name": _name_of(e), "area": _area_of(e),
-                      "domain": _domain_of(str(e.get("entity_id")))} for e in list(catalog)[:120]]
+            # Token 优化①：相关性排序 + 有界 + 在 prompt 里透明告知裁剪情况
+            rows, total, shown = _select_intent_catalog(catalog, text, self.catalog_limit)
+            note = (
+                f"设备目录（全屋共 {total} 条，已按与请求的相关性排序，"
+                f"下列 {shown} 条为候选；供识别设备名，不要输出 entity_id）"
+            )
             hist = "\n".join(f'{h.get("role")}: {h.get("text")}' for h in list(history)[-6:])
-            prompt = (f"设备目录（供识别设备名，不要输出 entity_id）:\n{_dumps(names, )}\n\n"
+            prompt = (f"{note}:\n{_dumps(rows)}\n\n"
                       f"对话上下文:\n{hist}\n\n用户说: {text}\n\n只输出 JSON:")
             try:
                 raw = self.llm.complete(prompt, system=INTENT_SYSTEM)

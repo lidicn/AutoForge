@@ -207,6 +207,7 @@ def build_app(
     store_root: str = ".forge",
     examples_dir: str | None = None,
     ui_dir: str | None = None,
+    readonly: bool = False,
 ) -> FastAPI:
     """构造 FastAPI 应用。
 
@@ -328,6 +329,24 @@ def build_app(
     _live = requires("live")
     _read = requires("read")
 
+    # 单写者租约（DCD 裁定一 A）：只读降级时写端点统一拒绝。
+    # `readonly=True` 由 serve 抢不到 af_flock 单写者锁时传入。
+    def _readonly_guard() -> None:
+        if readonly:
+            raise HTTPException(
+                status_code=503,
+                detail="服务处于只读模式（单写者锁被其他实例持有），写操作被拒绝",
+            )
+
+    if readonly:
+        async def _write_blocker() -> None:
+            raise HTTPException(
+                status_code=503,
+                detail="服务处于只读模式（单写者锁被其他实例持有），写操作被拒绝",
+            )
+
+        _write = _write_blocker
+
     app = FastAPI(
         title="AutoForge API",
         version=svc.API_VERSION,
@@ -420,7 +439,7 @@ def build_app(
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.post("/api/build")
+    @app.post("/api/build", dependencies=[Depends(_readonly_guard)])
     def api_build(body: BuildBody) -> dict[str, Any]:
         try:
             # v1.4.0：传 store → 自动加载 {store}/device_acl.json（设备保护分级生效）
@@ -428,7 +447,7 @@ def build_app(
         except IRValidationError as exc:
             raise HTTPException(status_code=400, detail=f"IR 校验失败：{exc}") from exc
 
-    @app.post("/api/bind")
+    @app.post("/api/bind", dependencies=[Depends(_readonly_guard)])
     def api_bind(body: BuildBody) -> dict[str, Any]:
         """v1.6.0：可选 binding——把 IR 里的设备描述占位符（`?书房吊灯`）回填为真实 entity_id。
 
@@ -436,7 +455,7 @@ def build_app(
         """
         return svc.bind_ir(store, body.ir)
 
-    @app.post("/api/sim")
+    @app.post("/api/sim", dependencies=[Depends(_readonly_guard)])
     def api_sim(body: SimBody) -> dict[str, Any]:
         try:
             # v1.5.0：传 store → `_telemetry` 落遥测
@@ -499,7 +518,7 @@ def build_app(
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.post("/api/spec/compile")
+    @app.post("/api/spec/compile", dependencies=[Depends(_readonly_guard)])
     def api_spec_compile(body: SpecBody) -> dict[str, Any]:
         return svc.compile_text(body.text)
 

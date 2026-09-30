@@ -1323,9 +1323,21 @@ def serve(
         raise typer.Exit(code=EXIT_IR_ERROR)
 
     from .af_api import build_app
+    from .af_flock import FileLock, owner_id
+
+    # 单写者租约（DCD 裁定一 A）：抢不到锁 → 降级只读，写操作由 API 层拒绝。
+    _lock = FileLock(Path(store_root) / ".serve.lock")
+    readonly = not _lock.try_acquire()
+    if readonly:
+        typer.echo(
+            f"⚠️ 单写者锁被占，降级只读（持有者: {_lock.holder().get('owner')}）；写操作将被拒绝",
+            err=True,
+        )
+    else:
+        typer.echo(f"· 取得单写者锁（owner={owner_id()}）")
 
     examples_path = examples or ("examples/ir" if Path("examples/ir").is_dir() else "")
-    app_ = build_app(store_root, examples_path or None, ui_dir or None)
+    app_ = build_app(store_root, examples_path or None, ui_dir or None, readonly=readonly)
     typer.echo(f"· AutoForge 只读服务层：http://{host}:{port}（文档 /docs，store={store_root}）")
     if ui_dir and Path(ui_dir).is_dir():
         typer.echo(f"· 前端静态托管：http://{host}:{port}/（dist={ui_dir}）")

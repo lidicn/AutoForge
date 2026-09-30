@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,6 +35,10 @@ __all__ = ["PersistStore", "record_instance", "restore_instance", "INSTANCES_SUB
 #: 落盘记录所在子目录：`{root}/instances/{instance_id}.json`
 INSTANCES_SUBDIR = "instances"
 _SUFFIX = ".json"
+
+#: B 增强（DCD 裁定二）：落盘记录校验和字段名（对齐 af_store 的 SHA256）。
+_SHA256_KEY = "_sha256"
+_logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -61,6 +67,26 @@ def _parse_iso(text: Any) -> datetime | None:
 def _safe(name: Any) -> str:
     cleaned = "".join(c if c.isalnum() or c in "-_." else "_" for c in str(name)).strip("_")
     return cleaned or "instance"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 记录完整性（B 增强：SHA256 校验和，对齐 af_store）
+# ─────────────────────────────────────────────────────────────────────
+
+def _record_checksum(record: Mapping[str, Any]) -> str:
+    """对记录内容（不含校验和字段本身）算 SHA256，用于读时验证完整性。"""
+    return hashlib.sha256(
+        json.dumps(dict(record), ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _verify_record(record: Mapping[str, Any]) -> bool:
+    """校验 `_sha256`；无校验和字段（旧格式）视为通过（向后兼容）。"""
+    if _SHA256_KEY not in record:
+        return True
+    stored = record[_SHA256_KEY]
+    stripped = {k: v for k, v in record.items() if k != _SHA256_KEY}
+    return _record_checksum(stripped) == stored
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -148,6 +174,8 @@ class PersistStore:
         record = record_instance(instance, clock)
         record["owner"] = self.owner
         record["lease_until_wall"] = _iso(clock.now() + timedelta(seconds=self.lease_s))
+        # B 增强：SHA256 校验和（对齐 af_store），读时校验 + 损坏段跳过
+        record[_SHA256_KEY] = _record_checksum(record)
         path = self._path(instance.instance_id)
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -183,10 +211,17 @@ class PersistStore:
         path = self._path(instance_id)
         if not path.is_file():
             return None
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            return None
+        if not _verify_record(record):
+            _logger.warning("af_persist: 落盘记录校验和不匹配，拒收（%s）", path)
+            return None
+        return record
 
     def records(self) -> list[dict[str, Any]]:
-        """读取全部落盘记录；坏文件跳过，不让一条损坏拖垮整轮恢复。"""
+        """读取全部落盘记录；坏文件/校验和不匹配跳过，不让一条损坏拖垮整轮恢复。"""
         if not self.directory.is_dir():
             return []
         out: list[dict[str, Any]] = []
@@ -194,9 +229,13 @@ class PersistStore:
             if path.name.endswith(".tmp"):
                 continue
             try:
-                out.append(json.loads(path.read_text(encoding="utf-8")))
+                record = json.loads(path.read_text(encoding="utf-8"))
             except (ValueError, OSError):
                 continue
+            if not _verify_record(record):
+                _logger.warning("af_persist: 落盘记录校验和不匹配，跳过（%s）", path)
+                continue
+            out.append(record)
         return out
 
     def clear(self) -> int:

@@ -216,3 +216,41 @@ def test_cli_run_accepts_persist_dir(tmp_path):
     persist_dir = tmp_path / "p"
     result = CliRunner().invoke(app, ["run", str(ir), "--persist-dir", str(persist_dir)])
     assert result.exit_code == 0, result.output
+
+
+# ── B 增强：SHA256 校验和 + 损坏段跳过（DCD 裁定二）──────────────────────
+
+
+def test_save_record_carries_sha256_and_roundtrip(tmp_path):
+    rt = _runtime(_wait_ir(), tmp_path / "p")
+    instance = _suspend(rt)
+    store = PersistStore(tmp_path / "p")
+    store.save(instance, rt.clock)
+    loaded = store.load(instance.instance_id)
+    assert loaded is not None
+    assert loaded["_sha256"], "B 增强：落盘记录应带 SHA256 校验和"
+    assert loaded["instance_id"] == instance.instance_id
+
+
+def test_load_rejects_checksum_mismatch(tmp_path):
+    rt = _runtime(_wait_ir(), tmp_path / "p")
+    instance = _suspend(rt)
+    store = PersistStore(tmp_path / "p")
+    store.save(instance, rt.clock)
+    # 篡改内容（保持 JSON 合法）但校验和 stale → 应拒收，且不拖累整轮恢复
+    path = store._path(instance.instance_id)
+    rec = json.loads(path.read_text(encoding="utf-8"))
+    rec["automation_id"] = "TAMPERED"
+    path.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+    assert store.load(instance.instance_id) is None
+    assert store.records() == []
+
+
+def test_legacy_record_without_checksum_still_loads(tmp_path):
+    """向后兼容：旧格式落盘记录无 `_sha256` 字段，应照常加载（不改格式头）。"""
+    store = PersistStore(tmp_path / "p")
+    store.directory.mkdir(parents=True)
+    legacy = {"instance_id": "old", "automation_id": "demo", "state": "suspended"}
+    (store.directory / "old.json").write_text(json.dumps(legacy), encoding="utf-8")
+    assert store.load("old") == legacy
+    assert len(store.records()) == 1
