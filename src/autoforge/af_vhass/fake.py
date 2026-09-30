@@ -157,6 +157,12 @@ SERVICE_STATE: dict[tuple[str, str], str] = {
     ("cover", "open_cover"): "open",
     ("cover", "close_cover"): "closed",
     ("cover", "stop_cover"): "stopped",
+    # ── F1 P1：决策 A 仿真补域（场景/脚本间接触发 + 通知副作用域）─────────────
+    ("scene", "turn_on"): "on",           # scene 触发：FakeHA 标记 active，不展开到 light 调用
+    ("script", "turn_on"): "on",          # script 运行：FakeHA 标记 active，不展开到真实脚本链
+    ("script", "turn_off"): "off",        # script 停止
+    ("notify", "notify"): "on",           # notify.notify：副作用不可观测（发手机），
+    ("persistent_notification", "create"): "on",  #    但 FakeHA 给一个"已触发"状态让仿真不跳过
 }
 
 #: 已建模、但**新状态由参数或当前状态决定**的服务（不能在上表里给死值）。
@@ -209,6 +215,12 @@ def service_effect(
         return current, {"volume_level": params.get("volume_level")}
     if (domain, service) == ("media_player", "volume_mute"):
         return current, {"is_volume_muted": params.get("is_volume_muted")}
+    # ── F1 P1：notify 域副作用不可观测（发手机/推送），
+    #    状态保持不变（None），但把 message/title 写进 attributes，
+    #    与 af_shadow 的 EXEMPT verdict 路径对齐（notify 已在 shadow exempt_actions 里）
+    if domain in ("notify", "persistent_notification"):
+        attrs = {k: v for k, v in params.items() if k in ("message", "title", "entity_id")}
+        return None, attrs
     if service == "toggle":
         return ("off" if current == "on" else "on"), {}
     return SERVICE_STATE.get((domain, service)), {}
