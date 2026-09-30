@@ -27,6 +27,7 @@ from autoforge.af_intervention import InterventionDetector, InterventionPolicy
 from autoforge.af_proposal import Proposal, ProposalManager, ProposalStatus, StaticGuardPolicy
 from autoforge.af_shadow import ShadowBinding, ShadowPolicy, ShadowRunner
 from autoforge.af_pretrigger import PreTriggerService
+from autoforge.af_experience import ExperienceStore
 
 __all__ = ["ConfGrading", "install", "make_later", "api_handlers", "mcp_tools"]
 
@@ -170,10 +171,12 @@ def install(
     grading.restore()
 
     # F12 预测性触发消费闭环：组装 + 记录真实触发（包裹 on_spawn）+ 周期扫描
+    # F11② 经验先验：用 persist_dir 创建 ExperienceStore 实例，喂给 PreTriggerService
+    experience_store = ExperienceStore(persist_dir) if persist_dir else None
     pretrigger = PreTriggerService(
         runtime,
         conf=conf,
-        experience=None,  # 接入点：ExperienceStore 可由调用方注入（F11② 先验）
+        experience=experience_store,
         threshold=0.8,
         interval_seconds=90.0,
         persist_dir=persist_dir,

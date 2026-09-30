@@ -40,7 +40,7 @@
 
 | # | 事项 | 状态与建议 |
 |---|---|---|
-| ① | **`wait` 语义二选一**（平台级决策，旧交接单 §1.2① 遗留） | 仍需拍板：A 改运行时让 wait 到期走 `then`；B 保留现状、修文档。`af_scheduler.tick()` 把所有非 emit 定时器派发为 `on_timeout`。建议走 DCD 申请裁定（见 §8）。 |
+| ① | ~~**`wait` 语义二选一**~~ | ✅ 已拍板 Option A（commit `f8141f5`, 2026-09-18）：`wait` 到期走 `then` 正常继续；`ask`（未知 kind）到点才走 `on_timeout`。测试覆盖：`test_wait_then_continues`（见 `tests/unit/test_af_executor_scheduler.py:191`）。原交接单此条过时。 |
 | ② | v2.5 F14 NL→IR 可逆编译器 | 📋 仅设计层（演进路线图 §2 v2.5），无代码；过需求门后拆。 |
 | ③ | import-linter CI 门禁 | 🟡 契约 `.importlinter` 已写；待 `pip install importlinter && lint-imports` 出违规清单，再接入 CI（观察期 `continue-on-error` → 升失败门禁）。 |
 | ④ | F11②经验先验注入 | TODO（非阻塞）：`af_runtime_ext.install` 当前传 `experience=None` 未真正接线，不影响正确性。 |
