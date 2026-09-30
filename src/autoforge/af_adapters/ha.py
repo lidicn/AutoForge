@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import urllib.error
@@ -256,7 +257,6 @@ class HAAdapter:
                 if pre:
                     self.undo_recorder(action, params, pre)
             except Exception:  # 快照捕获异常绝不阻断真实下发
-                import logging
                 logging.getLogger("autoforge.adapter").warning(
                     "undo 快照捕获异常（已忽略，不下发）", exc_info=True
                 )

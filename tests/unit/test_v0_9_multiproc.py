@@ -286,6 +286,9 @@ def test_runtime_restore_honors_lease(tmp_path):
     record = json.loads(record_path.read_text(encoding="utf-8"))
     record["owner"] = "other-proc"
     record["lease_until_wall"] = "2027-01-01T00:00:00+00:00"
+    # WAL-B：修改后需刷新 _sha256（先剥离旧 checksum 再算）
+    _sha_key = af_persist_mod._SHA256_KEY
+    record[_sha_key] = af_persist_mod._record_checksum({k: v for k, v in record.items() if k != _sha_key})
     record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
 
     rt2 = _runtime(_wait_ir(), persist_dir)
@@ -295,6 +298,7 @@ def test_runtime_restore_honors_lease(tmp_path):
 
     # 租约过期（崩溃进程）→ 可接管恢复
     record["lease_until_wall"] = "2026-01-01T00:00:00+00:00"
+    record[_sha_key] = af_persist_mod._record_checksum({k: v for k, v in record.items() if k != _sha_key})
     record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     rt3 = _runtime(_wait_ir(), persist_dir)
     assert len(rt3.restored) == 1

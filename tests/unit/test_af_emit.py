@@ -121,7 +121,7 @@ def test_emit_delay_uses_instance_timer_and_time_travel():
     runtime, _ = _make(_emit_ir("later", None, "30s"), {"binary_sensor.m": "off"})
 
     runtime.emit("binary_sensor.m", "on")
-    assert runtime.bus.emitted == [], "延迟未到点不应发布"
+    assert list(runtime.bus.emitted) == [], "延迟未到点不应发布"
 
     runtime.advance(31)
     assert [e.event for e in runtime.bus.emitted] == ["later"], "时间旅行到点后应发布"

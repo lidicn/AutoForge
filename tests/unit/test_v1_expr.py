@@ -111,8 +111,10 @@ def test_time_functions_explicit_timestamps():
 
 def test_time_between_normal_and_cross_midnight_windows():
     r = _resolve_factory({})
+    # 使用 naive ISO（无时区后缀）表示"本地墙钟时间"，避免 astimezone() 转换受运行机时区影响。
+    # P2-2 修复后，带时区的 ISO 会先归一到本地再比较——那时区行为由生产场景覆盖。
     def at(hhmm: str) -> dict:
-        return {"const": f"2026-09-15T{hhmm}:00+00:00"}
+        return {"const": f"2026-09-15T{hhmm}:00"}
 
     # 普通窗口 [07:00, 09:00)
     assert evaluate({"op": "truthy", "value": _call("time_between", at("08:30"), {"const": "07:00"}, {"const": "09:00"})}, r)
