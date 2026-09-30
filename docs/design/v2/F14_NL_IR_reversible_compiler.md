@@ -95,7 +95,7 @@ NL Text ──▶ IR Builder ──▶ IR dict (af-stage/1) ◀── IR Schema 
 | 阶段 | 交付物 | 依赖 | 验收标准 |
 |---|---|---|---|
 | P1 | Fidelity Verifier（往返校验器） | F5 schema + F15 真源 | 对 **30 条** IR 样本，核心字段 **L0 完全相等** + `condition` **L1 结构等价**（归一化后 `IR→NL→IR ≡ 原 IR`）。判据经 DCD 20261001·F 裁定（分层 + 30 条 + P1 准入）|
-| P2 | NL Builder（NL→IR 正向） | P1 + KNOWN_ACTIONS | 30 条 NL 文本样本全部成功构建合法 IR |
+| P2 | NL Builder（NL→IR 正向） | P1 + KNOWN_ACTIONS | 30 条 NL 文本样本全部成功构建合法 IR ✅（`af_nl_build.build_ir_from_nl`，受限文法零 LLM；每条过 `load_automation` + `verify_roundtrip.ok`；覆盖 ≥16 域） |
 | P3 | AskSpec 跨层复用 | P1 | AskSpec hash 一致、控件类型匹配 |
 | P4 | 不可逆字段处理 | P1 | L2/L3 字段正确标注、NL 渲染用 `[运行时]` 占位符 |
 
@@ -123,8 +123,9 @@ IR → NL → IR ≡ 原 IR: ✅
 | `af_nl.render_automation` | 对称增强（补所有 KNOWN_ACTIONS 的 NL 片段） | 中（F15 已开始） |
 | `af_ir.models.load_graph` | 新增 IR Schema Validator 调用点 | 小 |
 | `af_actions.KNOWN_ACTIONS` | 作为 NL Builder 的域-服务映射基表 | 无（已交付） |
+| `af_nl_build.build_ir_from_nl`（P2 新增） | 受限文法 NL→IR：反向 `_ACTION_VERBS` 按实体域消歧到 `domain.service`，装配 `on→[if]→do→pass` 连通链；仅产出 KNOWN_ACTIONS 内动作，超文法即 `ValueError` | 中 |
 | `af_api` | 新增 `/api/nl-to-ir` 和 `/api/fidelity-check` 端点 | 小 |
-| 测试 | 新增 `tests/f14/test_fidelity_roundtrip.py`（P1 验收） | 中 |
+| 测试 | 新增 `tests/f14/test_fidelity_roundtrip.py`（P1）+ `tests/f14/test_nl_build.py`（P2 验收） | 中 |
 
 ## 6. 不在 v2.5 范围内
 
@@ -144,4 +145,4 @@ IR → NL → IR ≡ 原 IR: ✅
 
 ---
 
-**审批状态**：✅ 已批准（DCD 20261001《AF 三题》·F，判据=方案 C 分层 L0/L1 + 30 样本，**本裁定即视为 P1 准入**）| **进度**：P1 Fidelity Verifier 已交付（`af_fidelity.py` + `af_ir/condition_norm.py` + `tests/f14/`）；P2–P4 待排
+**审批状态**：✅ 已批准（DCD 20261001《AF 三题》·F，判据=方案 C 分层 L0/L1 + 30 样本，**本裁定即视为 P1 准入**）| **进度**：P1 Fidelity Verifier 已交付（`af_fidelity.py` + `af_ir/condition_norm.py` + `tests/f14/`）；P2 NL Builder 已交付（`af_nl_build.py` + `tests/f14/test_nl_build.py`，30 样本双过 `load_automation`+`verify_roundtrip`）；P3–P4 待排
