@@ -192,11 +192,19 @@ DEFAULT_EFFECTS: dict[str, str] = {
     "close": "closed",
     "lock": "locked",
     "unlock": "unlocked",
+    "stop_cover": "stopped",
+    "media_play": "playing",
+    "media_pause": "paused",
+    "media_stop": "idle",
+    "play_media": "playing",
     "set_hvac_mode": "@params.hvac_mode",
+    "set_fan_mode": "@params.fan_mode",
+    "set_preset_mode": "@params.preset_mode",
     "set_state": "@params.state",
     "set_temperature": "@params.temperature",
     "set_cover_position": "@params.position",
     "volume_set": "@params.volume_level",
+    "volume_mute": "@params.is_volume_muted",
     # toggle 无法用静态效果表推导：期望态 = 当前态取反，需运行时状态源（见 resolver）
 }
 
