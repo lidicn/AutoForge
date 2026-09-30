@@ -219,13 +219,13 @@ class Trial:
     """试演期状态。
 
     决策 F：失败即暂停（分级）。
-    - low 风险 band：首次 assert 失败仅通知；24h 内二次失败才 pause。
+    - low 风险 band：首次 assert 失败仅 notify；24h 内二次失败才 pause。
     - high 风险 band：首次 assert 失败立即 pause + 通知。
     - 恢复必须人工（resume()），不许自动恢复。
     """
 
     __slots__ = ("store_diff_sha256", "started_at", "ends_at", "paused",
-                 "assert_failures", "risk_level", "automation_ids")
+                 "assert_failures", "failure_times", "risk_level", "automation_ids")
 
     def __init__(self, store_diff_sha256: str, started_at: float, ends_at: float,
                  risk_level: str = "low", automation_ids: list[str] | None = None) -> None:
@@ -234,6 +234,7 @@ class Trial:
         self.ends_at = ends_at
         self.paused = False
         self.assert_failures = 0
+        self.failure_times: list[float] = []
         self.risk_level = risk_level  # "low" | "high"
         self.automation_ids = list(automation_ids or [])
 
@@ -244,6 +245,7 @@ class Trial:
             "ends_at": self.ends_at,
             "paused": self.paused,
             "assert_failures": self.assert_failures,
+            "failure_times": list(self.failure_times),
             "risk_level": self.risk_level,
             "automation_ids": list(self.automation_ids),
         }
@@ -253,6 +255,7 @@ class Trial:
         t = cls(d["store_diff_sha256"], d["started_at"], d["ends_at"])
         t.paused = d.get("paused", False)
         t.assert_failures = d.get("assert_failures", 0)
+        t.failure_times = list(d.get("failure_times") or [])
         t.risk_level = d.get("risk_level", "low")
         t.automation_ids = list(d.get("automation_ids") or [])
         return t
@@ -350,6 +353,8 @@ class TrialStore:
 
         high 风险 band → 立即 pause + notify
         low 风险 band  → 首次仅 notify；24h 内二次失败才 pause
+          - 24h 窗口：清理 > 24h 前的旧失败时间戳
+          - 窗口内失败数 >= 2 → pause
         """
         with self._lock:
             t = self._trials.get(store_diff_sha256)
@@ -357,29 +362,37 @@ class TrialStore:
                 return {"ok": False, "reason": "not_in_trial"}
             if t.paused:
                 return {"ok": False, "reason": "already_paused"}
+
+            now = self._now()
             t.assert_failures += 1
+            t.failure_times.append(now)
+            # 清理 24h 前的旧失败时间戳（窗口滚动）
+            cutoff = now - self.LOW_RISK_SECOND_FAILURE_WINDOW_S
+            t.failure_times = [ft for ft in t.failure_times if ft >= cutoff]
+            failures_in_window = len(t.failure_times)
 
             should_pause = False
             if t.risk_level == "high":
                 # high 风险 band：首次失败即 pause
                 should_pause = True
             elif t.risk_level == "low":
-                # low 风险 band：24h 内二次失败才 pause
-                # 注意：这里简化处理——只要 assert_failures >= 2 就 pause
-                # 严格的"24h 内"需要额外记时间戳，当前最小实现
-                should_pause = t.assert_failures >= 2
+                # low 风险 band：24h 窗口内失败 >= 2 才 pause
+                should_pause = failures_in_window >= 2
 
             if should_pause:
                 result = self._pause_locked(t, pusher, reason=reason)
             else:
                 # 首次失败 low risk：仅 notify，不 pause
                 result = {"ok": True, "store_diff_sha256": store_diff_sha256,
-                          "assert_failures": t.assert_failures, "paused": False,
+                          "assert_failures": t.assert_failures,
+                          "failures_in_window": failures_in_window,
+                          "paused": False,
                           "action": "notified_only", "risk_level": t.risk_level}
                 if pusher is not None:
                     try:
                         pusher({"store_diff_sha256": store_diff_sha256,
                                 "reason": reason, "assert_failures": t.assert_failures,
+                                "failures_in_window": failures_in_window,
                                 "paused": False, "action": "notified_only",
                                 "risk_level": t.risk_level})
                     except Exception:  # noqa: BLE001
