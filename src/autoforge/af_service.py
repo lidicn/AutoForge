@@ -192,6 +192,7 @@ def health(store: "GraphStore | None" = None) -> dict[str, Any]:
             tick_exit_reason = get_tick_exit_reason()
     except Exception:
         pass  # tick_health is best-effort, must not break /api/health
+    from .af_time import house_tz_status
     return {
         "ok": ok,
         "version": API_VERSION,
@@ -202,6 +203,9 @@ def health(store: "GraphStore | None" = None) -> dict[str, Any]:
         "tick_health": tick_health,
         "ticker_alive": ticker_alive,
         "tick_exit_reason": tick_exit_reason,
+        # DCD 20261001·§五：时区口径必须可读到「env 生效了还是落到 fallback」，
+        # 否则 AF_TZ 写错也只会静默 +8，与 MA 同批披露的假绿同型。
+        "tz": house_tz_status(),
     }
 
 

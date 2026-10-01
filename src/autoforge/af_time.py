@@ -21,6 +21,7 @@ mimo Clock 设计增量（2026-09-22）：
 from __future__ import annotations
 
 import math
+import os
 import re
 
 import time
@@ -41,6 +42,10 @@ __all__ = [
     "format_duration",
     "ensure_aware",
     "load_tz",
+    "house_tz_name",
+    "house_tz_status",
+    "TZ_ENV_KEY",
+    "TZ_FALLBACK_NAME",
     "assert_clock_consistent",
     "matches_at",
 ]
@@ -76,6 +81,25 @@ class TimeSource(Protocol):
 
 
 # ── 辅助函数（mimo Clock 设计增量）───────────────────────────────────
+#: 家庭时区的部署环境配置项（单源）。空串与未设置同视。
+TZ_ENV_KEY = "AF_TZ"
+
+#: 未配置时的 fallback。DCD 20261001·§五：本仓 +8 从「写死」降级为「具名 fallback」。
+TZ_FALLBACK_NAME = "Asia/Shanghai"
+
+
+def house_tz_name() -> str:
+    """部署环境给出的家庭时区名；未配置落到 `TZ_FALLBACK_NAME`。
+
+    每次调用现读环境变量，不做模块级缓存——否则注入后毫无反应（MA 在同批裁定执行
+    回填里专门点名过那种 import 时绑定快照的写法）。
+    """
+    raw = os.environ.get(TZ_ENV_KEY)
+    if raw is not None and raw.strip():
+        return raw.strip()
+    return TZ_FALLBACK_NAME
+
+
 def ensure_aware(dt: datetime, *, who: str = "dt") -> datetime:
     """naive 时间一律拒绝。B3-AF-04 根因就是 naive UTC 与 aware local 混算。"""
     if dt.tzinfo is None:
@@ -83,14 +107,45 @@ def ensure_aware(dt: datetime, *, who: str = "dt") -> datetime:
     return dt
 
 
-def load_tz(tz_name: str = "Asia/Shanghai"):
-    """容器缺 tzdata 时退化为固定 +08:00（深圳无夏令时，语义等价）。"""
+def load_tz(tz_name: str | None = None):
+    """家庭时区对象。口径来自部署环境单一配置项（见 `house_tz_name`），不再写死。
+
+    DCD 20261001·§五 把时区上收为 homesdk 机制层，但 `homesdk.time` 尚未落地，
+    因此本仓先收口到这一个函数：homesdk 接口可用时，改这里一行即可。
+    """
+    name = tz_name or house_tz_name()
     if ZoneInfo is not None:
         try:
-            return ZoneInfo(tz_name)
+            return ZoneInfo(name)
         except Exception:
             pass
+    # 容器缺 tzdata（或名字写错）时退化为固定 +08:00：深圳无夏令时，与 fallback 名语义等价。
+    # 这件事必须能被外部看到，所以配套 `house_tz_status()` 供 /api/health 暴露。
     return timezone(timedelta(hours=8), "CST")
+
+
+def house_tz_status(tz_name: str | None = None) -> dict:
+    """时区口径的可观测判据：请求名 + 是否真的按名字解析成功。
+
+    静默退化到 +8 就是 MA 在 20261001 批里踩过的假绿同类问题，故把"退化了"这件事
+    本身做成一个能读到的字段，而不是只写在注释里。
+    """
+    name = tz_name or house_tz_name()
+    tz = load_tz(name)
+    raw = os.environ.get(TZ_ENV_KEY)
+    if tz_name is not None:
+        source = "param"
+    elif raw is not None and raw.strip():
+        source = f"env:{TZ_ENV_KEY}"
+    else:
+        source = "fallback"
+    offset = tz.utcoffset(datetime.now(timezone.utc))
+    return {
+        "tz_name": name,
+        "source": source,
+        "resolved_by_name": getattr(tz, "key", None) == name,
+        "utc_offset": None if offset is None else offset.total_seconds() / 3600,
+    }
 
 
 def assert_clock_consistent(c) -> None:
@@ -124,8 +179,14 @@ class SystemTimeSource:
     两者不统一是历史原因；mimo Clock 设计建议未来统一 now()=本地，但需迁移 67 处引用。
     """
 
-    def __init__(self, tz_name: str = "Asia/Shanghai"):
-        self._tz = load_tz(tz_name)
+    def __init__(self, tz_name: str | None = None):
+        self._tz_name = tz_name or house_tz_name()
+        self._tz = load_tz(self._tz_name)
+
+    @property
+    def tz_name(self) -> str:
+        """实际生效的时区名（构造时解析，供健康面与日志复核）。"""
+        return self._tz_name
 
     def now(self) -> datetime:
         return datetime.now(timezone.utc)
@@ -147,7 +208,7 @@ class SystemTimeSource:
         return time.monotonic()
 
     def __repr__(self) -> str:  # pragma: no cover - 调试辅助
-        return "SystemTimeSource()"
+        return f"SystemTimeSource(tz_name={self._tz_name!r})"
 
 
 @dataclass

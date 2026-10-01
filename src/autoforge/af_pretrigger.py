@@ -186,7 +186,7 @@ class PreTriggerService:
         window_minutes: float = DEFAULT_WINDOW_MINUTES,
         interval_seconds: float = DEFAULT_INTERVAL_SECONDS,
         persist_dir: str | None = None,
-        tz_name: str = "Asia/Shanghai",
+        tz_name: str | None = None,
         policy: PreTriggerBandPolicy | None = None,
     ) -> None:
         if not (0.0 < float(threshold) <= 1.0):

@@ -277,7 +277,7 @@ class Predictor:
         prior_strength: float = DEFAULT_PRIOR_STRENGTH,
         max_events: int = DEFAULT_MAX_EVENTS,
         pre_window_minutes: float = DEFAULT_PRE_WINDOW_MINUTES,
-        tz_name: str = "Asia/Shanghai",
+        tz_name: str | None = None,
         clock=None,
         filename: str = PREDICTIONS_FILE,
     ) -> None:
