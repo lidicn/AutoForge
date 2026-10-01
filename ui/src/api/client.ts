@@ -8,6 +8,7 @@ import type {
   CredentialsResponse, CredentialsUpdateResponse,
   WhoamiResponse, SubjectsResponse, RevokeResponse,
   LiveStatusResponse, LiveRunResponse,
+  UndoAvailableResponse, UndoPreviewResponse, UndoRunResponse,
   AsksResponse, AskAnswerResponse,
 } from '../types/api'
 
@@ -103,8 +104,15 @@ export const api = {
 
   // G 真机下发
   liveStatus: () => request<LiveStatusResponse>('GET', '/live/status'),
-  liveRun: (ir: unknown, live_allow: string[], confirm: boolean, events?: unknown[]) =>
-    request<LiveRunResponse>('POST', '/live/run', { ir, live_allow, confirm, events }),
+  liveRun: (ir: unknown, live_allow: string[], confirm: boolean, events?: unknown[], undo?: boolean) =>
+    request<LiveRunResponse>('POST', '/live/run', { ir, live_allow, confirm, events, undo }),
+
+  // F7 撤销：撤销 = 对真实设备再下发一次，闸门与 liveRun 同源（服务端令牌 + live 权限）
+  undoAvailable: () => request<UndoAvailableResponse>('GET', '/undo/available'),
+  undoPreview: (deploy_id: string) =>
+    request<UndoPreviewResponse>('GET', `/undo/${encodeURIComponent(deploy_id)}`),
+  undoDeploy: (deploy_id: string, confirm: boolean) =>
+    request<UndoRunResponse>('POST', `/undo/${encodeURIComponent(deploy_id)}`, { confirm }),
 
   // v1.7.3 运行中 watch 实例
   watchList: () => request<WatchListResponse>('GET', '/watch/list'),

@@ -166,6 +166,13 @@ class LiveRunBody(BaseModel):
     events: list[dict[str, Any]] | None = None
     live_allow: list[str] = []
     confirm: bool = False
+    #: F7：记录动作前快照，使本次下发可在窗口内经 /api/undo 撤销
+    undo: bool = False
+
+
+# ── F7 残留（WebUI 撤销按钮）：撤销 = 对真实设备再下发一次 ──
+class UndoBody(BaseModel):
+    confirm: bool = False
 
 
 # ── v0.6.0 标签体系 + 批量启停 ──
@@ -686,9 +693,32 @@ def build_app(
     def api_live_status() -> dict[str, Any]:
         return svc.live_status()
 
-    @app.post("/api/live/run", dependencies=[Depends(_live)])
+    @app.post("/api/live/run", dependencies=[Depends(_readonly_guard), Depends(_live)])
     def api_live_run(body: LiveRunBody) -> dict[str, Any]:
-        return _svc(svc.live_run, body.ir, body.live_allow, body.events, body.confirm, store)
+        return _svc(
+            svc.live_run, body.ir, body.live_allow, body.events, body.confirm, store, body.undo
+        )
+
+    # ── F7 残留（WebUI 撤销按钮，决策 E ⑤）──
+    #   GET 是只读盘点（read scope）；POST 会对真实设备再下发一次，所以闸门与
+    #   `/api/live/run` 完全同口径：live scope + 单写者只读降级拦 + 服务端令牌。
+    #   时间窗 / 风险域 confirm / 未知 deploy_id 的判定全在 `af_undo.UndoStore`，本层不重算。
+    @app.get("/api/undo/available", dependencies=[Depends(_read)])
+    def api_undo_available() -> dict[str, Any]:
+        """窗口内仍可撤销的部署清单（前端据此决定撤销按钮是否可点）。"""
+        return svc.undo_available(store.root if store else None)
+
+    @app.get("/api/undo/{deploy_id}", dependencies=[Depends(_read)])
+    def api_undo_preview(deploy_id: str) -> dict[str, Any]:
+        """撤销前盘点：窗口/风险域/实体清单，口径与 revert 同源。"""
+        return svc.undo_preview(deploy_id, store.root if store else None)
+
+    @app.post("/api/undo/{deploy_id}", dependencies=[Depends(_readonly_guard), Depends(_live)])
+    def api_undo_deploy(deploy_id: str, body: UndoBody | None = None) -> dict[str, Any]:
+        """撤销一次部署：回放动作前快照（风险域需 body.confirm=true）。"""
+        return _svc(
+            svc.undo_deploy, deploy_id, bool(body and body.confirm), store.root if store else None
+        )
 
     # ── v1.7.3：运行中 watch 实例列表（只读）──
     @app.get("/api/watch/list", dependencies=[Depends(_read)])

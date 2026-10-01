@@ -450,6 +450,54 @@ export interface LiveRunResponse {
   final_states: Record<string, string>
   nl: string
   asks: unknown[]
+  // F7：undo=true 时后端落"动作前快照"并交回撤销凭据
+  undo_enabled?: boolean
+  undo_deploy_id?: string | null
+  undo_window_s?: number | null
+}
+
+// ── F7 撤销（WebUI 撤销按钮，决策 E）──
+export interface UndoPreviewResponse {
+  exists: boolean
+  deploy_id: string
+  reason?: string
+  age_s?: number
+  window_s?: number
+  expired?: boolean
+  undoable?: boolean
+  entities?: string[]
+  risk_entities?: string[]
+  confirm_required?: boolean
+  domain_mapped?: string[]
+  domain_unmapped?: string[]
+}
+
+export interface UndoAvailableResponse {
+  window_s: number
+  items: { deploy_id: string; age_s: number; entities: string[] }[]
+}
+
+export interface UndoCallResult {
+  action: string | null
+  success: boolean
+  data: Record<string, unknown>
+  error: string | null
+}
+
+export interface UndoRunResponse {
+  ok: boolean
+  deploy_id: string
+  reason?: string
+  message?: string
+  risk_entities?: string[]
+  window_s?: number
+  restored?: string[]
+  failed?: string[]
+  skipped?: string[]
+  partial?: { entity_id: string; action: string; not_restored: string[]; message: string }[]
+  fully_restored?: boolean
+  results?: UndoCallResult[]
+  ha_url?: string
 }
 
 

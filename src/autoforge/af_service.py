@@ -34,8 +34,9 @@ from .af_nl import render_graph
 from .af_runtime import Runtime, build_runtime
 from .af_scanner import DeviceGuardRegistry, Diagnostic, ScanResult, StaticScanner
 from .af_spec import SpecError, compile_spec, graph_to_raw, render_spec
-from .af_store import GraphStore, diff_graphs
+from .af_store import DEFAULT_STORE_ROOT, GraphStore, diff_graphs
 from .af_time import SystemTimeSource
+from .af_undo import UndoStore, deploy_id as new_deploy_id
 from .af_vhass import FakeHAAdapter, seed_from_graph
 from .af_pending import PendingLimitExceeded, PendingStore
 from .af_error_knowledge import ErrorKnowledge
@@ -75,6 +76,10 @@ __all__ = [
     "live_status",
     "live_run",
     "get_metrics",
+    # F7 残留（WebUI 撤销按钮）：撤销的 HTTP 服务面
+    "undo_available",
+    "undo_preview",
+    "undo_deploy",
     # v1.4.0 待批队列（部署前写操作先入队，人审后回放落盘）
     "submit_pending",
     "list_pending",
@@ -1513,6 +1518,7 @@ def live_run(
     events: Sequence[Mapping[str, Any]] | None = None,
     confirm: bool = False,
     store: "GraphStore | None" = None,
+    undo: bool = False,
 ) -> dict[str, Any]:
     """受闸门的真机下发：三重闸全通过才执行。
 
@@ -1520,6 +1526,8 @@ def live_run(
     - **必须先过 StaticScanner**，ERROR 级诊断硬拒绝（未扫描即拒绝）
     - `allow` 只能做**减法**（从扫描器算出的可写集合中再收窄），不能扩权
     - `target/device_id/area_id` 形式的写目标必须被展开后再分级（P0-5）
+    - `undo=true`（或 `AUTOFORGE_UNDO=1`）时记录动作前快照并返回 `undo_deploy_id`，
+      WebUI / `forge undo` 才能在窗口内撤销本次部署（决策 E）
     """
     cfg = _live_config()
     if not cfg["enabled"]:
@@ -1570,7 +1578,19 @@ def live_run(
     runtime.instances.states = provider
     runtime.scheduler.states = provider
     runtime.executor.states = provider
-    runtime.adapters.register(HAAdapter(transport=transport, dry_run=False))
+    adapter = HAAdapter(transport=transport, dry_run=False)
+    undo_enabled = bool(undo) or os.getenv("AUTOFORGE_UNDO", "") == "1"
+    undo_id = ""
+    undo_store: UndoStore | None = None
+    if undo_enabled:
+        undo_store = _undo_store(store.root if store else None)
+        undo_id = new_deploy_id()
+
+        def _record_pre_snapshot(action, params, pre, _s=undo_store, _d=undo_id):
+            _s.record_merge(_d, pre)
+
+        adapter.undo_recorder = _record_pre_snapshot
+    runtime.adapters.register(adapter)
 
     _replay_live(runtime, list(events or []))
 
@@ -1589,6 +1609,10 @@ def live_run(
         "ha_url": ha_url,
         "allowlist": sorted(allow),
         "writes": sorted(targets),
+        # F7：只有真的写下了动作，才存在可撤销的快照（没落快照就不承诺可撤）
+        "undo_enabled": undo_enabled,
+        "undo_deploy_id": undo_id if (undo_store is not None and undo_store.exists(undo_id)) else None,
+        "undo_window_s": undo_store.window_s if undo_store is not None else None,
         "instances": [i.to_dict() for i in runtime.instances.all()],
         "audit": [e.to_dict() for e in runtime.audit],
         "bus": runtime.bus.stats(),
@@ -1596,6 +1620,67 @@ def live_run(
         "nl": render_graph(graph).text,
         "asks": _asks_of(runtime),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# F7 残留（WebUI 撤销按钮）：撤销的 HTTP 服务面。
+#   撤销 = 对真实设备**再下发一次**，所以服务端闸门口径与 `live_run` 完全对齐：
+#   ① `AUTOFORGE_LIVE_ENABLED=1`；② 令牌只从服务端 `AUTOFORGE_HA_TOKEN` 取，绝不从请求体收。
+#   时间窗 / 风险域二次确认 / 未知 deploy_id 这些**判定仍归 `af_undo.UndoStore`**
+#   （单一真值源，本层不重算，只转发并把结果结构化给前端）。
+# ─────────────────────────────────────────────────────────────────────
+
+def _undo_store(store_root: "str | Path | None") -> UndoStore:
+    return UndoStore(str(store_root) if store_root else DEFAULT_STORE_ROOT)
+
+
+def undo_available(store_root: "str | Path | None" = None) -> dict[str, Any]:
+    """窗口内仍可撤销的部署清单（前端据此决定按钮是否可点）。
+
+    不返 `ok`：查询成功与否由 HTTP 状态表达，判据是 `items`/`window_s` 本身
+    （字面量 `ok=True` 会被 AST 门禁判成 fake-ok）。
+    """
+    store = _undo_store(store_root)
+    return {"window_s": store.window_s, "items": store.available()}
+
+
+def undo_preview(deploy_id: str, store_root: "str | Path | None" = None) -> dict[str, Any]:
+    """撤销前盘点：窗口/风险域/实体清单，判定口径与 revert 同源（`exists`/`undoable`）。"""
+    return dict(_undo_store(store_root).inspect(deploy_id))
+
+
+def undo_deploy(
+    deploy_id: str,
+    confirm: bool = False,
+    store_root: "str | Path | None" = None,
+) -> dict[str, Any]:
+    """受闸门撤销：真机回放动作前快照（决策 E）。
+
+    被 `UndoStore.revert` 拒绝（未知/过期/风险域未确认）时**不抛异常**，
+    原样返回 `{ok: false, reason, …}`——前端要渲染的是"哪几个实体需要二次确认"，
+    不是笼统的 4xx。
+    """
+    cfg = _live_config()
+    if not cfg["enabled"]:
+        raise ServiceError("撤销未启用：真机回滚需要服务端设置 AUTOFORGE_LIVE_ENABLED=1", status=403)
+    if not cfg["has_token"]:
+        raise ServiceError("撤销缺少 HA 令牌：服务端需设置 AUTOFORGE_HA_TOKEN", status=403)
+
+    store = _undo_store(store_root)
+    token = os.getenv("AUTOFORGE_HA_TOKEN", "")
+    ha_url = str(cfg["ha_url"])
+    factory = LIVE_TRANSPORT_FACTORY
+    transport = factory(ha_url, token) if factory is not None else HATransport(base_url=ha_url, token=token)
+    adapter = HAAdapter(transport=transport, dry_run=False)
+
+    logger.warning("UNDO：deploy_id=%s confirm=%s ha_url=%s", deploy_id, confirm, ha_url)
+    result = store.revert(deploy_id, adapter, confirm=confirm)
+    result["results"] = [
+        {"action": r.data.get("action"), "success": r.success, "data": r.data, "error": r.error}
+        for r in result.get("results", [])
+    ]
+    result["ha_url"] = ha_url
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────

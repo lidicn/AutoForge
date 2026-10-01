@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { h, onMounted, ref } from 'vue'
 import {
-  NAlert, NButton, NCard, NInput, NSpace, NSwitch, NTag, NText, useMessage,
+  NAlert, NButton, NCard, NEmpty, NInput, NSpace, NSwitch, NTag, NText, NPopconfirm, useMessage,
 } from 'naive-ui'
 import { facade } from '@/api'
-import type { LiveStatusResponse, LiveRunResponse } from '@/types/api'
+import type {
+  LiveStatusResponse, LiveRunResponse, UndoRunResponse,
+} from '@/types/api'
 
 const message = useMessage()
 
@@ -14,9 +16,17 @@ const error = ref('')
 const irText = ref('')
 const allowText = ref('')
 const confirm = ref(false)
+const undo = ref(true)
 const running = ref(false)
 const result = ref<LiveRunResponse | null>(null)
 const runError = ref('')
+
+// F7 撤销：撤销 = 再下发一次，二次确认由 popconfirm 承担（对应后端 confirm=true）
+const undoItems = ref<{ deploy_id: string; age_s: number; entities: string[] }[]>([])
+const undoWindowS = ref(0)
+const undoBusy = ref(false)
+const undoResult = ref<UndoRunResponse | null>(null)
+const undoError = ref('')
 
 async function loadStatus() {
   error.value = ''
@@ -25,6 +35,39 @@ async function loadStatus() {
     status.value = res.data
   } catch (e) {
     error.value = String(e)
+  }
+}
+
+async function loadUndoList() {
+  try {
+    const res = await facade.undoAvailable()
+    undoItems.value = res.data.items
+    undoWindowS.value = res.data.window_s
+  } catch {
+    // 清单读不到不阻断主流程，但不能假装"没有可撤销项"是设备侧结论
+    undoItems.value = []
+    undoWindowS.value = 0
+  }
+}
+
+async function revert(id: string) {
+  undoBusy.value = true
+  undoError.value = ''
+  undoResult.value = null
+  try {
+    const res = await facade.undoDeploy(id, true)
+    undoResult.value = res.data
+    if (res.data.ok) {
+      message.success(res.data.fully_restored ? '已完整回滚' : '已回滚（存在部分恢复，见下方）')
+    } else {
+      message.warning(`撤销被拒绝：${res.data.reason}`)
+    }
+    await loadUndoList()
+  } catch (e) {
+    undoError.value = String(e)
+    message.error('撤销请求失败（真机闸门 / 权限，见后端详情）')
+  } finally {
+    undoBusy.value = false
   }
 }
 
@@ -56,9 +99,10 @@ async function run() {
   }
   running.value = true
   try {
-    const res = await facade.liveRun(ir, allow, true)
+    const res = await facade.liveRun(ir, allow, true, undefined, undo.value)
     result.value = res.data
     message.success('真机下发完成')
+    await loadUndoList()
   } catch (e) {
     runError.value = String(e)
     message.error('下发失败（见下方详情）')
@@ -67,7 +111,10 @@ async function run() {
   }
 }
 
-onMounted(loadStatus)
+onMounted(() => {
+  loadStatus()
+  loadUndoList()
+})
 </script>
 
 <template>
@@ -128,6 +175,10 @@ onMounted(loadStatus)
           <n-switch v-model:value="confirm" />
           <n-text :type="confirm ? 'success' : 'error'">我已确认将真实改变设备状态（confirm=true）</n-text>
         </div>
+        <div style="display: flex; align-items: center; gap: 10px">
+          <n-switch v-model:value="undo" />
+          <n-text depth="3">记录动作前快照，{{ undoWindowS || 60 }}s 窗口内可撤销本次部署（F7 / 决策 E）</n-text>
+        </div>
         <div>
           <n-button type="error" :loading="running" :disabled="!confirm" @click="run">下发真机</n-button>
         </div>
@@ -145,7 +196,70 @@ onMounted(loadStatus)
         <div>允许列表：<n-tag v-for="a in result.allowlist" :key="a" size="small" bordered="false" style="margin-right:6px">{{ a }}</n-tag></div>
         <div v-if="result.nl" class="nl">{{ result.nl }}</div>
         <div v-if="result.asks && result.asks.length" class="asks">有待应答 ask：{{ result.asks.length }} 条</div>
+        <div v-if="result.undo_deploy_id" class="asks">
+          撤销 ID：<code>{{ result.undo_deploy_id }}</code>
+          （窗口 {{ result.undo_window_s }}s · 可在下方「可撤销的部署」一键回滚）
+        </div>
+        <div v-else-if="result.undo_enabled" class="asks">
+          已开启快照记录，但本次下发没有落到任何写动作 → 无可撤销快照
+        </div>
       </n-space>
+    </n-card>
+
+    <n-card title="可撤销的部署（时间窗内）" :bordered="false" class="block">
+      <n-alert v-if="undoError" type="error" title="撤销请求失败" style="margin-bottom: 12px">
+        {{ undoError }}
+      </n-alert>
+      <n-space align="center" :size="10" style="margin-bottom: 8px">
+        <n-text depth="3">窗口 {{ undoWindowS }}s · {{ undoItems.length }} 条可撤销</n-text>
+        <n-button text size="small" @click="loadUndoList">刷新清单</n-button>
+      </n-space>
+      <n-empty v-if="!undoItems.length" description="窗口内没有可撤销的部署" size="small" />
+      <div v-for="item in undoItems" :key="item.deploy_id" class="undo-row">
+        <div>
+          <code>{{ item.deploy_id }}</code>
+          <n-text depth="3" style="margin-left: 8px">{{ item.age_s.toFixed(1) }}s 前</n-text>
+          <div class="ents">{{ item.entities.join('、') || '（无实体记录）' }}</div>
+        </div>
+        <n-popconfirm
+          positive-text="确认回滚"
+          negative-text="先不"
+          @positive-click="revert(item.deploy_id)"
+        >
+          <template #trigger>
+            <n-button size="small" type="warning" :loading="undoBusy" :disabled="undoBusy">
+              撤销
+            </n-button>
+          </template>
+          撤销会对真实设备再下发一次恢复动作（含风险域二次确认），确认？
+        </n-popconfirm>
+      </div>
+
+      <template v-if="undoResult">
+        <n-alert
+          :type="undoResult.ok ? (undoResult.fully_restored ? 'success' : 'warning') : 'error'"
+          :title="undoResult.ok ? (undoResult.fully_restored ? '已完整回滚' : '已回滚（非完整）') : `撤销被拒绝：${undoResult.reason}`"
+          style="margin-top: 12px"
+        >
+          <div v-if="undoResult.message">{{ undoResult.message }}</div>
+          <div v-if="undoResult.restored?.length">已恢复：{{ undoResult.restored.join('、') }}</div>
+          <div v-if="undoResult.partial?.length" class="warn">
+            部分恢复：
+            <div v-for="p in undoResult.partial" :key="p.entity_id">
+              {{ p.entity_id }} 已下发 {{ p.action }}，快照里 {{ p.not_restored.join('/') }} 读不出、未回放
+            </div>
+          </div>
+          <div v-if="undoResult.skipped?.length" class="warn">
+            跳过（读不出恢复目标 / 无恢复映射，未写设备）：{{ undoResult.skipped.join('、') }}
+          </div>
+          <div v-if="undoResult.failed?.length" class="warn">
+            恢复失败：{{ undoResult.failed.join('、') }}
+          </div>
+          <div v-if="undoResult.risk_entities?.length">
+            风险域：{{ undoResult.risk_entities.join('、') }}
+          </div>
+        </n-alert>
+      </template>
     </n-card>
   </div>
 </template>
@@ -183,5 +297,32 @@ onMounted(loadStatus)
 .asks {
   color: #b45309;
   font-size: 13px;
+}
+.undo-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-top: 1px solid #eef0f4;
+}
+.undo-row:first-of-type {
+  border-top: none;
+}
+.ents {
+  color: #8b93a7;
+  font-size: 12px;
+  margin-top: 4px;
+  word-break: break-all;
+}
+.warn {
+  color: #b45309;
+}
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: #f1f5f9;
+  border-radius: 4px;
+  padding: 1px 6px;
 }
 </style>

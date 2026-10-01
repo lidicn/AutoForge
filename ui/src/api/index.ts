@@ -44,8 +44,12 @@ export const facade = {
   subjects: () => api.subjects(),
   revokeToken: (token: string) => api.revokeToken(token),
   liveStatus: () => api.liveStatus(),
-  liveRun: (ir: unknown, live_allow: string[], confirm: boolean, events?: unknown[]) =>
-    api.liveRun(ir, live_allow, confirm, events),
+  liveRun: (ir: unknown, live_allow: string[], confirm: boolean, events?: unknown[], undo?: boolean) =>
+    api.liveRun(ir, live_allow, confirm, events, undo),
+  // F7 撤销（无 mock 夹具：撤销会写真机，mock 环境不该出现这个动作）
+  undoAvailable: () => api.undoAvailable(),
+  undoPreview: (deploy_id: string) => api.undoPreview(deploy_id),
+  undoDeploy: (deploy_id: string, confirm: boolean) => api.undoDeploy(deploy_id, confirm),
 
   // ── v2 M3 结构化 Ask（原生控件 + clarify 流程）──
   asksPending: () => api.asksPending(),

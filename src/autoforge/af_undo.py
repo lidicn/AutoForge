@@ -311,6 +311,48 @@ class UndoStore:
     def exists(self, deploy_id: str) -> bool:
         return deploy_id in self._records
 
+    def inspect(self, deploy_id: str) -> dict[str, Any]:
+        """只读盘点一条撤销记录（WebUI/MCP 渲染用）。
+
+        判定口径与 `revert` **同源**（同一 `window_s`、同一 `RISK_DOMAINS`），
+        避免前端自己算窗口/风险域而与实际拒绝结果不一致。
+        不调用 `restore_call`——那会为每个不可映射域刷 warn 日志。
+        """
+        rec = self._records.get(deploy_id)
+        if rec is None:
+            return {"exists": False, "deploy_id": deploy_id, "reason": "unknown_deploy_id"}
+        entities = rec.get("entities", {})
+        age = self._clock.now().timestamp() - float(rec.get("ts", 0))
+        expired = self.window_s > 0 and age > self.window_s
+        risk = sorted(e for e in entities if e.split(".", 1)[0] in RISK_DOMAINS)
+        mapped = sorted(e for e in entities if e.split(".", 1)[0] in DOMAIN_SETTER)
+        return {
+            "exists": True,
+            "deploy_id": deploy_id,
+            "age_s": round(age, 3),
+            "window_s": self.window_s,
+            "expired": expired,
+            "undoable": not expired,
+            "entities": sorted(entities),
+            "risk_entities": risk,
+            "confirm_required": bool(risk),
+            # 只说"这个域有恢复映射"，不说"一定能恢复"——属性是否读得出来要等 revert 才知道
+            "domain_mapped": mapped,
+            "domain_unmapped": sorted(set(entities) - set(mapped)),
+        }
+
+    def available(self) -> list[dict[str, Any]]:
+        """窗口内仍可撤销的部署清单（按时间倒序），供 UI 展示可撤销项。"""
+        now = self._clock.now().timestamp()
+        out = [
+            {"deploy_id": did, "age_s": round(now - float(rec.get("ts", 0)), 3),
+             "entities": sorted(rec.get("entities", {}))}
+            for did, rec in self._records.items()
+            if self.window_s <= 0 or (now - float(rec.get("ts", 0))) <= self.window_s
+        ]
+        out.sort(key=lambda r: r["age_s"])
+        return out
+
     def revert(
         self,
         deploy_id: str,
