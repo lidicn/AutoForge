@@ -1,0 +1,85 @@
+### 证据1 表达式白名单函数边界 fuzz ###
+=== [1] math 类对浮点极值 ===
+  abs([1e+308]) -> 1e+308
+  floor([1e+308]) -> 1e+308
+  ceil([1e+308]) -> 1e+308
+  round([1e+308]) -> 1e+308
+  abs([-1e+308]) -> 1e+308
+  floor([-1e+308]) -> -1e+308
+  ceil([-1e+308]) -> -1e+308
+  round([-1e+308]) -> -1e+308
+  abs([inf]) -> inf
+  floor([inf]) -> ❌ ValueError: cannot convert float NaN to integer
+  ceil([inf]) -> ❌ ValueError: cannot convert float NaN to integer
+  round([inf]) -> inf
+  abs([nan]) -> nan
+  floor([nan]) -> ❌ ValueError: cannot convert float NaN to integer
+  ceil([nan]) -> ❌ ValueError: cannot convert float NaN to integer
+  round([nan]) -> nan
+  abs([1e-323]) -> 1e-323
+  floor([1e-323]) -> 0.0
+  ceil([1e-323]) -> 1.0
+  round([1e-323]) -> 0.0
+
+=== [2] round 的 nd 边界 ===
+  round([3.14159, 0]) -> 3.0
+  round([3.14159, 1]) -> 3.1
+  round([3.14159, 10]) -> 3.14159
+  round([3.14159, 100]) -> 3.14159
+  round([3.14159, -1]) -> 0.0
+  round([3.14159, -10]) -> 0.0
+
+=== [3] clamp lo>hi ===
+  clamp([5, 10, 1]) -> 1.0
+
+=== [4] sum/avg 混类型与空 ===
+  sum([[1, '2', 3]]) -> ExprError(受控): sum() 需要数字，收到 '2'（实体状态请声明 type=numeric）
+  avg([[1, '2', 3]]) -> ExprError(受控): avg() 需要数字，收到 '2'（实体状态请声明 type=numeric）
+  avg([[]]) -> ExprError(受控): avg() 空数组无均值
+  sum([[]]) -> 0.0
+
+=== [5] min/max 空与混类型 ===
+  min([[]]) -> ExprError(受控): min() 空序列无最值
+  max([[]]) -> ExprError(受控): max() 空序列无最值
+  min([1, 'a']) -> ❌ TypeError: '<' not supported between instances of 'str' and 'int'
+  max([1, 'a']) -> ❌ TypeError: '>' not supported between instances of 'str' and 'int'
+
+=== [6] length 各类 ===
+  length(['abc']) -> 3
+  length([[1, 2]]) -> 2
+  length([(1, 2)]) -> 2
+  length([123]) -> ExprError(受控): length() 需要字符串或数组，收到 123
+  length([None]) -> ExprError(受控): length() 需要字符串或数组，收到 None
+  length([{'a': 1}]) -> ExprError(受控): length() 需要字符串或数组，收到 {'a': 1}
+
+=== [7] contains 多态 ===
+  contains(['hello', 'ell']) -> True
+  contains([[1, 2], 1]) -> True
+  contains([123, 1]) -> ExprError(受控): contains() 需要字符串或数组，收到 123
+  contains([None, 1]) -> ExprError(受控): contains() 需要字符串或数组，收到 None
+
+=== [8] time_between ===
+  time_between(['2026-01-01T23:00:00', '22:00', '07:00']) -> True
+  time_between(['2026-01-01T03:00:00', '22:00', '07:00']) -> True
+  time_between(['2026-01-01T22:00:00', '22:00', '07:00']) -> True
+  time_between(['2026-01-01T12:00:00', '24:00', '07:00']) -> ExprError(受控): time_between() 时间越界：'24:00'
+  time_between(['2026-01-01T12:00:00', '10:60', '07:00']) -> ExprError(受控): time_between() 时间越界：'10:60'
+  time_between(['not-a-time', '10:00', '12:00']) -> ExprError(受控): time_between() 无法解析时间戳 'not-a-time'（需 ISO 8601）
+
+=== [9] 时间函数对纯日期/带时区 ===
+  time_hour('2026-01-01') -> 0
+  time_hour('2026-01-01T12:00:00+08:00') -> 12
+  time_hour('2026-01-01 12:00:00') -> 12
+
+=== [10] first/last 空数组 ===
+  first([[]]) -> ExprError(受控): first() 空数组
+  last([[]]) -> ExprError(受控): last() 空数组
+
+============================================================
+未受控异常（非 ExprError）: 6
+  ❌ floor([inf]) -> ValueError: cannot convert float NaN to integer
+  ❌ ceil([inf]) -> ValueError: cannot convert float NaN to integer
+  ❌ floor([nan]) -> ValueError: cannot convert float NaN to integer
+  ❌ ceil([nan]) -> ValueError: cannot convert float NaN to integer
+  ❌ min([1, 'a']) -> TypeError: '<' not supported between instances of 'str' and 'int'
+  ❌ max([1, 'a']) -> TypeError: '>' not supported between instances of 'str' and 'int'

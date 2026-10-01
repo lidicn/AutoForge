@@ -1,0 +1,15 @@
+### 证据4 穿透验证与外层兜底 ###
+=== [1] 复刻 af_executor.py:398-405 的 try/except，验证 TypeError 是否穿透 ===
+  表达式: min(sensor, 20) 其中 sensor 解析为字符串 '21.5'
+    -> ('SOFT_FAIL', '未知算子：None')
+
+=== [2] 直接调 evaluate 看表达式结构是否合法 ===
+  {'fn': 'min', 'args': [{'var': 'sensor'}, {'lit': 20}]} -> ExprError: 未知算子：None
+  {'fn': 'min', 'args': [{'state': 'sensor.x'}, {'value': 20}]} -> ExprError: 未知算子：None
+  {'fn': 'min', 'args': ['sensor.x', 20]} -> ExprError: 未知算子：None
+
+=== [3] 外层兜底：tick/publish 是否捕获宽异常 ===
+    src/autoforge/af_runtime.py:104:            except Exception as _e:
+    src/autoforge/af_scheduler.py:271:            except Exception:
+    src/autoforge/af_executor.py:192:            except Exception:
+    src/autoforge/af_executor.py:422:        except Exception as exc:  # 适配器未注册

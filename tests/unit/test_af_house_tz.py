@@ -9,7 +9,9 @@
 """
 from __future__ import annotations
 
+import ast
 import inspect
+import pathlib
 from datetime import datetime, timezone
 
 from autoforge.af_time import (
@@ -99,3 +101,23 @@ def test_no_repo_site_hardcodes_shanghai_anymore():
         if param is not None:
             assert param.default is None, f"{owner.__name__} 又写死了 {param.default!r}"
     assert inspect.signature(house_tz_status).parameters["tz_name"].default is None
+
+
+#: 业务代码取墙钟只能走 af_time（口径唯一）；naive datetime 与 aware 混比即 TypeError。
+NAIVE_CLOCKS = frozenset({"datetime.now()", "datetime.utcnow()", "date.today()", "time.localtime()"})
+
+
+def test_仓内不再出现裸的_naive_墙钟调用():
+    """按 AST 扫真实调用点——文档字符串里引用这些写法是允许的（规则本身就要提到它们）。"""
+    src_root = pathlib.Path(__file__).resolve().parents[2] / "src" / "autoforge"
+    offenders = []
+    for path in sorted(src_root.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        for node in ast.walk(ast.parse(text)):
+            if not isinstance(node, ast.Call):
+                continue
+            seg = ast.get_source_segment(text, node)
+            if seg in NAIVE_CLOCKS:
+                offenders.append(f"{path.relative_to(src_root)}:{node.lineno} {seg}")
+    assert not offenders, f"绕开 af_time 的 naive 时钟：{offenders}"
+

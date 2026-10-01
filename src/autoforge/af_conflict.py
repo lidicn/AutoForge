@@ -23,7 +23,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
 
@@ -95,7 +95,8 @@ class SystemTimeSource:
     """缺省时钟（仅供装配层兜底；测试一律注入假时钟）。"""
 
     def now(self) -> datetime:
-        return datetime.now()
+        # naive 时钟一旦被接上 ensure_aware 的路径就是 TypeError；与 af_time.now() 同口径。
+        return datetime.now(timezone.utc)
 
     def monotonic(self) -> float:
         return time.monotonic()

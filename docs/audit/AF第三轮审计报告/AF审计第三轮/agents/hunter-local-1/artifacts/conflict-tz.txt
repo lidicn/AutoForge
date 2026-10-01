@@ -1,0 +1,120 @@
+### 证据9 af_conflict.py:98 破依赖注入+naive datetime ###
+KIND_CIRCUIT_HALF_OPEN = "circuit_half_open"
+KIND_CIRCUIT_RECOVERED = "circuit_recovered"
+KIND_USER_COOLDOWN = "user_cooldown"
+KIND_STARVED = "starved"
+KIND_DEGRADED = "degraded"
+KIND_FORCED_UNLOCK = "forced_unlock"
+
+
+@dataclass
+class SystemTimeSource:
+    """缺省时钟（仅供装配层兜底；测试一律注入假时钟）。"""
+
+    def now(self) -> datetime:
+        return datetime.now()
+
+    def monotonic(self) -> float:
+        return time.monotonic()
+
+
+@dataclass
+class _Circuit:
+    """单个 automation 的熔断状态。"""
+
+    conflict_count: int = 0
+    status: str = "closed"          # closed / open / half_open
+    open_until: float = 0.0
+
+--- 谁调用（含 clock 的类）---
+38:class RequestDecision(Enum):
+46:class ResourceLock:
+57:class ConflictEvent:
+69:class PendingRequest:
+94:class SystemTimeSource:
+97:    def now(self) -> datetime:
+105:class _Circuit:
+131:class ConflictArbiter:
+137:        clock: "TimeSource",
+157:        self.clock = clock
+588:    def _now(self) -> float:
+589:        return float(self.clock.monotonic())
+
+[1] 找 _now / now 定义
+    def now(L97) args=['self']
+    def _now(L588) args=['self']
+
+[2] 类是否有 clock 注入
+    class RequestDecision(L38) 有 clock 注入: False
+    class ResourceLock(L46) 有 clock 注入: False
+    class ConflictEvent(L57) 有 clock 注入: False
+    class PendingRequest(L69) 有 clock 注入: False
+    class SystemTimeSource(L94) 有 clock 注入: False
+    class _Circuit(L105) 有 clock 注入: False
+    class ConflictArbiter(L131) 有 clock 注入: True
+
+[3] 实测：naive vs aware 混用后果
+    aware = 2026-10-01 09:15:03.105231+00:00
+    naive = 2026-10-01 17:15:03.105241  （af_conflict.py:98 返回形态）
+    ❌ TypeError: can't subtract offset-naive and offset-aware datetimes
+    ❌ TypeError: can't compare offset-naive and offset-aware datetimes
+
+[4] 对照：项目其他地方怎么取时间
+    af_executor/af_bus/af_instance/af_persist 全部用 self.clock.now() → aware 且可注入
+    af_conflict.py:98 是唯一的裸 datetime.now() → naive 且不可注入
+
+==================================================================
+[5] ConflictArbiter 内部是否混用两个时间源
+==================================================================
+  ConflictArbiter 范围 L131-627
+    L137: clock: "TimeSource",
+    L157: self.clock = clock
+    L204: now = self._now()
+    L221: now = self._now()
+    L240: now = self._now()
+    L279: now = self._now()
+    L310: self._expire(self._now())
+    L316: now = self._now()
+    L589: return float(self.clock.monotonic())
+    L622: timestamp=self._now(),
+
+[6] 本地 SystemTimeSource 是否被实例化使用
+
+[7] 全模块 clock 用法汇总
+    L157: self.clock = clock
+    L589: return float(self.clock.monotonic())
+--- 谁 import af_conflict 的 SystemTimeSource ---
+src/autoforge/af_conflict_audit.py:17:    from .af_conflict import ConflictEvent, ResourceLock
+src/autoforge/af_conflict_audit.py:19:    from af_conflict import ConflictEvent, ResourceLock
+src/autoforge/af_conflict_runtime.py:29:    from .af_conflict import ConflictArbiter, RequestDecision, SystemTimeSource
+src/autoforge/af_conflict_runtime.py:33:    from af_conflict import ConflictArbiter, RequestDecision, SystemTimeSource
+src/autoforge/af_conflict_runtime.py:428:            from .af_conflict import KIND_DEGRADED, ConflictEvent
+src/autoforge/af_conflict_runtime.py:430:            from af_conflict import KIND_DEGRADED, ConflictEvent
+src/autoforge/af_bus.py:19:from .af_time import TimeSource, SystemTimeSource
+src/autoforge/af_bus.py:122:        self.clock = time_source or SystemTimeSource()
+src/autoforge/af_cli.py:25:from .af_time import SystemTimeSource
+src/autoforge/af_cli.py:295:        runtime = build_runtime(graph, persist_dir=persist_dir, clock=SystemTimeSource())
+src/autoforge/af_conflict.py:94:class SystemTimeSource:
+src/autoforge/af_conflict_runtime.py:29:    from .af_conflict import ConflictArbiter, RequestDecision, SystemTimeSource
+src/autoforge/af_conflict_runtime.py:33:    from af_conflict import ConflictArbiter, RequestDecision, SystemTimeSource
+src/autoforge/af_conflict_runtime.py:208:        self.clock = clock or SystemTimeSource()
+src/autoforge/af_executor.py:37:from .af_time import TimeSource, SystemTimeSource, parse_duration
+src/autoforge/af_executor.py:95:    clock: TimeSource = field(default_factory=SystemTimeSource)
+src/autoforge/af_instance.py:22:from .af_time import TimeSource, SystemTimeSource
+src/autoforge/af_instance.py:180:        self.clock = clock or SystemTimeSource()
+src/autoforge/af_live.py:207:        from .af_time import SystemTimeSource
+src/autoforge/af_live.py:208:        _clock = SystemTimeSource()
+src/autoforge/af_live.py:347:    from .af_time import SystemTimeSource
+src/autoforge/af_live.py:348:    _clock = getattr(runtime, "clock", None) or SystemTimeSource()
+src/autoforge/af_predict.py:5:* **时间**：只依赖 `af_time` 的 TimeSource 契约（`SystemTimeSource` / `ensure_aware` /
+src/autoforge/af_predict.py:44:from .af_time import SystemTimeSource, ensure_aware, load_tz
+src/autoforge/af_predict.py:307:        self._clock = clock or getattr(history_store, "clock", None) or SystemTimeSource(tz_name)
+src/autoforge/af_pretrigger.py:32:from .af_time import SystemTimeSource, ensure_aware, load_tz
+src/autoforge/af_pretrigger.py:254:        clock = getattr(self._runtime, "clock", None) or SystemTimeSource()
+src/autoforge/af_pretrigger.py:285:        clock = getattr(self._runtime, "clock", None) or SystemTimeSource()
+src/autoforge/af_runtime.py:4:- 生产：`HassStateProvider` + `SystemTimeSource` + `HAAdapter`
+src/autoforge/af_runtime.py:33:from .af_time import SystemTimeSource, TimeSource, VirtualTimeSource
+src/autoforge/af_runtime.py:44:    clock: TimeSource = field(default_factory=SystemTimeSource)
+src/autoforge/af_scheduler.py:23:from .af_time import TimeSource, SystemTimeSource, parse_duration
+src/autoforge/af_scheduler.py:62:    clock: TimeSource = field(default_factory=SystemTimeSource)
+--- __all__ ---

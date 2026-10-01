@@ -1,0 +1,103 @@
+### 证据8 today()/now() 混用核查 ###
+src/autoforge/af_bus.py:44:    """总线事件。时间戳取 HA 的 `last_changed`，**不用本地 datetime.now()**。"""
+src/autoforge/af_bus.py:234:                    at=self.clock.now(),
+src/autoforge/af_bus.py:267:                    at=self.clock.now(),
+src/autoforge/af_conflict.py:98:        return datetime.now()
+src/autoforge/af_executor.py:184:                            at=self.clock.now(),
+src/autoforge/af_executor.py:275:                    at=self.clock.now(),
+src/autoforge/af_executor.py:465:                        at=self.clock.now(),
+src/autoforge/af_executor.py:494:                at=self.clock.now(),
+src/autoforge/af_executor.py:514:                at=self.clock.now(),
+src/autoforge/af_executor.py:554:                at=self.clock.now(),
+src/autoforge/af_executor.py:692:                at=self.clock.now(),
+src/autoforge/af_feedback.py:62:    """取当前时间戳（秒）。兼容 ``Clock.now()`` 返回 float 或 datetime。"""
+src/autoforge/af_feedback.py:63:    raw = clock.now() if hasattr(clock, "now") else clock()
+src/autoforge/af_fire_recorder.py:160:        self._store.confirm(self.rule_key, self.day, self._clock.now().isoformat(), inst_id)
+src/autoforge/af_fire_recorder.py:201:        day = self._clock.now().date().isoformat()
+src/autoforge/af_fire_recorder.py:202:        now = self._clock.now()
+src/autoforge/af_fire_recorder.py:233:        before = (self._clock.now().date() - timedelta(days=self._keep_days)).isoformat()
+src/autoforge/af_fire_recorder.py:239:        day = self._clock.now().date().isoformat()
+src/autoforge/af_fire_recorder.py:242:            self._store.confirm(key, day, self._clock.now().isoformat(), None)
+src/autoforge/af_instance.py:230:            "trigger_time": self.clock.now().isoformat(),
+src/autoforge/af_instance.py:291:                at=self.clock.now(),
+src/autoforge/af_metrics.py:69:            "generated_at": self.runtime.clock.now().isoformat(),
+src/autoforge/af_persist.py:73:    now_wall = clock.now()
+src/autoforge/af_persist.py:93:    now_wall = clock.now()
+src/autoforge/af_persist.py:150:        record["lease_until_wall"] = _iso(clock.now() + timedelta(seconds=self.lease_s))
+src/autoforge/af_persist.py:173:        return clock.now() >= lease
+src/autoforge/af_predict.py:586:        now = ensure_aware(self._clock.local_now(), who="clock.local_now")
+src/autoforge/af_predict.py:788:        ref = ensure_aware(self._clock.local_now(), who="clock.local_now")
+src/autoforge/af_predict.py:828:            "saved_at": ensure_aware(self._clock.local_now(), who="clock.local_now").isoformat(),
+src/autoforge/af_pretrigger.py:255:        return clock.now().isoformat()
+src/autoforge/af_pretrigger.py:289:            else clock.local_now()
+src/autoforge/af_runtime.py:103:                self.audit.add(AuditEvent(type="conf_grading_enabled", at=self.clock.now(), message="conf grading enabled"))
+src/autoforge/af_runtime.py:105:                self.audit.add(AuditEvent(type="conf_grading_init_failed", at=self.clock.now(), message=str(_e)))
+src/autoforge/af_runtime.py:164:                        at=self.clock.now(),
+src/autoforge/af_runtime.py:179:                        at=self.clock.now(),
+src/autoforge/af_runtime.py:195:                    at=self.clock.now(),
+src/autoforge/af_runtime_plugins.py:174:            runtime.audit.append({"kind": "runtime_ext_conf_grading_enabled", "at": runtime.clock.now()})
+src/autoforge/af_runtime_plugins.py:179:                "at": runtime.clock.now(),
+src/autoforge/af_runtime_plugins.py:214:                "at": runtime.clock.now(),
+src/autoforge/af_runtime_plugins.py:220:                "at": runtime.clock.now(),
+src/autoforge/af_scheduler.py:193:                    at=self.clock.now(),
+src/autoforge/af_scheduler.py:210:                at=self.clock.now(),
+src/autoforge/af_service.py:1708:        "generated_at": datetime.now().isoformat(),
+src/autoforge/af_tick_supervisor.py:172:        self._health = health or TickHealth(started_wall=clock.now())
+src/autoforge/af_time.py:4:    业务代码**禁止直接调用 `time.time()` / `datetime.now()`**。
+src/autoforge/af_time.py:97:    n, l = c.now(), c.local_now()
+src/autoforge/af_time.py:99:    assert c.today() == l.date(), "today() must equal local_now().date()"
+src/autoforge/af_time.py:100:    assert c.utc_now().tzinfo is timezone.utc
+src/autoforge/af_time.py:131:        return self.local_now().date()
+src/autoforge/af_time.py:134:        return self.local_now() + timedelta(seconds=seconds)
+src/autoforge/af_vhass/event_bus.py:77:        now = self.clock.now()
+src/autoforge/af_vhass/fake.py:82:                values[entity_id] = sun_state(self.clock.now())  # type: ignore[attr-defined]
+src/autoforge/af_vhass/fake.py:130:            return sun_state(self.clock.now())  # type: ignore[attr-defined]
+src/autoforge/af_vhass/high_fidelity.py:217:        return sun_state_at(self.clock.now(), self.latitude, self.longitude)
+src/autoforge/af_vhass/high_fidelity.py:232:        return sun_attributes(self.clock.now(), self.latitude, self.longitude)
+--- now() 次数 ---
+src/autoforge/af_bus.py:234:                    at=self.clock.now(),
+src/autoforge/af_bus.py:267:                    at=self.clock.now(),
+src/autoforge/af_executor.py:184:                            at=self.clock.now(),
+src/autoforge/af_executor.py:275:                    at=self.clock.now(),
+src/autoforge/af_executor.py:465:                        at=self.clock.now(),
+src/autoforge/af_executor.py:494:                at=self.clock.now(),
+src/autoforge/af_executor.py:514:                at=self.clock.now(),
+src/autoforge/af_executor.py:554:                at=self.clock.now(),
+src/autoforge/af_executor.py:692:                at=self.clock.now(),
+src/autoforge/af_feedback.py:62:    """取当前时间戳（秒）。兼容 ``Clock.now()`` 返回 float 或 datetime。"""
+src/autoforge/af_feedback.py:63:    raw = clock.now() if hasattr(clock, "now") else clock()
+src/autoforge/af_fire_recorder.py:160:        self._store.confirm(self.rule_key, self.day, self._clock.now().isoformat(), inst_id)
+src/autoforge/af_fire_recorder.py:201:        day = self._clock.now().date().isoformat()
+src/autoforge/af_fire_recorder.py:202:        now = self._clock.now()
+src/autoforge/af_fire_recorder.py:233:        before = (self._clock.now().date() - timedelta(days=self._keep_days)).isoformat()
+src/autoforge/af_fire_recorder.py:239:        day = self._clock.now().date().isoformat()
+src/autoforge/af_fire_recorder.py:242:            self._store.confirm(key, day, self._clock.now().isoformat(), None)
+src/autoforge/af_instance.py:230:            "trigger_time": self.clock.now().isoformat(),
+src/autoforge/af_instance.py:291:                at=self.clock.now(),
+src/autoforge/af_metrics.py:69:            "generated_at": self.runtime.clock.now().isoformat(),
+src/autoforge/af_persist.py:73:    now_wall = clock.now()
+src/autoforge/af_persist.py:93:    now_wall = clock.now()
+src/autoforge/af_persist.py:150:        record["lease_until_wall"] = _iso(clock.now() + timedelta(seconds=self.lease_s))
+src/autoforge/af_persist.py:173:        return clock.now() >= lease
+src/autoforge/af_pretrigger.py:255:        return clock.now().isoformat()
+src/autoforge/af_runtime.py:103:                self.audit.add(AuditEvent(type="conf_grading_enabled", at=self.clock.now(), message="conf grading enabled"))
+src/autoforge/af_runtime.py:105:                self.audit.add(AuditEvent(type="conf_grading_init_failed", at=self.clock.now(), message=str(_e)))
+src/autoforge/af_runtime.py:164:                        at=self.clock.now(),
+src/autoforge/af_runtime.py:179:                        at=self.clock.now(),
+src/autoforge/af_runtime.py:195:                    at=self.clock.now(),
+src/autoforge/af_runtime_plugins.py:174:            runtime.audit.append({"kind": "runtime_ext_conf_grading_enabled", "at": runtime.clock.now()})
+src/autoforge/af_runtime_plugins.py:179:                "at": runtime.clock.now(),
+src/autoforge/af_runtime_plugins.py:214:                "at": runtime.clock.now(),
+src/autoforge/af_runtime_plugins.py:220:                "at": runtime.clock.now(),
+src/autoforge/af_scheduler.py:193:                    at=self.clock.now(),
+src/autoforge/af_scheduler.py:210:                at=self.clock.now(),
+src/autoforge/af_tick_supervisor.py:172:        self._health = health or TickHealth(started_wall=clock.now())
+src/autoforge/af_time.py:97:    n, l = c.now(), c.local_now()
+src/autoforge/af_vhass/event_bus.py:77:        now = self.clock.now()
+src/autoforge/af_vhass/fake.py:82:                values[entity_id] = sun_state(self.clock.now())  # type: ignore[attr-defined]
+src/autoforge/af_vhass/fake.py:130:            return sun_state(self.clock.now())  # type: ignore[attr-defined]
+src/autoforge/af_vhass/high_fidelity.py:217:        return sun_state_at(self.clock.now(), self.latitude, self.longitude)
+src/autoforge/af_vhass/high_fidelity.py:232:        return sun_attributes(self.clock.now(), self.latitude, self.longitude)
+--- today() ---
+src/autoforge/af_time.py:17:    - SystemTimeSource / VirtualTimeSource 增加 today() / utc_now() / wall_after()
+src/autoforge/af_time.py:99:    assert c.today() == l.date(), "today() must equal local_now().date()"

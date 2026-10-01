@@ -11,10 +11,15 @@
   `FUNCTIONS` 注册表内的纯函数（math / string / time / list 四族），不支持任意代码。
 - **资源上限**（防 DoS）：求值深度 `MAX_EXPR_DEPTH`、单次求值节点数 `MAX_EXPR_NODES`
   双硬顶，超限即 `ExprError`——编译期 `check_expr` 与运行期 `evaluate` 同一套上限。
+- **异常收口（不变量）**：求值层只允许抛 `ExprError` / `UnknownEntity`。executor 的 soft-fail
+  捕获列表正是按这两类写死的——`min`/`max` 混类型抛出的 `TypeError`、`floor(inf)` 抛出的
+  `ValueError` 一旦逃逸，设计好的降级/重试/审计路径会整条被跳过。新增函数必须自己做类型与
+  有限性校验，不要把裸 Python 异常留给调用方兜。
 """
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 
 from ..af_state import UnknownEntity
@@ -86,7 +91,11 @@ class _Budget:
 def _as_num(value: Any, fn: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ExprError(f"{fn}() 需要数字，收到 {value!r}（实体状态请声明 type=numeric）")
-    return float(value)
+    num = float(value)
+    if not math.isfinite(num):
+        # inf/nan 走到 int()//1 会抛 OverflowError/ValueError，跳出求值层就是未受控异常。
+        raise ExprError(f"{fn}() 需要有限数字，收到 {value!r}（传感器数值异常时宁可判失败）")
+    return num
 
 
 def _as_str(value: Any, fn: str) -> str:
@@ -121,13 +130,25 @@ def _parse_hhmm(text: Any, fn: str) -> int:
 
 
 def _min_max(args: list[Any], fn: str, pick: Callable[[list], Any]) -> Any:
-    """min/max：接受多个标量或单个数组。"""
+    """min/max：接受多个标量或单个数组。
+
+    必须先统一类型再交给 `min`/`max`：HA 实体状态原生是字符串，`min(sensor_temp, 20)`
+    会让 Python 抛 `TypeError` 逃出求值层——executor 的捕获列表不含它，soft-fail 被跳过。
+    """
     if len(args) == 1:
         values = _as_list(args[0], fn)
     else:
         values = list(args)
     if not values:
         raise ExprError(f"{fn}() 空序列无最值")
+    numeric = [v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    if numeric and len(numeric) != len(values):
+        raise ExprError(
+            f"{fn}() 参数类型混用（{len(numeric)} 个数字 / {len(values) - len(numeric)} 个其他）："
+            f"{values!r}；实体状态请声明 type=numeric"
+        )
+    if not numeric and not all(isinstance(v, str) for v in values):
+        raise ExprError(f"{fn}() 参数需同为数字或同为字符串，收到 {values!r}")
     return pick(values)
 
 
@@ -358,9 +379,13 @@ def _coerce(value: Any, declared: str | None, ref: str) -> Any:
         if isinstance(value, bool):
             raise ExprError(f"`{ref}` 声明为 numeric，但拿到布尔值 {value!r}")
         try:
-            return float(value)
+            num = float(value)
         except (TypeError, ValueError) as exc:
             raise ExprError(f"`{ref}` 声明为 numeric，但值 {value!r} 无法转成数字") from exc
+        if not math.isfinite(num):
+            # float('inf')/float('nan') 会成功，但 nan 参与比较恒 False = 静默错答。
+            raise ExprError(f"`{ref}` 声明为 numeric，但值 {value!r} 非有限数字")
+        return num
     if declared == "boolean":
         if isinstance(value, bool):
             return value
@@ -375,6 +400,8 @@ def _coerce(value: Any, declared: str | None, ref: str) -> Any:
     if declared == "enum":
         return str(value)
     # 未声明类型：按 Python 原生类型推断，字符串保持字符串（禁止隐式转数字）
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ExprError(f"`{ref}` 值为 {value!r}，非有限数字不能参与决策")
     return value
 
 

@@ -16,7 +16,6 @@ import secrets
 import threading
 import time
 import uuid
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -36,6 +35,7 @@ from .af_runtime import Runtime, build_runtime
 from .af_scanner import DeviceGuardRegistry, Diagnostic, ScanResult, StaticScanner
 from .af_spec import SpecError, compile_spec, graph_to_raw, render_spec
 from .af_store import GraphStore, diff_graphs
+from .af_time import SystemTimeSource
 from .af_vhass import FakeHAAdapter, seed_from_graph
 from .af_pending import PendingLimitExceeded, PendingStore
 from .af_error_knowledge import ErrorKnowledge
@@ -1717,7 +1717,7 @@ def get_metrics(store: GraphStore) -> dict[str, Any]:
                 "last_event_at": None,
             }
     return {
-        "generated_at": datetime.now().isoformat(),
+        "generated_at": SystemTimeSource().local_now().isoformat(),
         "source": "conf-store",
         "overall": {
             "total_runs": 0,

@@ -1,0 +1,9 @@
+{"run_id":"af-audit-run-3","repo":"AutoForge","target":"/data/workspace/AutoForge-main",
+ "source_ref":"zip-snapshot-2026-09-29T22:43","profile":"standard","wave":3,
+ "scope_note":"第三轮 scoped run，聚焦表达式求值边界与时间处理；前两轮已审面不重复。19 单元中 5 个 in-scope、14 个 out_of_scope。",
+ "coverage_statement":"PARTIAL COVERAGE",
+ "environment":{"python":"3.10.12","test_baseline":"1277 passed, 51 skipped, 0 failed"},
+ "method":"23 个白名单函数边界 fuzz + 端到端表达式穿透验证 + 静态闸可达性核实 + 时间源一致性检索",
+ "falsified":["af_conflict.py:98 naive datetime（死代码，无调用路径）","clamp(lo>hi)（语义一致）","time_hour(纯日期)=0（合理）"],
+ "validators":{"coverage_ledger":"PASS: 19 coverage units valid","findings":"PASS: 3 findings valid"},
+ "terminal_state":"all_phase6_artifacts_written_and_both_validators_pass","run_status":"complete","phase":6}
