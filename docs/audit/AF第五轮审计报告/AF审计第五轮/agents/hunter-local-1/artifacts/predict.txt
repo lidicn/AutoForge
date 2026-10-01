@@ -1,0 +1,117 @@
+### 证据2 af_predict / af_preference 边界 ###
+235:class _Model:
+252:class _Index:
+261:class Predictor:
+268:    def __init__(
+315:    def predictions_path(self) -> str:
+319:    def persist_dir(self) -> str:
+323:    def window_days(self) -> int:
+327:    def learn(
+394:    def predict(
+417:    def explain(
+548:    def pre_trigger(
+627:    def clear_prediction(self, automation_id: str) -> bool:
+637:    def reset(self, automation_id: str) -> None:
+644:    def flush(self) -> None:
+649:    def hourly(self, automation_id: str) -> list[int]:
+654:    def peak_hour(self, automation_id: str) -> int | None:
+661:    def state_counts(self, automation_id: str) -> dict[str, int]:
+666:    def state_pattern(self, automation_id: str, state: Mapping[str, Any] | None = None) -> float:
+681:    def is_predicted(self, automation_id: str) -> bool:
+686:    def stats(self, automation_id: str) -> dict:
+723:    def _fetch_history(self, automation_id: str) -> list:
+745:    def _current_state(self, automation_id: str) -> dict[str, str] | None:
+764:    def _invoke_executor(self, automation_id: str, probability: float):
+782:    def _window_events(self, model: _Model, now: datetime) -> list[dict]:
+786:    def _ref_now(self, model: _Model) -> datetime:
+795:    def _prune(self, automation_id: str, ref: datetime) -> None:
+808:    def _reindex(self, automation_id: str) -> None:
+825:    def _save(self) -> None:
+853:    def _load(self) -> None:
+907:    def _quarantine(self, path: str) -> None:
+
+=== 公开类/函数 ===
+['Any', 'DAY_MINUTES', 'DEFAULT_MAX_EVENTS', 'DEFAULT_MIN_DAYS', 'DEFAULT_MIN_EVENTS', 'DEFAULT_PRE_WINDOW_MINUTES', 'DEFAULT_PRIOR_STRENGTH', 'DEFAULT_WINDOW_DAYS', 'EVENT_TIME_KEYS', 'EXECUTOR_METHODS', 'HISTORY_METHODS', 'Iterable_abc', 'MODEL_VERSION', 'Mapping', 'PREDICTIONS_FILE', 'Predictor', 'STATE_KEYS', 'STATE_METHODS', 'Sequence', 'SystemTimeSource', 'annotations', 'dataclass', 'date', 'datetime', 'ensure_aware']
+82:def _require_id(automation_id: Any) -> str:
+88:def _require_window(window_minutes: Any) -> float:
+98:def _require_threshold(threshold: Any) -> float:
+108:def _call_flexible(fn, *args, **kwargs):
+132:def _event_datetime(value: Any) -> datetime:
+157:def _event_time_value(event: Mapping[str, Any]) -> Any:
+164:def _norm_state(raw: Any) -> dict[str, str] | None:
+171:def _event_state(event: Mapping[str, Any]) -> dict[str, str] | None:
+183:def _state_match(event_state: Mapping[str, str] | None,
+196:def _canon_state_key(state: Mapping[str, str] | None) -> str:
+202:def _minute_of_day(dt: datetime) -> float:
+206:def _band_segments(start: float, length: float) -> list[tuple[float, float]]:
+218:def _in_band(minute: float, segments: list[tuple[float, float]]) -> bool:
+222:def _overlap(a_lo: float, a_hi: float, b_lo: float, b_hi: float) -> float:
+226:def _parse_iso(text: str) -> datetime:
+230:def _ev_key(record: Mapping[str, Any]) -> tuple[str, str]:
+
+==================================================================
+[1] _band_segments / _in_band 跨午夜边界
+==================================================================
+  start=1320 length=540 -> segments=[(1320.0, 1440.0), (0.0, 420.0)]
+     检测: 23:30=True  03:00=True  12:00=False
+  start=0 length=1440 -> segments=[(0.0, 1440.0)]
+     检测: 23:30=True  03:00=True  12:00=True
+  start=1380 length=120 -> segments=[(1380.0, 1440.0), (0.0, 60.0)]
+     检测: 23:30=True  03:00=False  12:00=False
+  start=0 length=0 -> segments=[]
+     检测: 23:30=False  03:00=False  12:00=False
+  start=-60 length=60 -> segments=[(1380.0, 1440.0)]
+     检测: 23:30=True  03:00=False  12:00=False
+  start=1440 length=60 -> segments=[(0.0, 60.0)]
+     检测: 23:30=False  03:00=False  12:00=False
+
+==================================================================
+[2] _require_window / _require_threshold 边界
+==================================================================
+  _require_window(0) -> ValueError: window_minutes 必须是正有限值：0
+  _require_threshold(0) -> 0.0
+  _require_window(-1) -> ValueError: window_minutes 必须是正有限值：-1
+  _require_threshold(-1) -> ValueError: threshold 必须落在 [0, 1]：-1
+  _require_window(0.0) -> ValueError: window_minutes 必须是正有限值：0.0
+  _require_threshold(0.0) -> 0.0
+  _require_window('abc') -> ValueError: window_minutes 必须是正有限值：'abc'
+  _require_threshold('abc') -> ValueError: threshold 必须落在 [0, 1]：'abc'
+  _require_window(None) -> ValueError: window_minutes 必须是正有限值：None
+  _require_threshold(None) -> ValueError: threshold 必须落在 [0, 1]：None
+  _require_window(1000000000.0) -> 1000000000.0
+  _require_threshold(1000000000.0) -> ValueError: threshold 必须落在 [0, 1]：1000000000.0
+  _require_window(inf) -> ValueError: window_minutes 必须是正有限值：inf
+  _require_threshold(inf) -> ValueError: threshold 必须落在 [0, 1]：inf
+  _require_window(nan) -> ValueError: window_minutes 必须是正有限值：nan
+  _require_threshold(nan) -> ValueError: threshold 必须落在 [0, 1]：nan
+
+==================================================================
+[3] _overlap
+==================================================================
+  _overlap(0, 60) vs (30,90) = 30
+  _overlap(1380, 1500) vs (30,90) = 0.0
+  _overlap(0, 1440) vs (30,90) = 60
+
+==================================================================
+[4] Predictor 端到端：空历史 / naive now / 极端窗口
+==================================================================
+Traceback (most recent call last):
+  File "<stdin>", line 5, in <module>
+TypeError: Predictor.__init__() missing 2 required positional arguments: 'history_store' and 'executor'
+
+==================================================================
+[4b] Predictor 端到端（正确签名）
+==================================================================
+  [a] 空历史 predict      : 0.0
+  [b] stats(未知id) count : 0
+  [c] naive now:
+      ✅ ValueError: predict.now must be timezone-aware, got naive datetime.datetime(2
+  [d] window_minutes=0:
+      ✅ ValueError: window_minutes 必须是正有限值：0
+  [e] 极大窗口 1e9:
+      -> 0.0   ✅ 在 [0,1]
+  [f] peak_hour(未知id)   : None
+  [g] id='' -> ✅ ValueError: automation_id 必须是非空字符串：''
+  [g] id=None -> ✅ ValueError: automation_id 必须是非空字符串：None
+  [g] id=123 -> ✅ ValueError: automation_id 必须是非空字符串：123
+  [h] explain(空历史)     : {'automation_id': 'auto1', 'now': '2026-10-01T11:12:02.737396+00:00', 'window_minutes': 5.0, 'state': None, 'cold_start': True, 'reason': '无历史触发记录', 'events': 0, 'sample_events': 0, 'hits': 0, 'trials': 0, 'p_minute': 0.0, 'p_hour_prior': 0.0, 'prior_strength': 2.0, 'experience_prior_mean': None, 'experience_prior_weight': 0.0, 'p': 0.0}

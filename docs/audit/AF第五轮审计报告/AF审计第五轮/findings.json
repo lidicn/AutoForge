@@ -1,0 +1,71 @@
+[
+  {
+    "verdict": "rejected",
+    "fingerprint": "fp-bus-laststate-unbounded",
+    "title": "af_bus.py：_last_state / _last_accepted / _changes 的键永不摘除，实体漂移时旧键永久残留（事实成立，回归类）",
+    "description": "实测：_last_state 与 _last_accepted 的 pop/clear/del 在源码中出现 0 次，无任何摘除逻辑；_changes 的键同样永不删除（仅 deque 内部按时间窗口裁剪元素）。场景实测：旧设备 200 个发布后 _last_state=200；旧设备全部下线、新设备 200 个接入后 _last_state=400 —— 旧键全部残留、单调递增。家庭环境中设备更换/重命名/固件变更导致 entity_id 漂移是常态。",
+    "claimed_root_cause": "以 entity_id 为键的状态缓存缺少实体消失时的摘除路径。",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "src/autoforge/af_bus.py",
+        "line": 234,
+        "scope": "_last_state/_last_accepted",
+        "description": "dict 无 pop/clear/del，键永不摘除"
+      },
+      {
+        "kind": "sink",
+        "file": "src/autoforge/af_bus.py",
+        "line": 267,
+        "scope": "实体漂移",
+        "description": "旧 entity_id 下线后其缓存键永久残留"
+      }
+    ],
+    "evidence": [
+      {
+        "file": "agents/hunter-local-1/artifacts/bus.txt",
+        "line": 1,
+        "description": "实测：200 旧设备→_last_state=200；旧设备全下线+新设备 200→400"
+      }
+    ],
+    "reason": "事实成立但计为回归类而非新发现：增长受实体拓扑数量约束（非随时间无界），且与第一轮已报告的 P1（AuditLog / bus.emitted / _time_fired 无上限）属同一族问题——『只增不减』。去重结构 _seen 本身有 LRU 上限 4096，属正确实现。"
+  },
+  {
+    "verdict": "rejected",
+    "fingerprint": "fp-preference-on2-persist",
+    "title": "af_preference.py：每次 record() 全量重写整个偏好库，且无记录上限 → O(N²)（事实成立，属稳定性缺陷）",
+    "description": "PreferenceModel.record() 每次调用都执行 self._save()，而 _save() 把整个 _records 列表全量 json.dump 重写到 preferences.json（af_preference.py:467）。全模块 grep maxlen/MAX_RECORDS/prune/evict/expire 命中 0 次，_records 无任何上限，单调增长。实测单次 record 耗时随记录数严格线性上升：501条→7.58ms、1001条→14.73ms、2001条→29.25ms、4001条→58.73ms，即每次 O(N)、累计 O(N²)；仅插入 4001 条就累计耗时 119.51 秒。落盘文件由 158KB 增至 1268KB，实测约 326 字节/条。_load() 在启动时全量读入内存。长期常驻场景下（用户每次接受/拒绝一次自动化建议即写一条）该成本会持续恶化，且 preferences.json 无界膨胀。",
+    "claimed_root_cause": "持久化采用『全量重写』而非增量追加/分片，且缺少记录保留策略（上限或按时间裁剪）。",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "src/autoforge/af_preference.py",
+        "line": 168,
+        "scope": "record()",
+        "description": "每次插入后调用 self._save()"
+      },
+      {
+        "kind": "propagation",
+        "file": "src/autoforge/af_preference.py",
+        "line": 467,
+        "scope": "_save()",
+        "description": "data['records'] = [r.to_json() for r in self._records] —— 全量序列化后整文件重写"
+      },
+      {
+        "kind": "sink",
+        "file": "src/autoforge/af_preference.py",
+        "line": 129,
+        "scope": "_records",
+        "description": "list 无上限，且全模块无裁剪逻辑；_load() 启动时全量载入"
+      }
+    ],
+    "evidence": [
+      {
+        "file": "agents/hunter-local-1/artifacts/pref-instance.txt",
+        "line": 1,
+        "description": "实测：501/1001/2001/4001 条时单次 record 耗时 7.58/14.73/29.25/58.73 ms 严格线性；累计 119.51 s；落盘 158→1268 KB"
+      }
+    ],
+    "reason": "事实成立，但按本技能纪律不列为 confirmed 安全发现：属稳定性/性能缺陷（长期运行下写放大与内存/磁盘无界增长），不涉及低信任主体跨越信任边界。按用户本轮诉求另册记录。注：af_preference 在前四轮均为 out_of_scope，本轮为首次审计。"
+  }
+]

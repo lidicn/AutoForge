@@ -6,7 +6,8 @@
 - suggest(automation_id) -> list：基于偏好建议调整自动化参数
 
 上下文维度：小时段（morning/afternoon/evening/night）、工作日/周末、场景标签。
-零新依赖，持久化到 persist_dir/preferences.json。
+零新依赖，持久化为 append-only JSONL（`persist_dir/preferences.jsonl`），
+记录数有上限（`max_records`），超限丢弃最旧并同步回补聚合统计。
 """
 from __future__ import annotations
 
@@ -14,9 +15,13 @@ import json
 import os
 import time
 import uuid
-from dataclasses import dataclass, field, asdict
+from collections import deque
+from dataclasses import dataclass, field, asdict, fields as dataclasses_fields
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+
+from .af_store import append_jsonl, atomic_write_text, read_jsonl_bounded
 
 __all__ = [
     "PreferenceRecord",
@@ -25,9 +30,13 @@ __all__ = [
     "time_bucket",
 ]
 
-PREFERENCES_FILE = "preferences.json"
+PREFERENCES_FILE = "preferences.jsonl"
+#: 第五轮审计前的整档格式（每次 record 全量重写 → O(N²)）。只读迁移，不覆盖。
+LEGACY_PREFERENCES_FILE = "preferences.json"
 DEFAULT_MIN_SAMPLES = 3
 DEFAULT_CONFIDENCE_THRESHOLD = 0.6
+#: 明细留存上限：偏好明细是抽样证据，聚合态 `_stats` 才服务于决策。
+DEFAULT_MAX_RECORDS = 5000
 
 
 def time_bucket(hour: int) -> str:
@@ -118,17 +127,23 @@ class PreferenceModel:
         *,
         min_samples: int = DEFAULT_MIN_SAMPLES,
         confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+        max_records: int = DEFAULT_MAX_RECORDS,
         clock: Callable[[], float] = time.time,
         tz: Any = None,
     ) -> None:
         self._persist_dir = persist_dir
         self._min_samples = min_samples
         self._confidence_threshold = confidence_threshold
+        self._max_records = max(1, int(max_records))
         self._clock = clock
         self._tz = tz
-        self._records: list[PreferenceRecord] = []
+        self._records: deque[PreferenceRecord] = deque()
         # stats[context][action][params_frozen] = _Stat
         self._stats: dict[str, dict[str, dict[str, _Stat]]] = {}
+        #: 被上限丢弃的明细条数（诚实观测：聚合态可能比明细更宽）
+        self._evicted = 0
+        #: 距上次整档压缩已追加的行数
+        self._since_compact = 0
         self._load()
 
     # ── 记录 ────────────────────────────────────────────────────────
@@ -166,7 +181,8 @@ class PreferenceModel:
         )
         self._records.append(rec)
         self._update_stats(ctx, action, params_dict, rec.accepted, rec.timestamp)
-        self._save()
+        self._trim()
+        self._append_record(rec)
         return rec
 
     def record_accept(self, action: str, params=None, *, context=None, automation_id=None, details=None) -> PreferenceRecord:
@@ -342,6 +358,8 @@ class PreferenceModel:
             "accept_rate": round(accepted / total_records, 4) if total_records else 0.0,
             "contexts": contexts,
             "actions": actions,
+            "max_records": self._max_records,
+            "evicted_records": self._evicted,
             "persist_dir": self._persist_dir,
         }
 
@@ -362,10 +380,10 @@ class PreferenceModel:
             self._stats.clear()
         else:
             before = len(self._records)
-            self._records = [r for r in self._records if r.automation_id != automation_id]
+            self._records = deque(r for r in self._records if r.automation_id != automation_id)
             n = before - len(self._records)
             self._rebuild_stats()
-        self._save()
+        self._rewrite_all()
         return n
 
     # ── 内部 ────────────────────────────────────────────────────────
@@ -435,6 +453,31 @@ class PreferenceModel:
             stat.rejected += 1
         stat.last_seen = timestamp
 
+    def _revert_stats(self, rec: PreferenceRecord) -> None:
+        """明细被上限淘汰时回补聚合，使 `_stats` 恒等于「留存明细的派生态」。
+
+        键摘除是必要的：否则 `(context, action, params)` 组合本身又是一族"只增不减"。
+        `last_seen` 由最新记录写入，淘汰的是最旧记录，故计数未归零时它仍然有效。
+        """
+        pk = self._freeze_params(rec.params)
+        act_stat = self._stats.get(rec.context, {}).get(rec.action)
+        if not act_stat:
+            return
+        stat = act_stat.get(pk)
+        if stat is None:
+            return
+        if rec.accepted:
+            stat.accepted = max(0, stat.accepted - 1)
+        else:
+            stat.rejected = max(0, stat.rejected - 1)
+        if stat.total == 0:
+            del act_stat[pk]
+            ctx_stat = self._stats[rec.context]
+            if not act_stat:
+                del ctx_stat[rec.action]
+                if not ctx_stat:
+                    del self._stats[rec.context]
+
     def _rebuild_stats(self) -> None:
         """从记录重建统计。"""
         self._stats.clear()
@@ -458,35 +501,87 @@ class PreferenceModel:
                 return self._stats[ctx]
         return {}
 
-    def _save(self) -> None:
+    def _trim(self) -> None:
+        """明细超上限时丢最旧，并同步回补聚合。"""
+        while len(self._records) > self._max_records:
+            self._revert_stats(self._records.popleft())
+            self._evicted += 1
+
+    def _path(self, name: str) -> str:
+        return os.path.join(str(self._persist_dir), name)
+
+    def _append_record(self, rec: PreferenceRecord) -> None:
+        """O(1) 落盘：只追加本次新增的那一行，不重写整档。"""
         if not self._persist_dir:
             return
-        path = os.path.join(self._persist_dir, PREFERENCES_FILE)
         os.makedirs(self._persist_dir, exist_ok=True)
-        data = {
-            "records": [r.to_json() for r in self._records],
-            "min_samples": self._min_samples,
-            "confidence_threshold": self._confidence_threshold,
-        }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        append_jsonl(Path(self._path(PREFERENCES_FILE)), rec.to_json())
+        self._since_compact += 1
+        if self._since_compact >= self._compact_slack():
+            self._rewrite_all()
+
+    def _compact_slack(self) -> int:
+        """允许文件比内存留存多出这么多行再压缩（把整档重写摊薄到 O(1)/条）。"""
+        return max(64, self._max_records // 8)
+
+    def _rewrite_all(self) -> None:
+        """整档压缩（原子写）：留存明细有多少写多少。"""
+        if not self._persist_dir:
+            return
+        os.makedirs(self._persist_dir, exist_ok=True)
+        lines = "\n".join(
+            json.dumps(r.to_json(), ensure_ascii=False, default=str) for r in self._records
+        )
+        atomic_write_text(Path(self._path(PREFERENCES_FILE)), (lines + "\n") if lines else "")
+        self._since_compact = 0
+
+    def _migrate_legacy(self) -> list[PreferenceRecord]:
+        """旧整档格式（preferences.json）只读迁移：读入后由 `_rewrite_all` 落成 JSONL。
+
+        不删除旧文件、不覆盖旧文件——迁移可逆。
+        """
+        path = self._path(LEGACY_PREFERENCES_FILE)
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return []
+        recs = [r for r in (self._record_from_row(row) for row in data.get("records", []) if isinstance(row, dict)) if r is not None]
+        self._min_samples = data.get("min_samples", self._min_samples)
+        self._confidence_threshold = data.get("confidence_threshold", self._confidence_threshold)
+        return recs
 
     def _load(self) -> None:
         if not self._persist_dir:
             return
-        path = os.path.join(self._persist_dir, PREFERENCES_FILE)
-        if not os.path.exists(path):
-            return
+        path = Path(self._path(PREFERENCES_FILE))
+        if path.is_file():
+            # 读入量受上限约束：整档只可能比留存多出 _compact_slack 行
+            rows = read_jsonl_bounded(path, self._max_records + self._compact_slack())
+            raw = [r for r in (self._record_from_row(row) for row in rows) if r is not None]
+        else:
+            raw = self._migrate_legacy()
+        dropped = max(0, len(raw) - self._max_records)
+        self._evicted += dropped
+        for rec in raw[dropped:]:
+            self._records.append(rec)
+            self._update_stats(rec.context, rec.action, rec.params, rec.accepted, rec.timestamp)
+        if raw and (dropped or not path.is_file()):
+            # 超上限的老档 / 刚迁移完的整档 → 立即压成新格式；空库不建文件
+            self._rewrite_all()
+
+    #: 未知键（老版本残留 / 手工编辑）一律忽略，缺关键字段则整行丢弃
+    _RECORD_FIELDS = frozenset({f.name for f in dataclasses_fields(PreferenceRecord)})
+
+    @classmethod
+    def _record_from_row(cls, row: Mapping[str, Any]) -> PreferenceRecord | None:
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for r in data.get("records", []):
-                rec = PreferenceRecord(**r)
-                self._records.append(rec)
-                self._update_stats(rec.context, rec.action, rec.params, rec.accepted, rec.timestamp)
-            self._min_samples = data.get("min_samples", self._min_samples)
-            self._confidence_threshold = data.get("confidence_threshold", self._confidence_threshold)
-        except (json.JSONDecodeError, KeyError, TypeError):
-            # 损坏的持久化文件不阻塞启动
-            self._records.clear()
-            self._stats.clear()
+            kwargs = {k: v for k, v in row.items() if k in cls._RECORD_FIELDS}
+            rec = PreferenceRecord(**kwargs)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(rec.params, dict):
+            return None
+        return rec

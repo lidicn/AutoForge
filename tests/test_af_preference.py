@@ -215,13 +215,14 @@ class TestPreferenceModel(unittest.TestCase):
         self.assertIsNone(prefs["best_action"])
 
     def test_persistence_file_format(self):
+        """第五轮审计修复后为 append-only JSONL：一条记录一行，不再整档重写。"""
         self.model.record_accept("turn_on", {"entity_id": "light.a"}, automation_id="auto1")
+        self.model.record_accept("turn_off", {"entity_id": "light.a"}, automation_id="auto2")
         path = os.path.join(self.tmpdir, PREFERENCES_FILE)
         self.assertTrue(os.path.exists(path))
         with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        self.assertIn("records", data)
-        self.assertEqual(len(data["records"]), 1)
+            rows = [json.loads(line) for line in f if line.strip()]
+        self.assertEqual([r["automation_id"] for r in rows], ["auto1", "auto2"])
 
     def test_wildcard_context_match(self):
         # 记录时只有 time 维度

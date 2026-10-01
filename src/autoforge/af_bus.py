@@ -66,6 +66,9 @@ BREAKER_BLOCKED = "breaker_open"
 EVENT_SOURCE = "emit"
 EVENT_ENTITY_PREFIX = "event."
 
+#: 实体维度缓存的修剪周期（秒）。只决定"多久扫一次"，不改变任何判定语义。
+CACHE_PRUNE_INTERVAL_S = 60.0
+
 
 @dataclass(frozen=True)
 class BusEvent:
@@ -175,6 +178,9 @@ class EventBus:
         self._last_state: dict[str, str] = {}
         self._changes: dict[str, deque[float]] = {}
         self._open_until: dict[str, float] = {}
+        #: P1（第五轮审计）：修剪周期 + 累计摘除键数（观测"只增不减"是否收敛）
+        self._next_prune = self.clock.monotonic() + CACHE_PRUNE_INTERVAL_S
+        self._cache_pruned = 0
 
         self._subs: dict[str, list[Callable[[BusEvent], None]]] = {}
         self.counts: dict[str, int] = {ACCEPTED: 0, DUPLICATE: 0, THROTTLED: 0, BREAKER_BLOCKED: 0}
@@ -204,6 +210,9 @@ class EventBus:
             return DUPLICATE
 
         now = self.clock.monotonic()
+        if now >= self._next_prune:
+            self._next_prune = now + CACHE_PRUNE_INTERVAL_S
+            self._prune_stale_caches(now)
 
         if event.event is None:
             # 实体状态事件：去重后做熔断 + 节流（防自动化隐式循环 / 抖动）
@@ -288,6 +297,32 @@ class EventBus:
     def open_entities(self) -> list[str]:
         return [e for e in list(self._open_until) if self.is_open(e)]
 
+    # ── 缓存修剪（第五轮审计 P1 回归族：只增不减）────────────────────
+    def _prune_stale_caches(self, now: float) -> int:
+        """摘除「已不可能影响未来判定」的实体键 —— 语义等价，只是不再单调增长。
+
+        - `_last_accepted` / `_last_state`：`now - last >= throttle_window` 时
+          `_pass_throttle` 本来就必然放行（`last is None` 同分支），键已失效
+        - `_changes`：最近一次变更已滑出熔断窗口 → 下次 `_record_change` 会把窗口
+          清成 1 条，与"缺键新建"完全一致
+
+        `_open_until` **不修剪**：冷却到期的键虽然 `is_open()` 已返回 False，但
+        `_maybe_recover` 还要靠它记一条 BREAKER_RECOVER 审计；静默摘除等于丢观测。
+        """
+        removed = 0
+        stale = [k for k, v in self._last_accepted.items() if now - v >= self.throttle_window]
+        for k in stale:
+            self._last_accepted.pop(k, None)
+            self._last_state.pop(k, None)
+        removed += len(stale)
+        cutoff = now - self.breaker_window
+        dead = [k for k, w in self._changes.items() if not w or w[-1] < cutoff]
+        for k in dead:
+            self._changes.pop(k, None)
+        removed += len(dead)
+        self._cache_pruned += removed
+        return removed
+
     # ── 内部 ──────────────────────────────────────────────────────────
     def _is_duplicate(self, event: BusEvent) -> bool:
         # P1-6 修复：自定义事件 dedup_key 含唯一 event_id，永远不会被判重，却会占用
@@ -366,6 +401,12 @@ class EventBus:
             "counts": dict(self.counts),
             "open_entities": self.open_entities(),
             "subscriptions": {k: len(v) for k, v in self._subs.items()},
+            "entity_cache": {
+                "last_accepted": len(self._last_accepted),
+                "last_state": len(self._last_state),
+                "changes": len(self._changes),
+                "pruned_total": self._cache_pruned,
+            },
         }
 
 

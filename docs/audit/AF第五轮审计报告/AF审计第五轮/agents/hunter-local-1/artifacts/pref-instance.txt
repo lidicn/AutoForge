@@ -1,0 +1,91 @@
+### 证据3 af_preference / af_instance 回归 ###
+70:class PreferenceRecord:
+81:    def to_json(self) -> dict:
+86:class _Stat:
+93:    def total(self) -> int:
+97:    def rate(self) -> float:
+103:class PreferenceModel:
+115:    def __init__(
+135:    def record(
+172:    def record_accept(self, action: str, params=None, *, context=None, automation_id=None, details=None) -> PreferenceRecord:
+176:    def record_reject(self, action: str, params=None, *, context=None, automation_id=None, details=None) -> PreferenceRecord:
+181:    def preference(
+270:    def suggest(
+331:    def stats(self) -> dict[str, Any]:
+348:    def records_for(self, automation_id: str | None = None, action: str | None = None) -> list[PreferenceRecord]:
+357:    def clear(self, automation_id: str | None = None) -> int:
+372:    def _normalize_context(self, context: Mapping[str, Any] | None) -> str:
+381:    def _freeze_params(self, params: Mapping[str, Any]) -> str:
+390:    def _parse_params_key(self, key: str) -> dict[str, Any]:
+402:    def _coerce_param_value(v: str) -> Any:
+420:    def _update_stats(
+
+=== af_preference 公开 ===
+['Any', 'Callable', 'DEFAULT_CONFIDENCE_THRESHOLD', 'DEFAULT_MIN_SAMPLES', 'Mapping', 'PREFERENCES_FILE', 'PreferenceModel', 'PreferenceRecord', 'Sequence', 'annotations', 'asdict', 'context_key', 'dataclass', 'datetime', 'field', 'json', 'os', 'time', 'time_bucket', 'uuid']
+  class PreferenceModel: (persist_dir: 'str | None' = None, *, min_samples: 'int' = 3, confidence_threshold: 'float' = 0.6, clock: 'Callable[[], float]' = <built-in function time>, tz: 'Any' = None) -> 'None'
+  class PreferenceRecord: (record_id: 'str', automation_id: 'str | None', action: 'str', params: 'dict[str, Any]', context: 'str', accepted: 'bool', timestamp: 'float', details: 'dict[str, Any]' = <factory>) -> None
+  class _Stat: (accepted: 'int' = 0, rejected: 'int' = 0, last_seen: 'float' = 0.0) -> None
+  class datetime
+70:class PreferenceRecord:
+86:class _Stat:
+103:class PreferenceModel:
+
+==================================================================
+[1] PreferenceModel 空/边界
+==================================================================
+  [a] 空模型 record_count = ?
+      属性: ['_clock', '_coerce_param_value', '_confidence_threshold', '_freeze_params', '_load', '_min_samples', '_normalize_context', '_parse_params_key', '_persist_dir', '_rebuild_stats', '_records', '_save', '_stats', '_tz', '_update_stats', '_wildcard_match']
+  [b] min_samples=0 / 负数:
+      min_samples=0 -> 构造通过
+      min_samples=-1 -> 构造通过
+  [c] confidence_threshold 越界:
+      -0.1 -> 构造通过
+      1.5 -> 构造通过
+      0.0 -> 构造通过
+      1.0 -> 构造通过
+
+  [d] 记录增长（长期常驻内存）:
+      ❌ TypeError: PreferenceModel.record() missing 1 required keyword-only argument: 'accepted'
+      记录数 = ?  (插入 5000)
+      是否有上限: 需核实
+135:    def record(
+136-        self,
+137-        action: str,
+138-        params: Mapping[str, Any] | None = None,
+139-        *,
+140-        context: Mapping[str, Any] | None = None,
+141-        accepted: bool,
+142-        automation_id: str | None = None,
+143-        details: Mapping[str, Any] | None = None,
+144-    ) -> PreferenceRecord:
+145-        """记录用户接受/拒绝一个自动化动作。
+146-
+147-        Args:
+148-            action: 动作名（如 turn_on / set_temperature）
+149-            params: 动作参数（如 {"entity_id": "light.living", "brightness": 80}）
+150-            context: 上下文（hour/weekday/scene/entity_id）
+151-            accepted: 用户是否接受
+152-            automation_id: 关联的自动化 ID
+153-            details: 额外信息（如用户手动调整后的值）
+154-        """
+155-        ctx = self._normalize_context(context)
+--
+172:    def record_accept(self, action: str, params=None, *, context=None, automation_id=None, details=None) -> PreferenceRecord:
+173-        """便捷方法：记录用户接受。"""
+174-        return self.record(action, params, context=context, accepted=True, automation_id=automation_id, details=details)
+175-
+176:    def record_reject(self, action: str, params=None, *, context=None, automation_id=None, details=None) -> PreferenceRecord:
+177-        """便捷方法：记录用户拒绝（含手动覆盖）。"""
+=== 是否有裁剪/上限 ===
+(以上为空则无任何裁剪)
+
+==================================================================
+[2] 记录无上限实测 + 阈值不校验的实际影响
+==================================================================
+Traceback (most recent call last):
+  File "<stdin>", line 8, in <module>
+  File "/data/workspace/AutoForge-main/src/autoforge/af_preference.py", line 155, in record
+    ctx = self._normalize_context(context)
+  File "/data/workspace/AutoForge-main/src/autoforge/af_preference.py", line 375, in _normalize_context
+    hour = context.get("hour")
+AttributeError: 'str' object has no attribute 'get'

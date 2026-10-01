@@ -1,0 +1,13 @@
+{"run_id":"af-audit-run-5","repo":"AutoForge","source_ref":"zip-snapshot-2026-09-29T22:43",
+ "profile":"standard","wave":5,
+ "scope_note":"第五轮 scoped run：转向前四轮 out_of_scope 未审面 af_preference/af_predict/af_bus。14 单元中 5 in-scope、9 out_of_scope。",
+ "coverage_statement":"PARTIAL COVERAGE",
+ "environment":{"python":"3.10.12","test_baseline":"1277 passed, 51 skipped, 0 failed"},
+ "method":"未审模块首查 + 持久化写放大实测 + 缓存键摘除核查 + 预测引擎边界 fuzz + 去重/熔断结构核实",
+ "falsified":["af_predict 全部边界（跨午夜/负start/inf/nan/naive now/越界窗口/非法id 均正确）","af_bus 去重 LRU 有界 4096","af_bus 熔断参数与自定义事件跳过（设计决策）"],
+ "key_finding":{"module":"af_preference","issue":"record() 每次全量重写 + 无记录上限 → O(N²)","severity":"P1","measured":"4001 条时单次 58.73ms，累计 119.51s"},
+ "regression_unfixed":["af_scheduler.py:343 instance.id（连续四轮）","af_orchestrator.py:916 catalog[:120]","只增不减一族：AuditLog / PreferenceModel._records / bus._last_state"],
+ "methodology_note":"第四轮『边际收益衰减』判断被本轮推翻：衰减发生在『已审面邻近区』，转向『完全未审模块』仍有高回报",
+ "next_recommended":["af_evo (1474)","af_service (2102)"],
+ "validators":{"coverage_ledger":"PASS: 14 coverage units valid","findings":"PASS: 2 findings valid"},
+ "terminal_state":"all_phase6_artifacts_written_and_both_validators_pass","run_status":"complete","phase":6}
