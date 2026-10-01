@@ -307,12 +307,28 @@ def apply_group(group_auto: Any, store: Any = None, *,
             save_payload = {"ir": child.raw, "name": child.name, "group_ref": group_ref}
             res = af_service.submit_pending(store, "af_apply", save_payload, submitted_by="af_apply")
             if not res.get("ok"):
+                rollback_failed: list[dict[str, str]] = []
                 for d in deployed:
                     try:
                         store.rollback_pending(d)
-                    except Exception:
-                        pass
-                return {"ok": False, "stage": "save", "error": {"code": "SUBMIT_FAILED", "child": child.id}, "deployed": [], "conflicts": conflicts}
+                    except Exception as exc:  # noqa: BLE001
+                        # 回滚失败不能咽：咽下就变成"已回滚、deployed 为空"的假象，
+                        # 而待批队列里其实还留着条目（铁律 #5：回滚不了要 fail-closed 报出去）。
+                        rollback_failed.append(
+                            {"ref": d, "error": f"{type(exc).__name__}: {exc}"}
+                        )
+                return {
+                    "ok": False,
+                    "stage": "save",
+                    "error": {"code": "SUBMIT_FAILED", "child": child.id},
+                    "deployed": deployed if rollback_failed else [],
+                    "rollback_failed": rollback_failed,
+                    "conflicts": conflicts,
+                }
             deployed.append(child.id)
 
-    return {"ok": True, "ref": group_ref, "children": [c.id for c in children], "deployed": deployed, "conflicts": conflicts, "stage": stage}
+    # ok 由"该 stage 应入队的子自动化确实全部拿到了 pending ref"决定，不是字面量：
+    # apply/save 轨要求每个 child 都入队；其余 stage 没有入队义务，空集即成立。
+    expected = [c.id for c in children] if stage in ("apply", "save") else []
+    return {"ok": deployed == expected, "ref": group_ref, "children": [c.id for c in children],
+            "deployed": deployed, "conflicts": conflicts, "stage": stage}

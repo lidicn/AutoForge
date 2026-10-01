@@ -27,7 +27,6 @@ src/autoforge/af_version.py#except-pass-broad#_now
 src/autoforge/af_api.py#fake-ok-const#build_app.api_agent_delete
 src/autoforge/af_api.py#fake-ok-const#build_app.api_agent_rename
 src/autoforge/af_api.py#fake-ok-const#build_app.api_agents_list
-src/autoforge/af_api.py#fake-ok-const#build_app.api_asks
 src/autoforge/af_api.py#fake-ok-const#build_app.api_asks_answer
 src/autoforge/af_api.py#fake-ok-const#build_app.api_asks_pending
 src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_code_create
@@ -64,7 +63,6 @@ src/autoforge/af_experience.py#fake-ok-const#ExperienceStore.export
 src/autoforge/af_experience.py#fake-ok-const#ExperienceStore.summary
 src/autoforge/af_mcp.py#fake-ok-const#_t_pair
 src/autoforge/af_mcp.py#fake-ok-const#_t_request_pair
-src/autoforge/af_premiere.py#fake-ok-const#TrialStore._pause_locked
 src/autoforge/af_premiere.py#fake-ok-const#TrialStore.enter_trial
 src/autoforge/af_service.py#fake-ok-const#_session_view
 src/autoforge/af_service.py#fake-ok-const#asks_pending
@@ -86,7 +84,7 @@ src/autoforge/af_service.py#fake-ok-const#live_status
 src/autoforge/af_service.py#fake-ok-const#reject_pending
 src/autoforge/af_service.py#fake-ok-const#save_graph
 src/autoforge/af_service.py#fake-ok-const#set_graph_tags
-src/autoforge/af_service.py#fake-ok-const#simulate
+src/autoforge/af_service.py#fake-ok-const#simulate_track
 src/autoforge/af_service.py#fake-ok-const#spec_of
 src/autoforge/af_service.py#fake-ok-const#start_watch
 src/autoforge/af_service.py#fake-ok-const#submit_pending

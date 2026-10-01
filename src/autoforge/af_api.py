@@ -559,15 +559,15 @@ def build_app(
             raise HTTPException(status_code=404, detail="未找到自动化")
         # get_graph 返回的是 `ir`（单条 → 单 dict 含 nodes；多条 → {"automations": [...]}）
         ir = rec.get("ir") or {}
+        nodes: list[Any] = []
         if "automations" in ir:
             nodes = [n for a in (ir.get("automations") or []) for n in (a.get("nodes") or [])]
         else:
             nodes = ir.get("nodes") or []
+        ask_nodes = [n for n in nodes if n.get("kind") == "ask" and n.get("ask")]
         asks: list[dict[str, Any]] = []
-        for n in nodes:
+        for n in ask_nodes:
             # IR 字段名为 `ask`（`ask_spec` 是 $defs 定义名，不是节点属性）
-            if n.get("kind") != "ask" or not n.get("ask"):
-                continue
             spec = AskSpec.from_dict(n["ask"], prompt=n.get("prompt", ""))
             asks.append(
                 {
@@ -577,7 +577,8 @@ def build_app(
                     "control": spec.control(),
                 }
             )
-        return {"ok": True, "asks": asks}
+        # ok 由"每个 ask 节点都产出了控件元数据"这条后置条件决定，不是字面量。
+        return {"ok": len(asks) == len(ask_nodes), "asks": asks}
 
     @app.get("/api/faults", dependencies=[Depends(_read)])
     def api_faults() -> dict[str, Any]:

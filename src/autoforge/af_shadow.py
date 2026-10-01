@@ -345,6 +345,8 @@ class ShadowRunner:
     on_promote: Callable[[str], None] | None = None
     intervention: Any = None
     log_path: str | None = None  # shadow_log.json 落盘路径；None = 不持久化
+    replay_load_error: str | None = None  # 重启回放失败的原因；不阻断启动，但必须能被读到
+    watch_record_error: str | None = None  # 聚合侧写失败的最近原因（同上，不静默）
 
     # ---- 装饰 ----------------------------------------------------------- #
 
@@ -359,8 +361,10 @@ class ShadowRunner:
             try:
                 self.log.load_file(self.log_path)
                 self.compare_due()
-            except Exception:  # noqa: BLE001
-                pass  # 日志损坏不影响启动，仅丢失历史判定
+            except Exception as exc:  # noqa: BLE001
+                # 日志损坏不影响启动，但"历史判定丢了"这件事得留下痕迹，
+                # 否则损坏的 shadow_log 会被当成"回放一切正常"。
+                self.replay_load_error = f"{type(exc).__name__}: {exc}"
 
         def _do(instance: Any, node: Any, _orig: Any = original) -> Any:
             aid = _automation_id(instance)
@@ -497,8 +501,10 @@ class ShadowRunner:
                     {"record_id": record.record_id, "action": record.action,
                      "expected_state": record.expected_state, "observed_state": observed},
                 )
-            except Exception:  # noqa: BLE001
-                pass  # 聚合失败绝不影响影子比对本身
+            except Exception as exc:  # noqa: BLE001
+                # 聚合失败绝不影响影子比对本身，但原因要留在 runner 上：
+                # 静默咽下会让"生产态证据一条没记"看起来像"记好了"。
+                self.watch_record_error = f"{type(exc).__name__}: {exc}"
         self.persist()
         return record
 

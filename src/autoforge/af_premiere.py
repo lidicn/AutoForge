@@ -340,7 +340,8 @@ class TrialStore:
                 return {"ok": False, "reason": "not_paused"}
             t.paused = False
             self.save()
-            return {"ok": True, "store_diff_sha256": store_diff_sha256, "resumed": True}
+            resumed = self._trials.get(store_diff_sha256) is t and not t.paused
+            return {"ok": resumed, "store_diff_sha256": store_diff_sha256, "resumed": resumed}
 
     def report_assert_failure(
         self,
@@ -383,20 +384,18 @@ class TrialStore:
                 result = self._pause_locked(t, pusher, reason=reason)
             else:
                 # 首次失败 low risk：仅 notify，不 pause
-                result = {"ok": True, "store_diff_sha256": store_diff_sha256,
-                          "assert_failures": t.assert_failures,
-                          "failures_in_window": failures_in_window,
-                          "paused": False,
-                          "action": "notified_only", "risk_level": t.risk_level}
-                if pusher is not None:
-                    try:
-                        pusher({"store_diff_sha256": store_diff_sha256,
-                                "reason": reason, "assert_failures": t.assert_failures,
-                                "failures_in_window": failures_in_window,
-                                "paused": False, "action": "notified_only",
-                                "risk_level": t.risk_level})
-                    except Exception:  # noqa: BLE001
-                        pass
+                payload = {"store_diff_sha256": store_diff_sha256,
+                           "reason": reason, "assert_failures": t.assert_failures,
+                           "failures_in_window": failures_in_window,
+                           "paused": False, "action": "notified_only",
+                           "risk_level": t.risk_level}
+                notified, notify_error = self._deliver(pusher, payload)
+                # ok = 失败确实被计入窗口且试演期确实没被暂停（分级判定的两条真实后置条件），
+                # 推送是否送达另有 notified/notify_error，不混进 ok。
+                result = {"ok": (not t.paused) and failures_in_window >= 1,
+                          **payload,
+                          "notified": notified,
+                          "notify_error": notify_error}
 
             self.save()
             return result
@@ -419,6 +418,17 @@ class TrialStore:
             self.save()
             return result
 
+    @staticmethod
+    def _deliver(pusher: Optional[Pusher], payload: dict) -> tuple[bool, Optional[str]]:
+        """推送并如实回报是否送达。异常不外抛，但转成 (False, 原因)——绝不咽了还算成功。"""
+        if pusher is None:
+            return False, "no_pusher"
+        try:
+            pusher(payload)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {exc}"
+        return True, None
+
     def _pause_locked(self, t: Trial, pusher: Optional[Pusher], *, reason: str) -> dict:
         """设置 paused=True（调用方须持锁 + 调用 save）。"""
         t.paused = True
@@ -429,12 +439,9 @@ class TrialStore:
             "assert_failures": t.assert_failures,
             "risk_level": t.risk_level,
         }
-        if pusher is not None:
-            try:
-                pusher(payload)
-            except Exception:  # noqa: BLE001
-                pass
-        return {"ok": True, **payload}
+        notified, notify_error = self._deliver(pusher, payload)
+        applied = self._trials.get(t.store_diff_sha256) is t and t.paused
+        return {"ok": applied, **payload, "notified": notified, "notify_error": notify_error}
 
     # ---- JSON 落盘（原子替换）----
 
