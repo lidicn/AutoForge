@@ -1,0 +1,90 @@
+### 证据1 静态闸漏检探测 ###
+af_scanner 公开函数:
+   ['Any', 'Automation', 'CHECKS', 'CODE_HINT', 'DeviceGuardRegistry', 'Diagnostic', 'ERROR', 'EVENT_ENTITY_PREFIX', 'ExprError', 'Graph', 'GuardRule', 'Iterable', 'LIVE_CONFIRM_REQUIRED', 'LIVE_ENTITY_NOT_WHITELISTED', 'LIVE_TOKEN_REQUIRED', 'LIVE_WHITELIST_REQUIRED', 'Mapping', 'Node', 'POLICY_PARAMS', 'Path']
+  check_expr(expr: 'Mapping[str, Any]') -> 'None'
+Traceback (most recent call last):
+  File "<stdin>", line 3, in <module>
+ImportError: cannot import name 'GraphScanner' from 'autoforge.af_scanner' (/data/workspace/AutoForge-main/src/autoforge/af_scanner.py)
+
+==================================================================
+静态闸漏检探测（用 StaticScanner + 真实 Graph）
+==================================================================
+
+[1] ask 缺 on_timeout/default → 期望 MISSING_TIMEOUT_OR_DEFAULT
+    ❌IRValidationError: IR 校验失败：<root>: 'ir_version' is a required property; <root>: 'version' is a required property; edges/0: 'kind' is a required property; edges/0: Additional properties are not allowed ('type' was unexpected); nodes/0/kind: 'trigger' is not one of ['on', 'if', 'do', 'ask', 'wait', 'set', 'pass', 'group']
+
+[2] 静态环 do→do → 期望 STATIC_LOOP
+    ❌IRValidationError: IR 校验失败：<root>: 'ir_version' is a required property; <root>: 'version' is a required property; edges/0: 'kind' is a required property; edges/0: Additional properties are not allowed ('type' was unexpected); edges/1: 'kind' is a required property; edges/1: Additional properties are not allowed ('type' was unexpected); nodes/0: 'adapter' is a required property; nodes/1: 'adapter' is a required property
+
+[3] 引用不存在实体 → 期望 ENTITY_NOT_FOUND
+    ❌IRValidationError: IR 校验失败：<root>: 'ir_version' is a required property; <root>: 'version' is a required property; nodes/0: 'adapter' is a required property
+
+[4] L3 高危 lock.unlock → 期望 L3_ACTION
+    ❌IRValidationError: IR 校验失败：<root>: 'ir_version' is a required property; <root>: 'version' is a required property; nodes/0: 'adapter' is a required property
+
+[5] snapshot=false + AND → 期望 SNAPSHOT_FALSE_MULTI_AND
+    ❌IRValidationError: IR 校验失败：<root>: 'ir_version' is a required property; <root>: 'version' is a required property
+
+[6] 未知算子 → 期望 EXPR_INVALID
+    ❌IRValidationError: IR 校验失败：<root>: 'ir_version' is a required property; <root>: 'version' is a required property; nodes/0/expr: {'op': '__evil__', 'args': []} is not valid under any of the given schemas
+
+[7] on_cancel 内 ask → 期望 NESTED_SUSPEND_IN_CANCEL
+    ❌IRValidationError: IR 校验失败：<root>: 'ir_version' is a required property; <root>: 'version' is a required property; edges/0: 'kind' is a required property; edges/0: Additional properties are not allowed ('type' was unexpected); nodes/0: 'adapter' is a required property
+
+[8] conf<0.6 写设备 → 期望 LOW_CONF_WRITES_DEVICE
+    ❌IRValidationError: IR 校验失败：<root>: 'ir_version' is a required property; <root>: 'version' is a required property; nodes/0: 'adapter' is a required property
+
+==================================================================
+第二轮：用正确 IR 结构探测
+==================================================================
+[0] 基线（合法）: ['DO_WITHOUT_ON_ERROR', 'EXPECT_MISSING']
+
+[1] ask 缺 on_timeout/default → 期望 MISSING_TIMEOUT_OR_DEFAULT
+    实际: ['ASK_AT_RUNTIME', 'EXPECT_MISSING', 'MISSING_TIMEOUT_OR_DEFAULT']
+
+[2] 静态环 do→do → 期望 STATIC_LOOP
+    实际: ['DO_WITHOUT_ON_ERROR', 'EXPECT_MISSING', 'NL_COVERAGE', 'STATIC_LOOP']
+
+[3] 引用不存在实体 → 期望 ENTITY_NOT_FOUND
+    实际: ['DO_WITHOUT_ON_ERROR', 'ENTITY_NOT_FOUND', 'EXPECT_MISSING']
+
+[4] L3 lock.unlock → 期望 L3_ACTION
+    实际: ['DO_WITHOUT_ON_ERROR', 'EXPECT_MISSING', 'L2_NEEDS_CONFIRM']
+
+[5] conf=0.3 写设备 → 期望 LOW_CONF_WRITES_DEVICE
+    实际: ['DO_WITHOUT_ON_ERROR', 'EXPECT_MISSING']
+
+[6] on_cancel→ask → 期望 NESTED_SUSPEND_IN_CANCEL
+    实际: ['ASK_AT_RUNTIME', 'DO_WITHOUT_ON_ERROR', 'EXPECT_MISSING', 'MISSING_TIMEOUT_OR_DEFAULT', 'NESTED_SUSPEND_IN_CANCEL']
+
+[7] snapshot=false + and → 期望 SNAPSHOT_FALSE_MULTI_AND
+    实际: ['DO_WITHOUT_ON_ERROR', 'EXPECT_MISSING', 'SNAPSHOT_FALSE_MULTI_AND']
+
+==================================================================
+[9] confidence 是否被 from_dict 保留
+==================================================================
+  传入 confidence=0.3  ->  auto.confidence = 0.3
+Traceback (most recent call last):
+  File "<stdin>", line 13, in <module>
+AttributeError: 'Automation' object has no attribute 'to_dict'. Did you mean: 'from_dict'?
+
+==================================================================
+[10] 修正 do 结构（params.entity_id）后重测
+==================================================================
+  conf=0.3: ['DO_WITHOUT_ON_ERROR', 'EXPECT_MISSING', 'LOW_CONF_WRITES_DEVICE']
+    LOW_CONF=True  SHADOW=False
+  conf=0.5: ['DO_WITHOUT_ON_ERROR', 'EXPECT_MISSING', 'LOW_CONF_WRITES_DEVICE']
+    LOW_CONF=True  SHADOW=False
+  conf=0.7: ['DO_WITHOUT_ON_ERROR', 'EXPECT_MISSING', 'SHADOW_WRITES_DEVICE']
+    LOW_CONF=False  SHADOW=True
+  conf=0.92: ['DO_WITHOUT_ON_ERROR', 'EXPECT_MISSING']
+    LOW_CONF=False  SHADOW=False
+
+==================================================================
+[11] target_entities 对 target 形式的解析（P0-5 相关）
+==================================================================
+  params={'entity_id': 'light.x'} -> target_entities=['light.x']
+  params={'target': {'entity_id': 'light.y'}} -> target_entities=['light.y']
+  params={'target': {'device_id': 'dev123'}} -> target_entities=['device_id:dev123']
+  params={'target': {'area_id': 'living_room'}} -> target_entities=['area_id:living_room']
+  params={'entity_id': ['light.a', 'light.b']} -> target_entities=['light.a', 'light.b']

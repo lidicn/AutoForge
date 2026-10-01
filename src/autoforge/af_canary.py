@@ -103,7 +103,8 @@ class CanaryResult:
         复用 `af_undo.restore_call`（DOMAIN_SETTER）做属性感知恢复：
         light 还原 brightness/color_temp、cover 还原 position、climate 还原
         temperature/hvac_mode、fan 还原 percentage，switch/lock 还原 on/off。
-        无法映射（域无 setter / 快照缺关键属性）→ 跳过该实体（fail-closed，不猜）。
+        无法映射（域无 setter / 快照读不出方向）→ 跳过该实体（fail-closed，不猜）。
+        方向回放了但属性读不出 → 照常下发，`RestoreCall.gaps` 记 warn（部分恢复不静默）。
         """
         import logging
         logger = logging.getLogger("autoforge.canary")
@@ -119,8 +120,11 @@ class CanaryResult:
                     "canary 回滚跳过 %s：无法映射恢复动作（fail-closed）", entity_id,
                 )
                 continue
-            action, params = call
-            out.append(adapter.call(action, params))
+            if call.gaps:
+                logger.warning(
+                    "canary 回滚 %s 部分恢复：%s 读不出、未回放", entity_id, "/".join(call.gaps)
+                )
+            out.append(adapter.call(call.action, call.params))
         return out
 
 

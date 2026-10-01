@@ -112,9 +112,12 @@
   - 现状（交付前）：canary on/off 回滚丢属性（`canary.py:61`），`af_version` 回滚纯 IR 级，两者正交 → undo 需新建。
   - 涉及：`af_apply.py` `af_live.py` `af_canary.py` `af_version.py`。
   - 交付：① `CanaryResult.pre_states` 扩成 `pre_snapshot`（状态+属性，Snapshot 已支持 attributes）；② 新增 `af_undo.py` 的 `DOMAIN_SETTER` 映射：light→turn_on(带 brightness/color_temp)、switch/fan/lock→on-off、cover→set_cover_position、climate→set_temperature(带 hvac_mode) 参数化回放；③ 不可映射动作 **fail-closed**（回滚不了就告警跳过，绝不瞎滚，沿用决策 E）；④ undo 走下发同级 approve band，risk 域（climate/cover/lock/fan/vacuum）二次确认 `--confirm`；⑤ 窗口默认 60s（AUTOFORGE_UNDO_WINDOW_S 可配 0–300s），CLI `forge undo <deploy_id>` + `--live --undo` 自动落盘 pre-snapshot（落 `.forge/undo_log.json`）；HAAdapter.call 真实下发前钩子 `undo_recorder` 捕获首拍、fail-closed 不影响下发。
-  - 验收（tests/test_undo.py + tests/unit/test_p1_10_canary_real_snapshot.py 共 48 项）：light 含亮度参数化恢复；climate/cover 同；不可映射/状态未知跳过不崩；60s 过期拒绝；风险域缺 confirm 拒绝；全量离线门 1215 passed / 51 skipped 绿。
+  - 验收（2026-10-01 现测：`tests/test_undo.py` + `tests/unit/test_p1_10_canary_real_snapshot.py` + `tests/unit/test_undo_policy_unified.py` 共 **58 项**）：light 含亮度参数化恢复；climate/cover 同；不可映射/状态未知跳过不崩；60s 过期拒绝；风险域缺 confirm 拒绝。
   - 残留（非阻塞）：WebUI 撤销按钮（CLI 已就绪，WebUI 按钮待接入，决策 E ⑤ 余「WebUI 按钮」一项）；`forge undo` 真机下发走真实 HA，仅用户显式触发。
   - 决策结论（E）：**做，但不叫"安全红线"——常规安全能力**；60s 窗口 + 风险域二次确认 + fail-closed。
+  - **补丁（2026-10-01，第四轮审计 缺陷 2）**：`DOMAIN_SETTER` 六域原各有三种失败处理（light 静默丢 `brightness` 仍 turn_on / climate·cover 整块放弃 / `unknown`·`unavailable` 被当"关"——状态未知的锁会收到 `lock.unlock`）。现统一为一条策略并钉进铁律 §五 10：
+    ① 新增 `RestoreCall(action, params, gaps)`，读得出必回、读不出必报；② `_OFF_STATES` 移出 `unknown`/`unavailable`，`_direction()` 改双向白名单（`jammed`/`locking`/`standby` 一律不猜）；③ 新增 `_num_attr()` 收口 4 处 `except (TypeError, ValueError): pass`，并拦 `nan`/`inf`（与第三轮求值层收口同口径）；④ `_climate` 温度读不出但 `hvac_mode` 可读 → 只回方向并记 `gaps`；⑤ `revert()` 返回新增 `partial`/`fully_restored`，canary 回滚记 warn，`forge undo` CLI 打印部分恢复明细。
+    反例锁 `tests/unit/test_undo_policy_unified.py`（30 项）；两次行为回归注入分别红 3 项 / 10 项（铁律 §五 8 的"能变红"自证）；全量门 **2453 passed / 51 skipped 绿**。
 
 - **F8 冲突仲裁 / canary 默认开启与 band 归一** `[强化]` ✅ **部分交付（2026-09-28）：① band 单一真值源 + ③ G4 联动已落地；② 产销默认开启属部署配置待投产步骤开启**
   - 现状（交付前）：conflict/canary/conf 三套 band/priority 并存（`af_conf.band` `canary` `conflict.py:131`），默认 OFF。

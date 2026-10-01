@@ -4,8 +4,15 @@
 - **属性感知恢复**：除 on/off 外，light 的 brightness/color_temp、cover 的
   position、climate 的 temperature/hvac_mode、fan 的 percentage 都按动作前真实
   快照参数化回放（`DOMAIN_SETTER`），而不是只会"关灯/开灯"。
-- **fail-closed**：任何无法映射成恢复动作的域（binary_sensor、sensor、scene…
-  以及快照缺失的关键属性）一律**跳过并告警**，绝不瞎猜（沿用 canary 铁律）。
+- **单一恢复策略（第四轮审计 缺陷 2）**：六个域共用同一条规则——快照里**读得出的目标一定回放，
+  读不出的字段一定如实上报，既不猜值也不假装恢复完整**：
+  - 无法映射成恢复动作的域（binary_sensor、sensor、scene…）→ 跳过并告警（沿用 canary 铁律）；
+  - 状态本身不可判读（缺失 / `unknown` / `unavailable`）→ **跳过整个实体**，绝不据此写设备
+    （旧实现把 `unknown` 当"关"，会对状态未知的锁下发 `lock.unlock`）；
+  - 恢复目标本身不可判读（cover 的位置）→ 跳过（HA 的 `open` 含 1%–99%，转不成"全开"）；
+  - 方向读得出、附加属性读不出（brightness / color_temp / percentage / temperature）→
+    回放方向并把缺失字段记进 `gaps`，结果里以 `partial` 呈现 + warn 日志（旧实现静默丢字段后
+    仍报 `restored`，用户以为完全回滚了）。
 - **时间窗**：每次部署记录带时间戳，超过 `window_s`（默认 60s，可配 0–300s）
   的撤销请求直接拒绝——过期意味着需要重新走审批闸门，不能"静默无限期可撤"。
 - **风险域二次确认**：climate/cover/lock 等风险域的撤销需调用方显式 `confirm`，
@@ -20,18 +27,20 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, NamedTuple
 
 from .af_adapters import CallResult
 from .af_time import SystemTimeSource, TimeSource
 
 __all__ = [
     "DOMAIN_SETTER",
+    "RestoreCall",
     "restore_call",
     "RISK_DOMAINS",
     "UndoStore",
@@ -46,10 +55,25 @@ MAX_WINDOW_S = 300.0
 #: 风险域：撤销需调用方显式 confirm（与下发同级审批带）
 RISK_DOMAINS = frozenset({"climate", "cover", "lock", "fan", "vacuum"})
 
+#: 快照状态 → "off" 的读法。`unknown`/`unavailable` 是"读不出"，见 `_ILLEGIBLE_STATES`，
+#: 不放进来——旧实现把它们当"关"，会对状态未知的锁下发 `lock.unlock`。
+_OFF_STATES = frozenset({"off", "closed", "unlocked", "idle", "away", "false", "0"})
 _ON_STATES = frozenset({"on", "open", "locked", "active", "home", "true", "1"})
-_OFF_STATES = frozenset(
-    {"off", "closed", "unlocked", "idle", "away", "false", "0", "unavailable", "unknown"}
-)
+
+#: HA 的"我不知道"哨兵。它们**不是**关/合——状态读不出方向，据其下发就是猜。
+_ILLEGIBLE_STATES = frozenset({"unknown", "unavailable", "none", ""})
+
+
+class RestoreCall(NamedTuple):
+    """恢复动作 + 快照里存在却没能回放的字段。
+
+    `gaps` 非空即"部分恢复"：方向回放了、某个属性丢了。调用方必须把它呈现出来，
+    不能只报 `restored`（第四轮审计 缺陷 2 的正解——旧实现静默丢字段仍算成功）。
+    """
+
+    action: str
+    params: dict[str, Any]
+    gaps: tuple[str, ...] = ()
 
 
 def _as_state(snapshot: Mapping[str, Any]) -> str | None:
@@ -62,84 +86,128 @@ def _attrs(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     return dict(a) if isinstance(a, Mapping) else {}
 
 
-def _light(snapshot: Mapping[str, Any], entity_id: str) -> tuple[str, dict[str, Any]] | None:
+def _direction(snapshot: Mapping[str, Any]) -> str | None:
+    """快照状态 → "on" / "off"；读不出方向返回 None（调用方必须跳过，不写设备）。
+
+    两边都是**白名单**：`_OFF_STATES` / `_ON_STATES` 之外的状态（如 lock 的 `jammed`、
+    `locking`）含义不明，落到任何一边都是猜——默认"开"更是会把"卡住的锁"当成"已上锁"。
+    """
     st = _as_state(snapshot)
-    if st in _OFF_STATES:
-        return ("light.turn_off", {"entity_id": entity_id})
-    params: dict[str, Any] = {"entity_id": entity_id}
-    attrs = _attrs(snapshot)
-    if (b := attrs.get("brightness")) is not None:
-        try:
-            params["brightness"] = int(b)
-        except (TypeError, ValueError):
-            pass
-    if (ct := attrs.get("color_temp")) is not None:
-        try:
-            params["color_temp"] = int(ct)
-        except (TypeError, ValueError):
-            pass
-    return ("light.turn_on", params)
-
-
-def _switch(snapshot: Mapping[str, Any], entity_id: str) -> tuple[str, dict[str, Any]] | None:
-    st = _as_state(snapshot)
-    action = "switch.turn_off" if st in _OFF_STATES else "switch.turn_on"
-    return (action, {"entity_id": entity_id})
-
-
-def _fan(snapshot: Mapping[str, Any], entity_id: str) -> tuple[str, dict[str, Any]] | None:
-    st = _as_state(snapshot)
-    if st in _OFF_STATES:
-        return ("fan.turn_off", {"entity_id": entity_id})
-    params: dict[str, Any] = {"entity_id": entity_id}
-    attrs = _attrs(snapshot)
-    if (p := attrs.get("percentage")) is not None:
-        try:
-            params["percentage"] = int(p)
-        except (TypeError, ValueError):
-            pass
-    return ("fan.turn_on", params)
-
-
-def _cover(snapshot: Mapping[str, Any], entity_id: str) -> tuple[str, dict[str, Any]] | None:
-    attrs = _attrs(snapshot)
-    pos = attrs.get("current_position")
-    if pos is None:
-        return None  # 无位置信息：fail-closed，不猜
-    try:
-        pos = int(pos)
-    except (TypeError, ValueError):
+    if st is None or st in _ILLEGIBLE_STATES:
         return None
-    return ("cover.set_cover_position", {"entity_id": entity_id, "position": pos})
+    if st in _OFF_STATES:
+        return "off"
+    if st in _ON_STATES:
+        return "on"
+    return None
 
 
-def _climate(snapshot: Mapping[str, Any], entity_id: str) -> tuple[str, dict[str, Any]] | None:
+def _num_attr(
+    attrs: Mapping[str, Any], key: str, entity_id: str, *, cast: Callable[[Any], Any] = int
+) -> tuple[Any, bool]:
+    """读快照里的数值属性。
+
+    返回 `(值, 是否算 gap)`：键不存在 → `(None, False)`（快照本来就没这个字段，不算丢失）；
+    键存在但读不出（HA 常见的 `unknown`/`unavailable`/字符串/`nan`）→ `(None, True)` + 告警，
+    调用方必须把它记进 `gaps`。
+    """
+    if key not in attrs:
+        return None, False
+    raw = attrs[key]
+    try:
+        value = cast(raw)
+    except (TypeError, ValueError, OverflowError):
+        logger.warning("undo：%s 的 %s=%r 读不出数值，本次恢复不含该字段", entity_id, key, raw)
+        return None, True
+    if isinstance(value, float) and not math.isfinite(value):
+        logger.warning("undo：%s 的 %s=%r 非有限数值，本次恢复不含该字段", entity_id, key, raw)
+        return None, True
+    return value, False
+
+
+def _light(snapshot: Mapping[str, Any], entity_id: str) -> RestoreCall | None:
+    direction = _direction(snapshot)
+    if direction is None:
+        return None
+    if direction == "off":
+        return RestoreCall("light.turn_off", {"entity_id": entity_id})
+    params: dict[str, Any] = {"entity_id": entity_id}
     attrs = _attrs(snapshot)
-    temp = attrs.get("temperature")
+    gaps: list[str] = []
+    brightness, lost = _num_attr(attrs, "brightness", entity_id)
+    if brightness is not None:
+        params["brightness"] = brightness
+    gaps += ["brightness"] if lost else []
+    color_temp, lost = _num_attr(attrs, "color_temp", entity_id)
+    if color_temp is not None:
+        params["color_temp"] = color_temp
+    gaps += ["color_temp"] if lost else []
+    return RestoreCall("light.turn_on", params, tuple(gaps))
+
+
+def _switch(snapshot: Mapping[str, Any], entity_id: str) -> RestoreCall | None:
+    direction = _direction(snapshot)
+    if direction is None:
+        return None
+    action = "switch.turn_off" if direction == "off" else "switch.turn_on"
+    return RestoreCall(action, {"entity_id": entity_id})
+
+
+def _fan(snapshot: Mapping[str, Any], entity_id: str) -> RestoreCall | None:
+    direction = _direction(snapshot)
+    if direction is None:
+        return None
+    if direction == "off":
+        return RestoreCall("fan.turn_off", {"entity_id": entity_id})
+    params: dict[str, Any] = {"entity_id": entity_id}
+    percentage, lost = _num_attr(_attrs(snapshot), "percentage", entity_id)
+    if percentage is not None:
+        params["percentage"] = percentage
+    return RestoreCall("fan.turn_on", params, ("percentage",) if lost else ())
+
+
+def _cover(snapshot: Mapping[str, Any], entity_id: str) -> RestoreCall | None:
+    # HA 的 cover state 只有 open/closed 两档，而 open 覆盖 1%–99%，读不出位置就转不成
+    # "开到原处"——位置是唯一恢复目标，它读不出就整体 fail-closed（绝不下发 open_cover 猜值）。
+    pos, _ = _num_attr(_attrs(snapshot), "current_position", entity_id)
+    if pos is None:
+        return None
+    return RestoreCall("cover.set_cover_position", {"entity_id": entity_id, "position": pos})
+
+
+def _climate(snapshot: Mapping[str, Any], entity_id: str) -> RestoreCall | None:
+    attrs = _attrs(snapshot)
+    temp, temp_lost = _num_attr(attrs, "temperature", entity_id, cast=float)
     hvac = attrs.get("hvac_mode")
-    if temp is None and hvac is None:
-        return None  # 无可恢复设定：fail-closed
-    # 有 temperature → climate.set_temperature（可附带 hvac_mode）
     if temp is not None:
-        try:
-            params: dict[str, Any] = {"entity_id": entity_id, "temperature": float(temp)}
-        except (TypeError, ValueError):
-            return None
-        if hvac is not None:
+        params: dict[str, Any] = {"entity_id": entity_id, "temperature": temp}
+        if hvac is not None and str(hvac).strip().lower() not in _ILLEGIBLE_STATES:
             params["hvac_mode"] = str(hvac)
-        return ("climate.set_temperature", params)
-    # 仅 hvac_mode：单独调 climate.set_hvac_mode，避免缺 temperature 必填参数
-    return ("climate.set_hvac_mode", {"entity_id": entity_id, "hvac_mode": str(hvac)})
+            return RestoreCall("climate.set_temperature", params)
+        return RestoreCall(
+            "climate.set_temperature", params,
+            () if hvac is None else ("hvac_mode",),
+        )
+    # 温度读不出/没有：hvac_mode 读得出就只回方向，并把温度记进 gap（与 light 同策略）
+    if hvac is not None and str(hvac).strip().lower() not in _ILLEGIBLE_STATES:
+        return RestoreCall(
+            "climate.set_hvac_mode", {"entity_id": entity_id, "hvac_mode": str(hvac)},
+            ("temperature",) if temp_lost else (),
+        )
+    return None  # 读不出任何设定：fail-closed
 
 
-def _lock(snapshot: Mapping[str, Any], entity_id: str) -> tuple[str, dict[str, Any]] | None:
-    st = _as_state(snapshot)
-    action = "lock.lock" if st in ("locked", "true", "1") else "lock.unlock"
-    return (action, {"entity_id": entity_id})
+def _lock(snapshot: Mapping[str, Any], entity_id: str) -> RestoreCall | None:
+    direction = _direction(snapshot)
+    if direction is None:
+        # 状态未知时旧实现下发 lock.unlock——对读不出的锁做解锁是不可接受的猜测。
+        return None
+    action = "lock.lock" if direction == "on" else "lock.unlock"
+    return RestoreCall(action, {"entity_id": entity_id})
 
 
 #: 域 → 属性感知恢复动作生成器（决策 E ② 的 DOMAIN_SETTER 映射）
-DOMAIN_SETTER: dict[str, Callable[[Mapping[str, Any], str], tuple[str, dict[str, Any]] | None]] = {
+DOMAIN_SETTER: dict[str, Callable[[Mapping[str, Any], str], RestoreCall | None]] = {
     "light": _light,
     "switch": _switch,
     "fan": _fan,
@@ -149,12 +217,19 @@ DOMAIN_SETTER: dict[str, Callable[[Mapping[str, Any], str], tuple[str, dict[str,
 }
 
 
-def restore_call(entity_id: str, snapshot: Mapping[str, Any]) -> tuple[str, dict[str, Any]] | None:
-    """依据动作前快照推导恢复动作（属性感知）。无法映射 → None（fail-closed）。"""
+def restore_call(entity_id: str, snapshot: Mapping[str, Any]) -> RestoreCall | None:
+    """依据动作前快照推导恢复动作（属性感知）。无法映射 → None（fail-closed）。
+
+    读得出的目标一定回放；读不出的字段进 `RestoreCall.gaps` 由调用方如实上报。
+    """
     if not entity_id or snapshot is None:
         return None
     # 状态缺失：无法判定 on/off，绝不猜（fail-closed）
-    if _as_state(snapshot) is None:
+    st = _as_state(snapshot)
+    if st is None:
+        return None
+    if st in _ILLEGIBLE_STATES:
+        logger.warning("undo 跳过 %s：快照状态 %r 读不出方向（fail-closed）", entity_id, st)
         return None
     domain = entity_id.split(".", 1)[0]
     setter = DOMAIN_SETTER.get(domain)
@@ -249,6 +324,8 @@ class UndoStore:
         - 超时间窗 → 拒绝（需重新审批）
         - 风险域（climate/cover/lock…）且未 confirm → 拒绝
         - 不可映射实体 → 跳过 + 告警（不阻断其余可恢复实体）
+        - 方向回放了但有属性读不出 → 照常下发，实体进 `partial` 并列出 `not_restored`，
+          绝不只报 `restored`（第四轮审计 缺陷 2）
         """
         rec = self._records.get(deploy_id)
         if rec is None:
@@ -275,13 +352,21 @@ class UndoStore:
         restored: list[str] = []
         failed: list[str] = []
         skipped: list[str] = []
+        partial: list[dict[str, Any]] = []
         results: list[CallResult] = []
         for entity_id, snapshot in entities.items():
             call = restore_call(entity_id, snapshot)
             if call is None:
                 skipped.append(entity_id)
                 continue
-            action, params = call
+            action, params, gaps = call
+            if gaps:
+                partial.append({
+                    "entity_id": entity_id,
+                    "action": action,
+                    "not_restored": list(gaps),
+                    "message": "方向已恢复，但快照里这些属性读不出、未回放",
+                })
             try:
                 res = adapter.call(action, params)
             except Exception as exc:  # 适配器异常不阻断其余回滚
@@ -301,6 +386,8 @@ class UndoStore:
             "restored": restored,
             "failed": failed,
             "skipped": skipped,
+            "partial": partial,
+            "fully_restored": all_ok and not partial and not skipped,
             "results": results,
         }
 

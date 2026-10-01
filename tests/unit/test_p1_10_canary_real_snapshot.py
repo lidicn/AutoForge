@@ -12,7 +12,7 @@ import pytest
 from autoforge.af_adapters import Adapter, CallResult
 from autoforge.af_canary import CanaryResult
 from autoforge.af_state import InMemoryStateProvider
-from autoforge.af_undo import restore_call
+from autoforge.af_undo import RestoreCall, restore_call
 
 
 class _RecordingAdapter(Adapter):
@@ -32,21 +32,22 @@ class TestRestoreCall:
 
     def test_on_state_maps_to_turn_on(self):
         assert restore_call("light.x", {"state": "on", "attributes": {}}) == (
-            "light.turn_on", {"entity_id": "light.x"})
+            RestoreCall("light.turn_on", {"entity_id": "light.x"}))
         assert restore_call("switch.x", {"state": "open", "attributes": {}}) == (
-            "switch.turn_on", {"entity_id": "switch.x"})
+            RestoreCall("switch.turn_on", {"entity_id": "switch.x"}))
 
     def test_off_state_maps_to_turn_off(self):
         assert restore_call("light.x", {"state": "off", "attributes": {}}) == (
-            "light.turn_off", {"entity_id": "light.x"})
+            RestoreCall("light.turn_off", {"entity_id": "light.x"}))
         assert restore_call("switch.x", {"state": "closed", "attributes": {}}) == (
-            "switch.turn_off", {"entity_id": "switch.x"})
+            RestoreCall("switch.turn_off", {"entity_id": "switch.x"}))
 
     def test_none_state_returns_none(self):
         # 状态未知：fail-closed，不猜
         assert restore_call("light.x", {"state": None, "attributes": {}}) is None
 
     def test_unmappable_domain_returns_none(self):
+        # climate 无任何可读设定（temperature/hvac_mode 都缺）→ 不猜
         assert restore_call("climate.x", {"state": "heat", "attributes": {}}) is None
         assert restore_call("sensor.x", {"state": "20", "attributes": {}}) is None
 

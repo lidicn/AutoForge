@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from autoforge.af_adapters import CallResult
-from autoforge.af_undo import RISK_DOMAINS, DOMAIN_SETTER, UndoStore, restore_call
+from autoforge.af_undo import RISK_DOMAINS, DOMAIN_SETTER, RestoreCall, UndoStore, restore_call
 from autoforge.af_state import Snapshot
 
 
@@ -44,24 +44,27 @@ class FakeStateProvider:
 # ── DOMAIN_SETTER / restore_call ──────────────────────────────────────────
 def test_restore_light_on_with_brightness():
     call = restore_call("light.study", {"state": "on", "attributes": {"brightness": 120}})
-    assert call == ("light.turn_on", {"entity_id": "light.study", "brightness": 120})
+    # 期望值用 RestoreCall 写死：gap 必须为空才算"完全恢复"
+    assert call == RestoreCall(
+        "light.turn_on", {"entity_id": "light.study", "brightness": 120})
 
 
 def test_restore_light_off():
     call = restore_call("light.study", {"state": "off", "attributes": {}})
-    assert call == ("light.turn_off", {"entity_id": "light.study"})
+    assert call == RestoreCall("light.turn_off", {"entity_id": "light.study"})
 
 
 def test_restore_switch_and_lock():
     assert restore_call("switch.pump", {"state": "on", "attributes": {}}) == (
-        "switch.turn_on", {"entity_id": "switch.pump"})
+        RestoreCall("switch.turn_on", {"entity_id": "switch.pump"}))
     assert restore_call("lock.door", {"state": "locked", "attributes": {}}) == (
-        "lock.lock", {"entity_id": "lock.door"})
+        RestoreCall("lock.lock", {"entity_id": "lock.door"}))
 
 
 def test_restore_cover_with_position():
     call = restore_call("cover.curtain", {"state": "open", "attributes": {"current_position": 40}})
-    assert call == ("cover.set_cover_position", {"entity_id": "cover.curtain", "position": 40})
+    assert call == RestoreCall(
+        "cover.set_cover_position", {"entity_id": "cover.curtain", "position": 40})
 
 
 def test_restore_cover_without_position_fail_closed():
@@ -74,7 +77,7 @@ def test_restore_climate_with_temperature_and_mode():
         "climate.bedroom",
         {"state": "heat", "attributes": {"temperature": 22.5, "hvac_mode": "heat"}},
     )
-    assert call == (
+    assert call == RestoreCall(
         "climate.set_temperature",
         {"entity_id": "climate.bedroom", "temperature": 22.5, "hvac_mode": "heat"},
     )
@@ -82,7 +85,8 @@ def test_restore_climate_with_temperature_and_mode():
 
 def test_restore_fan_with_percentage():
     call = restore_call("fan.ceiling", {"state": "on", "attributes": {"percentage": 50}})
-    assert call == ("fan.turn_on", {"entity_id": "fan.ceiling", "percentage": 50})
+    assert call == RestoreCall(
+        "fan.turn_on", {"entity_id": "fan.ceiling", "percentage": 50})
 
 
 def test_restore_unmappable_domain_fail_closed():

@@ -688,6 +688,14 @@ def undo(
     typer.echo(f"· 已恢复 {len(result['restored'])} 个实体：{result['restored']}")
     if result.get("skipped"):
         typer.echo(f"· 跳过（无法映射，fail-closed）：{result['skipped']}")
+    for p in result.get("partial") or []:
+        typer.echo(
+            f"· 部分恢复 {p['entity_id']}：已下发 {p['action']}，"
+            f"快照里 {'/'.join(p['not_restored'])} 读不出、未回放",
+            err=True,
+        )
+    if result.get("failed"):
+        typer.echo(f"· 恢复失败：{result['failed']}", err=True)
 
 
 store_app = typer.Typer(no_args_is_help=True, help="G6 版本化存储（Graph 快照 + 置信度）")
