@@ -2,12 +2,13 @@
 import { ref, onMounted } from 'vue'
 import { NAlert, NCard, NSpace, NText } from 'naive-ui'
 import { api } from '@/api/client'
+import type { MetricsResponse, ExperienceResponse, TelemetryResponse } from '@/types/api'
 
 const loading = ref(true)
 const error = ref('')
-const metrics = ref<any>(null)
-const experience = ref<any>(null)
-const telemetry = ref<any>(null)
+const metrics = ref<MetricsResponse | null>(null)
+const experience = ref<ExperienceResponse | null>(null)
+const telemetry = ref<TelemetryResponse | null>(null)
 
 async function load() {
   loading.value = true

@@ -11,6 +11,7 @@ import type {
   UndoAvailableResponse, UndoPreviewResponse, UndoRunResponse,
   EvidenceProdResponse, WatchListResponse,
   AsksResponse, AskAnswerResponse,
+  MetricsResponse, ExperienceResponse, TelemetryResponse, SessionViewResponse,
 } from '../types/api'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8787/api'
@@ -119,9 +120,9 @@ export const api = {
   watchList: () => request<WatchListResponse>('GET', '/watch/list'),
   // F4 ③：生产态验证证据三档（verified / failed / unmodeled）
   evidenceProd: () => request<EvidenceProdResponse>('GET', '/evidence/prod'),
-  metrics: () => request<any>('GET', '/metrics'),
-  experience: (limit = 20) => request<any>('GET', `/experience?limit=${limit}`),
-  telemetry: (days = 30) => request<any>('GET', `/telemetry?days=${days}`),
+  metrics: () => request<MetricsResponse>('GET', '/metrics'),
+  experience: (limit = 20) => request<ExperienceResponse>('GET', `/experience?limit=${limit}`),
+  telemetry: (days = 30) => request<TelemetryResponse>('GET', `/telemetry?days=${days}`),
 
   // ── v2 M3 结构化 Ask（原生控件 + clarify 流程）──
   // 进程内会话的挂起 ask（仿真会话可见），含后端 AskSpec.control() 的控件元数据
@@ -131,6 +132,7 @@ export const api = {
   askAnswer: (payload: { ask_id?: string | null; room?: string | null; text?: string; answer?: Record<string, unknown> }) =>
     request<AskAnswerResponse>('POST', '/asks/answer', payload),
   // 结构化应答走会话端点：可拿到 422（校验被拒，会话保持挂起可重答）
+  // 成功时后端回**整个会话快照**（`_session_view`），不是 ack
   sessionAnswer: (sid: string, payload: { ask_id?: string | null; room?: string | null; text?: string; answer?: Record<string, unknown> }) =>
-    request<any>('POST', `/sessions/${sid}/answer`, payload),
+    request<SessionViewResponse>('POST', `/sessions/${encodeURIComponent(sid)}/answer`, payload),
 }

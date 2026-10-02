@@ -602,3 +602,73 @@ export interface AskAnswerResponse {
   inbox?: string
 }
 
+// ── v1.5.0 经验闭环三面板（/metrics /experience /telemetry）──
+// 形状取自后端正源：`af_service.get_metrics`、`ExperienceStore.summary`、
+// `TelemetryStore.usage` + `ErrorKnowledge.counts`。
+export interface MetricsOverall {
+  total_runs: number
+  total_success: number
+  total_failed: number
+  /** 无执行样本时为 null，后端不把它伪造成 0% */
+  overall_success_rate: number | null
+  audit_distribution: Record<string, number>
+}
+
+export interface MetricsAutomation {
+  id: string
+  runs: number
+  success: number
+  failed: number
+  success_rate: number | null
+  audit_distribution: Record<string, number>
+  confidence: { value: number; band: 'auto' | 'shadow' | 'ask' }
+  last_event_at: string | null
+}
+
+export interface MetricsResponse {
+  generated_at: string
+  source: string
+  overall: MetricsOverall
+  /** 以 automation_id 为键的映射（不是数组） */
+  automations: Record<string, MetricsAutomation>
+}
+
+export interface ExperienceResponse {
+  ok: boolean
+  observed: number
+  top_pairs: { pair: string; count: number }[]
+  top_entities: { entity_id: string; count: number }[]
+  patterns: {
+    kinds: Record<string, number>
+    adapters: Record<string, number>
+    modes: Record<string, number>
+  }
+}
+
+export interface TelemetryResponse {
+  ok: boolean
+  days: number
+  total: number
+  total_tokens: number
+  success_rate: number | null
+  by_tool: Record<string, number>
+  by_category: Record<string, number>
+  by_ok: { ok: number; failed: number }
+  by_day: Record<string, number>
+  /** 错误知识库类别分布 */
+  knowledge: Record<string, number>
+}
+
+// ── 会话视图（/sessions/{sid}/answer 返回应答后的完整会话快照）──
+export interface SessionViewResponse {
+  ok: boolean
+  session_id: string
+  mode: string
+  instances: Instance[]
+  audit: AuditEntry[]
+  bus: Record<string, unknown>
+  final_states: Record<string, string>
+  nl: string
+  asks: AskItem[]
+}
+

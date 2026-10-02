@@ -22,7 +22,7 @@
 | 第七轮审计 | **finding 属实，已修** | 详见 `docs/audit/审计报告_第七轮_核实与修复.md`；第八轮尚未落 `docs/audit`（本回合实测目录内最新即第七轮，mtime `10-02 11:46`） |
 | 门禁肥化防护（计划外补刀） | **已交付** | `gates.sh` 计数棘轮 + `.gates-tally.txt`（上限 104），三条变异实测能红；AgentOps 模板同步去反引号缺陷 |
 | F4 ③ / F7 前端残留 | **已收口** | `/evidence` 生产态证据视图上线；真机下发的事件回放与撤销按钮端到端真点通（读数见 §一末） |
-| UI 类型门禁（上一版登记的债） | **已收口** | 15 条 `vue-tsc` 错误清零，`type-check` 改 `--force` 防缓存假绿，`ci.yml` 新增 `ui` 硬门 job；过程中抓到"两个按钮从未接线"与"mock 夹具少回两字段"两条真缺陷（§二之二） |
+| UI 类型门禁（上一版登记的债） | **已收口（含下一批零 `any`）** | 15 条 `vue-tsc` 错误清零，`type-check` 改 `--force` 防缓存假绿，`ci.yml` 新增 `ui` 硬门 job；过程中抓到"两个按钮从未接线"与"mock 夹具少回两字段"两条真缺陷（§二之二）。同族第二批：API 层四处 `request<any>` 换成后端真形类型并逐键与在线响应对账，`grep request<any> ui/src` 已无匹配（§二之三） |
 | 部署 | **未部署** | 铁律 #3：文档/本地阶段不部署，镜像重烤须进合并停机窗 |
 
 ---
@@ -281,6 +281,34 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 
 ---
 
+## 二之三、本批读数：API 层四处 `request<any>` 换成后端真形
+
+**判据不变**：先读后端正源（`af_service` / `af_api` / 三个 Store 的返回语句），再定 TS 形状；定完拿**在线 HTTP 响应**逐键对账，不用代码读数为通过背书。
+
+| 端点 | 新类型 | 后端正源（行级） | 在线对账 |
+|------|--------|------------------|----------|
+| `GET /api/metrics` | `MetricsResponse` + `MetricsOverall`/`MetricsAutomation` | `af_service.get_metrics`（`:1939-1950` 顶层、`:1929-1938` 逐自动化） | 顶层 4 键 + `overall` 5 键实测一致；`automations` 首次读到 `{}`（bootstrap 归档无 conf 快照 ⇒ `load_conf` 抛 `FileNotFoundError` 被跳过），补 `store save examples/ir/case01_day_light.json` 后读到逐自动化 8 键 `{id,runs,success,failed,success_rate,audit_distribution,confidence{value,band},last_event_at}`，与类型逐项相同 |
+| `GET /api/experience` | `ExperienceResponse` | `ExperienceStore.summary`（`af_experience.py:195-203`）、`top_pairs/top_entities`（`:119-129`）、`_load` 的 `patterns` 默认结构（`:51`） | 实测 5 键 `{ok,observed,top_pairs,top_entities,patterns}`，`patterns` 三分片 `{kinds,adapters,modes}`；条目形状 `{pair,count}`/`{entity_id,count}` 由在线数据坐实 |
+| `GET /api/telemetry` | `TelemetryResponse` | `TelemetryStore.usage`（`af_telemetry.py:226-236`）+ `get_telemetry` 追加 `knowledge`（`af_service.py:628-630`）、`ErrorKnowledge.counts`（`af_error_knowledge.py:188-193`） | 实测 11 键，含 `by_ok {ok,failed}` 与 `knowledge`；`success_rate` 在 0 样本时实为 `null` ⇒ 类型写 `number \| null`，**不写成 `number`**（后端注释明确"不伪造 0%"） |
+| `POST /api/sessions/{sid}/answer` | `SessionViewResponse` | `_session_view`（`af_service.py:1404-1416`），与 `POST /api/sessions`、`GET /api/sessions/{sid}` **同一序列化器** | 顶层 9 键 `{ok,session_id,mode,instances,audit,bus,final_states,nl,asks}` 由那两条同族端点在线实测坐实；`/answer` **成功路径未跑通**：`case04_ask_timeout` 带 seed+event 建会话后 `asks=0`（未挂起），404 `没有匹配的待应答 ask` 反倒是唯一实测读数。⇒ 该条是"顶层形状已验证、应答成功分支 = EXEMPT"，`instances`/`audit` 沿用 `SimResponse` 既有的 `Instance[]`/`AuditEntry[]` |
+
+**铁律 #8（类型门必须能变红）**：在 `MetricsView` 注入 `metrics.value?.total_runs`（该字段只在 `overall` 下）→
+`src/views/MetricsView.vue(35,36): error TS2339: Property 'total_runs' does not exist on type '{ generated_at: string; source: string; overall: {...}; automations: Record<...>; }'`，`npm run type-check` **RC=2**；撤除探针后 **RC=0**。这条错误只可能由**新类型**产生——上一版这里是 `ref<any>`，同一个字段名写错在类型门里是静默的。
+
+**浏览器点验（`AF_ALLOW_NOAUTH=1 … serve --ui-dir ui/dist --port 8790`，产物为本次 `npm run build` 的 dist）**：`/#/metrics` 三卡都出真数据，控制台 `(no console messages found)`。
+- 指标聚合：`"generated_at": "2026-10-02T14:26:13.304326+08:00"`、`"source": "conf-store"`、`overall` 四计数 0 / `overall_success_rate: null`，`automations.study_day_light.confidence = {value: 1, band: "auto"}`。
+- 实体共现：`observed: 1`、`top_pairs[0].pair = "binary_sensor.study_motion|light.study_main"`、`patterns.kinds = {do:3, if:2, on:2, pass:1}`。
+- 遥测归因：`days: 30, total: 1, by_tool {"af.experience_export":1}, by_ok {ok:1,failed:0}, success_rate: 1, knowledge {"BIND_AMBIGUOUS":1}`。
+（三张卡都只是 `JSON.stringify(..., null, 2)` 原样打印，所以本批的验收面是"类型改完页面读数不变、且不报错"，不是"新增展示"。）
+
+**一处必须留档的自我更正**：8788 那一轮我说过"三卡读数不变、0 条控制台消息"，而当时 `take_snapshot` 因参数校验失败**并没有真的取到快照**——那句话说早了。上面的读数是事后在 8790 重跑导航 + 快照 + 控制台三个调用之后抄下来的。
+
+**顺手修掉的邻接缺陷**：`client.ts` 的 `sessionAnswer` 路径段是裸插值 `/sessions/${sid}/answer`，而同文件其余 20+ 处路径参数一律 `encodeURIComponent` ⇒ 本批补齐同一口径。
+
+**门禁读数**：`npm run type-check` **RC=0**；`npm run build` **RC=0**（`✓ built in 51.06s`，`build-manifest.json: commit=8c1f278… files=707`）；`GATES_PYTHON=python bash gates.sh` **RC=0**（`全量违规 104 条 / 登记上限 104 条`、`undefined-name 门禁干净（扫描 150 个文件）`、主题白名单 7 处全在契约表内）。`git diff --stat` 三个文件全在 `ui/`（`client.ts`/`types/api.ts`/`MetricsView.vue`，+80/−7），本批 **0 处 Python 改动**。
+
+---
+
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
 
 | commit | 内容 |
@@ -298,6 +326,7 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 | `c5b13a9` | 本记录上一版读数 + `inbox/20261002-AgentOps门禁模板无版本载体-决策申请.md` |
 | 本批（即本条记录所在 commit） | **裁定 20261002 的 AF 侧落地**：`af_insight_queue` 只落盘队列 + `make_durable_ask_sink` 接线 + `approve_insight`/`reject_insight` + `/api/insights/*` 三端点；`/api/asks/answer` 加 `channel_error`（③A）；`_envelope` docstring 钉 `ref`=实例 id 与 v2.6 删除时点（②A）；vendored wheel 换 `b4b5d6bb…`；计划文档 §第 4 步 ①/§第 1 步 ③/§四 顺序与窗后验收对齐裁定；测试新增 13 项 |
 | 本批之二（UI 类型硬门） | `vue-tsc -b --force` 15 条清零（4 处 `bordered="false"` 传成字符串、`SpecEditorView` 两个**死控件**补 `compile()`/`bindDevices()`、`DiffResponse` 按后端真形补 `old`/`new`、`SpecCompileResponse.ir` 改可空 + `error?`、5 处死 import）；`mock.ts` diff 夹具补成与真响应同形（类型门自己抓出来的假夹具）；`package.json` `type-check` 加 `--force`（防缓存假绿）；`ci.yml` 新增 `ui` job 作硬门；`VersionsView` 拆分 `loadError` 防错指；读数见 §二之二 |
+| 本批之三（API 层零 `any`） | `metrics`/`experience`/`telemetry`/`sessionAnswer` 四处 `request<any>` 换成 `MetricsResponse`/`ExperienceResponse`/`TelemetryResponse`/`SessionViewResponse`（形状取自后端返回语句，逐键与在线 HTTP 响应对账；`success_rate` 按后端"0 样本不伪造 0%"写成可空）；`MetricsView` 三个 `ref<any>` 收口；`sessionAnswer` 路径段补 `encodeURIComponent`；类型门红/绿双向读数（探针 TS2339 RC=2 → 撤除 RC=0）；读数见 §二之三 |
 
 ## 四、审计侧
 
@@ -326,7 +355,8 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 - 洞察队列**只有 API，没有面板**：`/api/insights/pending` 可读、approve/reject 可写，UI 上还没有"MA 洞察"这一屏（下一步做面板时，空态与"approve ≠ 部署"的措辞必须照 `EvidenceView` 的口径写，不许写"点了就上线"）。
 - `BoundedCache` 基类收敛（第五轮遗留）与"实现间契约不一致"的**静态**门禁：本轮以契约测试覆盖，未做静态门禁。
 - 证据面板的 `evicted_automations` 只做"提示有自动化被挤出内存"，未做跨进程持久化——**注意这与 ④A 不是同一个问题**：④A 裁的是 MA 洞察提案队列（已持久化），证据档的进程内清零仍是遗留。
-- **新落门的 `ui` job 看不见四行**：`ui/src/api/client.ts:122-124,135` 的 `metrics`/`experience`/`telemetry`/`sessionAnswer` 仍是 `request<any>`，类型门对这四条通道只能证明"调用方没写错字段名以外的东西"。把它们换成真实响应类型是下一步（同一套判据：先读后端返回再定 TS 形状）。
+- `SessionViewResponse` 的**应答成功分支 = EXEMPT**：`case04_ask_timeout` 带 seed + event 建会话后 `asks=0`（分支未走到挂起 ask），只实测到 404 失败面；顶层 9 键靠同族 `POST /sessions`/`GET /sessions/{sid}` 的同一 `_session_view` 坐实。下一次做洞察面板或真机 ask 流程时顺手补一条"应答成功 → 快照键"的实测。
+- `/api/metrics` 的 `runs/success/failed/audit_distribution` 仍是 0/空——`get_metrics` 的 docstring 写明这三项需**常驻进程**（`forge serve`/`watch`）才累计，原型期服务层无状态。本批只把"形状"钉成类型，没有把"数值来源"改成真累计；那是另一件事，不在类型面批里偷做。
 - 本机 `node_modules` 的完整性没有门禁：本批实测 `@types/node@22.20.2` 曾被装成 **37/74** 文件（见 §二之二）。我用 registry 同版本 tarball 增量补齐了缺的 37 个文件，但**成因未查**（不在本批范围），且这条只在开发机成立——CI 走 `npm ci` 从锁文件装，不复用本机 `node_modules`。若下次又冒出"某个 `node:*` 模块找不到"，先数 `node_modules/@types/node/*.d.ts` 再怀疑代码。
 - **新 `ui` CI job 的 CI 侧执行 = EXEMPT，不是 VERIFIED**：本机无 `gh`（`gh: command not found`）且 AF 是私有仓 ⇒ 读不到 Actions 运行结果。本地只有 `npm run type-check` RC=0 与 `npm run build` RC=0 两个读数，它们证明的是"这套命令在这台机器上会红也会绿"，**不证明 GitHub runner 上装得起来**。下一次能读 CI 时第一件事就是补这条。
 - **CI 装依赖的源是第三方镜像**：`ui/package-lock.json` 实测 137/137 条 `resolved` 指 `registry.npmmirror.com`（0 条 npmjs、0 条缺 `integrity`），根因是用户级 `~/.npmrc` 漏进共享产物。已作为 DPP R7 同题的**前提修正**提 DCD（§五 第 5 件），裁定前不改 lockfile 一个字节。
@@ -338,6 +368,7 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 - ~~`ma/insights` 提案重启即清零~~ → 裁定 ④A：`af_insight_queue` 落盘队列，approve 只交接不部署。
 - ~~0.3.1 wheel sha 不可复现~~ → 裁定 §〇：DCD 补账 + 重建产物 `b4b5d6bb…` 为权威，AF vendored/pin 跟新，且 wheel 内 `time.py` 与源树逐字节相同（实测见 §一）。
 - ~~AF 的 UI 没有类型门禁（登记 16 条待清）~~ → 实测 **15 条**全部清掉（其中 `SpecEditorView` 的两个按钮是**从未接线的死控件**、`LiveView` 四处 `bordered="false"` 把字符串真值当布尔传），`type-check` 加 `--force` 防缓存假绿，`ci.yml` 新增 `ui` job 作硬门；红/绿双向都有实测读数（注入探针 RC=2 → 撤除 RC=0）。见 §二之二。
+- ~~API 层四处 `request<any>`（`metrics`/`experience`/`telemetry`/`sessionAnswer`）让新类型门对这四条通道失明~~ → 全部换成后端真形类型，且逐键与在线响应对账（`success_rate` 按后端语义写成可空）；`grep request<any> ui/src` = **No matches found**；类型门能因这些字段变红由探针 TS2339 实测。见 §二之三。
 
 ---
 
