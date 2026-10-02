@@ -314,6 +314,7 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 | 2 | 第 0 步 ③④：0.3.1 记账缺口（源树 `time.py` 未入库 + NAS `VERSIONS.txt` 无 0.3.1 条目 ⇒ sha 不可复现）+ §四 合并停机窗排期与授权 | `inbox/20261002-homesdk0.3.1记账缺口与AF镜像重烤合并窗-决策申请.md` → **记账半边已裁定并已执行**（DCD §〇：源码+契约表入库 `5e4ba33`、VERSIONS 补条目、以重建 `b4b5d6bb…` 为权威，AF pin 与 vendored wheel 已跟新）；**镜像重烤半边 = 合并窗内做，尚未生效**（窗口未开） |
 | 3 | 第七轮 `StateProvider` 统一 fail-closed 的方向与代价（整段软失败 vs 逐实体可见漂移） | `inbox/20261002-AF-StateProvider统一fail-closed的方向与代价-决策申请.md` → **已裁定：A 先行 + B 排队**，B 启动条件 = 下次真实改动 `af_instance._refresh_snapshot` 或 AF v2.6；整段口径被裁定为**有意设计**；漂移须以 `entity_drift` 记账 |
 | 4 | 第 0 步 ④ 的记账载体：`E:/NAS/AgentOps` **不是 git 仓** ⇒ 已授权改的门禁模板无 commit、无 sha、不可回滚；三仓 CI 都依赖它，却没有任何版本账 | `inbox/20261002-AgentOps门禁模板无版本载体-决策申请.md`（**已提交，尚未裁定**）——本批 20261002 裁定的申请来源六件里**不含这一件**，实测裁定文首"申请来源"清单逐项对得上，唯独缺它。缺陷仍在：模板 sha `887c33dd…` 无版本账，AF 侧不动他仓 |
+| 5 | 新 `ui` CI job 将**首次**让 GitHub runner 按 lockfile 去第三方镜像拉 137 个包（`ui/package-lock.json` 实测 137/137 指 `registry.npmmirror.com`、0 条 npmjs、0 条缺 `integrity`；根因是用户级 `~/.npmrc` 漏进共享产物）。这是 DPP 同题申请（R7）在 AF 的**前提修正**：那边选"只登记"的承重句是"CI 只在我这台机器跑"，AF 今天把这句话拿掉了 | `inbox/20261002-AF-CI首次消费镜像锁文件-DPP-R7同题补充-决策申请.md`（**已提交，待裁**）。裁定前 AF **不动 lockfile 一个字节**；AF 倾向"只把 CI 侧改指官方源、本机开发不变"那一档 |
 
 ## 六、未在本版做（登记，不静默）
 
@@ -327,6 +328,8 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 - 证据面板的 `evicted_automations` 只做"提示有自动化被挤出内存"，未做跨进程持久化——**注意这与 ④A 不是同一个问题**：④A 裁的是 MA 洞察提案队列（已持久化），证据档的进程内清零仍是遗留。
 - **新落门的 `ui` job 看不见四行**：`ui/src/api/client.ts:122-124,135` 的 `metrics`/`experience`/`telemetry`/`sessionAnswer` 仍是 `request<any>`，类型门对这四条通道只能证明"调用方没写错字段名以外的东西"。把它们换成真实响应类型是下一步（同一套判据：先读后端返回再定 TS 形状）。
 - 本机 `node_modules` 的完整性没有门禁：本批实测 `@types/node@22.20.2` 曾被装成 **37/74** 文件（见 §二之二）。我用 registry 同版本 tarball 增量补齐了缺的 37 个文件，但**成因未查**（不在本批范围），且这条只在开发机成立——CI 走 `npm ci` 从锁文件装，不复用本机 `node_modules`。若下次又冒出"某个 `node:*` 模块找不到"，先数 `node_modules/@types/node/*.d.ts` 再怀疑代码。
+- **新 `ui` CI job 的 CI 侧执行 = EXEMPT，不是 VERIFIED**：本机无 `gh`（`gh: command not found`）且 AF 是私有仓 ⇒ 读不到 Actions 运行结果。本地只有 `npm run type-check` RC=0 与 `npm run build` RC=0 两个读数，它们证明的是"这套命令在这台机器上会红也会绿"，**不证明 GitHub runner 上装得起来**。下一次能读 CI 时第一件事就是补这条。
+- **CI 装依赖的源是第三方镜像**：`ui/package-lock.json` 实测 137/137 条 `resolved` 指 `registry.npmmirror.com`（0 条 npmjs、0 条缺 `integrity`），根因是用户级 `~/.npmrc` 漏进共享产物。已作为 DPP R7 同题的**前提修正**提 DCD（§五 第 5 件），裁定前不改 lockfile 一个字节。
 
 已收口（上一版登记、本版实测销账）：
 - ~~`ui/src/views/LiveView.vue` `events=undefined` ⇒ `_replay_live` 空转~~ → 补事件脚本输入 + 回放读数，F7 端到端真点通（`dep-28bf327fe8d7`，假 HA `turn_on`→`turn_off`，设备回 `off`）。
