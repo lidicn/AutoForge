@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import json
+
 from autoforge.af_fidelity import fidelity_equal, project_automation, verify_roundtrip
 from autoforge.af_ir import Automation
 
@@ -240,3 +242,73 @@ def test_params_key_order_irrelevant():
     a = Automation.from_dict(_chain("n_on", "n_do", "light.turn_on", p1))
     b = Automation.from_dict(_chain("n_on", "n_do", "light.turn_on", p2))
     assert fidelity_equal(a, b) is True
+
+
+# ── group 容器：子树必须进保真判据（反例实测能变红，铁律 #8）────────────────
+def _group_ir(*, mode="sequence", children=None):
+    child = {"id": "child1", "name": "child1", "version": 1, "mode": "single",
+             "nodes": [_on("c_on", "binary_sensor.x"),
+                       {"id": "c_do", "kind": "do", "adapter": "ha", "action": "light.turn_on",
+                        "params": {"entity_id": "light.c"}},
+                       {"id": "c_pass", "kind": "pass"}],
+             "edges": [_edge("c_on", "c_do"), _edge("c_do", "c_pass")]}
+    second = {**child, "id": "child2", "name": "child2"}
+    return _auto([_on("n_on", "binary_sensor.presence"),
+                  {"id": "n_group", "kind": "group", "name": "compound",
+                   "mode": mode, "children": list(children if children is not None else [child])},
+                  {"id": "n_pass", "kind": "pass"}],
+                 [_edge("n_on", "n_group"), _edge("n_group", "n_pass")],
+                 ir_version="0.3.0")
+
+
+def test_group_projection_keeps_children_and_mode():
+    """投影丢弃 children/mode 曾是假绿：现在两者必须出现在投影里，且子树可回读。"""
+    auto = Automation.from_dict(_group_ir())
+    proj = project_automation(auto)
+    gnode = next(n for n in proj["nodes"] if n["id"] == "n_group")
+    assert gnode["mode"] == "sequence"
+    assert [c["id"] for c in gnode["children"]] == ["child1"]
+    assert fidelity_equal(auto, Automation.from_dict(proj))
+
+
+def test_group_child_added_or_removed_fails_l0():
+    """多一个/少一个子自动化必须判失败——只比 kind 会两者都判绿。"""
+    one = Automation.from_dict(_group_ir())
+    two = Automation.from_dict(_group_ir(children=[
+        {"id": "child1", "name": "child1", "version": 1, "mode": "single",
+         "nodes": [_on("c_on", "binary_sensor.x"),
+                   {"id": "c_do", "kind": "do", "adapter": "ha", "action": "light.turn_on",
+                    "params": {"entity_id": "light.c"}},
+                   {"id": "c_pass", "kind": "pass"}],
+         "edges": [_edge("c_on", "c_do"), _edge("c_do", "c_pass")]},
+        {"id": "child2", "name": "child2", "version": 1, "mode": "single",
+         "nodes": [_on("c_on", "binary_sensor.x"),
+                   {"id": "c_do", "kind": "do", "adapter": "ha", "action": "light.turn_on",
+                    "params": {"entity_id": "light.c"}},
+                   {"id": "c_pass", "kind": "pass"}],
+         "edges": [_edge("c_on", "c_do"), _edge("c_do", "c_pass")]},
+    ]))
+    assert fidelity_equal(one, two) is False
+
+
+def test_group_mode_mutation_fails_l0():
+    assert fidelity_equal(
+        Automation.from_dict(_group_ir(mode="sequence")),
+        Automation.from_dict(_group_ir(mode="parallel")),
+    ) is False
+
+
+def test_group_child_action_mutation_fails_l0():
+    """子自动化里的 action 改动必须红——否则 group 是保真判据的黑洞。"""
+    base = {"id": "child1", "name": "child1", "version": 1, "mode": "single",
+            "nodes": [_on("c_on", "binary_sensor.x"),
+                      {"id": "c_do", "kind": "do", "adapter": "ha", "action": "light.turn_on",
+                       "params": {"entity_id": "light.c"}},
+                      {"id": "c_pass", "kind": "pass"}],
+            "edges": [_edge("c_on", "c_do"), _edge("c_do", "c_pass")]}
+    mutated = json.loads(json.dumps(base))
+    mutated["nodes"][1]["action"] = "light.turn_off"
+    assert fidelity_equal(
+        Automation.from_dict(_group_ir(children=[base])),
+        Automation.from_dict(_group_ir(children=[mutated])),
+    ) is False

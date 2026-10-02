@@ -2,7 +2,8 @@
 
 判据（DCD 20261001《AF 三题》·F / 方案 C）：
 - **核心字段 L0 完全相等**：automation id、node id 集合、node kind、trigger、
-  action(domain.service)、edges、schema/ir_version、mode。
+  action(domain.service)、edges、schema/ir_version、mode；group 容器还递归比节点级
+  `mode`（sequence|parallel）与整棵 `children` 子树（顺序即编排语义）。
 - **params 语义相等**：键序无关、值必等。
 - **condition（`expr`）L1 结构等价**：经 `condition_norm.normalize_condition` 归一化（CNF）后相等
   ——允许布尔等价变形，如 `(A and B) or C ≡ (A or C) and (B or C)`。
@@ -81,6 +82,13 @@ def _node_projection(node) -> dict[str, Any]:
         d["var"] = node.var
     if node.ask is not None:
         d["ask"] = node.ask.to_dict()
+    # group 容器的两项必须进投影：`mode` 是编排语义，`children` 是整棵子树。
+    # 过去投影把 children 丢了也照样"保真通过"——那是假绿：schema 现在会直接拒收
+    # （kind=group 而 children 缺失），但判据不该靠 schema 兜出来才发现。
+    if node.mode is not None:
+        d["mode"] = node.mode
+    if node.children:
+        d["children"] = [project_automation(child) for child in node.children]
     return d
 
 
@@ -120,6 +128,10 @@ def _node_core(node) -> dict[str, Any]:
             "timeout": node.timeout,
             "spec": None if node.ask is None else node.ask.to_dict(),
         }),
+        # group 容器：编排语义与整棵子树都是核心字段。只比 kind 的话，投影丢掉一个
+        # child 也算"保真通过"——那是假绿，且比 children 缺失更危险（schema 拦不住）。
+        "mode": node.mode,
+        "children": node.children,
     }
 
 
@@ -156,9 +168,20 @@ def fidelity_equal(a: Automation, b: Automation) -> bool:
             return False
         if na["ask"] != nb["ask"]:  # P3：ask 控件元数据结构相等
             return False
+        if na["mode"] != nb["mode"]:  # group 编排语义（sequence|parallel）
+            return False
+        if not _children_equal(na["children"], nb["children"]):
+            return False
         if na["condition"] != nb["condition"]:  # L1 结构等价
             return False
     return ca["edges"] == cb["edges"]  # 拓扑完全相等（L0）
+
+
+def _children_equal(a: tuple[Automation, ...], b: tuple[Automation, ...]) -> bool:
+    """group 子树递归保真：顺序即编排语义（sequence 下换序 = 换了执行次序），故按位比较。"""
+    if [c.id for c in a] != [c.id for c in b]:
+        return False
+    return all(fidelity_equal(x, y) for x, y in zip(a, b))
 
 
 @dataclass
