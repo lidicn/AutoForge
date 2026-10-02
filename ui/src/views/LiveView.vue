@@ -15,6 +15,9 @@ const error = ref('')
 
 const irText = ref('')
 const allowText = ref('')
+// 事件脚本：后端 `_replay_live` 靠它把触发条件喂进 runtime。此前这里恒传 undefined
+// ⇒ 回放空转，trigger 型自动化在真机档一次都不会命中（F4 ③ 前端残留）。
+const eventsText = ref('')
 const confirm = ref(false)
 const undo = ref(true)
 const running = ref(false)
@@ -97,11 +100,22 @@ async function run() {
     message.warning('必须提供可写白名单（live_allow），不允许全量下发')
     return
   }
+  let events: unknown[] = []
+  if (eventsText.value.trim()) {
+    try {
+      const parsed = JSON.parse(eventsText.value)
+      if (!Array.isArray(parsed)) throw new Error('事件脚本必须是数组')
+      events = parsed
+    } catch (e) {
+      message.error(`事件脚本不是合法 JSON 数组：${String(e)}`)
+      return
+    }
+  }
   running.value = true
   try {
-    const res = await facade.liveRun(ir, allow, true, undefined, undo.value)
+    const res = await facade.liveRun(ir, allow, true, events, undo.value)
     result.value = res.data
-    message.success('真机下发完成')
+    message.success(events.length ? `真机下发完成（回放 ${events.length} 条事件）` : '真机下发完成（未提供事件脚本：trigger 型自动化不会命中）')
     await loadUndoList()
   } catch (e) {
     runError.value = String(e)
@@ -171,6 +185,16 @@ onMounted(() => {
             placeholder="light.study_main&#10;switch.office_ac"
           />
         </div>
+        <div>
+          <div class="label">事件脚本（可空）——按顺序回放进 runtime，用于让 trigger 型自动化在真机档命中</div>
+          <n-input
+            v-model:value="eventsText"
+            type="textarea"
+            :autosize="{ minRows: 2, maxRows: 8 }"
+            placeholder='[{"entity_id":"binary_sensor.motion","state":"on"},{"advance_s":30}]'
+            style="font-family: monospace"
+          />
+        </div>
         <div style="display: flex; align-items: center; gap: 10px">
           <n-switch v-model:value="confirm" />
           <n-text :type="confirm ? 'success' : 'error'">我已确认将真实改变设备状态（confirm=true）</n-text>
@@ -193,6 +217,13 @@ onMounted(() => {
       <n-space vertical :size="10">
         <div>模式：<n-tag size="small" type="error" bordered="false">{{ result.mode }}</n-tag> · HA：{{ result.ha_url }}</div>
         <div>写目标：<n-tag v-for="w in result.writes" :key="w" size="small" type="warning" bordered="false" style="margin-right:6px">{{ w }}</n-tag></div>
+        <n-alert
+          v-if="result.missing_entities && result.missing_entities.length"
+          type="warning"
+          :title="`真机终态读不到 ${result.missing_entities.length} 个实体（值记为空，未编造）`"
+        >
+          <code>{{ result.missing_entities.join('、') }}</code>
+        </n-alert>
         <div>允许列表：<n-tag v-for="a in result.allowlist" :key="a" size="small" bordered="false" style="margin-right:6px">{{ a }}</n-tag></div>
         <div v-if="result.nl" class="nl">{{ result.nl }}</div>
         <div v-if="result.asks && result.asks.length" class="asks">有待应答 ask：{{ result.asks.length }} 条</div>

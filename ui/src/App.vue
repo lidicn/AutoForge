@@ -19,6 +19,7 @@ const menuOptions: MenuOption[] = [
   { label: () => h(RouterLink, { to: '/overview' }, { default: () => '概览' }), key: '/overview' },
   { label: () => h(RouterLink, { to: '/automations' }, { default: () => '自动化列表' }), key: '/automations' },
   { label: () => h(RouterLink, { to: '/running' }, { default: () => '运行中' }), key: '/running' },
+  { label: () => h(RouterLink, { to: '/evidence' }, { default: () => '生产态证据' }), key: '/evidence' },
   { label: () => h(RouterLink, { to: '/asks' }, { default: () => '待应答' }), key: '/asks' },
   { label: () => h(RouterLink, { to: '/devices' }, { default: () => '设备目录' }), key: '/devices' },
   { label: () => h(RouterLink, { to: '/simulation' }, { default: () => '仿真回放' }), key: '/simulation' },

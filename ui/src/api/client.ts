@@ -9,6 +9,7 @@ import type {
   WhoamiResponse, SubjectsResponse, RevokeResponse,
   LiveStatusResponse, LiveRunResponse,
   UndoAvailableResponse, UndoPreviewResponse, UndoRunResponse,
+  EvidenceProdResponse, WatchListResponse,
   AsksResponse, AskAnswerResponse,
 } from '../types/api'
 
@@ -116,6 +117,8 @@ export const api = {
 
   // v1.7.3 运行中 watch 实例
   watchList: () => request<WatchListResponse>('GET', '/watch/list'),
+  // F4 ③：生产态验证证据三档（verified / failed / unmodeled）
+  evidenceProd: () => request<EvidenceProdResponse>('GET', '/evidence/prod'),
   metrics: () => request<any>('GET', '/metrics'),
   experience: (limit = 20) => request<any>('GET', `/experience?limit=${limit}`),
   telemetry: (days = 30) => request<any>('GET', `/telemetry?days=${days}`),

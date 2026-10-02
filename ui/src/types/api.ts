@@ -454,6 +454,8 @@ export interface LiveRunResponse {
   undo_enabled?: boolean
   undo_deploy_id?: string | null
   undo_window_s?: number | null
+  // 第七轮口径：真机终态读不到的实体显式列出（不编值）。此前 UI 不渲染 ⇒ 漂移看不见。
+  missing_entities?: string[]
 }
 
 // ── F7 撤销（WebUI 撤销按钮，决策 E）──
@@ -470,6 +472,35 @@ export interface UndoPreviewResponse {
   confirm_required?: boolean
   domain_mapped?: string[]
   domain_unmapped?: string[]
+}
+
+// ── F4 ③ 生产态验证证据（监护视图，GET /api/evidence/prod）──
+// 刻意没有 `ok`：查询成败由 HTTP 状态表达，判据只有 counts 本身。
+export interface EvidenceAutomation {
+  automation_id: string
+  verified_in_prod: number
+  last_verified_at: number | null
+  failed_in_prod: number
+  last_failed_at: number | null
+  unmodeled_in_prod: number
+  shadow: number
+  canary: number
+  conflict: number
+}
+
+export interface EvidenceSummary {
+  total_verified_in_prod: number
+  total_failed_in_prod: number
+  total_unmodeled_in_prod: number
+  total_conflict: number
+  automations_with_failed: number
+  tracked_automations: number
+  evicted_automations: number
+}
+
+export interface EvidenceProdResponse {
+  automations: EvidenceAutomation[]
+  summary: EvidenceSummary
 }
 
 export interface UndoAvailableResponse {

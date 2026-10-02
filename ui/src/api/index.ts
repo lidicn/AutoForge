@@ -51,6 +51,9 @@ export const facade = {
   undoPreview: (deploy_id: string) => api.undoPreview(deploy_id),
   undoDeploy: (deploy_id: string, confirm: boolean) => api.undoDeploy(deploy_id, confirm),
 
+  // F4 ③ 生产态证据（只读；无 mock 夹具——证据来自真实运行喂入，伪造一份等于假安心）
+  evidenceProd: () => api.evidenceProd(),
+
   // ── v2 M3 结构化 Ask（原生控件 + clarify 流程）──
   asksPending: () => api.asksPending(),
   asksSidecar: () => api.asksSidecar(),
