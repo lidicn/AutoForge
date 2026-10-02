@@ -1,10 +1,7 @@
-"""DCD 20261001《DB六格与MA五题》§五 时区归属 —— AF 半边。
+"""DCD 20261001《DB六格与MA五题》§五 时区归属 —— AF 半边 + 《homesdk 接入四问》问题 1/2。
 
-裁定要求「各仓不再各自硬编码 +8」「偏移由部署环境单一配置项提供」。`homesdk.time`
-那半边尚未落地（0.3.0 源码树里没有 time 模块），所以本仓先把口径收口到
-`af_time.house_tz_name()` 这一个读取点，`Asia/Shanghai` / +8 退化为**具名 fallback**。
-
-这里锁的是「注入真的改变整条时间轴」，不是「某个字段变了一行」——MA 在同批回填里
+主路径已换成机制层 `homesdk.time`（规范键 `HOMESDK_TZ`，`AF_TZ` 降为过渡别名），
+本文件锁的是**注入真的改变整条时间轴**，不是「某个字段变了一行」——MA 在同批回填里
 专门点名过 import 时绑定快照那种「注入后毫无反应」的写法。
 """
 from __future__ import annotations
@@ -13,6 +10,8 @@ import ast
 import inspect
 import pathlib
 from datetime import datetime, timezone
+
+import pytest
 
 from autoforge.af_time import (
     TZ_ENV_KEY,
@@ -23,6 +22,17 @@ from autoforge.af_time import (
     house_tz_status,
     matches_at,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_tz_keys(monkeypatch):
+    """机制层优先级是 `HOMESDK_TZ` → `TZ` → `AF_TZ`（裁定甲）。
+
+    本文件测的是 `AF_TZ` 这条别名链，所以先把高优先级的两个键清空——否则机器上恰好
+    有一个 `TZ` 就能让这些测试整片变红（红得跟代码无关，正是最难查的那种）。
+    """
+    for key in ("HOMESDK_TZ", "TZ", "TZ_OFFSET_HOURS"):
+        monkeypatch.delenv(key, raising=False)
 
 
 def test_unconfigured_uses_named_fallback(monkeypatch):

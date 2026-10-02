@@ -22,7 +22,7 @@ jobs:
         # af_executor / af_runtime 硬依赖 homesdk.consent（WO-AF-001 收口）。
         # 钉死文件名、不用通配（与 Dockerfile.api/test 同构），装不上就是真坏了，
         # 不许回退成"跳过"。
-        run: pip install docker/homesdk/homesdk-0.1.1-py3-none-any.whl
+        run: pip install docker/homesdk/homesdk-0.3.1-py3-none-any.whl
       - name: Run tests
         run: pytest tests/ -q
 
@@ -39,7 +39,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: Install homesdk (私有 wheel，仓库内随附)
-        run: pip install docker/homesdk/homesdk-0.1.1-py3-none-any.whl
+        run: pip install docker/homesdk/homesdk-0.3.1-py3-none-any.whl
       - name: Run ADM linkage contract tests
         # DCD v4.1 七问裁定 第一档①：三主通道接口契约测试进 CI，防跨仓协议漂移。
         # 已落地：DB→AF（ASK 队列，tests/contract/test_af_ask_contract.py）、
@@ -60,7 +60,7 @@ jobs:
         # 2026-10-01 整改：原来的 `|| echo "跳过门禁"` + continue-on-error 会让门禁
         # **永远不可能红**——这正是 MA 同批自查披露的假绿同型（见 DCD 20261001 回填）。
         # 文件名钉死、不通配；装不上即整条 job 失败。
-        run: pip install docker/homesdk/homesdk-0.1.1-py3-none-any.whl
+        run: pip install docker/homesdk/homesdk-0.3.1-py3-none-any.whl
       - name: Install package (门禁冒烟需要可导入的 autoforge)
         # 冒烟门跑的是 `import autoforge`，本仓不装就等于门没门。
         run: pip install -e .

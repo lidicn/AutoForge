@@ -81,23 +81,80 @@ class TimeSource(Protocol):
 
 
 # ── 辅助函数（mimo Clock 设计增量）───────────────────────────────────
-#: 家庭时区的部署环境配置项（单源）。空串与未设置同视。
+#: 家庭时区的过渡别名键（DCD 20261001·homesdk 接入四问 问题 2 甲：`AF_TZ` 降为别名）。
 TZ_ENV_KEY = "AF_TZ"
 
 #: 未配置时的 fallback。DCD 20261001·§五：本仓 +8 从「写死」降级为「具名 fallback」。
 TZ_FALLBACK_NAME = "Asia/Shanghai"
 
+#: 规范键（机制层 `homesdk.time` 的第一优先键）。
+HOMESDK_TZ_ENV_KEY = "HOMESDK_TZ"
+
+#: 前缀约定（与 `homesdk.config` / `homesdk.time` 同一约定：`HOMESDK_` 优先）。
+HOMESDK_TZ_PREFIX = "HOMESDK_"
+
+#: 基键（与 `homesdk.time.TZ_ENV_KEYS` 同一份清单）。
+_TZ_BASE_KEYS: tuple[str, ...] = ("TZ", TZ_ENV_KEY, "TZ_OFFSET_HOURS")
+
+#: 有效读取顺序——照机制层约定：**每个基键先试 `HOMESDK_` 前缀，再试裸键**。
+#: 写成扁平清单而不是循环里拼前缀，是为了让 fallback 与 `homesdk.time` 的优先级逐字相等；
+#: 两条路径给出两个优先级，就等于同一份 compose 文件有两个家庭墙钟。
+TZ_ENV_KEYS: tuple[str, ...] = tuple(
+    key for base in _TZ_BASE_KEYS for key in (f"{HOMESDK_TZ_PREFIX}{base}", base)
+)
+
+#: 值形态是小时偏移而非 IANA 名的键（单独处理，越界值拒收）。
+_OFFSET_KEY_SUFFIX = "TZ_OFFSET_HOURS"
+
+
+def homesdk_time():
+    """机制层 `homesdk.time` 模块；不可用时返回 None（vendor 的 wheel 里没有该模块）。
+
+    缺席是**可观测**的，不是静默的：`house_tz_status()["mechanism"]` 会写 `"af_local"`。
+    """
+    try:
+        from homesdk import time as _module
+    except (ImportError, AttributeError):
+        return None
+    return _module
+
+
+def _first_tz_value() -> tuple[str | None, str | None]:
+    """按 `TZ_ENV_KEYS` 顺序取第一个有效配置，返回 `(键名, 值)`；都没有则 `(None, None)`。"""
+    for key in TZ_ENV_KEYS:
+        raw = os.environ.get(key)
+        if raw is None:
+            continue
+        value = raw.strip()
+        if not value:  # 空串等同未配置（`AF_TZ=` 是"没配"，不是"配了个空时区"）
+            continue
+        if key.endswith(_OFFSET_KEY_SUFFIX):
+            try:
+                hours = float(value)
+            except (TypeError, ValueError):
+                continue
+            if not -24 < hours < 24:  # "80" 这类笔误不留 fallback 幻觉
+                continue
+            sign = "+" if hours >= 0 else "-"
+            whole = int(abs(hours))
+            minutes = int(round((abs(hours) - whole) * 60))
+            return key, f"UTC{sign}{whole:02d}:{minutes:02d}"
+        return key, value
+    return None, None
+
 
 def house_tz_name() -> str:
-    """部署环境给出的家庭时区名；未配置落到 `TZ_FALLBACK_NAME`。
+    """当前生效的家庭时区标识（IANA 名，或兜底的 `UTC+HH:MM` 形态）。
 
-    每次调用现读环境变量，不做模块级缓存——否则注入后毫无反应（MA 在同批裁定执行
-    回填里专门点名过那种 import 时绑定快照的写法）。
+    主路径走机制层 `homesdk.time`（DCD 20261001·homesdk 接入四问 问题 1/2）；机制层缺席时
+    用本仓同口径的读取链做 fallback。每次调用现读环境变量，不做模块级缓存——否则注入后
+    毫无反应（MA 在同批裁定执行回填里专门点名过那种 import 时绑定快照的写法）。
     """
-    raw = os.environ.get(TZ_ENV_KEY)
-    if raw is not None and raw.strip():
-        return raw.strip()
-    return TZ_FALLBACK_NAME
+    module = homesdk_time()
+    if module is not None:
+        return module.house_tz_name()
+    _, value = _first_tz_value()
+    return value or TZ_FALLBACK_NAME
 
 
 def ensure_aware(dt: datetime, *, who: str = "dt") -> datetime:
@@ -108,16 +165,27 @@ def ensure_aware(dt: datetime, *, who: str = "dt") -> datetime:
 
 
 def load_tz(tz_name: str | None = None):
-    """家庭时区对象。口径来自部署环境单一配置项（见 `house_tz_name`），不再写死。
+    """家庭时区对象。
 
-    DCD 20261001·§五 把时区上收为 homesdk 机制层，但 `homesdk.time` 尚未落地，
-    因此本仓先收口到这一个函数：homesdk 接口可用时，改这里一行即可。
+    `tz_name=None`（生产默认）走机制层 `homesdk.time.house_tz()`——IANA 名口径，能表达 DST；
+    机制层缺席时退本仓解析。显式传参（`af_predict` / `af_pretrigger` 的按图覆盖）保持原语义。
     """
-    name = tz_name or house_tz_name()
+    if tz_name is None:
+        module = homesdk_time()
+        if module is not None:
+            return module.house_tz()
+        tz_name = house_tz_name()
     if ZoneInfo is not None:
         try:
-            return ZoneInfo(name)
+            return ZoneInfo(tz_name)
         except Exception:
+            pass
+    if tz_name.startswith("UTC") and len(tz_name) > 3:
+        try:
+            sign = 1 if tz_name[3] == "+" else -1
+            hours, minutes = tz_name[4:].split(":")
+            return timezone(sign * timedelta(hours=int(hours), minutes=int(minutes)))
+        except (ValueError, IndexError):
             pass
     # 容器缺 tzdata（或名字写错）时退化为固定 +08:00：深圳无夏令时，与 fallback 名语义等价。
     # 这件事必须能被外部看到，所以配套 `house_tz_status()` 供 /api/health 暴露。
@@ -125,24 +193,28 @@ def load_tz(tz_name: str | None = None):
 
 
 def house_tz_status(tz_name: str | None = None) -> dict:
-    """时区口径的可观测判据：请求名 + 是否真的按名字解析成功。
+    """时区口径的可观测判据：请求名 + 是否真的按名字解析成功 + 谁在供数。
 
     静默退化到 +8 就是 MA 在 20261001 批里踩过的假绿同类问题，故把"退化了"这件事
-    本身做成一个能读到的字段，而不是只写在注释里。
+    本身做成一个能读到的字段，而不是只写在注释里。`mechanism` 区分两种供数路径：
+    `homesdk.time`（机制层）与 `af_local`（本仓 fallback）——两条路径给出同一个名字
+    才算迁移完成，这条字段就是用来发现它们分叉的。
     """
-    name = tz_name or house_tz_name()
-    tz = load_tz(name)
-    raw = os.environ.get(TZ_ENV_KEY)
+    key, _ = _first_tz_value()
+    module = homesdk_time()
     if tz_name is not None:
         source = "param"
-    elif raw is not None and raw.strip():
-        source = f"env:{TZ_ENV_KEY}"
+    elif key is not None:
+        source = f"env:{key}"
     else:
         source = "fallback"
+    name = tz_name or house_tz_name()
+    tz = load_tz(tz_name)
     offset = tz.utcoffset(datetime.now(timezone.utc))
     return {
         "tz_name": name,
         "source": source,
+        "mechanism": "homesdk.time" if module is not None else "af_local",
         "resolved_by_name": getattr(tz, "key", None) == name,
         "utc_offset": None if offset is None else offset.total_seconds() / 3600,
     }

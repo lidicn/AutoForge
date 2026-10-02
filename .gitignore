@@ -59,6 +59,9 @@ tests_fresh/
 examples_fresh/
 tmp_*.py
 *.whl
+# vendor 进仓的私有 wheel 是交付物（Dockerfile.api/test 与 CI 直接 COPY + pip install 它），
+# 上面那条通配会把它挡掉，所以只对这个目录开白名单。
+!docker/homesdk/*.whl
 
 # ── 用户端 WebUI（2026-09-25 补）：依赖与构建产物绝不入库 ──
 # 注意：根已有 dist/ 规则，但那是全局的；这里是按前端子目录精确兜底，
