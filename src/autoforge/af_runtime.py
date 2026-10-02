@@ -24,6 +24,7 @@ from .af_audit import (
 from .af_bus import ACCEPTED, BusEvent, EventBus
 from .af_conf import ConfidenceStore
 from .af_executor import NodeExecutor
+from . import af_mqtt_bridge as _bridge
 from .af_instance import TERMINAL_STATES, Instance, InstanceManager
 from .af_ir import Graph
 from .af_persist import PersistStore, restore_instance
@@ -250,6 +251,9 @@ class Runtime:
             bucket["success"] += 1
         elif state == "failed":
             bucket["failed"] += 1
+        # 联动旁观者（MQTT 事件流等）。旁观者自己负责把失败留痕，不许把执行链带崩。
+        for observer in _bridge.current_observers():
+            observer(instance, state)
 
     @property
     def exec_stats(self) -> dict[str, dict[str, int]]:

@@ -317,6 +317,7 @@ def _make_runtime(
                 logging.getLogger(__name__).debug("[DRY-LIVE 意图] %s %s", action, params)
             adapter.on_dry_run = _on_dry
         runtime.adapters.register(adapter)
+        _start_linkage_bridge(clock=runtime.clock)   # 真机/ dry-live 才发事件；未开启即 no-op
         return runtime, undo_deploy_id
 
     seed: dict[str, str] = {}
@@ -1311,6 +1312,32 @@ def entities_state(
         typer.echo(f"⚠️ {result['note']}")
 
 
+def _start_linkage_bridge(clock=None):
+    """ADM 联动第 1/2 步的进程级开关：`AUTOFORGE_MQTT=1` 才联网。
+
+    未开启返回 None —— 那条路径下 AF 的行为与接桥前逐字相同（默认关，不是默认试连）。
+    开启但 broker 配置不齐则抛 `BridgeUnavailable`：宁可拒绝启动，也不留一条
+    "看着在跑、其实一句都没说"的假桥。
+    """
+    from . import af_mqtt_bridge
+    from .af_mcp import TOOLS
+
+    if not af_mqtt_bridge.env_enabled():
+        return None
+    bridge = af_mqtt_bridge.start_from_env(
+        tools=[tool[0] for tool in TOOLS],
+        version=af_mqtt_bridge.PRESENCE_CAPS_VERSION,
+        proposal_sink=af_mqtt_bridge.make_ask_sink(clock=clock),
+        clock=clock,
+    )
+    af_mqtt_bridge.attach(bridge)
+    typer.echo(
+        f"· MQTT 联动桥已上线：adm/{af_mqtt_bridge.PRESENCE_NAME}/status=online，"
+        f"发 {af_mqtt_bridge.FIRED_TOPIC}|{af_mqtt_bridge.FAILED_TOPIC}，订 {af_mqtt_bridge.INSIGHTS_TOPIC}"
+    )
+    return bridge
+
+
 @app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="监听地址（容器内用 0.0.0.0）"),
@@ -1349,7 +1376,12 @@ def serve(
     typer.echo(f"· AutoForge 只读服务层：http://{host}:{port}（文档 /docs，store={store_root}）")
     if ui_dir and Path(ui_dir).is_dir():
         typer.echo(f"· 前端静态托管：http://{host}:{port}/（dist={ui_dir}）")
-    uvicorn.run(app_, host=host, port=port, log_level="info")
+    bridge = _start_linkage_bridge()
+    try:
+        uvicorn.run(app_, host=host, port=port, log_level="info")
+    finally:
+        if bridge is not None:
+            bridge.stop()   # 显式 retained offline：LWT 只覆盖异常断连
 
 
 def _print_stats(runtime: Runtime) -> None:
