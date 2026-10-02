@@ -60,7 +60,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from . import af_service as svc
 from .af_pending import PendingStore
@@ -82,6 +82,13 @@ __all__ = ["build_app"]
 #: Bearer 令牌提取（auto_error=False：缺失时不报错，交由鉴权依赖决定）
 _bearer = HTTPBearer(auto_error=False)
 
+#: `/api/sim` 一次可回放的 events 条数上限（8e8c725 的 DoS 面收敛：整场仿真在内存里跑）。
+#: 原先写成 pydantic v2 的 `Field(max_length=…)`——CI 解析到 pydantic **1.10**（被
+#: `pytest-homeassistant-custom-component` 拖下来）时，这个 kwarg 让 `import af_api`
+#: 当场 `ValueError: constraints set but not enforced`，9 个测试文件连收集都跑不起来，
+#: 三条 CI 作业从 run 13 起永久红。判据挪到请求边界上，两版 pydantic 行为一致。
+_MAX_SIM_EVENTS = 10000
+
 
 
 class BuildBody(BaseModel):
@@ -92,7 +99,7 @@ class BuildBody(BaseModel):
 class SimBody(BaseModel):
     ir: dict[str, Any]
     seed: dict[str, str] | None = None
-    events: list[dict[str, Any]] | None = Field(default=None, max_length=10000)
+    events: list[dict[str, Any]] | None = None
 
 
 class InterveneBody(BaseModel):
@@ -464,6 +471,11 @@ def build_app(
 
     @app.post("/api/sim", dependencies=[Depends(_readonly_guard)])
     def api_sim(body: SimBody) -> dict[str, Any]:
+        if body.events is not None and len(body.events) > _MAX_SIM_EVENTS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"events 条数 {len(body.events)} 超过上限 {_MAX_SIM_EVENTS}：仿真整场在内存里跑",
+            )
         try:
             # v1.5.0：传 store → `_telemetry` 落遥测
             return svc.simulate(body.ir, body.seed, body.events, store=store)

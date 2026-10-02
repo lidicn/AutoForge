@@ -105,3 +105,25 @@ def test_writable_mode_write_endpoints_not_503(tmp_path):
     client = TestClient(build_app(store_root=str(tmp_path), readonly=False))
     r = client.post("/api/graphs/enable", json={"tag": "t", "enable": True})
     assert r.status_code != 503
+
+
+def test_api_sim_rejects_oversized_event_list(tmp_path, monkeypatch):
+    """/api/sim 的 events 上限是 DoS 面（整场仿真在内存里跑），必须在边界上真生效。
+
+    它原先写成 pydantic v2 的 `Field(max_length=…)`：CI 解析到 pydantic 1.10 时
+    **import 期就 ValueError**（"constraints set but not enforced"），而 v1 里这条
+    约束根本不存在——一个只在半套环境里生效、另半套环境让整仓崩掉的写法不是防线。
+    """
+    monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
+    client = TestClient(build_app(store_root=str(tmp_path)))
+    r = client.post("/api/sim", json={"ir": {"name": "x"}, "events": [{"e": 1}] * 10001})
+    assert r.status_code == 422, r.text
+    assert "10000" in r.json()["detail"]
+
+
+def test_api_sim_accepts_events_exactly_at_the_cap(tmp_path, monkeypatch):
+    """上限是"超过才拒"：恰好 10000 条必须放行到服务层（证明拒的是条数，不是整条路由）。"""
+    monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
+    client = TestClient(build_app(store_root=str(tmp_path)))
+    r = client.post("/api/sim", json={"ir": {"name": "x"}, "events": [{"e": 1}] * 10000})
+    assert r.status_code != 422, r.text

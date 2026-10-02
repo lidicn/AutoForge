@@ -20,6 +20,12 @@ import builtins
 import sys
 from pathlib import Path
 
+#: `ast.TypeAlias` 是 3.12+ 才有的节点（`type X = ...` 语句）。本仓 `requires-python = ">=3.11"`，
+#: 裸引用它会让门禁在 3.11 上 AttributeError 当场崩——CI 就是 3.11，于是每条 run 永久红，
+#: 而红因被 gates.sh 写成"undefined-name 门禁红"。取不到就跳过这一类绑定形态：
+#: 3.11 连 `type` 语句都解析不了（SyntaxError 先报），这里本来就没有可绑的名字。
+_TYPE_ALIAS = getattr(ast, "TypeAlias", None)
+
 BUILTIN_NAMES = frozenset(dir(builtins))
 
 #: 解释器运行期注入、AST 里看不到定义的名字。
@@ -96,7 +102,7 @@ def _bound_names(tree: ast.AST) -> set[str]:
         elif isinstance(node, ast.MatchMapping):
             if node.rest:
                 names.add(node.rest)
-        elif isinstance(node, ast.TypeAlias):
+        elif _TYPE_ALIAS is not None and isinstance(node, _TYPE_ALIAS):
             add_target(node.name)
     return names
 
