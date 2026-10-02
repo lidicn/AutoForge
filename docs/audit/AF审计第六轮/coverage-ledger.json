@@ -1,0 +1,446 @@
+[
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_adapters%23%E9%80%82%E9%85%8D%E5%99%A8::src%2Fautoforge%2Faf_adapters%2Fha.py%23%E5%87%BA%E5%90%91::src%2Fautoforge%2Faf_adapters::ATTACK-CLASSES.md%23Access%20control",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_adapters#适配器",
+      "boundary": "src/autoforge/af_adapters/ha.py#出向",
+      "subsystem": "src/autoforge/af_adapters",
+      "attack_class": "ATTACK-CLASSES.md#Access control"
+    },
+    "surface": "src/autoforge/af_adapters#适配器",
+    "boundary": "src/autoforge/af_adapters/ha.py#出向",
+    "subsystem": "src/autoforge/af_adapters",
+    "attack_class": "ATTACK-CLASSES.md#Access control",
+    "starting_paths": [
+      "src/autoforge/af_adapters"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第六轮 scoped run，聚焦第五轮指出的处女地 af_evo + af_service；其余面未纳入本轮，不作覆盖声明"
+    ]
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_api.py%23HTTP::src%2Fautoforge%2Faf_api.py%23%E9%89%B4%E6%9D%83::src%2Fautoforge%2Faf_api.py::ATTACK-CLASSES.md%23Access%20control",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_api.py#HTTP",
+      "boundary": "src/autoforge/af_api.py#鉴权",
+      "subsystem": "src/autoforge/af_api.py",
+      "attack_class": "ATTACK-CLASSES.md#Access control"
+    },
+    "surface": "src/autoforge/af_api.py#HTTP",
+    "boundary": "src/autoforge/af_api.py#鉴权",
+    "subsystem": "src/autoforge/af_api.py",
+    "attack_class": "ATTACK-CLASSES.md#Access control",
+    "starting_paths": [
+      "src/autoforge/af_api.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第六轮 scoped run，聚焦第五轮指出的处女地 af_evo + af_service；其余面未纳入本轮，不作覆盖声明"
+    ]
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_cli.py%23CLI::src%2Fautoforge%2Faf_cli.py%23%E8%BE%93%E5%85%A5::src%2Fautoforge%2Faf_cli.py::ATTACK-CLASSES.md%23Injection",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_cli.py#CLI",
+      "boundary": "src/autoforge/af_cli.py#输入",
+      "subsystem": "src/autoforge/af_cli.py",
+      "attack_class": "ATTACK-CLASSES.md#Injection"
+    },
+    "surface": "src/autoforge/af_cli.py#CLI",
+    "boundary": "src/autoforge/af_cli.py#输入",
+    "subsystem": "src/autoforge/af_cli.py",
+    "attack_class": "ATTACK-CLASSES.md#Injection",
+    "starting_paths": [
+      "src/autoforge/af_cli.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Injection",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第六轮 scoped run，聚焦第五轮指出的处女地 af_evo + af_service；其余面未纳入本轮，不作覆盖声明"
+    ]
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_evo.py%23%E6%95%B0%E5%80%BC%E8%BD%AC%E6%8D%A2::src%2Fautoforge%2Faf_evo.py%23to-int-overflow::src%2Fautoforge%2Faf_evo.py::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_evo.py#数值转换",
+      "boundary": "src/autoforge/af_evo.py#to-int-overflow",
+      "subsystem": "src/autoforge/af_evo.py",
+      "attack_class": "ATTACK-CLASSES.md#Business logic"
+    },
+    "surface": "src/autoforge/af_evo.py#数值转换",
+    "boundary": "src/autoforge/af_evo.py#to-int-overflow",
+    "subsystem": "src/autoforge/af_evo.py",
+    "attack_class": "ATTACK-CLASSES.md#Business logic",
+    "starting_paths": [
+      "src/autoforge/af_evo.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Framing, schema, and interpretation attack classes",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Core discipline",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Universal moves",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "covered",
+    "agent_id": "hunter-local-1",
+    "reviewed_paths": [
+      "src/autoforge/af_evo.py"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-local-1",
+        "reviewed_paths": [
+          "src/autoforge/af_evo.py"
+        ],
+        "artifact": "agents/hunter-local-1/artifacts/evo.txt",
+        "method": "local",
+        "invariant": "类型转换辅助函数必须对所有输入形态返回 None 或有效值，不得抛未受控异常",
+        "result": "核实：_to_int 仅捕获 (TypeError,ValueError)，int(float('inf')) 抛 OverflowError 未被捕获；_clamp01(float('nan')) 返回 1.0（NaN 比较恒 False 导致 max/min 链路把 NaN 静默映射为上界）。但可达性受限：_to_int 的输入均为计数类字段（overrides/attributed/attempts/health_score），且 L905/L924 等调用点外层已包 try/except Exception 并 _warn；除法 ov/total 有 total>0 守卫。故不产生实际失效，计为 hardening note"
+      }
+    ],
+    "result_fingerprints": [],
+    "unresolved": []
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_evo.py%23%E7%A9%BA%E9%9B%86%E7%9B%B8%E4%BC%BC%E5%BA%A6::src%2Fautoforge%2Faf_evo.py%23jaccard-%E7%A9%BA%E9%9B%86%E8%AF%AD%E4%B9%89::src%2Fautoforge%2Faf_evo.py::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_evo.py#空集相似度",
+      "boundary": "src/autoforge/af_evo.py#jaccard-空集语义",
+      "subsystem": "src/autoforge/af_evo.py",
+      "attack_class": "ATTACK-CLASSES.md#Business logic"
+    },
+    "surface": "src/autoforge/af_evo.py#空集相似度",
+    "boundary": "src/autoforge/af_evo.py#jaccard-空集语义",
+    "subsystem": "src/autoforge/af_evo.py",
+    "attack_class": "ATTACK-CLASSES.md#Business logic",
+    "starting_paths": [
+      "src/autoforge/af_evo.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Framing, schema, and interpretation attack classes",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Core discipline",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Universal moves",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "candidate",
+    "agent_id": "hunter-local-1",
+    "reviewed_paths": [
+      "src/autoforge/af_evo.py"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-local-1",
+        "reviewed_paths": [
+          "src/autoforge/af_evo.py"
+        ],
+        "artifact": "agents/hunter-local-1/artifacts/evo2.txt",
+        "method": "local",
+        "invariant": "集合相似度对空输入应有明确的保守语义，不得把『都缺失』等同于『都相同』",
+        "result": "实测：_trigger_tokens(None)=frozenset()、_trigger_tokens({})=frozenset()，_jaccard(∅,∅)=1.0，故 trigger_similarity(None,None)=1.0、trigger_similarity({},{})=1.0。对照组：不同房间人体传感器=0.500、人体传感器vs日落=0.000。即两条『都缺 trigger』的自动化被判为 100% 相似，而两条真实且不同的自动化相似度反而更低。在去重/合并决策语境下，这会把『共同缺失』误判为『完全相同』"
+      }
+    ],
+    "result_fingerprints": [
+      "fp-evo-jaccard-empty"
+    ],
+    "unresolved": []
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_evo.py%23%E7%AE%97%E6%B3%95%E5%A4%8D%E6%9D%82%E5%BA%A6::src%2Fautoforge%2Faf_evo.py%23max-jaccard-O%28n2%29::src%2Fautoforge%2Faf_evo.py::ATTACK-CLASSES.md%23Resource%20and%20file%20handling",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_evo.py#算法复杂度",
+      "boundary": "src/autoforge/af_evo.py#max-jaccard-O(n2)",
+      "subsystem": "src/autoforge/af_evo.py",
+      "attack_class": "ATTACK-CLASSES.md#Resource and file handling"
+    },
+    "surface": "src/autoforge/af_evo.py#算法复杂度",
+    "boundary": "src/autoforge/af_evo.py#max-jaccard-O(n2)",
+    "subsystem": "src/autoforge/af_evo.py",
+    "attack_class": "ATTACK-CLASSES.md#Resource and file handling",
+    "starting_paths": [
+      "src/autoforge/af_evo.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Resource and file handling",
+    "selected_companion_blocks": [
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Failure and recovery attack classes",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Core discipline",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Universal moves",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "covered",
+    "agent_id": "hunter-local-1",
+    "reviewed_paths": [
+      "src/autoforge/af_evo.py"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-local-1",
+        "reviewed_paths": [
+          "src/autoforge/af_evo.py"
+        ],
+        "artifact": "agents/hunter-local-1/artifacts/evo.txt",
+        "method": "local",
+        "invariant": "相似度为 O(n²) 的配对比较在目标规模下应可接受",
+        "result": "实测 _max_jaccard：n=100→1.86ms、n=400→28.72ms、n=800→125.30ms，呈 O(n²) 增长。但典型家庭自动化规模为数十条，n=100 时仅 1.86ms，不构成实际瓶颈。对照第五轮 af_preference 的 O(N²)（每次写入都全量重写、4001 条耗时 119.51s）—— 本处为一次性计算且规模受限，不计为缺陷"
+      }
+    ],
+    "result_fingerprints": [],
+    "unresolved": []
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_executor.py%23%E6%89%A7%E8%A1%8C%E5%99%A8::src%2Fautoforge%2Faf_executor.py%23canary::src%2Fautoforge%2Faf_executor.py::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_executor.py#执行器",
+      "boundary": "src/autoforge/af_executor.py#canary",
+      "subsystem": "src/autoforge/af_executor.py",
+      "attack_class": "ATTACK-CLASSES.md#Business logic"
+    },
+    "surface": "src/autoforge/af_executor.py#执行器",
+    "boundary": "src/autoforge/af_executor.py#canary",
+    "subsystem": "src/autoforge/af_executor.py",
+    "attack_class": "ATTACK-CLASSES.md#Business logic",
+    "starting_paths": [
+      "src/autoforge/af_executor.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第六轮 scoped run，聚焦第五轮指出的处女地 af_evo + af_service；其余面未纳入本轮，不作覆盖声明"
+    ]
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_instance.py%23%E5%AE%9E%E4%BE%8B%E7%AE%A1%E7%90%86::src%2Fautoforge%2Faf_instance.py%23%E7%BB%88%E6%80%81%E5%9B%9E%E6%94%B6::src%2Fautoforge%2Faf_instance.py::ATTACK-CLASSES.md%23Resource%20and%20file%20handling",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_instance.py#实例管理",
+      "boundary": "src/autoforge/af_instance.py#终态回收",
+      "subsystem": "src/autoforge/af_instance.py",
+      "attack_class": "ATTACK-CLASSES.md#Resource and file handling"
+    },
+    "surface": "src/autoforge/af_instance.py#实例管理",
+    "boundary": "src/autoforge/af_instance.py#终态回收",
+    "subsystem": "src/autoforge/af_instance.py",
+    "attack_class": "ATTACK-CLASSES.md#Resource and file handling",
+    "starting_paths": [
+      "src/autoforge/af_instance.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Resource and file handling",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第六轮 scoped run，聚焦第五轮指出的处女地 af_evo + af_service；其余面未纳入本轮，不作覆盖声明"
+    ]
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_mcp.py%23%E5%B7%A5%E5%85%B7%E9%97%A8::src%2Fautoforge%2Faf_mcp.py%23%E6%8E%88%E6%9D%83%E7%A0%81::src%2Fautoforge%2Faf_mcp.py::ATTACK-CLASSES.md%23Access%20control",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_mcp.py#工具门",
+      "boundary": "src/autoforge/af_mcp.py#授权码",
+      "subsystem": "src/autoforge/af_mcp.py",
+      "attack_class": "ATTACK-CLASSES.md#Access control"
+    },
+    "surface": "src/autoforge/af_mcp.py#工具门",
+    "boundary": "src/autoforge/af_mcp.py#授权码",
+    "subsystem": "src/autoforge/af_mcp.py",
+    "attack_class": "ATTACK-CLASSES.md#Access control",
+    "starting_paths": [
+      "src/autoforge/af_mcp.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第六轮 scoped run，聚焦第五轮指出的处女地 af_evo + af_service；其余面未纳入本轮，不作覆盖声明"
+    ]
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_service.py%23%E4%BC%9A%E8%AF%9D%E6%B8%85%E7%90%86::src%2Fautoforge%2Faf_service.py%23purge-%E4%BB%85%E5%9C%A8%E8%AF%BB%E8%B7%AF%E5%BE%84::src%2Fautoforge%2Faf_service.py::ATTACK-CLASSES.md%23Resource%20and%20file%20handling",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_service.py#会话清理",
+      "boundary": "src/autoforge/af_service.py#purge-仅在读路径",
+      "subsystem": "src/autoforge/af_service.py",
+      "attack_class": "ATTACK-CLASSES.md#Resource and file handling"
+    },
+    "surface": "src/autoforge/af_service.py#会话清理",
+    "boundary": "src/autoforge/af_service.py#purge-仅在读路径",
+    "subsystem": "src/autoforge/af_service.py",
+    "attack_class": "ATTACK-CLASSES.md#Resource and file handling",
+    "starting_paths": [
+      "src/autoforge/af_service.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Resource and file handling",
+    "selected_companion_blocks": [
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Failure and recovery attack classes",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Core discipline",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Universal moves",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "candidate",
+    "agent_id": "hunter-local-1",
+    "reviewed_paths": [
+      "src/autoforge/af_service.py"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-local-1",
+        "reviewed_paths": [
+          "src/autoforge/af_service.py"
+        ],
+        "artifact": "agents/hunter-local-1/artifacts/session.txt",
+        "method": "local",
+        "invariant": "有 TTL 的缓存必须在写入路径也触发回收，不能只在读取路径惰性清理",
+        "result": "实测：create_session（L1347）不调用 _purge_sessions，仅 list_sessions/_get_session 调用。用真实样例 IR 创建 50 个会话，将 TTL 缩短为 0.5s 后等待 1.2s（已超 TTL）不做任何读取，_SESSIONS 仍为 50（全部残留）；调用一次 list_sessions() 后立即清零。每个会话持有 Runtime（含 bus/audit/adapters/clock）+ FakeHA（仿真状态）+ Graph（完整 IR）三个重对象，非轻量条目。默认 TTL=3600s。触发场景：创建会话后用户放弃（不 answer、不 get、不 list）时永久残留，直至下次有读取操作"
+      }
+    ],
+    "result_fingerprints": [
+      "fp-session-lazy-purge"
+    ],
+    "unresolved": []
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_service.py%23%E5%AE%9E%E4%BD%93%E5%81%A5%E5%BA%B7%E7%BC%93%E5%AD%98::src%2Fautoforge%2Faf_service.py%23health-cache::src%2Fautoforge%2Faf_service.py::ATTACK-CLASSES.md%23Resource%20and%20file%20handling",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_service.py#实体健康缓存",
+      "boundary": "src/autoforge/af_service.py#health-cache",
+      "subsystem": "src/autoforge/af_service.py",
+      "attack_class": "ATTACK-CLASSES.md#Resource and file handling"
+    },
+    "surface": "src/autoforge/af_service.py#实体健康缓存",
+    "boundary": "src/autoforge/af_service.py#health-cache",
+    "subsystem": "src/autoforge/af_service.py",
+    "attack_class": "ATTACK-CLASSES.md#Resource and file handling",
+    "starting_paths": [
+      "src/autoforge/af_service.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Resource and file handling",
+    "selected_companion_blocks": [
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Failure and recovery attack classes",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Core discipline",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Universal moves",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "covered",
+    "agent_id": "hunter-local-1",
+    "reviewed_paths": [
+      "src/autoforge/af_service.py"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-local-1",
+        "reviewed_paths": [
+          "src/autoforge/af_service.py"
+        ],
+        "artifact": null,
+        "method": "source",
+        "invariant": "以文件路径为键的缓存其键数量必须受输入规模约束",
+        "result": "核实：_ENTITY_HEALTH_CACHE 以 DeviceCatalog 路径字符串为键，键数量受 store 根目录数量约束（通常 1 个），且条目按 (st_mtime, st_size) 校验失效，单条目会被覆盖而非累积。无缺陷"
+      }
+    ],
+    "result_fingerprints": [],
+    "unresolved": []
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_vhass%23%E4%BB%BF%E7%9C%9F::src%2Fautoforge%2Faf_vhass%2Ffake.py%23%E7%8A%B6%E6%80%81%E6%9C%BA::src%2Fautoforge%2Faf_vhass::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_vhass#仿真",
+      "boundary": "src/autoforge/af_vhass/fake.py#状态机",
+      "subsystem": "src/autoforge/af_vhass",
+      "attack_class": "ATTACK-CLASSES.md#Business logic"
+    },
+    "surface": "src/autoforge/af_vhass#仿真",
+    "boundary": "src/autoforge/af_vhass/fake.py#状态机",
+    "subsystem": "src/autoforge/af_vhass",
+    "attack_class": "ATTACK-CLASSES.md#Business logic",
+    "starting_paths": [
+      "src/autoforge/af_vhass"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第六轮 scoped run，聚焦第五轮指出的处女地 af_evo + af_service；其余面未纳入本轮，不作覆盖声明"
+    ]
+  }
+]

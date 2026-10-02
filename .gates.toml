@@ -22,6 +22,10 @@ critical_globs = [
     "src/autoforge/af_affordance.py",  # 风险域表（与 af_adapters/base.py 的表矛盾即 P0）
     "src/autoforge/af_adapters/*",     # 真机写入
     "src/autoforge/af_ir/*",           # IR 与边优先级
+    # 第六轮审计 REG-3：这两份是"缺陷实际发生地"却在看守之外（去抖那条 NameError 就在 scheduler）。
+    "src/autoforge/af_scheduler.py",   # 触发/mode/配额/去抖
+    "src/autoforge/af_service.py",     # 会话与仿真编排（`_SESSIONS` 家族）
+    "src/autoforge/af_mqtt_bridge.py", # 跨仓说话的一张嘴：吞异常就等于对端静默失联
 ]
 
 # ── 写入路径：这里的字面量 `ok=True` 是硬错误 ─────────────────────────────

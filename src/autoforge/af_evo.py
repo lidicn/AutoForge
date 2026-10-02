@@ -232,8 +232,11 @@ def _token_sets(value: Any) -> list[frozenset[str]]:
 
 
 def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
-    if not a and not b:
-        return 1.0
+    if not a or not b:
+        # 空 token 集的交集与并集都是 ∅，数学上是 0/0。取 1.0 等于宣布"两条都没有
+        # 触发器的自动化完全相同"——而真实不同的两条只有 0.5。共同缺失不是证据，判 0.0；
+        # 确实要把"共同缺失"当作相同的地方必须显式表达（EvoPolicy.merge_allow_empty_triggers）。
+        return 0.0
     union = len(a | b)
     return (len(a & b) / union) if union else 0.0
 
@@ -247,10 +250,13 @@ def _max_jaccard(sa: Sequence[frozenset[str]], sb: Sequence[frozenset[str]]) -> 
 
 
 def trigger_similarity(a: Any, b: Any) -> float:
-    """两个自动化（或触发器）的触发相似度：触发 token 的最大两两 Jaccard。"""
+    """两个自动化（或触发器）的触发相似度：触发 token 的最大两两 Jaccard。
+
+    任一侧拿不出 trigger 就是 0.0（"没有可比对的东西"），而不是 1.0。
+    """
     sa, sb = _token_sets(a), _token_sets(b)
     if not sa or not sb:
-        return 1.0 if (not sa and not sb) else 0.0
+        return 0.0
     return _max_jaccard(sa, sb)
 
 

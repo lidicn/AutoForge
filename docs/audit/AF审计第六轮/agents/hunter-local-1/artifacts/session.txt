@@ -1,0 +1,44 @@
+### 证据3 af_service._SESSIONS 惰性清理 ###
+SESSION_TTL_S(默认) = 3600.0
+已改为 0.5s 用于观测
+
+[1] 创建 50 个会话（不查询、不列出）
+  create 失败: IRValidationError: IR 校验失败：<root>: 'ir_version' is a required property; nodes/1/timeout: 60 is not 
+  创建成功 0 个
+  _SESSIONS 大小 = 0
+
+[2] 等待 1.0s（超过 TTL）后，不查询直接看大小
+  _SESSIONS 大小 = 0   ← 已过期但未清理
+
+[3] 此时调用一次 list_sessions()（触发 purge）
+  list_sessions 返回 0 条
+  _SESSIONS 大小 = 0   ← 读取路径触发清理
+
+[4] 关键验证：create_session 自身是否清理
+  create_session 源码中是否调用 _purge_sessions: ❌ 否
+  list_sessions: 是
+  _get_session : 是
+
+==============================================================
+用真实样例 IR 重测
+==============================================================
+  样例: study_ask_ac  keys=['ir_version', 'id', 'name', 'version', 'mode', 'snapshot', 'meta', 'nodes', 'edges']
+  创建成功 50 个
+  _SESSIONS 大小 = 50
+
+  等待超过 TTL 后（未做任何读取）: _SESSIONS = 50
+  → ❌ 过期会话全部残留（清理未被触发）
+
+  调用 list_sessions() 后: _SESSIONS = 0（返回 0 条）
+  → ✅ 读取路径触发清理
+
+==============================================================
+每个会话持有的对象（内存权重）
+==============================================================
+  会话字典字段: ['id', 'runtime', 'states', 'graph', 'entities', 'created', 'mode']
+    runtime    type=Runtime
+    states     type=FakeHA
+    graph      type=Graph
+    entities   type=set
+  runtime 属性示例: ['_exec_stats', '_on_instance_change', '_on_spawn', '_on_terminal', 'adapters', 'advance', 'answer', 'audit', 'bus', 'cancel', 'clock', 'conf']
+    runtime.instances 数 = ?

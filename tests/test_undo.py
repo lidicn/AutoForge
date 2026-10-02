@@ -8,6 +8,7 @@ canary 属性感知回滚、HAAdapter 下发前快照捕获钩子、forge undo C
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,7 @@ class RecordingAdapter:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
 
-    def call(self, action: str, params: Mapping) -> CallResult:  # type: ignore[name-defined]
+    def call(self, action: str, params: Mapping) -> CallResult:
         self.calls.append((action, dict(params)))
         return CallResult.ok({"action": action})
 

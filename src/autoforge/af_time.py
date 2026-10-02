@@ -27,7 +27,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 try:
     from zoneinfo import ZoneInfo

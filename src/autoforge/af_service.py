@@ -1267,6 +1267,9 @@ def bootstrap_examples(store: GraphStore, examples_dir: str | Path) -> list[str]
 #: 会话存活上限（秒），可用环境变量覆盖
 SESSION_TTL_S = float(os.getenv("AUTOFORGE_SESSION_TTL_S", "3600"))
 
+#: 在途会话硬上限。TTL 只管"活了多久"，这一条管"同时有多少份 Runtime 常驻"。
+SESSION_MAX = int(os.getenv("AUTOFORGE_SESSION_MAX", "128"))
+
 _SESSIONS: dict[str, dict[str, Any]] = {}
 _SESSIONS_LOCK = threading.Lock()
 
@@ -1347,15 +1350,29 @@ def _session_view(sess: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _purge_sessions() -> None:
+    """先按 TTL 清，再把总量压回水位线之下。
+
+    只做 TTL 不够：峰值内存仍等于「创建速率 × SESSION_TTL_S」，而一个会话挂着
+    Runtime + FakeHA + Graph——一轮批量仿真就能把上千份常驻住（第六轮审计 R6-F1）。
+    同族的 af_audit / af_preference / af_bus 都是"超时 + 硬上限"两条腿，这里补齐。
+    """
     now = time.monotonic()
     with _SESSIONS_LOCK:
         for sid in [k for k, v in _SESSIONS.items() if now - float(v["created"]) > SESSION_TTL_S]:
             _SESSIONS.pop(sid, None)
+        overflow = len(_SESSIONS) - SESSION_MAX
+        if overflow > 0:
+            # 最老的先走：正在等人工应答的会话被挤掉后拿到的是 404「可能已过期」，
+            # 这比整进程 OOM 轻——所以水位线要留足，不是拿来当流控用的。
+            oldest = sorted(_SESSIONS.items(), key=lambda kv: float(kv[1]["created"]))[:overflow]
+            for sid, _sess in oldest:
+                _SESSIONS.pop(sid, None)
 
 
 def _get_session(session_id: str) -> dict[str, Any]:
     _purge_sessions()
-    sess = _SESSIONS.get(session_id)
+    with _SESSIONS_LOCK:  # 读也要上锁：清/插两条写路径都在锁里，读侧例外就是读到半截
+        sess = _SESSIONS.get(session_id)
     if sess is None:
         raise ServiceError(f"未找到会话 {session_id!r}（可能已过期或服务已重启）", status=404)
     return sess
@@ -1367,6 +1384,9 @@ def create_session(
     events: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """创建会话：回放事件并停在挂起点/终态，返回含 `asks` 的状态视图。"""
+    # 第六轮审计 R6-F1：清理原本只挂在读路径上，纯"创建后不再读"的会话会一直常驻。
+    # 创建前先清一次，硬上限才真的封得住峰值。
+    _purge_sessions()
     graph = _load_ir(ir)
     runtime, states = _build_sim_runtime(graph, seed)
     _replay(runtime, states, list(events or []))

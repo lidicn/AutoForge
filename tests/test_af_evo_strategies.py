@@ -237,7 +237,23 @@ def test_trigger_similarity_metric():
     assert trigger_similarity(a, a) == 1.0
     assert abs(trigger_similarity(a, b) - 0.75) < 1e-9
     assert trigger_similarity(a, c) == 0.0
-    assert trigger_similarity(None, None) == 1.0
+
+
+def test_missing_triggers_are_not_identical():
+    """第六轮缺陷 2：`_jaccard(∅,∅)` 曾返回 1.0，把"共同缺失"读成"完全相同"。
+
+    真实不同的两条（不同房间人体传感器）只有 0.5，若"都没写 trigger"拿到 1.0，
+    任何阈值化去重都会把最容易误合并的一对排在最前面。
+    """
+    from autoforge.af_evo import _jaccard, _trigger_tokens
+
+    assert _jaccard(_trigger_tokens(None), _trigger_tokens({})) == 0.0
+    assert trigger_similarity(None, None) == 0.0        # 无证据 ≠ 铁定相同
+    assert trigger_similarity({}, {}) == 0.0
+    hall = {"kind": "state", "entity_id": "binary_sensor.motion_hall", "to": "on"}
+    kitchen = {"kind": "state", "entity_id": "binary_sensor.motion_kitchen", "to": "on"}
+    # 对照组：真实不同的两条也只有 0.5，"共同缺失"绝不能高过它
+    assert trigger_similarity(hall, kitchen) == 0.5
 
 
 def test_action_signature_ignores_node_id():

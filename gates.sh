@@ -39,6 +39,15 @@ echo "══ AST 门禁（不含冒烟）═════════════
 ast_rc=$?
 
 echo
+echo "══ undefined-name 门禁（标准库 AST，零依赖）═══════════════════"
+# 审计 REG-3：这一类（用了没定义的名字）在既有门禁体系里无人看守，而它能让整套测试
+# 连收集都跑不起来。只依赖标准库——本机禁 pip install，要装包的门禁等于没有门禁。
+"$PYTHON" "$REPO/scripts/check_undefined_names.py" "$REPO/src"
+name_rc=$?
+"$PYTHON" "$REPO/scripts/check_undefined_names.py" "$REPO/tests"
+tests_name_rc=$?
+
+echo
 echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）════════════════════"
 # 单跑冒烟：只走 `import` 子进程，慢但一次性看清。
 # 注意：这条在开发机上的红多半是「依赖没装齐 / 本地副本不完整」，
@@ -47,6 +56,10 @@ echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）═════�
 smoke_rc=${PIPESTATUS[0]}
 
 echo
+if [ $name_rc -ne 0 ] || [ $tests_name_rc -ne 0 ]; then
+  echo "结论：undefined-name 门禁红（src=$name_rc / tests=$tests_name_rc）。这类名字在运行期就是 NameError，没有『基线放行』这一说——补 import 或删掉误用。"
+  exit 1
+fi
 if [ $ast_rc -ne 0 ]; then
   echo "结论：AST 门禁红（exit=$ast_rc）。修，或在 .gates-baseline.txt 里逐条写明放行理由。"
   exit $ast_rc
