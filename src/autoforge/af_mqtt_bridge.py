@@ -25,9 +25,7 @@ from homesdk import mqtt as _mqtt
 from homesdk import presence as _presence
 from homesdk.config import MissingEnv
 
-from .af_time import SystemTimeSource, TimeSource
-
-from .af_time import SystemTimeSource, TimeSource
+from .af_time import SystemTimeSource, TimeSource, to_house_iso
 
 __all__ = [
     "AfMqttBridge",
@@ -240,10 +238,17 @@ class AfMqttBridge:
             del bucket[: len(bucket) - MAX_HISTORY]
 
     def _envelope(self, *, automation_id: str, instance_id: str, extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """载荷形态对齐 ADM 主题契约表 §1.2：`{trace_id, ts, automation_id, ref}`。
+
+        `ref` 是表里给的字段的值——这里放实例标识；`instance_id` 同值并留，
+        因为表里 `ref` 到底指"实例"还是"部署 ref"没有写死（已就此提 DCD）。
+        `ts` 走家庭墙钟口径（契约 §四），不是机器时区也不是 UTC。
+        """
         payload: dict[str, Any] = {
             "trace_id": uuid4().hex[:12],
-            "ts": self.clock.now().isoformat(),
+            "ts": to_house_iso(self.clock.now()),
             "automation_id": automation_id,
+            "ref": instance_id,
             "instance_id": instance_id,
         }
         if extra:

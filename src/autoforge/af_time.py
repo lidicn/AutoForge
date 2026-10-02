@@ -157,6 +157,27 @@ def house_tz_name() -> str:
     return value or TZ_FALLBACK_NAME
 
 
+def to_house_iso(moment: datetime | float | int | None = None) -> str:
+    """家庭墙钟口径的 ISO8601（ADM 主题契约 §四：跨仓时间戳不靠"大家都是 +8"的默契）。
+
+    主路径走机制层 `homesdk.time.to_house_iso`；缺席时用本仓同语义的镜像——
+    naive datetime **按家庭墙钟解释**，不交给机器时区（B3-AF-04 的根因）。
+    """
+    module = homesdk_time()
+    if module is not None:
+        return module.to_house_iso(moment)
+    tz = load_tz()
+    if moment is None:
+        target = datetime.now(tz)
+    elif isinstance(moment, (int, float)):
+        target = datetime.fromtimestamp(float(moment), tz=tz)
+    elif isinstance(moment, datetime):
+        target = moment.replace(tzinfo=tz) if moment.tzinfo is None else moment.astimezone(tz)
+    else:
+        raise TypeError(f"to_house_iso 不支持的入参类型：{type(moment).__name__}")
+    return target.isoformat()
+
+
 def ensure_aware(dt: datetime, *, who: str = "dt") -> datetime:
     """naive 时间一律拒绝。B3-AF-04 根因就是 naive UTC 与 aware local 混算。"""
     if dt.tzinfo is None:

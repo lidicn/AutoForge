@@ -29,7 +29,7 @@ from autoforge.af_mqtt_bridge import (
     preflight,
 )
 from autoforge.af_runtime import Runtime
-from autoforge.af_time import VirtualTimeSource
+from autoforge.af_time import VirtualTimeSource, load_tz
 
 
 class FakeClient:
@@ -108,6 +108,32 @@ def test_fired_and_failed_are_not_retained():
     body = json.loads(client.published[1]["payload"]) if isinstance(client.published[1]["payload"], str) else client.published[1]["payload"]
     assert body["error"] == "boom" and body["automation_id"] == "auto_a"
     assert body["trace_id"], "跨仓排障锚点"
+
+
+def _body(record: dict) -> dict:
+    payload = record["payload"]
+    return json.loads(payload) if isinstance(payload, str) else payload
+
+
+def test_event_envelope_matches_adm_contract_table():
+    """契约表 §1.2 载荷字段 + §四 时间口径：fired={trace_id,ts,automation_id,ref}，failed 多 error。
+
+    `ts` 断言的是**口径**而不是某个固定偏移：必须带偏移、且偏移等于家庭时区当前偏移。
+    写死 "+08:00" 会让这条测试在 TZ 环境变量被改动时假红，也放过了"naive UTC"这类真红。
+    """
+    client = FakeClient()
+    bridge = _bridge(client)
+    bridge.publish_fired(automation_id="auto_a", instance_id="inst-1")
+    bridge.publish_failed(automation_id="auto_a", instance_id="inst-2", error="boom")
+    fired, failed = (_body(p) for p in client.published)
+
+    assert set(fired) == {"trace_id", "ts", "automation_id", "ref", "instance_id"}
+    assert fired["ref"] == fired["instance_id"] == "inst-1"
+    assert failed["ref"] == "inst-2" and failed["error"] == "boom"
+
+    ts = datetime.fromisoformat(fired["ts"])
+    assert ts.tzinfo is not None and ts.utcoffset() is not None, "ts 不许是 naive 或 Z（契约 §四）"
+    assert ts.utcoffset() == datetime.now(load_tz()).utcoffset()
 
 
 def test_observe_terminal_uses_instance_id_and_ignores_other_states():

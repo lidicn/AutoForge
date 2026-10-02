@@ -48,6 +48,13 @@ name_rc=$?
 tests_name_rc=$?
 
 echo
+echo "══ 主题白名单门禁（ADM 契约表为唯一真源）══════════════════════"
+# 契约表 §五「代码里出现的 topic 必须在本表登记（未登记的判红）」、§六「加主题 = 改本表」。
+# 没有基线放行一说：未登记主题 = broker ACL 与代码口径不一致，属上线风险，不属风格问题。
+"$PYTHON" "$REPO/scripts/check_topic_whitelist.py" "$REPO/src/autoforge"
+topic_rc=$?
+
+echo
 echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）════════════════════"
 # 单跑冒烟：只走 `import` 子进程，慢但一次性看清。
 # 注意：这条在开发机上的红多半是「依赖没装齐 / 本地副本不完整」，
@@ -59,6 +66,10 @@ echo
 if [ $name_rc -ne 0 ] || [ $tests_name_rc -ne 0 ]; then
   echo "结论：undefined-name 门禁红（src=$name_rc / tests=$tests_name_rc）。这类名字在运行期就是 NameError，没有『基线放行』这一说——补 import 或删掉误用。"
   exit 1
+fi
+if [ $topic_rc -ne 0 ]; then
+  echo "结论：主题白名单门禁红（exit=$topic_rc）。先在 ADM 主题契约表登记，再改代码；不存在『基线放行』。"
+  exit $topic_rc
 fi
 if [ $ast_rc -ne 0 ]; then
   echo "结论：AST 门禁红（exit=$ast_rc）。修，或在 .gates-baseline.txt 里逐条写明放行理由。"
