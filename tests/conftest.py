@@ -66,6 +66,23 @@ def examples_dir() -> Path:
     return EXAMPLES
 
 
+def vhass_plugin_loaded(config) -> bool:
+    """真 vhass 的 `hass` 夹具由 pytest-homeassistant **插件**提供，插件没注册就没有夹具。
+
+    模块级 skipif 原先只问"包装得上吗"（`find_spec('homeassistant')`），可本仓
+    `pyproject.toml:65` 默认 `-p no:homeassistant`（Windows 上 HA runner 要 `fcntl`，
+    插件在加载阶段就崩）。于是在 GitHub CI 上：**包在、插件被禁** ⇒ 夹具不存在 ⇒
+    收集期 `fixture 'hass' not found` **报错**而不是 skip，CI 从建仓第一条 run 起就红
+    （2026-10-02 实测：run 1-26 全 failed，其中 pytest 作业 10 errors）。
+    真 vhass 的权威跑法是 `docker run autoforge-test`——`Dockerfile.test` 显式
+    `-p pytest_homeassistant_custom_component.plugins` 把插件加载回来。
+    """
+    return any(
+        getattr(mod, "__name__", "").startswith("pytest_homeassistant_custom_component")
+        for mod in config.pluginmanager.get_plugins()
+    )
+
+
 def pytest_collection_modifyitems(config, items):
     """离线环境自动 skip 需要真实 HA 的集成测试。
 
@@ -73,6 +90,15 @@ def pytest_collection_modifyitems(config, items):
     真连 HA 的测试会因此 HASocketBlockedError。这些测试统一打
     `@pytest.mark.integration`；仅当 AUTOFORGE_LIVE_HA=1 时才运行。
     """
+    if not vhass_plugin_loaded(config):
+        reason = (
+            "真 vhass 需要 pytest-homeassistant 插件处于启用状态；本仓默认 `-p no:homeassistant`"
+            "（Windows 装不上 HA runner）。权威跑法 = docker run autoforge-test"
+            "（Dockerfile.test 显式 -p 加载插件）"
+        )
+        for item in items:
+            if "vhass" in item.keywords:
+                item.add_marker(pytest.mark.skip(reason=reason))
     live_ha = os.environ.get("AUTOFORGE_LIVE_HA", "").lower() in ("1", "true", "yes")
     if live_ha:
         return
