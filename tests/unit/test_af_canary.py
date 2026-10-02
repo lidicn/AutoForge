@@ -151,3 +151,58 @@ def test_executor_skips_canary_when_low_confidence():
 
     # ask 带：不进入 canary 保护，因此无漂移审计
     assert not any(ev.type == ENTITY_DRIFT for ev in runtime.audit)
+
+
+# ── 第七轮审计：StateProvider 统一 fail-closed 后，canary 两处读取的落点 ──────
+
+def test_has_drift_reads_unreadable_target_as_drift():
+    """动作后目标实体读不到（漂移/改名）→ 判**有漂移**，不是抛穿、更不是"没漂"。
+
+    铁律 #5：EXEMPT ≠ VERIFIED。读不到实际态就没有"符合预期"的证据。
+    """
+    states = InMemoryStateProvider()
+    states.set_state("light.x", "off")
+    adapter = MockAdapter()
+    guard = CanaryGuard(states)
+    res = guard.perform(adapter, "light.turn_on", {"entity_id": "light.x"})
+    states.states.pop("light.x")  # 设备在动作之后从 HA 消失
+    assert res.has_drift() is True   # 旧行为：抛 UnknownEntity 穿出 step()
+
+
+def test_executor_soft_fails_when_pre_snapshot_missing():
+    """取不到动作前快照 → 一条动作都不许下发，走软失效记 entity_drift。
+
+    `perform` 在**下发之前**取快照，所以这里 mock 适配器必须一次都没被调用；
+    异常也不许穿出 `publish`（穿出就是整次 tick 陪葬，第二轮审计那一类）。
+    """
+    graph = load_graph(
+        {
+            "ir_version": "0.2.1",
+            "id": "drive",
+            "name": "drive",
+            "version": 1,
+            "mode": "single",
+            "confidence": 0.9,  # auto 带 → 进 canary 保护
+            "nodes": [
+                {"id": "o", "kind": "on", "trigger": {"type": "state", "entity_id": "binary_sensor.m", "to": "on"}},
+                {
+                    "id": "d",
+                    "kind": "do",
+                    "adapter": "mock",
+                    "action": "light.turn_on",
+                    "params": {"entity_id": "light.ghost"},  # 状态源里没有这个实体
+                    "canary": {"auto_rollback": True},
+                    "on_error": {"default": "err"},
+                },
+                {"id": "err", "kind": "pass"},
+            ],
+            "edges": [{"from": "o", "to": "d", "kind": "then"}],
+        }
+    )
+    states = InMemoryStateProvider()
+    states.set_state("binary_sensor.m", "off")
+    runtime = build_runtime(graph, states=states)
+    runtime.publish(BusEvent.of("binary_sensor.m", "on"))  # 不许抛
+
+    assert any(ev.type == ENTITY_DRIFT for ev in runtime.audit)
+    assert runtime.adapters.get("mock").calls == [], "取不到回滚把手就不该下发"

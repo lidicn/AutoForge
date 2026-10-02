@@ -1,0 +1,73 @@
+### 证据3 关节：仿真/生产 StateProvider 行为不一致 ###
+=== 两个 StateProvider 实现对『未知实体』的行为对比 ===
+  InMemoryStateProvider(仿真/单测) vs HAStateProvider(生产 HA)
+
+[仿真] snapshot(['binary_sensor.motion','light.ghost'])
+   ❌ 抛 UnknownEntity: 'light.ghost'   ← 整段快照失败，连存在的实体也拿不到
+
+[生产] snapshot(['binary_sensor.motion','light.ghost'])
+   成功，len=1  values={'binary_sensor.motion': 'on'}
+   → 未知实体被【静默省略】，不抛异常
+   → 存在的实体仍可读: motion='on'
+   get('light.ghost') -> UnknownEntity（推迟到读取时才抛）
+
+==================================================================
+=== 后果：短路求值下两者结果不同 ===
+==================================================================
+  表达式: motion_state == 'on' OR ghost == 'on'   （A or B，A 为 True 时短路）
+
+  [仿真] snapshot() 阶段就抛 UnknownEntity
+         → 连 A（存在的实体）都来不及求值 → 整段软失效 → 自动化不执行
+  [生产] snapshot() 返回含 A 的快照
+         → A='on' 为 True → or 短路 → B 永不被求值 → 无异常 → 自动化正常执行
+
+  >>> 同一份 IR：仿真判定『不执行』，生产实际『执行』
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+ModuleNotFoundError: No module named 'autoforge.af_expr'
+
+==================================================================
+[4] 表达式 or 是否短路
+==================================================================
+  evaluate 签名: (expr: 'Mapping[str, Any]', resolve: 'Resolver', _budget: '_Budget | None' = None) -> 'bool'
+  ❌ KeyError: 'left'
+  resolve 调用序列: []
+
+==================================================================
+[5] 端到端：同一 IR 在『抛异常』与『静默省略』两种 Provider 下的结果
+==================================================================
+
+  【A】仿真 Provider（FakeHA / InMemory，未知实体 snapshot 阶段抛）
+    ❌ snapshot 阶段 UnknownEntity: 'light.ghost'
+    结果 = 整段软失效 → 自动化【不执行】
+
+  【B】生产 Provider（HAStateProvider，未知实体静默省略）
+Traceback (most recent call last):
+  File "<stdin>", line 30, in <module>
+  File "/data/workspace/AutoForge-main/src/autoforge/af_ir/expr.py", line 483, in evaluate
+    return any(evaluate(a, resolve, budget) for a in args)
+  File "/data/workspace/AutoForge-main/src/autoforge/af_ir/expr.py", line 483, in <genexpr>
+    return any(evaluate(a, resolve, budget) for a in args)
+  File "/data/workspace/AutoForge-main/src/autoforge/af_ir/expr.py", line 489, in evaluate
+    right = _operand_value(expr["right"], resolve, budget)
+  File "/data/workspace/AutoForge-main/src/autoforge/af_ir/expr.py", line 376, in _operand_value
+    raise ExprError(f"非法 operand：{operand!r}")
+autoforge.af_ir.expr.ExprError: 非法 operand：'on'
+
+==================================================================
+[6] 端到端实证（用 is_on 一元算子）：motion 存在且 on，ghost 不存在
+==================================================================
+
+  【A】仿真 Provider（FakeHA / InMemoryStateProvider，P1-12 fail-closed）
+    ❌ snapshot 阶段抛 UnknownEntity: 'light.ghost'
+    → 整段软失效，自动化【不执行】
+
+  【B】生产 Provider（HAStateProvider / vhass bridge，静默省略）
+    evaluate -> True
+    → or 短路：A=True 即返回，B 未求值，自动化【执行】
+
+==================================================================
+  同一 IR + 同一真实状态（motion=on, ghost 不存在）：
+    仿真 → 不执行  ｜  生产 → 执行
+  >>> 仿真无法预测生产行为（铁律『看到即跑的』在此失效）
+==================================================================

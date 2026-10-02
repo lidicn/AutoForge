@@ -1,0 +1,52 @@
+### 证据4 af_adapters 关节：接口契约一致性 ###
+66:class AdapterError(Exception):
+71:class CallResult:
+79:    def ok(cls, data: Mapping[str, Any] | None = None) -> "CallResult":
+83:    def fail(cls, error: str, **data: Any) -> "CallResult":
+87:class FaultQueue:
+98:    def __init__(self) -> None:
+101:    def push(self, kind: str, error: str) -> None:
+104:    def pop(self) -> tuple[str, str] | None:
+107:    def empty(self) -> bool:
+110:    def clear(self) -> None:
+113:    def __len__(self) -> int:
+118:class Adapter(Protocol):
+123:    def call(self, action: str, params: Mapping[str, Any]) -> CallResult:
+128:class AdapterRegistry:
+134:    def register(self, adapter: Adapter) -> None:
+137:    def get(self, name: str) -> Adapter:
+143:    def __contains__(self, name: object) -> bool:
+146:    def values(self) -> list[Adapter]:
+156:def is_destructive(action: str) -> bool:
+162:def classify_action(adapter: str, action: str, params: Mapping[str, Any] | None = None) -> str:
+
+=== 各适配器 call 返回值对比 ===
+--- src/autoforge/af_adapters/__init__.py ---
+--- src/autoforge/af_adapters/base.py ---
+123:    def call(self, action: str, params: Mapping[str, Any]) -> CallResult:
+141:            raise AdapterError(f"未注册的适配器：{name!r}（已注册：{sorted(self._adapters)}）") from exc
+--- src/autoforge/af_adapters/ha.py ---
+73:            raise RuntimeError(
+93:    def call(self, action: str, params: Mapping[str, Any]) -> CallResult:
+98:            return CallResult.fail(f"非法动作（应为 domain.service）：{action!r}", action=action)
+101:            return CallResult.fail(f"非法 domain/service（含非法字符）：{action!r}", action=action)
+123:            return CallResult.fail(f"HA 返回 {exc.code}：{detail}", action=action, params=dict(params))
+125:            return CallResult.fail(f"HA 下发失败（{action}）：{exc}", action=action, params=dict(params))
+127:            return CallResult.fail(f"HA 返回 {status}：{raw[:200]}", action=action, params=dict(params))
+132:        return CallResult.ok({"action": action, "result": data})
+--- src/autoforge/af_adapters/http.py ---
+33:            raise _NoRedirectAllowed(f"重定向目标不在出站白名单内: {host_of(newurl)}")
+67:    def call(self, action: str, params: Mapping[str, Any]) -> CallResult:
+71:            return CallResult.fail("缺少或非法 url", action=action, params=dict(params))
+73:            return CallResult.fail(
+80:            return CallResult.ok({"dry_run": True, "action": action, "url": url})
+89:                return CallResult.ok({"status": resp.status, "body": body})
+91:            return CallResult.fail(str(exc), action=action, url=url)
+93:            return CallResult.fail(f"HTTP 请求失败：{exc}", action=action, url=url)
+--- src/autoforge/af_adapters/mock.py ---
+38:    def actions(self) -> list[str]:
+41:    def called_with(self, action: str) -> list[dict[str, Any]]:
+65:    def call(self, action: str, params: Mapping[str, Any]) -> CallResult:
+70:            return CallResult.fail(error, fault=kind, action=action, params=dict(params))
+73:            return CallResult.ok({"action": action, "params": dict(params)})
+74:        return CallResult.fail(f"mock 预设失败：{action}", action=action, params=dict(params))

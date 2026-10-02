@@ -179,9 +179,16 @@ def test_live_run_records_pre_snapshot_and_undo_restores_it(tmp_path, noauth, mo
         },
     )
     assert r.status_code == 200, r.json()
-    deploy_id = r.json()["undo_deploy_id"]
+    body = r.json()
+    deploy_id = body["undo_deploy_id"]
     assert deploy_id, "undo=true 必须把撤销 ID 交回前端，否则按钮无从指向"
     assert [a for a, _ in transports[0].dispatched] == ["light.turn_off"]
+    # 第七轮审计：`StateProvider` 统一 fail-closed 后，触发实体不在 HA 里会抛。
+    # 这是**报告**读取点（动作已下发、撤销句柄已落盘），必须显式列出缺口而不是 500
+    # ——500 会让操作员连 undo_deploy_id 都拿不到。
+    assert body["missing_entities"] == ["binary_sensor.hall"]
+    assert body["final_states"]["binary_sensor.hall"] is None
+    assert body["final_states"]["light.study"] == "on"
 
     u = client.post(f"/api/undo/{deploy_id}", json={"confirm": True})
     assert u.status_code == 200, u.json()

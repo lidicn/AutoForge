@@ -26,7 +26,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable, Iterable, Mapping
 
-from ..af_state import Snapshot, StateProvider
+from ..af_state import Snapshot, StateProvider, UnknownEntity
 from ..af_config import Config, get_config
 from .base import AdapterError, CallResult, FaultQueue
 
@@ -174,8 +174,8 @@ class HAStateProvider:
     """HA 状态源（REST，生产用）。
 
     每次 `snapshot()` 拉取所需实体的**当前**状态，返回只读快照。
-    拉取失败（网络/鉴权）时**不静默吞错**：缺失实体不进快照，
-    后续求值会按 IR §14-9 走 `on_error` 软失效 / 漂移告警。
+    未知实体抛 `UnknownEntity`（fail-closed），与仿真底座同一口径
+    ——见 `af_state.StateProvider` 的跨实现契约与第七轮审计。
     """
 
     def __init__(
@@ -193,15 +193,25 @@ class HAStateProvider:
         )
 
     def snapshot(self, entity_ids: Iterable[str]) -> Snapshot:
+        """P1-12 同一口径：**未知实体抛 `UnknownEntity`，不静默省略**。
+
+        第七轮审计的实锤：这一族过去是 fail-open（缺实体就从快照里省掉），而仿真底座
+        `FakeHA`/`InMemoryStateProvider` 是 fail-closed（抛）。配合 `or` 用 `any()` 短路
+        （`af_ir/expr.py:517`），同一条 IR 在两边结论相反：
+        `or(is_on(motion), is_on(ghost))` + `ghost` 不存在 → 仿真软失效**不执行**，
+        生产里 motion 命中即**执行**。用户"看到即跑的"就此失效。
+        统一到 fail-closed：漂移要么两边都拦，要么两边都放，不许一半一半。
+        """
         wanted = list(entity_ids)
         all_states = self.transport.all_states()
         values: dict[str, str] = {}
         attributes: dict[str, dict[str, Any]] = {}
         for entity_id in wanted:
-            if entity_id in all_states:
-                state, attrs = all_states[entity_id]
-                values[entity_id] = state
-                attributes[entity_id] = attrs
+            if entity_id not in all_states:
+                raise UnknownEntity(entity_id)
+            state, attrs = all_states[entity_id]
+            values[entity_id] = state
+            attributes[entity_id] = attrs
         return Snapshot(values=values, attributes=attributes)
 
 

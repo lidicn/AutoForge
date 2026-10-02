@@ -1,0 +1,24 @@
+### 证据2 af_state 快照接缝 ###
+=== [1] Snapshot.get 的『≥2 个点』判定规则边界 ===
+  light.x                            -> 'on'                  (1 个点：正常实体)
+  climate.bedroom.temperature        -> 22.5                  (2 个点：实体.属性)
+  climate.bedroom.hvac_mode          -> 'heat'                (2 个点：实体.属性)
+  climate.bedroom.missing            -> ❌ UnknownEntity  (2 个点但属性不存在)
+  sensor.a.b.c                       -> ❌ UnknownEntity  (3 个点)
+  input_number.x                     -> ❌ UnknownEntity  (domain=input_number（含下划线）)
+  light.x.                           -> ❌ UnknownEntity  (尾部点)
+  .light.x                           -> ❌ UnknownEntity  (头部点)
+
+=== [2] 接缝风险：domain 含点？===
+  HA entity_id 规范：domain.object_id，domain 不含点
+  但 object_id 可以含点吗？实测 rpartition 行为：
+    climate.bedroom.temperature  -> base='climate.bedroom' attr='temperature'
+    light.a.b                    -> base='light.a' attr='b'
+    x.y.z.w                      -> base='x.y.z' attr='w'
+
+=== [3] InMemoryStateProvider.snapshot 的未知实体处理 ===
+Traceback (most recent call last):
+  File "<stdin>", line 37, in <module>
+  File "/data/workspace/AutoForge-main/src/autoforge/af_state.py", line 118, in snapshot
+    raise UnknownEntity(e)
+autoforge.af_state.UnknownEntity: 'light.ghost'

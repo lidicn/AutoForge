@@ -1,0 +1,51 @@
+### 证据6 广度扫描 ###
+=== [1] pyflakes 全仓 ===
+src/autoforge/af_api.py:536:5: redefinition of unused 'api_asks' from line 510
+src/autoforge/af_apply.py:16:1: '.af_draft.DraftError' imported but unused
+src/autoforge/af_audit.py:16:1: 'typing.Mapping' imported but unused
+src/autoforge/af_auth.py:22:1: 'os' imported but unused
+src/autoforge/af_bus.py:15:1: 'dataclasses.replace' imported but unused
+src/autoforge/af_catalog.py:33:1: 'typing.Iterable' imported but unused
+src/autoforge/af_catalog.py:400:9: '.af_registry.RegistrySnapshot' imported but unused
+src/autoforge/af_cli.py:12:1: 'sys' imported but unused
+src/autoforge/af_cli.py:317:17: redefinition of unused 'sys' from line 12
+src/autoforge/af_cli.py:331:13: 'homeassistant' imported but unused
+src/autoforge/af_cli.py:332:13: 'pytest_homeassistant_custom_component.common.async_fire_time_changed' imported but unused
+src/autoforge/af_cli.py:593:5: '.af_flock.owner_id' imported but unused
+src/autoforge/af_conflict.py:25:1: 'dataclasses.field' imported but unused
+src/autoforge/af_conflict.py:28:1: 'typing.Mapping' imported but unused
+src/autoforge/af_conflict_audit.py:14:1: 'typing.Any' imported but unused
+src/autoforge/af_conflict_runtime.py:23:1: 'functools' imported but unused
+src/autoforge/af_conflict_runtime.py:25:1: 'dataclasses.field' imported but unused
+src/autoforge/af_conflict_runtime.py:26:1: 'typing.Iterable' imported but unused
+src/autoforge/af_draft.py:13:1: 'json' imported but unused
+src/autoforge/af_draft.py:19:1: '.af_spec.SpecError' imported but unused
+
+=== [2] 跨模块调用：可能返回 None 未检查（抽样）===
+  返回 Optional 的函数共 341 个
+
+  被跨处调用且返回 Optional 的函数（前 12）：
+    _get                             定义于 af_fire_recorder.py:65  返回 dict[str, Any] | None
+        调用 30 处: ['af_evo.py:267', 'af_evo.py:324', 'af_evo.py:333', 'af_evo.py:785']
+    norm_state                       定义于 af_feedback.py:51  返回 str | None
+        调用 16 处: ['af_feedback.py:58', 'af_feedback.py:58', 'af_feedback.py:88', 'af_feedback.py:86']
+    _pick                            定义于 af_orchestrator.py:1234  返回 Mapping[str, Any] | None
+        调用 13 处: ['af_health.py:555', 'af_orchestrator.py:1245', 'af_orchestrator.py:1246', 'af_orchestrator.py:1248']
+    _to_int                          定义于 device_sm.py:27  返回 int | None
+        调用 12 处: ['af_evo.py:905', 'af_evo.py:924', 'af_evo.py:925', 'af_evo.py:988']
+    _to_float                        定义于 device_sm.py:34  返回 float | None
+        调用 12 处: ['af_evo.py:933', 'af_evo.py:957', 'af_evo.py:947', 'device_sm.py:188']
+    _area_of                         定义于 af_orchestrator.py:494  返回 str | None
+        调用 11 处: ['af_catalog.py:190', 'af_catalog.py:171', 'af_orchestrator.py:1199', 'af_orchestrator.py:915']
+    _parse_iso                       定义于 af_persist.py:49  返回 datetime | None
+        调用 11 处: ['af_persist.py:97', 'af_persist.py:103', 'af_persist.py:170', 'af_predict.py:384']
+    _load                            定义于 af_undo.py:186  返回 None
+        调用 10 处: ['af_cli.py:204', 'af_cli.py:435', 'af_cli.py:487', 'af_cli.py:560']
+    dfs                              定义于 af_scanner.py:1091  返回 None
+        调用 8 处: ['af_orchestrator.py:1527', 'af_orchestrator.py:1520', 'af_scanner.py:1080', 'af_scanner.py:1106']
+    load_device_guard                定义于 af_service.py:602  返回 DeviceGuardRegistry | None
+        调用 7 处: ['af_cli.py:107', 'af_service.py:365', 'af_service.py:662', 'af_service.py:449']
+    _walk                            定义于 af_nl.py:202  返回 None
+        调用 7 处: ['af_conflict_runtime.py:156', 'af_conflict_runtime.py:148', 'af_conflict_runtime.py:154', 'af_nl.py:171']
+    _atomic_write                    定义于 af_store.py:81  返回 None
+        调用 7 处: ['af_store.py:118', 'af_store.py:405', 'af_store.py:527', 'af_store.py:237']

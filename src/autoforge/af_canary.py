@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from .af_adapters import Adapter, CallResult
-from .af_state import StateProvider
+from .af_state import StateProvider, UnknownEntity
 from .af_vhass.fake import SERVICE_STATE
 from .af_undo import restore_call
 
@@ -86,12 +86,21 @@ class CanaryResult:
         return []
 
     def has_drift(self) -> bool:
-        """动作成功后，目标实体状态是否没变成预期 → 漂移。"""
+        """动作成功后，目标实体状态是否没变成预期 → 漂移。
+
+        第七轮审计把四个 `StateProvider` 统一到 fail-closed 后，取不到实际态会**抛**
+        `UnknownEntity`（此前生产侧拿到部分快照 → 判"没漂"）。读不到实际态不等于验过了
+        （铁律 #5：EXEMPT ≠ VERIFIED），所以这里保守判**有漂移**、让回滚把手生效，
+        而不是让异常穿出 `step()` 拖垮 tick。
+        """
         exp = self.expected_state()
         if exp is None:
             return False
         for entity_id in self._targets():
-            actual = self.guard.states.snapshot([entity_id]).values.get(entity_id)
+            try:
+                actual = self.guard.states.snapshot([entity_id]).values.get(entity_id)
+            except UnknownEntity:
+                return True
             if actual != exp:
                 return True
         return False

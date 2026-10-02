@@ -21,7 +21,7 @@ from typing import Any, Iterable, Mapping
 
 from ..af_adapters import CallResult
 from ..af_adapters.base import FaultQueue
-from ..af_state import Snapshot, StateProvider
+from ..af_state import Snapshot, StateProvider, UnknownEntity
 
 __all__ = ["HassStateProvider", "HassAdapter"]
 
@@ -33,12 +33,18 @@ class HassStateProvider:
         self.hass = hass
 
     def snapshot(self, entity_ids: Iterable[str]) -> Snapshot:
+        """未知实体**在取快照这一刻**就抛 `UnknownEntity`（P1-12 同一口径）。
+
+        原来这里 `continue` 并把漂移推给"运行时"——但 `or`/`and` 走 `any()`/`all()` 短路
+        （`af_ir/expr.py:516`），未被求值的那一支永远不会去 `Snapshot.get`，异常也就永远不发。
+        于是同一条 IR 在仿真（fail-closed 底座）与生产（这里）结论相反。见第七轮审计。
+        """
         values: dict[str, str] = {}
         attributes: dict[str, dict[str, Any]] = {}
         for entity_id in entity_ids:
             state = self.hass.states.get(entity_id)
             if state is None:
-                continue  # 实体不存在 → 运行时按漂移处理（UnknownEntity）
+                raise UnknownEntity(entity_id)
             values[entity_id] = state.state
             attributes[entity_id] = dict(state.attributes)
         return Snapshot(values=values, attributes=attributes)

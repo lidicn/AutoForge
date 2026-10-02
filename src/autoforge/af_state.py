@@ -86,10 +86,22 @@ class Snapshot:
 
 @runtime_checkable
 class StateProvider(Protocol):
-    """状态源。生产=HA，仿真=vhass/FakeHA。"""
+    """状态源。生产=HA（REST / `hass.states`），仿真=vhass/FakeHA/InMemory。
+
+    **跨实现契约（铁律：仿真与生产不许对同一条 IR 给出相反结论）**：
+    `snapshot()` 必须在**取快照这一刻**对未知实体抛 `UnknownEntity`，不许静默省略、
+    也不许编造域默认值。理由不是风格问题——`and`/`or` 走 `all()`/`any()` 短路
+    （`af_ir/expr.py:514-517`），未被求值的那一支永远不会去 `Snapshot.get`，
+    所以"缺失留给运行时去发现"这个推断在 fail-open 一侧根本不成立：
+    `or(is_on(motion), is_on(ghost))` 里 `ghost` 不存在时，fail-open 的生产会在
+    motion 命中时照常执行，fail-closed 的仿真则软失效不执行——用户"看到即跑的"失效。
+    第七轮审计的 key_finding，四个实现（`InMemoryStateProvider` / `FakeHA` /
+    `HAStateProvider` / `HassStateProvider`）由 `tests/contract/test_state_provider_policy.py`
+    同口径钉住。
+    """
 
     def snapshot(self, entity_ids: Iterable[str]) -> Snapshot:
-        """一次性读取给定实体的状态，返回只读快照。"""
+        """一次性读取给定实体的状态，返回只读快照；未知实体 → `UnknownEntity`。"""
         ...
 
 

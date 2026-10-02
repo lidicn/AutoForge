@@ -1,0 +1,465 @@
+[
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_adapters%23%E9%80%82%E9%85%8D%E5%99%A8%E5%8D%8F%E8%AE%AE::src%2Fautoforge%2Faf_adapters%2Fbase.py%23CallResult%E5%A5%91%E7%BA%A6::src%2Fautoforge%2Faf_adapters::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_adapters#适配器协议",
+      "boundary": "src/autoforge/af_adapters/base.py#CallResult契约",
+      "subsystem": "src/autoforge/af_adapters",
+      "attack_class": "ATTACK-CLASSES.md#Business logic"
+    },
+    "surface": "src/autoforge/af_adapters#适配器协议",
+    "boundary": "src/autoforge/af_adapters/base.py#CallResult契约",
+    "subsystem": "src/autoforge/af_adapters",
+    "attack_class": "ATTACK-CLASSES.md#Business logic",
+    "starting_paths": [
+      "src/autoforge/af_adapters/base.py",
+      "src/autoforge/af_adapters/ha.py",
+      "src/autoforge/af_adapters/http.py",
+      "src/autoforge/af_adapters/mock.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Framing, schema, and interpretation attack classes",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Core discipline",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Universal moves",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "covered",
+    "agent_id": "hunter-local-1",
+    "reviewed_paths": [
+      "src/autoforge/af_adapters/base.py",
+      "src/autoforge/af_adapters/ha.py",
+      "src/autoforge/af_adapters/http.py",
+      "src/autoforge/af_adapters/mock.py"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-local-1",
+        "reviewed_paths": [
+          "src/autoforge/af_adapters/base.py",
+          "src/autoforge/af_adapters/ha.py",
+          "src/autoforge/af_adapters/http.py",
+          "src/autoforge/af_adapters/mock.py"
+        ],
+        "artifact": null,
+        "method": "source",
+        "invariant": "同一抽象的所有实现必须遵守相同的异常契约（抛 or 返回 Result）",
+        "result": "核实 4 个实现的 call()：ha/http/mock 全部返回 CallResult.ok/fail，不向上抛业务异常（仅未知适配器名在 base.py:141 抛 AdapterError）。契约一致，无缺陷"
+      }
+    ],
+    "result_fingerprints": [],
+    "unresolved": []
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_api.py%23HTTP::src%2Fautoforge%2Faf_api.py%23%E9%89%B4%E6%9D%83::src%2Fautoforge%2Faf_api.py::ATTACK-CLASSES.md%23Access%20control",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_api.py#HTTP",
+      "boundary": "src/autoforge/af_api.py#鉴权",
+      "subsystem": "src/autoforge/af_api.py",
+      "attack_class": "ATTACK-CLASSES.md#Access control"
+    },
+    "surface": "src/autoforge/af_api.py#HTTP",
+    "boundary": "src/autoforge/af_api.py#鉴权",
+    "subsystem": "src/autoforge/af_api.py",
+    "attack_class": "ATTACK-CLASSES.md#Access control",
+    "starting_paths": [
+      "src/autoforge/af_api.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第七轮 scoped run，广度探测模块间接缝（关节处）；此面未纳入本轮，不作任何覆盖声明"
+    ]
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_audit.py%23%E5%AE%A1%E8%AE%A1%E6%97%A5%E5%BF%97::src%2Fautoforge%2Faf_audit.py%23%E5%86%99%E8%B7%AF%E5%BE%84::src%2Fautoforge%2Faf_audit.py::ATTACK-CLASSES.md%23Resource%20and%20file%20handling",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_audit.py#审计日志",
+      "boundary": "src/autoforge/af_audit.py#写路径",
+      "subsystem": "src/autoforge/af_audit.py",
+      "attack_class": "ATTACK-CLASSES.md#Resource and file handling"
+    },
+    "surface": "src/autoforge/af_audit.py#审计日志",
+    "boundary": "src/autoforge/af_audit.py#写路径",
+    "subsystem": "src/autoforge/af_audit.py",
+    "attack_class": "ATTACK-CLASSES.md#Resource and file handling",
+    "starting_paths": [
+      "src/autoforge/af_audit.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Resource and file handling",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第七轮 scoped run，广度探测模块间接缝（关节处）；此面未纳入本轮，不作任何覆盖声明"
+    ]
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_cli.py%23CLI::src%2Fautoforge%2Faf_cli.py%23%E8%BE%93%E5%85%A5::src%2Fautoforge%2Faf_cli.py::ATTACK-CLASSES.md%23Injection",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_cli.py#CLI",
+      "boundary": "src/autoforge/af_cli.py#输入",
+      "subsystem": "src/autoforge/af_cli.py",
+      "attack_class": "ATTACK-CLASSES.md#Injection"
+    },
+    "surface": "src/autoforge/af_cli.py#CLI",
+    "boundary": "src/autoforge/af_cli.py#输入",
+    "subsystem": "src/autoforge/af_cli.py",
+    "attack_class": "ATTACK-CLASSES.md#Injection",
+    "starting_paths": [
+      "src/autoforge/af_cli.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Injection",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第七轮 scoped run，广度探测模块间接缝（关节处）；此面未纳入本轮，不作任何覆盖声明"
+    ]
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_conflict%23%E5%86%B2%E7%AA%81%E4%BB%B2%E8%A3%81::src%2Fautoforge%2Faf_conflict_runtime.py%23%E9%94%81::src%2Fautoforge%2Faf_conflict::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_conflict#冲突仲裁",
+      "boundary": "src/autoforge/af_conflict_runtime.py#锁",
+      "subsystem": "src/autoforge/af_conflict",
+      "attack_class": "ATTACK-CLASSES.md#Business logic"
+    },
+    "surface": "src/autoforge/af_conflict#冲突仲裁",
+    "boundary": "src/autoforge/af_conflict_runtime.py#锁",
+    "subsystem": "src/autoforge/af_conflict",
+    "attack_class": "ATTACK-CLASSES.md#Business logic",
+    "starting_paths": [
+      "src/autoforge/af_conflict_runtime.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第七轮 scoped run，广度探测模块间接缝（关节处）；此面未纳入本轮，不作任何覆盖声明"
+    ]
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_executor.py%23%E6%89%A7%E8%A1%8C%E5%99%A8::src%2Fautoforge%2Faf_executor.py%23canary::src%2Fautoforge%2Faf_executor.py::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_executor.py#执行器",
+      "boundary": "src/autoforge/af_executor.py#canary",
+      "subsystem": "src/autoforge/af_executor.py",
+      "attack_class": "ATTACK-CLASSES.md#Business logic"
+    },
+    "surface": "src/autoforge/af_executor.py#执行器",
+    "boundary": "src/autoforge/af_executor.py#canary",
+    "subsystem": "src/autoforge/af_executor.py",
+    "attack_class": "ATTACK-CLASSES.md#Business logic",
+    "starting_paths": [
+      "src/autoforge/af_executor.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第七轮 scoped run，广度探测模块间接缝（关节处）；此面未纳入本轮，不作任何覆盖声明"
+    ]
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_flock.py%23%E8%B7%A8%E8%BF%9B%E7%A8%8B%E9%94%81::src%2Fautoforge%2Faf_flock.py%23%E9%94%81%E4%B8%8E%E7%A7%9F%E7%BA%A6%E5%88%86%E5%B7%A5::src%2Fautoforge%2Faf_flock.py::ATTACK-CLASSES.md%23Resource%20and%20file%20handling",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_flock.py#跨进程锁",
+      "boundary": "src/autoforge/af_flock.py#锁与租约分工",
+      "subsystem": "src/autoforge/af_flock.py",
+      "attack_class": "ATTACK-CLASSES.md#Resource and file handling"
+    },
+    "surface": "src/autoforge/af_flock.py#跨进程锁",
+    "boundary": "src/autoforge/af_flock.py#锁与租约分工",
+    "subsystem": "src/autoforge/af_flock.py",
+    "attack_class": "ATTACK-CLASSES.md#Resource and file handling",
+    "starting_paths": [
+      "src/autoforge/af_flock.py",
+      "src/autoforge/af_persist.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Resource and file handling",
+    "selected_companion_blocks": [
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Framing, schema, and interpretation attack classes",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Core discipline",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Universal moves",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "covered",
+    "agent_id": "hunter-local-1",
+    "reviewed_paths": [
+      "src/autoforge/af_flock.py",
+      "src/autoforge/af_persist.py"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-local-1",
+        "reviewed_paths": [
+          "src/autoforge/af_flock.py",
+          "src/autoforge/af_persist.py"
+        ],
+        "artifact": null,
+        "method": "source",
+        "invariant": "同类落盘写入操作的互斥策略应当一致",
+        "result": "核实：FileLock 被 af_catalog(3处)/af_experience(2处)/af_live(1处) 使用；af_persist 仅用 owner_id（租约标记，af_persist.py:25）未用锁。差异有设计依据：租约解决『恢复时谁可接管』（claims() 仲裁，阻止双进程驱动同一实例），锁解决『写入时互斥』。两者职责不同，且第一轮的架构评估已记录『单写者假设未代码化』为本项目的已知架构缺陷，此处不重复计入"
+      }
+    ],
+    "result_fingerprints": [],
+    "unresolved": []
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_instance.py%23%E5%AE%9E%E4%BE%8B%E7%AE%A1%E7%90%86::src%2Fautoforge%2Faf_instance.py%23%E7%BB%88%E6%80%81%E5%9B%9E%E6%94%B6::src%2Fautoforge%2Faf_instance.py::ATTACK-CLASSES.md%23Resource%20and%20file%20handling",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_instance.py#实例管理",
+      "boundary": "src/autoforge/af_instance.py#终态回收",
+      "subsystem": "src/autoforge/af_instance.py",
+      "attack_class": "ATTACK-CLASSES.md#Resource and file handling"
+    },
+    "surface": "src/autoforge/af_instance.py#实例管理",
+    "boundary": "src/autoforge/af_instance.py#终态回收",
+    "subsystem": "src/autoforge/af_instance.py",
+    "attack_class": "ATTACK-CLASSES.md#Resource and file handling",
+    "starting_paths": [
+      "src/autoforge/af_instance.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Resource and file handling",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第七轮 scoped run，广度探测模块间接缝（关节处）；此面未纳入本轮，不作任何覆盖声明"
+    ]
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_mcp.py%23%E5%B7%A5%E5%85%B7%E9%97%A8::src%2Fautoforge%2Faf_mcp.py%23%E6%8E%88%E6%9D%83%E7%A0%81::src%2Fautoforge%2Faf_mcp.py::ATTACK-CLASSES.md%23Access%20control",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_mcp.py#工具门",
+      "boundary": "src/autoforge/af_mcp.py#授权码",
+      "subsystem": "src/autoforge/af_mcp.py",
+      "attack_class": "ATTACK-CLASSES.md#Access control"
+    },
+    "surface": "src/autoforge/af_mcp.py#工具门",
+    "boundary": "src/autoforge/af_mcp.py#授权码",
+    "subsystem": "src/autoforge/af_mcp.py",
+    "attack_class": "ATTACK-CLASSES.md#Access control",
+    "starting_paths": [
+      "src/autoforge/af_mcp.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "out_of_scope",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "第七轮 scoped run，广度探测模块间接缝（关节处）；此面未纳入本轮，不作任何覆盖声明"
+    ]
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_state.py%23Snapshot.get::src%2Fautoforge%2Faf_state.py%23%E4%BA%8C%E7%82%B9%E5%88%A4%E5%AE%9A%E8%A7%84%E5%88%99::src%2Fautoforge%2Faf_state.py::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_state.py#Snapshot.get",
+      "boundary": "src/autoforge/af_state.py#二点判定规则",
+      "subsystem": "src/autoforge/af_state.py",
+      "attack_class": "ATTACK-CLASSES.md#Business logic"
+    },
+    "surface": "src/autoforge/af_state.py#Snapshot.get",
+    "boundary": "src/autoforge/af_state.py#二点判定规则",
+    "subsystem": "src/autoforge/af_state.py",
+    "attack_class": "ATTACK-CLASSES.md#Business logic",
+    "starting_paths": [
+      "src/autoforge/af_state.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Framing, schema, and interpretation attack classes",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Core discipline",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Universal moves",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "covered",
+    "agent_id": "hunter-local-1",
+    "reviewed_paths": [
+      "src/autoforge/af_state.py"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-local-1",
+        "reviewed_paths": [
+          "src/autoforge/af_state.py"
+        ],
+        "artifact": "agents/hunter-local-1/artifacts/state.txt",
+        "method": "local",
+        "invariant": "实体.属性 的判定规则必须覆盖 HA entity_id 的所有合法形态",
+        "result": "证伪（无缺陷）：实测 Snapshot.get 的『≥2 个点即实体.属性』判定——light.x→'on'；climate.bedroom.temperature→22.5；climate.bedroom.missing→UnknownEntity；sensor.a.b.c→UnknownEntity；尾部点/头部点均 UnknownEntity。HA entity_id 规范为 domain.object_id（domain 不含点），rpartition 按最后一点切分正确。属性缺失抛 UnknownEntity 走软失效而非编值，符合设计"
+      }
+    ],
+    "result_fingerprints": [],
+    "unresolved": []
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_state.py%23StateProvider%E5%8D%8F%E8%AE%AE::src%2Fautoforge%2Faf_state.py%23%E5%9B%9B%E5%AE%9E%E7%8E%B0%E4%B8%A4%E6%B4%BE-%E4%BB%BF%E7%9C%9F%E7%94%9F%E4%BA%A7%E4%B8%8D%E4%B8%80%E8%87%B4::src%2Fautoforge%2Faf_state.py::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_state.py#StateProvider协议",
+      "boundary": "src/autoforge/af_state.py#四实现两派-仿真生产不一致",
+      "subsystem": "src/autoforge/af_state.py",
+      "attack_class": "ATTACK-CLASSES.md#Business logic"
+    },
+    "surface": "src/autoforge/af_state.py#StateProvider协议",
+    "boundary": "src/autoforge/af_state.py#四实现两派-仿真生产不一致",
+    "subsystem": "src/autoforge/af_state.py",
+    "attack_class": "ATTACK-CLASSES.md#Business logic",
+    "starting_paths": [
+      "src/autoforge/af_state.py",
+      "src/autoforge/af_vhass/fake.py",
+      "src/autoforge/af_adapters/ha.py",
+      "src/autoforge/af_vhass/bridge.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Framing, schema, and interpretation attack classes",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Core discipline",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Universal moves",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "candidate",
+    "agent_id": "hunter-local-1",
+    "reviewed_paths": [
+      "src/autoforge/af_state.py",
+      "src/autoforge/af_vhass/fake.py",
+      "src/autoforge/af_adapters/ha.py",
+      "src/autoforge/af_vhass/bridge.py"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-local-1",
+        "reviewed_paths": [
+          "src/autoforge/af_state.py",
+          "src/autoforge/af_vhass/fake.py",
+          "src/autoforge/af_adapters/ha.py",
+          "src/autoforge/af_vhass/bridge.py"
+        ],
+        "artifact": "agents/hunter-local-1/artifacts/provider.txt",
+        "method": "local",
+        "invariant": "同一抽象（StateProvider）的所有实现必须对『未知实体』给出一致行为，否则仿真无法预测生产",
+        "result": "端到端实证：项目内有 4 个 StateProvider 实现，对未知实体分成两派。抛异常派：InMemoryStateProvider(af_state.py:112，注释『P1-12 fail-closed，不静默省略』) 与 FakeHA(af_vhass/fake.py:75，CLI forge sim 实际使用的仿真底座)；静默省略派：HAStateProvider(af_adapters/ha.py:194，`if entity_id in all_states` 不在即跳过) 与 vhass bridge(bridge.py:35，`continue`)。实测同一 IR（or 短路表达式）+ 同一状态（motion=on，ghost 不存在）：仿真侧 snapshot() 阶段即抛 UnknownEntity → 整段软失效 → 自动化不执行；生产侧 snapshot() 返回含 motion 的部分快照 → or 短路使 ghost 永不被求值 → 返回 True → 自动化执行。af_ir/expr.py:483 确认 or 用 any() 短路。仿真的意义是预测生产行为（项目铁律『看到即跑的』），此处失效"
+      }
+    ],
+    "result_fingerprints": [
+      "fp-stateprovider-sim-prod-divergence"
+    ],
+    "unresolved": []
+  },
+  {
+    "coverage_id": "src%2Fautoforge%2Faf_time.py%23TimeSource%E5%8D%8F%E8%AE%AE::src%2Fautoforge%2Faf_time.py%23%E5%8F%8C%E6%97%B6%E9%92%9F%E4%B8%80%E8%87%B4%E6%80%A7::src%2Fautoforge%2Faf_time.py::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "src/autoforge/af_time.py#TimeSource协议",
+      "boundary": "src/autoforge/af_time.py#双时钟一致性",
+      "subsystem": "src/autoforge/af_time.py",
+      "attack_class": "ATTACK-CLASSES.md#Business logic"
+    },
+    "surface": "src/autoforge/af_time.py#TimeSource协议",
+    "boundary": "src/autoforge/af_time.py#双时钟一致性",
+    "subsystem": "src/autoforge/af_time.py",
+    "attack_class": "ATTACK-CLASSES.md#Business logic",
+    "starting_paths": [
+      "src/autoforge/af_time.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Framing, schema, and interpretation attack classes",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Core discipline",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Universal moves",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "covered",
+    "agent_id": "hunter-local-1",
+    "reviewed_paths": [
+      "src/autoforge/af_time.py"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-local-1",
+        "reviewed_paths": [
+          "src/autoforge/af_time.py"
+        ],
+        "artifact": "agents/hunter-local-1/artifacts/time.txt",
+        "method": "local",
+        "invariant": "双时钟（wall + monotonic）的推进必须语义明确，跳变不得破坏定时器正确性",
+        "result": "证伪（无缺陷）：实测 VirtualTimeSource——advance(100) 使 Δmonotonic=Δwall=100 一致；jump(100) 使 Δwall=100 而 Δmonotonic=0。后者为有意设计，源码 af_time.py:191 注释明确『只动墙钟不动单调钟（NTP 校时/人为改时钟/夏令时切换）』，且设计目的正是让 af_persist 的定时器墙钟换算在时钟跳变后仍正确。reset() 正确归零。advance_to 内部调用 advance 故同步。该模块 fan-in=20（全仓最高）但实现扎实"
+      }
+    ],
+    "result_fingerprints": [],
+    "unresolved": []
+  }
+]

@@ -452,6 +452,14 @@ class NodeExecutor:
         if node.kind == "do":
             return self._do(instance, node)
 
+        if node.kind == "group":
+            # 组合的展开发生在**部署期**（`af_apply.apply_group` 逐子入队），不在运行期实例里内联：
+            # 每条子自动化有自己的 trigger 与实例，内联执行等于凭空造 N 个实例。
+            raise ValueError(
+                f"group 节点 {node.id} 不可在实例内联执行"
+                f"（{len(node.children)} 条子自动化各有独立触发），应由 apply_group 在部署期展开"
+            )
+
         raise ValueError(f"未知节点类型：{node.kind}")
 
     def _feed_canary_evidence(
@@ -498,7 +506,13 @@ class NodeExecutor:
                 self.states,
                 auto_rollback=bool(canary.get("auto_rollback", True)) if isinstance(canary, dict) else True,
             )
-            wrapped = guard.perform(adapter, node.action or "", dict(node.params))
+            try:
+                wrapped = guard.perform(adapter, node.action or "", dict(node.params))
+            except UnknownEntity as exc:
+                # 取不到动作前快照 = 没有回滚把手（铁律 #5：回滚不了就 fail-closed）。
+                # `perform` 在**下发之前**取快照，所以这里一条动作都还没发出去；
+                # 异常不许穿出 `step()`——穿出就是整次 tick 陪葬（第二轮审计那一类）。
+                return self._soft_fail(instance, node, exc)
             # P1-11：canary.duration 接入——动作下发后挂起观察 duration，超时恢复时检查漂移
             canary_duration = None
             if isinstance(canary, dict):

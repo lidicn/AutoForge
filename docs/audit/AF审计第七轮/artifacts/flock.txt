@@ -1,0 +1,75 @@
+### 证据5 af_flock 关节：跨进程锁接缝 ###
+"""v0.9.0 跨进程原语：进程身份 + 跨进程文件锁（零外部依赖）。
+
+- `owner_id()`：进程唯一标识（hostname-pid-uuid 片段），用于实例归属 / 写者署名 / 协调锁。
+- `FileLock`： advisory 文件锁，POSIX 用 `fcntl.flock`，Windows 用 `msvcrt.locking`；
+  进程崩溃 / 退出时内核自动释放（无陈旧锁问题），锁文件内容记录最后持有者信息供诊断。
+
+设计边界：锁是**建议性**的（advisory）——所有写方（GraphStore / PersistStore /
+watch 协调）都经本模块拿锁才能互斥；绕过者不受保护。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import socket
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+__all__ = ["owner_id", "FileLock"]
+
+try:  # POSIX
+    import fcntl as _fcntl
+
+    _POSIX = True
+except ImportError:  # Windows
+    _fcntl = None
+    import msvcrt as _msvcrt
+
+    _POSIX = False
+
+_OWNER: str | None = None
+
+
+def owner_id() -> str:
+    """本进程唯一身份（进程内缓存）：`{hostname}-{pid}-{uuid8}`。"""
+    global _OWNER
+    if _OWNER is None:
+        _OWNER = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    return _OWNER
+
+
+class FileLock:
+    """跨进程互斥锁（阻塞式 `acquire` 带超时；`try_acquire` 非阻塞）。
+
+    用法：
+        with FileLock(path):        # 超时抛 TimeoutError
+            ...
+    """
+
+    def __init__(
+        self,
+        path: str | Path,
+        timeout: float = 10.0,
+        poll_s: float = 0.05,
+        info: "Mapping[str, Any] | None" = None,
+    ):
+        self.path = Path(path)
+
+=== 谁在用 flock ===
+src/autoforge/af_catalog.py:37:from .af_flock import FileLock
+src/autoforge/af_catalog.py:493:            with FileLock(str(path) + ".lock", timeout=10.0):
+src/autoforge/af_catalog.py:567:        with FileLock(str(self.alias_path) + ".lock", timeout=10.0):
+src/autoforge/af_catalog.py:577:        with FileLock(str(self.alias_path) + ".lock", timeout=10.0):
+src/autoforge/af_cli.py:593:    from .af_flock import owner_id
+src/autoforge/af_experience.py:18:from .af_flock import FileLock
+src/autoforge/af_experience.py:81:        with FileLock(str(self.path) + ".lock", timeout=10.0):
+src/autoforge/af_experience.py:206:        with FileLock(str(self.path) + ".lock", timeout=10.0):
+src/autoforge/af_live.py:29:from .af_flock import FileLock, owner_id
+src/autoforge/af_live.py:57:    基于 `FileLock`（flock/msvcrt）：进程崩溃或退出时内核自动释放锁文件，
+src/autoforge/af_live.py:66:        self._lock = FileLock(Path(path), timeout=0.0, info=self._info)
+src/autoforge/af_persist.py:25:from .af_flock import owner_id

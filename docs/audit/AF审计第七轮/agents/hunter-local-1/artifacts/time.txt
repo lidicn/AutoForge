@@ -1,0 +1,97 @@
+### 证据1 af_time 关节：双时钟一致性 ###
+class VirtualTimeSource:
+    """仿真用虚拟时间源：时间完全由测试推进，支持时间旅行。
+
+    两个时钟**同步推进**（`advance` 同时推进墙钟与单调时钟），
+    这样依赖 `monotonic()` 的计时器在仿真里也能被 `async_fire_time_changed` 驱动。
+
+    mimo Clock 增量：`jump()` 只动墙钟不动单调钟，用于测 NTP 校时/人为改时钟场景。
+    """
+
+    start: datetime = field(default_factory=lambda: datetime(2026, 9, 14, 8, 0, 0, tzinfo=timezone.utc))
+    _current: datetime = field(init=False)
+    _mono: float = field(default=0.0, init=False)
+
+    def __post_init__(self) -> None:
+        if self.start.tzinfo is None:
+            self.start = self.start.replace(tzinfo=timezone.utc)
+        self._current = self.start
+
+    # ── TimeSource 实现 ──────────────────────────────────────────────
+    def now(self) -> datetime:
+        return self._current
+
+    def local_now(self) -> datetime:
+        """B3-AF-04：仿真时间即本地时间（仿真测试断言基于仿真时间本身）。"""
+        return self._current
+
+    def utc_now(self) -> datetime:
+        return self._current.astimezone(timezone.utc)
+
+    def today(self) -> date:
+        return self._current.date()
+
+    def wall_after(self, seconds: float) -> datetime:
+        return self._current + timedelta(seconds=seconds)
+
+    def monotonic(self) -> float:
+        return self._mono
+
+    # ── 仿真控制 ────────────────────────────────────────────────────
+    def advance(self, seconds: float) -> datetime:
+        """向前推进虚拟时间（秒），两个时钟同步。返回推进后的墙钟。"""
+        if seconds < 0:
+            raise ValueError(f"虚拟时间只能前进，收到 {seconds}s")
+        self._current = self._current + timedelta(seconds=seconds)
+        self._mono += float(seconds)
+        return self._current
+
+    def jump(self, seconds: float) -> datetime:
+        """只动墙钟不动单调钟（NTP 校时/人为改时钟/夏令时切换）。
+
+        mimo Clock 设计：墙钟与单调钟解耦是必须的——af_persist 的定时器墙钟换算
+        恰恰要在时钟跳变后仍正确，绑死的虚拟时钟测不出这类 bug。
+        """
+        self._current = self._current + timedelta(seconds=seconds)
+        return self._current
+
+    def advance_to(self, target: datetime) -> datetime:
+        """推进到指定墙钟时刻（不得回退）。"""
+        delta = (target - self._current).total_seconds()
+        return self.advance(delta)
+
+    def reset(self) -> None:
+        self._current = self.start
+        self._mono = 0.0
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试辅助
+        return f"VirtualTimeSource(now={self._current.isoformat()}, mono={self._mono:.3f})"
+
+
+# ── 时长字面量：`10m` / `90s` / `2h` / `1d` ─────────────────────────
+_UNIT_SECONDS = {
+    "s": 1.0,
+    "m": 60.0,
+    "h": 3600.0,
+    "d": 86400.0,
+}
+
+
+def parse_duration(value: str | int | float) -> float:
+
+==================================================================
+[1] VirtualTimeSource: advance/jump/advance_to 对 monotonic 的影响
+==================================================================
+  初始: now=2026-01-01 12:00:00+00:00  monotonic=0.0
+  advance(60): now=2026-01-01 12:01:00+00:00  monotonic=60.0
+  jump(3600):  now=2026-01-01 13:01:00+00:00  monotonic=60.0   ← jump 是否推进 monotonic?
+  advance_to(+2d): now=2026-01-03 12:00:00+00:00  monotonic=169200.0
+  → wall 前进 2 天 = 172800s，monotonic 增量 = 169200.0
+
+==================================================================
+[2] 关键接缝检查：wall 与 monotonic 是否同步推进
+==================================================================
+  advance(100): Δmonotonic=100.0  Δwall=100.0  一致=✅
+  jump(100):    Δmonotonic=0.0  Δwall=100.0  一致=❌
+
+[3] reset(): now=2026-01-01 12:00:00+00:00 monotonic=0.0

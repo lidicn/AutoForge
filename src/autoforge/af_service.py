@@ -35,6 +35,7 @@ from .af_runtime import Runtime, build_runtime
 from .af_scanner import DeviceGuardRegistry, Diagnostic, ScanResult, StaticScanner
 from .af_spec import SpecError, compile_spec, graph_to_raw, render_spec
 from .af_store import DEFAULT_STORE_ROOT, GraphStore, diff_graphs
+from .af_state import UnknownEntity
 from .af_time import SystemTimeSource
 from .af_undo import UndoStore, deploy_id as new_deploy_id
 from .af_vhass import FakeHAAdapter, seed_from_graph
@@ -547,6 +548,10 @@ def reject_pending(store: GraphStore, op_id: str, reason: str = "") -> dict[str,
     if op is None:
         raise ServiceError(f"未找到待批操作 {op_id!r}", status=404)
     ps.delete(op_id)
+    if ps.load(op_id) is not None:
+        # delete 之后回读确认"真的不在队列里了"。报 ok=True 而条目还在，等于对上层
+        # 谎报已回滚，而 group 的原子性判据正是这句话（铁律 #5：回滚不了要 fail-closed）。
+        raise ServiceError(f"待批操作 {op_id!r} 仍在队列中（删除未生效），请复查 pending", status=409)
     logger.warning("PENDING_REJECTED op=%s reason=%s", op_id, reason)
     return {"ok": True, "rejected": op_id, "reason": reason}
 
@@ -1532,6 +1537,35 @@ def _replay_live(runtime: Runtime, events: Sequence[Mapping[str, Any]]) -> None:
             runtime.tick()
 
 
+def _live_final_states(
+    provider, entities: Sequence[str]
+) -> tuple[dict[str, Any], list[str]]:
+    """取真机终态用于**报告**：缺哪个实体就显式列出来，不编值、也不把请求打崩。
+
+    第七轮审计把 `StateProvider` 统一到 fail-closed（未知实体 → 抛 `UnknownEntity`），
+    而这里是 `live_run` 返回体的读取点：动作**已经下发**、撤销句柄**已经落盘**。让它
+    直接抛，等于一次成功部署返回 500，操作员连 `undo_deploy_id` 都拿不到——比"某个
+    实体读不到"严重得多。所以异常在**边界**翻译成 `missing_entities`（值记 None），
+    provider 侧的口径不动。
+
+    每轮至少剔掉一个实体，所以循环必然收敛（正常路径只取一次快照）。
+    """
+    final: dict[str, Any] = {e: None for e in entities}
+    missing: list[str] = []
+    pending = list(entities)
+    while pending:
+        try:
+            snap = provider.snapshot(pending)
+        except UnknownEntity as exc:
+            drift = str(exc.args[0]) if exc.args and str(exc.args[0]) in pending else pending[0]
+            missing.append(drift)
+            pending.remove(drift)
+            continue
+        final.update({e: snap.values.get(e) for e in pending})
+        break
+    return final, sorted(missing)
+
+
 def live_run(
     ir: Mapping[str, Any],
     live_allow: Sequence[str],
@@ -1615,7 +1649,7 @@ def live_run(
     _replay_live(runtime, list(events or []))
 
     entities = sorted(_entities_of(graph))
-    snapshot = provider.snapshot(entities)
+    final_states, missing_entities = _live_final_states(provider, entities)
     logger.warning(
         "LIVE RUN：automation(s)=%s writes=%s events=%d",
         [a.id for a in graph],
@@ -1636,7 +1670,10 @@ def live_run(
         "instances": [i.to_dict() for i in runtime.instances.all()],
         "audit": [e.to_dict() for e in runtime.audit],
         "bus": runtime.bus.stats(),
-        "final_states": {e: snapshot.values.get(e) for e in entities},
+        "final_states": final_states,
+        # 漂移在这里**报告**而不是把请求打崩：动作已经下发、undo_deploy_id 已经落盘，
+        # 500 会让操作员连撤销把手都拿不到（口径见 `_live_final_states`）。
+        "missing_entities": missing_entities,
         "nl": render_graph(graph).text,
         "asks": _asks_of(runtime),
     }

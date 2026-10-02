@@ -374,9 +374,13 @@ class InstanceManager:
     def _refresh_snapshot(self, instance: Instance) -> None:
         """新建快照并丢弃旧快照（IR §7.1）。
 
-        P1-12：snapshot 对未知实体 raise UnknownEntity。spawn 时不应因此
-        阻止实例创建——只 snapshot 已知实体，未知实体留到表达式求值时
-        由 P1-16（UnknownEntity→False）处理。
+        P1-12：`snapshot()` 对未知实体 raise `UnknownEntity`（四个 `StateProvider` 实现
+        同口径，见第七轮审计）。spawn 时不因此阻止实例创建，但**回退形态是空快照**：
+        一旦某个读取实体漂移，本实例这一整段都读不到状态，表达式逐条抛
+        `UnknownEntity` → 执行器 `on_error` 软失效（`af_executor.py:442`）。
+        即"单个实体漂移 = 整段软失效"，不是"只有引用它的那一支失效"——
+        仿真侧一直就是这个口径，生产侧第七轮起对齐。代价与备选见
+        `docs/audit/审计报告_第七轮_核实与修复.md`。
         """
         from .af_state import UnknownEntity
         entity_ids = sorted(instance.automation.reads())
