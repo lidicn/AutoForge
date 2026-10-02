@@ -195,8 +195,10 @@ class ConflictArbiter:
     ) -> RequestDecision:
         """do 节点执行前调用。多实体按字典序排序获取锁。
 
-        observe=True：只观测不拦截（事件照记，最终返回 ALLOW 并强制登记锁），
-        用于「审计不缺席」的旁路模式。
+        observe=True：只观测不拦截（事件照记，并强制登记锁），但**返回真实判据**——
+        拦不拦是调用方（`af_conflict_runtime`，band/mode 策略在那一层）的决定。
+        原实现在这里把判据改写成 ALLOW 返回：真实判据被吞掉，F4 要的
+        "试演期探测到争抢"这条生产证据在 observe 下恒为 0。
         """
         ids = _normalize_ids(entity_ids)
         try:
@@ -204,7 +206,6 @@ class ConflictArbiter:
             if observe and decision is not RequestDecision.ALLOW:
                 now = self._now()
                 self._acquire(ids, automation_id, instance_id, action, now, forced=True)
-                return RequestDecision.ALLOW
             return decision
         except Exception as exc:  # 故障优先：绝不阻塞 do 节点
             self._emit(

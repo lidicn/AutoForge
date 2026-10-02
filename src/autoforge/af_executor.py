@@ -209,8 +209,15 @@ class NodeExecutor:
                         guard=SimpleNamespace(states=self.states),
                         pre_snapshot=pending_canary.get("pre_snapshot", {}),
                     )
-                    if wrapped.has_drift():
+                    if wrapped.expected_state() is None:
+                        self._feed_canary_evidence(instance, node, "unmodeled", {
+                            "reason": "观察期动作无 SERVICE_STATE 映射，漂移不可判",
+                        })
+                    elif wrapped.has_drift():
                         rolled = wrapped.rollback(adapter)
+                        self._feed_canary_evidence(instance, node, "failed", {
+                            "reason": "canary 观察期漂移，已自动回滚", "rollback_calls": len(rolled),
+                        })
                         self.audit.add(
                             AuditEvent(
                                 type=ENTITY_DRIFT,
@@ -222,6 +229,8 @@ class NodeExecutor:
                                 data={"params": dict(wrapped.params)},
                             )
                         )
+                    else:
+                        self._feed_canary_evidence(instance, node, "verified")
             except Exception:
                 logging.getLogger("autoforge.executor").exception("canary 漂移检查失败（已隔离，不阻断流程）")
 
@@ -445,6 +454,24 @@ class NodeExecutor:
 
         raise ValueError(f"未知节点类型：{node.kind}")
 
+    def _feed_canary_evidence(
+        self, instance: Instance, node: Node, status: str, detail: dict[str, Any] | None = None
+    ) -> None:
+        """F4：把 canary 的生产态结论喂进 af_watch（诚实报告 `verified_in_prod` 分区）。
+
+        聚合失败不得影响执行，但也不许静默咽下——原因要进日志，否则"一条证据没记下"
+        看起来和"记好了"一样（与 af_shadow 留 `watch_record_error` 同一口径）。
+        """
+        try:
+            from . import af_watch
+
+            af_watch.record_canary(
+                instance.automation.id, status, self.clock.now(),
+                {"node_id": node.id, "action": node.action or "", **(detail or {})},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("af_watch 聚合 canary 证据失败（不影响执行）：%r", exc)
+
     def _do(self, instance: Instance, node: Node) -> Iterable[str] | None:
         """`do`：**单次调用**，不重试不降级。"""
         try:
@@ -493,8 +520,17 @@ class NodeExecutor:
                 self.instances.suspend(instance, node.id, canary_duration, kind="canary_observe")
                 return None
             # 无 duration → 立即检查漂移（原行为）
-            if wrapped.has_drift():
+            if wrapped.expected_state() is None:
+                # F4：动作没有 SERVICE_STATE 映射 → has_drift() 恒 False，**不是**"验过了"，
+                # 是"无从验"。记成 verified 就是 铁律 #5 的假证据，单列 unmodeled 一档。
+                self._feed_canary_evidence(instance, node, "unmodeled", {
+                    "reason": "SERVICE_STATE 无该动作的预期态，漂移不可判",
+                })
+            elif wrapped.has_drift():
                 rolled = guard.check_and_rollback(adapter, wrapped)
+                self._feed_canary_evidence(instance, node, "failed", {
+                    "reason": "canary 漂移，已自动回滚", "rollback_calls": len(rolled),
+                })
                 self.audit.add(
                     AuditEvent(
                         type=ENTITY_DRIFT,
@@ -507,6 +543,8 @@ class NodeExecutor:
                     )
                 )
                 return self._soft_fail(instance, node, RuntimeError(f"canary 漂移，已回滚 {node.action}"))
+            else:
+                self._feed_canary_evidence(instance, node, "verified")
             result = wrapped.result
         else:
             result: CallResult = adapter.call(node.action or "", dict(node.params))

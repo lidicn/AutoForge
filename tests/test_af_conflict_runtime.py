@@ -316,3 +316,103 @@ def test_wait_decision_parks_and_resumes_via_scheduler():
     assert scheduler.jobs                                                       # call_later(0, retry)
     scheduler.jobs[0][1]()
     assert resumed and resumed[0] == {"then"}                                   # 重试成功续跑
+
+
+# ── F4：争抢落到生产证据（af_watch），但"放行"不算证据 ────────────────────
+
+
+def _watch_row(automation_id):
+    af_watch = _load("af_watch")
+    for row in af_watch.verified_in_prod_partition()["automations"]:
+        if row["automation_id"] == automation_id:
+            return row
+    return None
+
+
+def _reset_watch():
+    _load("af_watch").reset()
+
+
+def test_reject_feeds_conflict_evidence():
+    _reset_watch()
+    service = make_service()
+    executor = FakeExecutor([])
+    service.attach(executor)
+    service.arbiter.request(["light.study"], "B", "i-b", "light.turn_off", {})
+    executor._do(make_instance("A", "i-1"), make_node())
+
+    row = _watch_row("A")
+    assert row is not None and row["conflict"] == 1
+    # 被仲裁挡下 ≠ 生产验证失败，也绝不算"验过了"（三档各归各栏）
+    assert row["verified_in_prod"] == 0 and row["failed_in_prod"] == 0
+    _reset_watch()
+
+
+def test_wait_and_preempted_each_feed_conflict_evidence():
+    _reset_watch()
+    service = make_service(wait_enabled=True, scheduler=FakeScheduler())
+    service.arbiter.request(["light.study"], "B", "i-b", "light.turn_off", {})   # 0.99 占锁
+    executor = FakeExecutor([])
+    service.attach(executor)
+    executor._do(make_instance("A", "i-1"), make_node())                          # WAIT → 排队
+    assert _watch_row("A")["conflict"] == 1
+    _reset_watch()
+
+    log = []
+    service2 = make_service(conf=FakeConf({"A": 0.85, "B": 0.95}))
+    executor2 = FakeExecutor(log)
+    service2.attach(executor2)
+    executor2.on_call = lambda: service2.arbiter.request(
+        ["light.study"], "B", "i-b", "light.turn_off", {}
+    )
+    assert executor2._do(make_instance("A", "i-1"), make_node()) == {"on_error"}   # 在飞被抢占
+    row = _watch_row("A")
+    assert row["conflict"] == 1
+    _reset_watch()
+
+
+def test_observe_mode_detection_is_still_evidence():
+    """试演期不拦截，但"探测到争抢"本身就是生产证据——否则试演期结束时零证据。"""
+    _reset_watch()
+    service = make_service(mode="observe")
+    executor = FakeExecutor([])
+    service.attach(executor)
+    service.arbiter.request(["light.study"], "B", "i-b", "light.turn_off", {})
+    assert executor._do(make_instance("A", "i-1"), make_node()) == {"then"}
+    assert _watch_row("A")["conflict"] == 1
+    _reset_watch()
+
+
+def test_plain_allow_feeds_no_production_evidence():
+    """ALLOW 只是"没拦住"。喂进聚合器会把仲裁器的存在算成生产验证证据（铁律 #5）。"""
+    _reset_watch()
+    service = make_service()
+    executor = FakeExecutor([])
+    service.attach(executor)
+    assert executor._do(make_instance("A", "i-1"), make_node()) == {"then"}
+    assert _watch_row("A") is None
+    assert _load("af_watch").verified_in_prod_partition()["automations"] == []
+    _reset_watch()
+
+
+def test_watch_feed_failure_does_not_block_dispatch():
+    """聚合器抛错不得影响下发（与 af_shadow 的 watch_record_error 同口径）。"""
+    _reset_watch()
+    af_watch = _load("af_watch")
+    original = af_watch.record_conflict
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("聚合器炸了")
+
+    af_watch.record_conflict = boom
+    try:
+        service = make_service()
+        log = []
+        executor = FakeExecutor(log)
+        service.attach(executor)
+        service.arbiter.request(["light.study"], "B", "i-b", "light.turn_off", {})
+        assert executor._do(make_instance("A", "i-1"), make_node()) == {"on_error"}
+        assert not any(item[0] == "call" for item in log)                     # 拦截逻辑照旧
+    finally:
+        af_watch.record_conflict = original
+    _reset_watch()

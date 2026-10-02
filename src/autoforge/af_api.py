@@ -720,6 +720,13 @@ def build_app(
             svc.undo_deploy, deploy_id, bool(body and body.confirm), store.root if store else None
         )
 
+    # ── F4：生产态验证证据（af_watch 聚合）。刻意不叫 /api/watch/*——那条前缀在本服务里
+    #   指"运行中的 watch 实例"（下面 §v1.7.3），两者不是一个东西。──
+    @app.get("/api/evidence/prod", dependencies=[Depends(_read)])
+    def api_evidence_prod() -> dict[str, Any]:
+        """诚实报告 `verified_in_prod` 分区：verified / failed / unmodeled 三档 + 淘汰计数。"""
+        return svc.watch_summary()
+
     # ── v1.7.3：运行中 watch 实例列表（只读）──
     @app.get("/api/watch/list", dependencies=[Depends(_read)])
     def api_watch_list() -> dict[str, Any]:

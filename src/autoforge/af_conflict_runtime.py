@@ -21,6 +21,7 @@ auto/shadow/ask 三级自主同口径——`shadow` 只读比对不参与冲突�
 from __future__ import annotations
 
 import functools
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
@@ -302,6 +303,11 @@ class ConflictService:
             self._audit_degraded("request", exc, entity_ids[0], automation_id)
             decision = RequestDecision.ALLOW
 
+        # F4：仲裁器真判出争抢（排队 / 拒绝 / 熔断）就落生产证据，observe 模式的探测同样算证据
+        if decision is not RequestDecision.ALLOW:
+            self._feed_watch_conflict(
+                automation_id, decision.value, entity_ids=list(entity_ids), observe=observe
+            )
         if decision is RequestDecision.WAIT and not observe:
             self._park(executor, original, instance, node, automation_id, instance_id)
             return tuple(self.settings.wait_edges)
@@ -322,6 +328,7 @@ class ConflictService:
             self._note_af_actions(automation_id, action, params, entity_ids)
         self._safe_release(entity_ids, automation_id, success=success and not aborted)
         if aborted:                                   # 在飞期间被抢占 → 走 on_error 边
+            self._feed_watch_conflict(automation_id, "preempted", entity_ids=list(entity_ids))
             return self._abort(executor, instance, node, RequestDecision.REJECT, "preempted")
         return edges
 
@@ -407,6 +414,23 @@ class ConflictService:
                 self.intervention.note_af_action(automation_id, eid, action, expected)
             except Exception as exc:
                 self._audit_degraded("note_af_action", exc, eid, automation_id)
+
+    def _feed_watch_conflict(self, automation_id: str, reason: str, **detail: Any) -> None:
+        """F4：真发生了争抢（排队 / 被拒 / 在飞被抢占）才喂 af_watch。
+
+        ALLOW 放行**不喂**——那只是"没拦住"，不是"验过了"，喂进去会把仲裁器的存在
+        算成生产态验证证据（铁律 #5）。聚合失败不得影响下发，但原因要进日志。
+        """
+        try:
+            from . import af_watch
+
+            af_watch.record_conflict(
+                automation_id, "conflict", self.clock.now(), {"reason": reason, **detail}
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("autoforge.conflict").warning(
+                "af_watch 聚合冲突证据失败（不影响下发）：%r", exc
+            )
 
     def _safe_band(self, automation_id: str) -> str:
         """统一 band 真值源读取（故障优先：缺省 auto，绝不因 band 查询异常而阻断下发）。"""

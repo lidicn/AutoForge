@@ -1649,6 +1649,22 @@ def undo_preview(deploy_id: str, store_root: "str | Path | None" = None) -> dict
     return dict(_undo_store(store_root).inspect(deploy_id))
 
 
+# ─────────────────────────────────────────────────────────────────────
+# F4：生产态验证证据的只读面（`af_watch` 进程内聚合）
+# ─────────────────────────────────────────────────────────────────────
+
+def watch_summary() -> dict[str, Any]:
+    """`verified_in_prod` 分区 + summary，供监护视图直接渲染。
+
+    三档一起给（verified / failed / unmodeled）：只报 verified 会让「生产验过 10 次
+    全 MISS」和「一次都没跑过」读数相同（铁律 #5）。同样**不返字面量 `ok`**——
+    查询成功与否由 HTTP 状态表达，判据是 `automations`/`summary` 本身。
+    """
+    from autoforge.af_watch import verified_in_prod_partition
+
+    return dict(verified_in_prod_partition())
+
+
 def undo_deploy(
     deploy_id: str,
     confirm: bool = False,
