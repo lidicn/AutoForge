@@ -99,8 +99,38 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Install deps（锁文件安装，不用 npm install）
-        run: npm ci
+      - name: Install deps（锁文件安装，交付面走官方源）
+        # DCD 裁定 20261002「AF CI 锁文件源与 MA 载荷键名」§一：(b) 只把 CI 侧改指官方源，
+        # 不动 `ui/package-lock.json` 一个字节，本机开发照旧走镜像。
+        # 必须两条一起给：只写 `--registry=` 是**空操作**——锁文件 137/137 条 `resolved` 指
+        # registry.npmmirror.com，而 npm 的 `replace-registry-host` 默认值是 `npmjs`（只改写
+        # registry.npmjs.org 主机，不动第三方主机）。本机实测（同一份锁文件、空缓存目录、`--loglevel=http`
+        # 的 fetch 行按主机计数）：
+        #   只 `--registry=https://registry.npmjs.org`（默认 replace）→ RC=0，但 fetch 行是
+        #     registry.npmmirror.com 87 + cdn.npmmirror.com 87，npmjs 只有 argv 回显 1 行＝装的仍是镜像；
+        #   `--registry=https://registry.invalid.test --replace-registry-host=always` → RC=1 ENOTFOUND，
+        #     日志里 193 处主机引用全打 invalid.test、npmmirror 0 处＝改写确实发生；
+        #   本 job 这条（官方源 + always）→ 空缓存装机 RC=0，该次日志 263 处主机引用全打
+        #     registry.npmjs.org、npmmirror 0 处；同一份 node_modules 上 `vue-tsc -b --force` 与
+        #     `vite build` 均 RC=0（本机 Node 24 / npm 11.9.0 预跑，runner 上以本 job 的自证读数为准）。
+        # 交付面逐字节对账：137/137 条官方 tarball 的 sha512 与锁文件 `integrity` 全 MATCH，
+        # 所以这条改写不会 EINTEGRITY；同一份 node_modules 上 `vue-tsc -b --force` 与 `vite build` 都 RC=0。
+        # 交付面**必须自证**：npm ci 绿不能证明它没吃镜像（镜像照样能装成功），所以把
+        # `--loglevel=http` 的 fetch 行留在日志里并当场数主机（本机实测该 loglevel 会把 URL 打到 stdout）。
+        # 主机匹配写 `npmmirror\.com` 而不是 `registry.npmmirror.com`：实测镜像还会把 tarball 重定向到
+        # `cdn.npmmirror.com`（同一份日志里两个主机各 87 行），只数第一个会漏。
+        # flag 形式在 npm 11.9.0 上实测；`replace-registry-host` 自 npm 9.6.3 起存在，runner 的 npm 10.x 适用。
+        run: |
+          set -o pipefail
+          npm ci --registry=https://registry.npmjs.org --replace-registry-host=always \
+            --no-audit --loglevel=http 2>&1 | tee /tmp/npm-ci.log
+          mirror_hits=$(grep -c 'npmmirror\.com' /tmp/npm-ci.log || true)
+          official_hits=$(grep -c 'registry\.npmjs\.org' /tmp/npm-ci.log || true)
+          echo "fetch 主机读数：npmmirror=${mirror_hits} npmjs=${official_hits}"
+          if [ "$mirror_hits" -ne 0 ] || [ "$official_hits" -eq 0 ]; then
+            echo "::error::CI 没有从官方源拉包（交付面仍在吃第三方镜像）"
+            exit 1
+          fi
         working-directory: ui
       - name: 类型硬门（vue-tsc -b --force）
         # 2026-10-02 登记质量债收口：此前 `vue-tsc -b`（无 --force）在本地有

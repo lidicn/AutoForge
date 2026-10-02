@@ -23,6 +23,7 @@
 | 门禁肥化防护（计划外补刀） | **已交付** | `gates.sh` 计数棘轮 + `.gates-tally.txt`（上限 104），三条变异实测能红；AgentOps 模板同步去反引号缺陷 |
 | F4 ③ / F7 前端残留 | **已收口** | `/evidence` 生产态证据视图上线；真机下发的事件回放与撤销按钮端到端真点通（读数见 §一末） |
 | GitHub CI | **首次可读，且从"永久红"修到第一条绿** | 实测 run 1–27 `conclusion` 全为 `failure`（建仓以来一条没绿过），三个红因全在版本/判据层而非产品逻辑：pydantic-v2-only 的 `Field(max_length=)` 让 CI（pydantic 1.10.12）**0 条测试跑过**、undefined-name 门禁自己用了 3.12+ 的 `ast.TypeAlias`（CI 是 3.11）、真 vhass 的 skip 判据问"包能否 import"而非"插件注册了没"。三条各钉能变红的反例后，run 28 五作业全 `success`，CI 与本机通过/跳过数逐字相同（2621/51）。读数与残留见 §二之五 |
+| DCD 20261002 §一（CI 锁文件源）| **裁定 (b) 已落地，但落法补了一条 flag** | 只按原文写 `--registry=https://registry.npmjs.org` 经实测是**空操作**（fetch 87+87 行仍在 `registry.npmmirror.com`/`cdn.npmmirror.com`），必须配 `--replace-registry-host=always`；安装步另加"主机自证"守卫（CI 绿不能证明没吃镜像）。逐字节对账 137/137 `integrity` MATCH ⇒ 锁文件字节未动。回执已投 DCD（含 §四 判例 2 的证据更正：`@types/node` tarball 两源逐字节相同、根目录差异不是重打包痕迹）。见 §二之七 |
 | UI 类型门禁（上一版登记的债） | **已收口（含下一批零 `any`）** | 15 条 `vue-tsc` 错误清零，`type-check` 改 `--force` 防缓存假绿，`ci.yml` 新增 `ui` 硬门 job；过程中抓到"两个按钮从未接线"与"mock 夹具少回两字段"两条真缺陷（§二之二）。同族第二批：API 层四处 `request<any>` 换成后端真形类型并逐键与在线响应对账，`grep request<any> ui/src` 已无匹配（§二之三） |
 | 部署 | **未部署** | 铁律 #3：文档/本地阶段不部署，镜像重烤须进合并停机窗 |
 
@@ -361,8 +362,8 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 
 ⇒ §六 那条「新 `ui` job 的 CI 侧执行 = EXEMPT」**今天销账为 VERIFIED**：GitHub runner 上
 `npm ci` → `vue-tsc -b --force` → `vite build` 三步真绿（顺带实测：137 条 `registry.npmmirror.com`
-的锁文件在 runner 上装得起来，§五 第 5 件那个"能不能装"的经验未知量没了——但**换官方源**仍是待裁项，
-装得起来不等于来源可信）。
+的锁文件在 runner 上装得起来，§五 第 5 件那个"能不能装"的经验未知量没了——当时"换官方源"仍待裁，
+同批晚些时候裁定为 (b) 并落地，落法与读数见 §二之七）。
 
 ### 红因一：`Field(max_length=…)` 是 pydantic v2 写法，CI 解到的是 pydantic 1.10（`b5f0a7b`）
 
@@ -453,6 +454,46 @@ CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip�
 
 ---
 
+## 二之七、本批读数：DCD 裁定 (b) 落地——但**字面落法是一条空操作**，所以加了自证
+
+裁定：`decisions/20261002-AF锁文件源与MA载荷键名-裁定.md` §一 → **(b) 只把 CI 侧改指官方源，不动锁文件字节**。
+`ci.yml` 的 `ui` 作业安装步照此改。落之前先把"这条命令到底改不改得动主机"问清楚，因为
+`package-lock.json` 的 137 条 `resolved` 是**写死在锁文件里的主机名**，而 npm 的
+`replace-registry-host` 默认值是 `npmjs`（只改写 `registry.npmjs.org` 这个主机，不动第三方主机）。
+
+**离线证伪（同一份锁文件、每次换空缓存目录、`--loglevel=http` 把 fetch URL 打到 stdout，按主机计数）**：
+
+| 命令形状 | 结果 | fetch 主机读数 |
+|---|---|---|
+| 只 `--registry=https://registry.npmjs.org`（默认 replace） | **RC=0 装成功** | fetch 行是 `registry.npmmirror.com` 87 + `cdn.npmmirror.com` 87，`registry.npmjs.org` 只有 argv 回显 1 处、0 条 fetch ⇒ **装的仍是镜像**，`--registry` 单独写是空操作 |
+| `--registry=https://registry.invalid.test --replace-registry-host=always` | **RC=1** | npm debug 日志 193 处主机引用全打 `registry.invalid.test`（`ENOTFOUND`），npmmirror 0 处 ⇒ 改写确实发生 |
+| 本 job 采用的形状（官方源 + `always`） | **RC=0，`added 87 packages in 3m`** | 175 行 fetch 全打 `registry.npmjs.org`，npmmirror **0** 行 |
+
+⇒ **只按字面加 `--registry=` 会得到一条"看起来执行了裁定、实际什么都没改"的 CI**（DCD §一 理由 2 想要的"integrity 若在官方源不符会在 CI 暴露"也永远不会暴露）。落法改成两条 flag 一起给。
+
+**逐字节对账（裁定 (b) 的前提）**：把 137 条 `resolved` 的主机换成 `registry.npmjs.org` 后逐条下载、算 sha512 与锁文件 `integrity` 比对 ⇒ **137/137 MATCH，0 条 MISS、0 条 ERROR**。所以这条改写不会 `EINTEGRITY`，"不动锁文件字节"是站得住的。
+
+**CI 绿不等于走的是官方源**（镜像源同样能装成功），所以安装步自带读数：`tee /tmp/npm-ci.log` 后数主机——
+`npmmirror` 命中数不为 0，或 `npmjs` 命中数为 0，就 `::error::` + `exit 1`。守卫逻辑在**三份实测日志**上跑过：
+镜像那份 → `npmmirror=174 npmjs=1` ⇒ 红；不可达源那份 → `npmmirror=0 npmjs=0` ⇒ 红；官方源那份 → `npmmirror=0 npmjs=175` ⇒ 绿。
+`grep` 的模式写 `npmmirror\.com` 而不是 `registry.npmmirror.com`：**实测镜像会把 tarball 再重定向到 `cdn.npmmirror.com`**（同一份日志 87 行），只数第一个主机名会漏掉一半。
+
+**同一份官方源 node_modules 上的后续两步**（预跑，目录只带 `package.json`/锁文件/`src` 等，`node_modules` 全新装）：
+`npm run type-check`（`vue-tsc -b --force`）**RC=0**；`npm run build`（vite + manifest）**RC=0**
+（`✓ built in 32.72s`，manifest 那行 `commit=unknown` 是探针目录不是 git 仓，与判据无关）。
+
+**给 DCD 的一条更正（§四 判例 2 的旁证不成立）**：`@types/node@22.20.2` 的 tarball 从
+`registry.npmmirror.com` 与 `registry.npmjs.org` 取下来说是**同一个字节串**
+——两者 `size=447116`、`sha256` 前缀同为 `64921eb9b6caae37`，解包根目录**都**是 `node v22.20`（不是 `package/`）。
+⇒ 根目录不是 `package/` 是**官方发布物本身的形态**（DefinitelyTyped 的发布布局），不是"镜像重打包"的证据；
+对本锁文件这 137 条而言，镜像与官方逐字节等价。判例 2 想表达的"信任镜像要降级为信任 integrity 哈希"方向没错，
+但**证据要换掉**，否则"镜像会重打包"会被当成既成事实传下去。回执已投 `关键决策部/inbox/`（见 §五 第 6 件）。
+
+**残留登记**：本机预跑用的是 Node 24 / npm 11.9.0，runner 是 Node 20（npm 10.x）。`replace-registry-host` 自 npm 9.6.3 起存在，
+但这条改写在 runner 上的真读数只有 push 之后才知道——守卫步就是为此而写：**它要么给出 npmjs 的读数，要么当场红**，不会静默退回镜像。
+
+---
+
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
 
 | commit | 内容 |
@@ -477,6 +518,7 @@ CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip�
 | 本批之六（CI 第三个红因） | `e674886`：`tests/conftest.py` 新增 `vhass_plugin_loaded()`，`@pytest.mark.vhass` 的 skip 判据从"包能否 find_spec"换成"插件真注册了没"——CI 上 10 条 `fixture 'hass' not found` 收口为带理由的 skip；本机用桩包 + 伪 `sys.platform` 取到红/绿双向读数 |
 | `b31c2ad` | 文档：§二之五 CI 首读全篇 + §〇 CI 行 + §三 台账两行 + §五 第 4 件按 20261002 裁定改写 + §六 四条残留/一条销账；顺带修回被我上一次编辑吃掉的 `## 三` 标题，并把核实基准从"HEAD 自指"改成"代码侧最新 commit"（文档提交不再改判据） |
 | 本批之七（events 上限补齐） | `af_api.py`：`_MAX_SIM_EVENTS` → `_MAX_REPLAY_EVENTS` + `_check_event_cap()`，`/api/sim`/`/api/sessions`/`/api/live/run` 三条端点同形判据（8e8c725 只装了第一条）；`test_af_api.py` 参数化钉两条新端点（超上限 422 + 恰好上限非 422），摘掉判据实测 `2 failed`（400/403 而非 422）；本机全量 2623 passed / 51 skipped RC=0，门禁 RC=0。读数见 §二之六 |
+| 本批之八（裁定 (b) 落地 + 空操作证伪） | `ci.yml` 的 `ui` 安装步：`--registry=https://registry.npmjs.org` **配** `--replace-registry-host=always`（只写前者经实测是空操作——fetch 全在 `registry.npmmirror.com` 87 + `cdn.npmmirror.com` 87），并加主机自证（`npmmirror` 命中≠0 或 `npmjs` 命中=0 → `::error::` + `exit 1`，三份实测日志上红/红/绿）；逐字节对账 137/137 integrity MATCH，官方源 node_modules 上 type-check/build 均 RC=0。回执投 DCD：裁定落法补正 + §四 判例 2 证据更正。读数见 §二之七 |
 
 
 ## 四、审计侧
@@ -494,7 +536,8 @@ CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip�
 | 2 | 第 0 步 ③④：0.3.1 记账缺口（源树 `time.py` 未入库 + NAS `VERSIONS.txt` 无 0.3.1 条目 ⇒ sha 不可复现）+ §四 合并停机窗排期与授权 | `inbox/20261002-homesdk0.3.1记账缺口与AF镜像重烤合并窗-决策申请.md` → **记账半边已裁定并已执行**（DCD §〇：源码+契约表入库 `5e4ba33`、VERSIONS 补条目、以重建 `b4b5d6bb…` 为权威，AF pin 与 vendored wheel 已跟新）；**镜像重烤半边 = 合并窗内做，尚未生效**（窗口未开） |
 | 3 | 第七轮 `StateProvider` 统一 fail-closed 的方向与代价（整段软失败 vs 逐实体可见漂移） | `inbox/20261002-AF-StateProvider统一fail-closed的方向与代价-决策申请.md` → **已裁定：A 先行 + B 排队**，B 启动条件 = 下次真实改动 `af_instance._refresh_snapshot` 或 AF v2.6；整段口径被裁定为**有意设计**；漂移须以 `entity_drift` 记账 |
 | 4 | 第 0 步 ④ 的记账载体：`E:/NAS/AgentOps` **不是 git 仓** ⇒ 已授权改的门禁模板无 commit、无 sha、不可回滚；三仓 CI 都依赖它，却没有任何版本账 | `inbox/20261002-AgentOps门禁模板无版本载体-决策申请.md` → **已裁定**（`decisions/20261002-AgentOps与MA交付面-裁定.md` §一）：**A 建仓为目标态**（NAS bare 加 `agentops.git`、模板首次 commit、此后走 PR），**建仓与推送授权"与合并停机窗同批"** ⇒ AF 侧本窗不动；**C 兜底本窗已落**（申请区贴了模板 sha256 `887c33dd…`）。裁定另点名两件事：模板分发=**各仓按模板重写自己的 CI**（重写即该仓一次 CI 变更，走各自 PR），`memory-agent/.github/workflows/gates.yml:56` 的 `continue-on-error` 由 **MA 侧修**，AF 不碰他仓 main |
-| 5 | 新 `ui` CI job 将**首次**让 GitHub runner 按 lockfile 去第三方镜像拉 137 个包（`ui/package-lock.json` 实测 137/137 指 `registry.npmmirror.com`、0 条 npmjs、0 条缺 `integrity`；根因是用户级 `~/.npmrc` 漏进共享产物）。这是 DPP 同题申请（R7）在 AF 的**前提修正**：那边选"只登记"的承重句是"CI 只在我这台机器跑"，AF 今天把这句话拿掉了 | `inbox/20261002-AF-CI首次消费镜像锁文件-DPP-R7同题补充-决策申请.md`（**已提交，待裁**）。裁定前 AF **不动 lockfile 一个字节**；AF 倾向"只把 CI 侧改指官方源、本机开发不变"那一档 |
+| 5 | 新 `ui` CI job 将**首次**让 GitHub runner 按 lockfile 去第三方镜像拉 137 个包（`ui/package-lock.json` 实测 137/137 指 `registry.npmmirror.com`、0 条 npmjs、0 条缺 `integrity`；根因是用户级 `~/.npmrc` 漏进共享产物）。这是 DPP 同题申请（R7）在 AF 的**前提修正**：那边选"只登记"的承重句是"CI 只在我这台机器跑"，AF 今天把这句话拿掉了 | `inbox/20261002-AF-CI首次消费镜像锁文件-DPP-R7同题补充-决策申请.md` → **已裁定 (b)**（`decisions/20261002-AF锁文件源与MA载荷键名-裁定.md` §一：只把 CI 侧改指官方源、**不动锁文件字节**、本机开发照旧）。**AF 已落地**，但落法比裁定原文多一条 flag：只写 `--registry=` 经实测是**空操作**（fetch 全在 `npmmirror` 的两个主机上），必须配 `--replace-registry-host=always`；同时给安装步加了主机自证守卫（CI 绿不能证明没吃镜像）。逐字节对账 137/137 MATCH ⇒ "不动锁文件"成立。读数见 §二之七 |
+| 6 | 上一条落地时抓到的两件事要回给 DCD：①裁定原文那条命令是空操作，落法已补一条 flag（问"算不算改判"）；②裁定 §四 判例 2 的证据不成立——`@types/node@22.20.2` 的 tarball 在**两个源逐字节相同**（`size=447116`、`sha256` 前缀同为 `64921eb9b6caae37`、解包根目录都是 `node v22.20`），"根目录不是 `package/`"是 DefinitelyTyped 自己的发布布局，不是镜像重打包的痕迹 | `inbox/20261002-AF-锁文件源裁定落法补正与判例2旁证更正-回执.md`（**已提交，待回话**）。同件另附一条小问：安装步那条"fetch 主机集合 ⊆ {批准的那一个域} 且该域命中数 > 0"的守卫形状要不要提升到 AgentOps 模板——按 20261002 §一"分发=各仓自写"的口径，AF 默认不动 |
 
 ## 六、未在本版做（登记，不静默）
 
@@ -512,7 +555,7 @@ CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip�
 - **CI 读数这条路本身没有门禁**：本批能读到 run 1–27 全红，靠的是"本机 `~/.git-credentials` 里存着可用的 github.com 凭证 + `api.github.com` 可达"（同一时刻 `github.com` 网页面 `curl` 超时、浏览器 `ERR_CONNECTION_TIMED_OUT`）。这是**一次性条件**，不是可复跑的命令；下一次两者都不可达时又变成 EXEMPT。要收口就得做成脚本（且不能把凭证写进仓）。
 - **真 vhass 在 CI 上现在是 skip**：10 条 `*_in_real_vhass` 判"插件未注册 → skip（带理由）"，权威场地是 `docker run autoforge-test`；本机无 docker（`docker: command not found`），该文件也自陈"未经实跑验证" ⇒ **F14 第二道闸至今没有任何真跑读数**，"CI 绿"不许被读成"仿真复核过"。
 - **CI 依赖未 pin**（`pip install -e ".[dev]"` 每次现解）：本批那条 pydantic v1/v2 红就是漂移付的账；改 lockfile/加 pin 等 §五 第 5 件裁定。
-- **CI 装依赖的源是第三方镜像**：`ui/package-lock.json` 实测 137/137 条 `resolved` 指 `registry.npmmirror.com`（0 条 npmjs、0 条缺 `integrity`），根因是用户级 `~/.npmrc` 漏进共享产物。已作为 DPP R7 同题的**前提修正**提 DCD（§五 第 5 件），裁定前不改 lockfile 一个字节。
+- **本机开发面仍在吃镜像**：AF 本机 `~/.npmrc` 指 `registry.npmmirror.com`，裁定 (b) 只管 CI 侧，本机不变（这是裁定选的档位，不是遗漏）。CI 侧的守卫已把"交付面必须从官方源"变成会红的判据；开发面要收口得另裁。
 
 已收口（上一版登记、本版实测销账）：
 - ~~`ui/src/views/LiveView.vue` `events=undefined` ⇒ `_replay_live` 空转~~ → 补事件脚本输入 + 回放读数，F7 端到端真点通（`dep-28bf327fe8d7`，假 HA `turn_on`→`turn_off`，设备回 `off`）。
