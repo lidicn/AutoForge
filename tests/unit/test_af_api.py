@@ -127,3 +127,22 @@ def test_api_sim_accepts_events_exactly_at_the_cap(tmp_path, monkeypatch):
     client = TestClient(build_app(store_root=str(tmp_path)))
     r = client.post("/api/sim", json={"ir": {"name": "x"}, "events": [{"e": 1}] * 10000})
     assert r.status_code != 422, r.text
+
+
+@pytest.mark.parametrize("path", ["/api/sessions", "/api/live/run"])
+def test_event_cap_covers_every_events_endpoint(tmp_path, monkeypatch, path):
+    """`8e8c725` 当年只给 `/api/sim` 装了闸门，同一条 DoS 面在另外两条 events 端点上留着。
+
+    三条端点都是"整场回放在内存里跑"，所以判据必须同形：超上限 422、恰好等于上限放行到服务层
+    （后者可能因缺 confirm / live 未启用而 403，那是对的——拒的理由不是条数）。
+    """
+    monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
+    client = TestClient(build_app(store_root=str(tmp_path)))
+    body = {"ir": {"name": "x"}, "live_allow": ["light.a"]}
+
+    over = client.post(path, json={**body, "events": [{"e": 1}] * 10001})
+    assert over.status_code == 422, over.text
+    assert "10000" in over.json()["detail"]
+
+    at_cap = client.post(path, json={**body, "events": [{"e": 1}] * 10000})
+    assert at_cap.status_code != 422, at_cap.text

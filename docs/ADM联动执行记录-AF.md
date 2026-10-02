@@ -421,14 +421,35 @@ CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip�
 
 ### 这批的残留（登记，不静默）
 
-- **`/api/sessions` 与 `/api/live/run` 的 `events` 没有上限**：`8e8c725` 当年只给 `/api/sim` 装了闸门，
-  同一条 DoS 面留了两个口子。本批**只把已有那道闸门改成版本无关**，没顺手扩——扩它=改两个端点的现有行为，另案处理。
+- **~~`/api/sessions` 与 `/api/live/run` 的 `events` 没有上限~~（同批内已补）**：`8e8c725` 当年只给 `/api/sim` 装了闸门，
+  同一条 DoS 面留了两个口子。当时以"扩它=改两个端点的现有行为"为由另案处理，紧接着的 §二之六 就把它补齐了。
 - **CI 依赖仍未 pin**：`pip install -e ".[dev]"` 每次现解，v1/v2 之争正是漂移付的账。等 §五 第 5 件（镜像锁文件）裁定；
   裁定前 CI 仍会随上游版本漂。
 - **"CI 绿"不等于"F14 第二道闸跑过"**：CI 上 10 条真 vhass 现在是 skip（41 → 51 skipped 口径变化），
   容器才是它跑的场地，而容器路径在本机不可实跑（无 docker：`docker: command not found`）。
 - 门禁 AST 基线（104 条）与解释器版本无关，但 **undefined-name 门禁的覆盖面与解释器版本有关**：
   3.11 上看不见 `type` 语句绑定的名字。这条不是缺陷（那种语法在 3.11 上先 SyntaxError），只是别把它当"两版等价"。
+
+---
+
+## 二之六、本批读数：`events` 上限从"只有 `/api/sim`"补到三条端点
+
+§二之五 记下的一条残留：`8e8c725` 当年只给 `/api/sim` 装了 events 闸门，`/api/sessions`（`create_session`
+→ `_replay`）与 `/api/live/run`（`live_run`）收同一个 `events: list[dict]`，同一条"整场回放在内存里跑"的面裸着。
+本批补上，判据与 `/api/sim` 同形：
+
+- `af_api.py`：`_MAX_SIM_EVENTS` → `_MAX_REPLAY_EVENTS = 10000` + 一个 `_check_event_cap()`，三个 handler 各调一次
+  （`grep -c "_check_event_cap(body.events)" src/autoforge/af_api.py` = **3**）；上限仍是**请求边界**判据，
+  不是模型层——§二之五 红因一那条教训（v2-only kwarg 让 CI 整仓进不去）不能反过来再犯。
+- 新测试 `test_event_cap_covers_every_events_endpoint` 参数化两条端点：超上限→422 且 detail 带 `10000`，
+  恰好上限→**不是** 422（可以是 403/400，那是别的闸门在说话）。
+- **能变红实测**：临时摘掉两处 `_check_event_cap` 调用后重跑该测试 → `2 failed`，原文分别是
+  `E  AssertionError: {"detail":"IR 校验失败：<root>: 'ir_version' is a required property; …"}` / `assert 400 == 422`（`/api/sessions`）
+  和 `E  AssertionError: {"detail":"真机下发未启用：服务端需设置 AUTOFORGE_LIVE_ENABLED=1"}` / `assert 403 == 422`（`/api/live/run`）。
+  ⇒ 这两条读数同时是缺陷本体的证据：**10001 条 events 在修复前会一路走进业务层**，被拒的理由是"IR 不合 schema"或"live 没开"，
+  而不是"条数超限"——即尺寸判据完全不存在。装回后 `11 passed`。
+- 本机全量：`python -m pytest tests/ -q` → **2623 passed, 51 skipped, 7 subtests passed, RC=0**（比上一批 +2，正是这两条参数化）；
+  `GATES_PYTHON=python bash gates.sh` → **RC=0**（"结论：门禁干净"）。
 
 ---
 
@@ -454,6 +475,8 @@ CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip�
 | `17953c6` | 本批之四落盘（`feat(ui): ADM ④A 洞察面板…`），已推 origin/main |
 | 本批之五（CI 首读 + 两个永久红因） | `b5f0a7b`：`af_api.SimBody` 的 pydantic-v2-only `Field(max_length=)` 改成 `_MAX_SIM_EVENTS` + `/api/sim` 边界判据（CI 解到 pydantic 1.10.12 时 `import af_api` 直接 ValueError，pytest/contracts 两作业 0 条测试跑过）；`scripts/check_undefined_names.py` 的 `ast.TypeAlias` 改 `getattr`（3.11 无此属性，门禁自己崩且红因被写成"undefined-name 红"）；两条各钉一个能变红的反例（端点 422 测试 + subprocess 真删 `ast.TypeAlias`）。读数见 §二之五 |
 | 本批之六（CI 第三个红因） | `e674886`：`tests/conftest.py` 新增 `vhass_plugin_loaded()`，`@pytest.mark.vhass` 的 skip 判据从"包能否 find_spec"换成"插件真注册了没"——CI 上 10 条 `fixture 'hass' not found` 收口为带理由的 skip；本机用桩包 + 伪 `sys.platform` 取到红/绿双向读数 |
+| `b31c2ad` | 文档：§二之五 CI 首读全篇 + §〇 CI 行 + §三 台账两行 + §五 第 4 件按 20261002 裁定改写 + §六 四条残留/一条销账；顺带修回被我上一次编辑吃掉的 `## 三` 标题，并把核实基准从"HEAD 自指"改成"代码侧最新 commit"（文档提交不再改判据） |
+| 本批之七（events 上限补齐） | `af_api.py`：`_MAX_SIM_EVENTS` → `_MAX_REPLAY_EVENTS` + `_check_event_cap()`，`/api/sim`/`/api/sessions`/`/api/live/run` 三条端点同形判据（8e8c725 只装了第一条）；`test_af_api.py` 参数化钉两条新端点（超上限 422 + 恰好上限非 422），摘掉判据实测 `2 failed`（400/403 而非 422）；本机全量 2623 passed / 51 skipped RC=0，门禁 RC=0。读数见 §二之六 |
 
 
 ## 四、审计侧
@@ -486,9 +509,8 @@ CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip�
 - `SessionViewResponse` 的**应答成功分支 = EXEMPT**：`case04_ask_timeout` 带 seed + event 建会话后 `asks=0`（分支未走到挂起 ask），只实测到 404 失败面；顶层 9 键靠同族 `POST /sessions`/`GET /sessions/{sid}` 的同一 `_session_view` 坐实。下一次做洞察面板或真机 ask 流程时顺手补一条"应答成功 → 快照键"的实测。
 - `/api/metrics` 的 `runs/success/failed/audit_distribution` 仍是 0/空——`get_metrics` 的 docstring 写明这三项需**常驻进程**（`forge serve`/`watch`）才累计，原型期服务层无状态。本批只把"形状"钉成类型，没有把"数值来源"改成真累计；那是另一件事，不在类型面批里偷做。
 - 本机 `node_modules` 的完整性没有门禁：本批实测 `@types/node@22.20.2` 曾被装成 **37/74** 文件（见 §二之二）。我用 registry 同版本 tarball 增量补齐了缺的 37 个文件，但**成因未查**（不在本批范围），且这条只在开发机成立——CI 走 `npm ci` 从锁文件装，不复用本机 `node_modules`。若下次又冒出"某个 `node:*` 模块找不到"，先数 `node_modules/@types/node/*.d.ts` 再怀疑代码。
-- **CI 读数这条路本身没有门禁**：本批能读到 run 1-26 全红，靠的是"本机 `~/.git-credentials` 里存着可用的 github.com 凭证 + `api.github.com` 可达"（同一时刻 `github.com` 网页面 `curl` 超时、浏览器 `ERR_CONNECTION_TIMED_OUT`）。这是**一次性条件**，不是可复跑的命令；下一次两者都不可达时又变成 EXEMPT。要收口就得做成脚本（且不能把凭证写进仓）。
+- **CI 读数这条路本身没有门禁**：本批能读到 run 1–27 全红，靠的是"本机 `~/.git-credentials` 里存着可用的 github.com 凭证 + `api.github.com` 可达"（同一时刻 `github.com` 网页面 `curl` 超时、浏览器 `ERR_CONNECTION_TIMED_OUT`）。这是**一次性条件**，不是可复跑的命令；下一次两者都不可达时又变成 EXEMPT。要收口就得做成脚本（且不能把凭证写进仓）。
 - **真 vhass 在 CI 上现在是 skip**：10 条 `*_in_real_vhass` 判"插件未注册 → skip（带理由）"，权威场地是 `docker run autoforge-test`；本机无 docker（`docker: command not found`），该文件也自陈"未经实跑验证" ⇒ **F14 第二道闸至今没有任何真跑读数**，"CI 绿"不许被读成"仿真复核过"。
-- **`/api/sessions` 与 `/api/live/run` 的 `events` 无上限**（`8e8c725` 只给 `/api/sim` 装闸门）：本批只把已有那道改成版本无关，扩到另两个端点=改现有行为，未做。
 - **CI 依赖未 pin**（`pip install -e ".[dev]"` 每次现解）：本批那条 pydantic v1/v2 红就是漂移付的账；改 lockfile/加 pin 等 §五 第 5 件裁定。
 - **CI 装依赖的源是第三方镜像**：`ui/package-lock.json` 实测 137/137 条 `resolved` 指 `registry.npmmirror.com`（0 条 npmjs、0 条缺 `integrity`），根因是用户级 `~/.npmrc` 漏进共享产物。已作为 DPP R7 同题的**前提修正**提 DCD（§五 第 5 件），裁定前不改 lockfile 一个字节。
 
@@ -502,6 +524,7 @@ CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip�
 - ~~AF 的 UI 没有类型门禁（登记 16 条待清）~~ → 实测 **15 条**全部清掉（其中 `SpecEditorView` 的两个按钮是**从未接线的死控件**、`LiveView` 四处 `bordered="false"` 把字符串真值当布尔传），`type-check` 加 `--force` 防缓存假绿，`ci.yml` 新增 `ui` job 作硬门；红/绿双向都有实测读数（注入探针 RC=2 → 撤除 RC=0）。见 §二之二。
 - ~~API 层四处 `request<any>`（`metrics`/`experience`/`telemetry`/`sessionAnswer`）让新类型门对这四条通道失明~~ → 全部换成后端真形类型，且逐键与在线响应对账（`success_rate` 按后端语义写成可空）；`grep request<any> ui/src` = **No matches found**；类型门能因这些字段变红由探针 TS2339 实测。见 §二之三。
 - ~~洞察队列只有 API、UI 没有"MA 洞察"这一屏~~ → `/#/insights` 上线：账目四计数 + 队列落点路径 + `unreadable` 记账可见 + 无 IR 行交接按钮 `disabled` + 二次确认写死"交接 ≠ 部署" + 空态四种成因。approve/reject 两条分支都在真后端上点通，把手 `a648a1aeb3c84751` 在 `af_pending` 与 decided 两侧对得上。见 §二之四。
+- ~~`/api/sessions` 与 `/api/live/run` 的 `events` 无上限~~ → `_MAX_REPLAY_EVENTS` + `_check_event_cap()` 覆盖三条 events 端点（`grep -c` = 3）；参数化测试在两处摘掉判据后**实测变红**（`assert 400 == 422` / `assert 403 == 422`，即 10001 条 events 修复前一路走进业务层），装回 11 passed、全量 2623 passed RC=0。见 §二之六。
 
 ---
 

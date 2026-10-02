@@ -82,12 +82,21 @@ __all__ = ["build_app"]
 #: Bearer 令牌提取（auto_error=False：缺失时不报错，交由鉴权依赖决定）
 _bearer = HTTPBearer(auto_error=False)
 
-#: `/api/sim` 一次可回放的 events 条数上限（8e8c725 的 DoS 面收敛：整场仿真在内存里跑）。
+#: 一次可回放的 events 条数上限（8e8c725 的 DoS 面收敛：整场仿真/回放在内存里跑）。
 #: 原先写成 pydantic v2 的 `Field(max_length=…)`——CI 解析到 pydantic **1.10**（被
 #: `pytest-homeassistant-custom-component` 拖下来）时，这个 kwarg 让 `import af_api`
 #: 当场 `ValueError: constraints set but not enforced`，9 个测试文件连收集都跑不起来，
-#: 三条 CI 作业从 run 13 起永久红。判据挪到请求边界上，两版 pydantic 行为一致。
-_MAX_SIM_EVENTS = 10000
+#: pytest / contracts 两条作业自建仓以来一条没绿过。判据挪到请求边界上，两版 pydantic 行为一致。
+#: 同一判据覆盖 `/api/sim`、`/api/sessions`、`/api/live/run`——8e8c725 当年只装了 `/api/sim`。
+_MAX_REPLAY_EVENTS = 10000
+
+
+def _check_event_cap(events: list[dict[str, Any]] | None) -> None:
+    if events is not None and len(events) > _MAX_REPLAY_EVENTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"events 条数 {len(events)} 超过上限 {_MAX_REPLAY_EVENTS}：整场回放/仿真在内存里跑",
+        )
 
 
 
@@ -471,11 +480,7 @@ def build_app(
 
     @app.post("/api/sim", dependencies=[Depends(_readonly_guard)])
     def api_sim(body: SimBody) -> dict[str, Any]:
-        if body.events is not None and len(body.events) > _MAX_SIM_EVENTS:
-            raise HTTPException(
-                status_code=422,
-                detail=f"events 条数 {len(body.events)} 超过上限 {_MAX_SIM_EVENTS}：仿真整场在内存里跑",
-            )
+        _check_event_cap(body.events)
         try:
             # v1.5.0：传 store → `_telemetry` 落遥测
             return svc.simulate(body.ir, body.seed, body.events, store=store)
@@ -674,6 +679,7 @@ def build_app(
 
     @app.post("/api/sessions", dependencies=[Depends(_write)])
     def api_session_create(body: SessionBody) -> dict[str, Any]:
+        _check_event_cap(body.events)
         return _svc(svc.create_session, body.ir, body.seed, body.events)
 
     @app.get("/api/sessions", dependencies=[Depends(_read)])
@@ -707,6 +713,7 @@ def build_app(
 
     @app.post("/api/live/run", dependencies=[Depends(_readonly_guard), Depends(_live)])
     def api_live_run(body: LiveRunBody) -> dict[str, Any]:
+        _check_event_cap(body.events)
         return _svc(
             svc.live_run, body.ir, body.live_allow, body.events, body.confirm, store, body.undo
         )
