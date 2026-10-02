@@ -317,7 +317,7 @@ def _make_runtime(
                 logging.getLogger(__name__).debug("[DRY-LIVE 意图] %s %s", action, params)
             adapter.on_dry_run = _on_dry
         runtime.adapters.register(adapter)
-        _start_linkage_bridge(clock=runtime.clock)   # 真机/ dry-live 才发事件；未开启即 no-op
+        _start_linkage_bridge(clock=runtime.clock, store_root=store_root)   # 真机/ dry-live 才发事件；未开启即 no-op
         return runtime, undo_deploy_id
 
     seed: dict[str, str] = {}
@@ -1312,7 +1312,7 @@ def entities_state(
         typer.echo(f"⚠️ {result['note']}")
 
 
-def _start_linkage_bridge(clock=None):
+def _start_linkage_bridge(clock=None, store_root=DEFAULT_STORE_ROOT):
     """ADM 联动第 1/2 步的进程级开关：`AUTOFORGE_MQTT=1` 才联网。
 
     未开启返回 None —— 那条路径下 AF 的行为与接桥前逐字相同（默认关，不是默认试连）。
@@ -1327,13 +1327,14 @@ def _start_linkage_bridge(clock=None):
     bridge = af_mqtt_bridge.start_from_env(
         tools=[tool[0] for tool in TOOLS],
         version=af_mqtt_bridge.PRESENCE_CAPS_VERSION,
-        proposal_sink=af_mqtt_bridge.make_ask_sink(clock=clock),
+        proposal_sink=af_mqtt_bridge.make_durable_ask_sink(store_root=store_root, clock=clock),
         clock=clock,
     )
     af_mqtt_bridge.attach(bridge)
     typer.echo(
         f"· MQTT 联动桥已上线：adm/{af_mqtt_bridge.PRESENCE_NAME}/status=online，"
         f"发 {af_mqtt_bridge.FIRED_TOPIC}|{af_mqtt_bridge.FAILED_TOPIC}，订 {af_mqtt_bridge.INSIGHTS_TOPIC}"
+        f"（洞察提案落 {Path(str(store_root)) / 'insight_proposals'}，只读不部署）"
     )
     return bridge
 
@@ -1376,7 +1377,7 @@ def serve(
     typer.echo(f"· AutoForge 只读服务层：http://{host}:{port}（文档 /docs，store={store_root}）")
     if ui_dir and Path(ui_dir).is_dir():
         typer.echo(f"· 前端静态托管：http://{host}:{port}/（dist={ui_dir}）")
-    bridge = _start_linkage_bridge()
+    bridge = _start_linkage_bridge(store_root=store_root)
     try:
         uvicorn.run(app_, host=host, port=port, log_level="info")
     finally:

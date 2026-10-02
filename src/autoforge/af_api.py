@@ -727,6 +727,47 @@ def build_app(
         """诚实报告 `verified_in_prod` 分区：verified / failed / unmodeled 三档 + 淘汰计数。"""
         return svc.watch_summary()
 
+    # ── ADM 第 1 步 ④A：MA 洞察提案的**只落盘队列**（裁定 20261002 §三 ④A）──
+    #   这里的"approve"只把提案交接进 af_pending（可执行待批队列），**不部署**。
+    #   桥侧写的是 `{store_root}/insight_proposals`，两边同一路径才能读到同一份账。
+    def _insight_queue():
+        """桥侧与 HTTP 侧必须读同一个目录：路径口径只在这里定义一次。"""
+        from .af_insight_queue import InsightQueue
+
+        root = store.root if store else None
+        if not root:
+            raise HTTPException(status_code=503, detail="未配置 store，洞察队列不可用")
+        return InsightQueue(Path(root) / "insight_proposals")
+
+    @app.get("/api/insights/pending", dependencies=[Depends(_read)])
+    def api_insights_pending(include_decided: bool = False) -> dict[str, Any]:
+        queue = _insight_queue()
+        rows = [r.to_dict() for r in queue.list_pending()]
+        out: dict[str, Any] = {"count": len(rows), "proposals": rows, "queue": queue.stats()}
+        if include_decided:
+            out["decided"] = [r.to_dict() for r in queue.list_decided()]
+        return out
+
+    @app.post("/api/insights/approve", dependencies=[Depends(_write)])
+    def api_insights_approve(body: dict[str, Any]) -> dict[str, Any]:
+        return _svc(
+            svc.approve_insight,
+            store,
+            _insight_queue(),
+            str(body.get("proposal_id") or ""),
+            reviewer=str(body.get("reviewer") or ""),
+        )
+
+    @app.post("/api/insights/reject", dependencies=[Depends(_write)])
+    def api_insights_reject(body: dict[str, Any]) -> dict[str, Any]:
+        return _svc(
+            svc.reject_insight,
+            _insight_queue(),
+            str(body.get("proposal_id") or ""),
+            reviewer=str(body.get("reviewer") or ""),
+            reason=str(body.get("reason") or ""),
+        )
+
     # ── v1.7.3：运行中 watch 实例列表（只读）──
     @app.get("/api/watch/list", dependencies=[Depends(_read)])
     def api_watch_list() -> dict[str, Any]:
@@ -771,10 +812,13 @@ def build_app(
             return {
                 "ok": False,
                 "reason": "inbox_key_missing",
+                # 裁定 20261002 §三 ③A：通道失败必须与业务失败可分。
+                # DB 见 channel_error=true 必须告警并**停止把该 ask 标记为已答**。
+                "channel_error": True,
                 "inbox": str(fname),
                 "error": "AUTOFORGE_INBOX_KEY 未配置：答案无法签名，读侧必然拒收（裁定 Q5：key 是通道生效前提）",
             }
-        return {"ok": True, "inbox": str(fname), "signed": True}
+        return {"ok": True, "channel_error": False, "inbox": str(fname), "signed": True}
 
     @app.post("/api/watch/start", dependencies=[Depends(_write)])
     def api_watch_start(body: dict[str, Any]) -> dict[str, Any]:

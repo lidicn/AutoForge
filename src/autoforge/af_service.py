@@ -497,6 +497,68 @@ def submit_pending(
     }
 
 
+def approve_insight(
+    store: GraphStore, queue: Any, proposal_id: str, *, reviewer: str = ""
+) -> dict[str, Any]:
+    """裁定 20261002 §三 ④A 的交接点：只落盘的 MA 洞察提案 **approve 之后**才进 `af_pending`。
+
+    三道刻意限制：
+    ① 队列里查不到就报错——不代为创建提案；
+    ② 只有自然语言、没有编译后 IR 的提案直接拒——服务端不凭空造一张可部署的图（要造先走 `af_draft`）；
+    ③ 一条提案含多条自动化时也拒——一次交接只对应一条，不猜要哪条。
+    通过后走的是 `submit_pending` 的常规路径：静态扫描第一道闸 + per-agent 熔断，与人工来源同闸。
+    """
+    rec = queue.get(proposal_id)
+    if rec is None:
+        raise ServiceError(f"洞察提案 {proposal_id!r} 在队列里查不到（不代为创建）", status=404)
+    if rec.status != "pending":
+        raise ServiceError(f"提案 {proposal_id} 已是 {rec.status}，不重复处理", status=409)
+    ir = rec.suggested_ir
+    if not ir:
+        raise ServiceError(
+            "该提案只有自然语言、没有编译后的 IR：approve 不代为造图，请先走 af_draft",
+            status=400,
+        )
+    graph: Mapping[str, Any] = ir
+    automations = ir.get("automations") if isinstance(ir, Mapping) else None
+    if isinstance(automations, list):
+        if len(automations) != 1 or not isinstance(automations[0], Mapping):
+            raise ServiceError(
+                f"提案含 {len(automations)} 条自动化，一次 approve 只交接一条（不猜要哪条）",
+                status=400,
+            )
+        graph = automations[0]
+    name = str(graph.get("name") or graph.get("id") or rec.hypothesis_id)
+    res = submit_pending(
+        store,
+        "af_save",
+        {"ir": dict(graph), "name": name, "note": f"ma_insight:{rec.hypothesis_id}"},
+        summary=f"MA 洞察 {rec.proposal_id}（conf={rec.conf:.2f}）经批准后入待批",
+        submitted_by=reviewer or "insight_approve",
+    )
+    moved = queue.move_to(
+        rec, status="approved", decided_by=reviewer or "insight_approve",
+        reason=f"pending_op={res.get('pending')}",
+    )
+    return {
+        "proposal_id": moved.proposal_id,
+        "pending": res.get("pending"),
+        "name": name,
+        "note": "已进待批队列；这一步**还没有部署**，仍需 af_pending 的 approve",
+    }
+
+
+def reject_insight(queue: Any, proposal_id: str, *, reviewer: str = "", reason: str = "") -> dict[str, Any]:
+    """判定为"不做"：移出 pending 归档，**不产生任何待批操作**（拒绝也要留痕）。"""
+    rec = queue.get(proposal_id)
+    if rec is None:
+        raise ServiceError(f"洞察提案 {proposal_id!r} 在队列里查不到", status=404)
+    if rec.status != "pending":
+        raise ServiceError(f"提案 {proposal_id} 已是 {rec.status}，不重复处理", status=409)
+    moved = queue.move_to(rec, status="rejected", decided_by=reviewer or "insight_reject", reason=reason)
+    return {"proposal_id": moved.proposal_id, "status": moved.status, "decided_at": moved.decided_at}
+
+
 def list_pending(store: GraphStore, agent: str | None = None) -> dict[str, Any]:
     """列出待批（审批视图：含 summary / blast_radius / 完整 payload 供回放）。"""
     return {"ok": True, "items": PendingStore(store.root).list(agent)}

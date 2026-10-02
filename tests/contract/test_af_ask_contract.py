@@ -168,6 +168,8 @@ def test_answer_contract_persists(tmp_path, monkeypatch):
 
     assert r.status_code == 200
     assert body["ok"] is True and body["signed"] is True
+    # 裁定 20261002 §三 ③A：通道字段与业务字段分开给（成功路径也要显式 False，不能缺省）
+    assert body["channel_error"] is False
     assert isinstance(body["inbox"], str) and body["inbox"]
 
     # 落盘契约：answer_inbox/ 下应恰好一个文件，且字段与请求一致（可回注）
@@ -190,6 +192,9 @@ def test_answer_without_inbox_key_is_not_reported_as_success(tmp_path, monkeypat
 
     assert body["ok"] is False
     assert body["reason"] == "inbox_key_missing"
+    # 裁定 20261002 §三 ③A：DB 侧判据是 channel_error，不是"猜哪个字段算通道故障"。
+    # 见 true 必须告警并**停止把该 ask 标记为已答**（否则就是"用户点了按钮没生效也没人知道"）。
+    assert body["channel_error"] is True
     # 证据链不丢：文件仍在（用户确实答过），但结论是"通道未生效"
     assert _written(tmp_path)["ask_id"] == "inst-001"
 

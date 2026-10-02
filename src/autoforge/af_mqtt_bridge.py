@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
@@ -121,6 +122,9 @@ def make_client(
 def make_ask_sink(*, clock: TimeSource | None = None, audit: Any = None) -> Any:
     """默认落点：进程内 ask 审批队列（`ProposalManager`，且**不带 deployer**）。
 
+    ⚠️ 进程内 = 重启清零。生产入口现在用 `make_durable_ask_sink()`（DCD 20261002 §三 ④A
+    要求"先持久化到独立队列"）；本工厂留给需要 conf 三级分流/审计联动的调用方与测试。
+
     为什么不是持久化的 `af_pending`：那条队列是**可执行**的（人点 approve 就落盘部署）。
     对端经 MQTT 投来的洞察要不要进那条队列属跨仓安全边界，已交 DCD；在此之前只进这条
     "只出提案、谁都部署不了"的队列（`INSIGHT_CONF_CAP` < ask_max，band 必为 ask）。
@@ -139,6 +143,20 @@ def make_ask_sink(*, clock: TimeSource | None = None, audit: Any = None) -> Any:
         clock=run_clock,
         audit=log,
         deployer=None,
+    )
+
+
+def make_durable_ask_sink(*, store_root: Any, clock: TimeSource | None = None) -> Any:
+    """生产落点：MA 洞察进**只落盘、不可部署**的独立队列（`af_insight_queue`）。
+
+    DCD `20261002` §三 ④A 裁的正是这条："先持久化到独立队列，仍不可直接部署
+    （approve 之后才进 `af_pending`）"。与 `make_ask_sink` 的差别只有一条：
+    进程内的提案重启即清零，磁盘上的不会。
+    """
+    from .af_insight_queue import InsightQueue, PersistentInsightSink
+
+    return PersistentInsightSink(
+        InsightQueue(Path(str(store_root)) / "insight_proposals", clock=clock)
     )
 
 
@@ -240,8 +258,9 @@ class AfMqttBridge:
     def _envelope(self, *, automation_id: str, instance_id: str, extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
         """载荷形态对齐 ADM 主题契约表 §1.2：`{trace_id, ts, automation_id, ref}`。
 
-        `ref` 是表里给的字段的值——这里放实例标识；`instance_id` 同值并留，
-        因为表里 `ref` 到底指"实例"还是"部署 ref"没有写死（已就此提 DCD）。
+        `ref` 按裁定 20261002 §三 ②A 定义为**实例 id**（保持本实现，一次部署会 fire 多次，
+        所以 deploy ref 语义更错）。`instance_id` 是同值过渡字段，**删除时点 = AF v2.6**
+        （改名/删除属破坏性变更，须与停机窗同做），在此之前两边同写、下游任选其一。
         `ts` 走家庭墙钟口径（契约 §四），不是机器时区也不是 UTC。
         """
         payload: dict[str, Any] = {

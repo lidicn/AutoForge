@@ -26,7 +26,7 @@ AF 是**自动化中枢**：DSL 编译 + 安全验证 + 部署 + 回滚的权威
 
 | 子任务 | 验收 |
 |--------|------|
-| ① 仓内 vendor 从 0.1.1 → 0.3.1（`COPY` wheel + `pip install`，`pyproject.toml` 改 `>=0.3.1`） | 双版本门禁结论一致（已实测排除技术风险） |
+| ① 仓内 vendor 从 0.1.1 → 0.3.1（`COPY` wheel + `pip install`，`pyproject.toml` 改 `>=0.3.1`） | 双版本门禁结论一致（已实测排除技术风险）。**0.3.1 权威 sha = `b4b5d6bbe424…`**（源码入库 `5e4ba33` 后重建，可复现；首投 `36fdf77a…` 作废——裁定 §〇） |
 | ② **时区接入 `homesdk.time`**（裁定 §五）：AF 现有 `af_time.house_tz_name()` 退化为 fallback，主路径改调 `homesdk.time` | `AF_TZ` → `HOMESDK_TZ`；`tests/unit/test_af_house_tz.py` 9 例仍绿 |
 | ③ NAS 镜像重烤搭下一次既有变更窗（DB 写面/MA PII 窗），⛔ 不单独开 | — |
 | ④ AgentOps 门禁模板已授权改（裁定 §四）：去 `continue-on-error` + `GATES_PYTHON` 改"探测不到就报红" + 模板自检 | 与三仓 CI 变更合批 |
@@ -37,7 +37,7 @@ AF 是**自动化中枢**：DSL 编译 + 安全验证 + 部署 + 回滚的权威
 |--------|------|
 | ① 新建 `af_mqtt_bridge.py`：复用 homesdk `mqtt.get_client`/`presence.advertise`，连接 broker（fail-closed 缺凭据即抛） | 容器启动后 `adm/autoforge/status=online`（retained + LWT） |
 | ② 发布 `af/automation/fired` 与 `af/automation/failed` 事件（不 retained） | 自动化执行后 mosquitto_sub 能看到 |
-| ③ 订阅 `ma/insights`（MA 发布的洞察事件），走"生成提案→进审批→不自动部署" | 一次端到端：MA 发 `ma/insights`，AF 订阅后 `af_draft.propose_dsl` 生成候选 |
+| ③ 订阅 `ma/insights`（MA 发布的洞察事件），走"生成提案→**只落盘**→人批后才进可执行队列→不自动部署"（裁定 20261002 §三 **④A**：独立持久队列，重启不丢；`conf` 仍被 `INSIGHT_CONF_CAP` 封顶在 ask 带） | 一次端到端：MA 发 `ma/insights`，AF 订阅后落 `{store_root}/insight_proposals/pending/*.json`；`af_draft` 造图后 approve 才进 `af_pending` |
 | ④ 订阅 `butler/inbox/*`——**不订阅**（收件箱是 DB 的，AF 不替 DB 说话） | — |
 
 ### 第 2 步：AF presence 发布
@@ -60,9 +60,9 @@ AF 是**自动化中枢**：DSL 编译 + 安全验证 + 部署 + 回滚的权威
 
 | 子任务 | 验收 |
 |--------|------|
-| ① `af_mcp.py` 的 `draft/verify/deploy` 工具面，DB 通过 MCP 调用链"拟→验→批→部署" | DB 调一次 dry_run（不实际部署） |
-| ② ask 通道已有（DB 轮询 `/api/asks/pending`），建自动化是自然扩展 | — |
-| ③ 契约测试：`tests/contract/test_af_db_contract.py`（断言 ask+answer schema + 鉴权 + INBOX_KEY 必须启用） | INBOX_KEY 未设即 fail-closed 拒收（裁定 Q5 已裁"通道生效前提"） |
+| ① `af_draft` → `af_apply(stage="simulate")` → `stage="dry_run"` → 人批 → `stage="save"` 的工具链，DB 通过 MCP 调用链"拟→验→批→部署"（命名口径按裁定 20261002 §三 **①A**：以 AF 现名为准，**不新增 `verify`/`deploy` 别名**——"验"与"部署"是同一工具的不同 stage，天然不可能"验着验着变部署"） | DB 调一次 `dry_run`（不实际部署）；未知 stage 拒收 |
+| ② ask 通道已有（DB 轮询 `/api/asks/pending`），建自动化是自然扩展；**裁定 ③A**：`/api/asks/answer` 必须回报 `channel_error`——DB 见 `true` 须告警并**停止把该 ask 标为已答**（"用户点了按钮没生效也没人知道"= 假绿） | 两个方向都有断言：`inbox_key_missing` → `channel_error=true`，签名落盘成功 → `false` |
+| ③ 契约测试：`tests/contract/test_af_db_contract.py`（断言 ask+answer schema + 鉴权 + INBOX_KEY 必须启用）+ `tests/contract/test_af_insight_queue_contract.py`（④A 队列 13 项：重启不丢、approve 不部署、队列满不丢消息） | INBOX_KEY 未设即 fail-closed 拒收（裁定 Q5 已裁"通道生效前提"） |
 
 ### 第 5 步：后续优化三项（已裁，并入本版排期）
 
@@ -84,6 +84,19 @@ AF 是**自动化中枢**：DSL 编译 + 安全验证 + 部署 + 回滚的权威
 ## 四、停机窗口（合并，不单独开）
 
 AF 镜像重烤 + AgentOps 模板生效 + DB 写面修复 + MA PII 回填/R1/R3 生效——**四件事合并为一次窗口**，不要四次不可用。
+
+**裁定 20261002 §一 把顺序写死了**（窗口内照此执行，回滚按反序逐件退）：
+
+```
+补 homesdk 账（✅ DCD 已执行，commit 5e4ba33）
+  → 重建 wheel（✅ 已执行，权威 sha b4b5d6bbe424…；首投 36fdf77a… 作废）
+  → 重烤 AF 镜像（待窗）
+  → AgentOps 模板生效 + DB 写面遗留 + MA PII/R1/R3（待窗）
+回滚顺序：模板 → 镜像 → wheel → 账
+```
+
+**窗后 AF 侧验收（缺任一项即该步未完成，不许用"配置正确只是没抓包"过账）**：
+① `compose ps` 服务在；② `/health` 返回 200；③ `mosquitto_sub` 抓到一条 `af/automation/fired`，且其 `ts` 是**家庭墙钟**口径；④ `adm/autoforge/status` retained 值为 `online`。
 
 ---
 
