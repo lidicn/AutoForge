@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/ADM联动执行计划-AF.md`（DCD 出品，v2.5 联动落地版）
 > 记录人：AutoForge 开发
-> 核实基准：**HEAD = `c5b13a9`**（已推 origin/main；本轮实测 `git rev-list --count origin/main..master` = 0、`master..origin/main` = 0，即本地与远端同点），另加**本回合 working-tree 改动**（`af_insight_queue` 队列 + `/api/insights/*` + `channel_error` 字段 + vendored wheel 换版）——这些与本条记录同批提交，故下文读数都在"上述改动已生效"的工作树上当场跑出（铁律 #11）
+> 核实基准：代码侧最新 commit = **`e674886`**（已推 origin/main；本记录与后续文档提交只改文档，不再改判据）。§二/二之二…二之五 五组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
 > 契约真源：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
 > 交叉裁定：`20260929-ADM三仓联动七问`、`20261001-AF-homesdk接入四问`、`20260930-AutoForge后续优化三项`、`20261001-DB目标模式与AF三题` §H、**`20261002-homesdk记账与AF-DB-DPP六件-裁定`**（本轮落地依据，§一 末）
 
@@ -22,6 +22,7 @@
 | 第七轮审计 | **finding 属实，已修** | 详见 `docs/audit/审计报告_第七轮_核实与修复.md`；第八轮尚未落 `docs/audit`（本回合实测目录内最新即第七轮，mtime `10-02 11:46`） |
 | 门禁肥化防护（计划外补刀） | **已交付** | `gates.sh` 计数棘轮 + `.gates-tally.txt`（上限 104），三条变异实测能红；AgentOps 模板同步去反引号缺陷 |
 | F4 ③ / F7 前端残留 | **已收口** | `/evidence` 生产态证据视图上线；真机下发的事件回放与撤销按钮端到端真点通（读数见 §一末） |
+| GitHub CI | **首次可读，且从"永久红"修到第一条绿** | 实测 run 1–27 `conclusion` 全为 `failure`（建仓以来一条没绿过），三个红因全在版本/判据层而非产品逻辑：pydantic-v2-only 的 `Field(max_length=)` 让 CI（pydantic 1.10.12）**0 条测试跑过**、undefined-name 门禁自己用了 3.12+ 的 `ast.TypeAlias`（CI 是 3.11）、真 vhass 的 skip 判据问"包能否 import"而非"插件注册了没"。三条各钉能变红的反例后，run 28 五作业全 `success`，CI 与本机通过/跳过数逐字相同（2621/51）。读数与残留见 §二之五 |
 | UI 类型门禁（上一版登记的债） | **已收口（含下一批零 `any`）** | 15 条 `vue-tsc` 错误清零，`type-check` 改 `--force` 防缓存假绿，`ci.yml` 新增 `ui` 硬门 job；过程中抓到"两个按钮从未接线"与"mock 夹具少回两字段"两条真缺陷（§二之二）。同族第二批：API 层四处 `request<any>` 换成后端真形类型并逐键与在线响应对账，`grep request<any> ui/src` 已无匹配（§二之三） |
 | 部署 | **未部署** | 铁律 #3：文档/本地阶段不部署，镜像重烤须进合并停机窗 |
 
@@ -336,6 +337,101 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 
 ---
 
+## 二之五、本批读数：CI **首次可读**，实测 run 1–27 一条没绿过 + 三个红因逐一修掉
+
+**怎么读到的（先记账，因为上一版把这条判成 EXEMPT）**：本机仍无 `gh`（`gh: command not found`）；
+此刻 `github.com` 网页面对本机不可达——`curl` 回 `github.com = 000 (10.015s)`（超时），
+浏览器两次 `ERR_CONNECTION_TIMED_OUT`；而 `api.github.com = 200`。
+于是走 REST：用 `~/.git-credentials` 里那条 github.com 凭证做**只读 GET**（AF 是私有仓，匿名读回 404/401）。
+凭证值全程未打印，命令里只输出 `token_len=40`；作业日志经该 API 的 `-L` 重定向下载。
+**登记**：这条路依赖"那台机器上已存着可用的 github.com 凭证"，它不是脚本、不在门禁里，
+下一次网页与 API 都不可达时又读不到——真要长期可读，得把 CI 读数做成一条可复跑的命令（残留见 §六）。
+
+**总体读数（原样）**：`total_count 26 / listed 27`、`success runs: []`。
+即 **run 1（2026-09-29T14:44Z, `106bcf8`）到 run 26 一条都没绿过**——不是我上一版猜的"从 run 13 起"，
+是**建仓以来全红**。作业级读数（run 26，`17953c6`）：
+
+| job | 结论 | 失败步骤 |
+|-----|------|----------|
+| pytest | failure | `Run tests` |
+| quality-gates | failure | `Run quality gates` |
+| adm-linkage-contracts | failure | `Run ADM linkage contract tests` |
+| layering-gates | **success** | — |
+| ui-typecheck-build | **success** | — |
+
+⇒ §六 那条「新 `ui` job 的 CI 侧执行 = EXEMPT」**今天销账为 VERIFIED**：GitHub runner 上
+`npm ci` → `vue-tsc -b --force` → `vite build` 三步真绿（顺带实测：137 条 `registry.npmmirror.com`
+的锁文件在 runner 上装得起来，§五 第 5 件那个"能不能装"的经验未知量没了——但**换官方源**仍是待裁项，
+装得起来不等于来源可信）。
+
+### 红因一：`Field(max_length=…)` 是 pydantic v2 写法，CI 解到的是 pydantic 1.10（`b5f0a7b`）
+
+CI 作业日志原文（两个作业同一句）：
+`E   ValueError: On field "events" the following field constraints are set but not enforced: max_length.`
+→ `Interrupted: 9 errors during collection` / `2 errors during collection`，**一条测试都没跑**。
+同一条红因至少早到 run 18（`2026-10-01T14:40:13Z` 的日志里已是同一句）。
+runner 实装版本（`Successfully installed` 那行原样）：`pydantic-1.10.12`、`fastapi-0.125.0`、
+`homeassistant-2024.3.3`、`pytest-homeassistant-custom-component-0.13.109`、解释器 `Python/3.11.16`。
+根因链：`[dev]` extras 里的 vhass 插件把 HA 与其 pin 拖进来 ⇒ pydantic 解到 v1 ⇒
+`af_api.py:95` 的 v2-only kwarg 让 `import af_api` **在模块创建期**抛 ValueError ⇒ 凡 import 它的 9 个测试文件全挂。
+本机是 `pydantic 2.13.4 / fastapi 0.141.1`，所以本地全量永远看不见这条（实测 `10001 events → REJECTED`、
+`10000 → ACCEPTED`：**上限在 v2 下是真生效的**，缺陷不是"闸门没水"，而是"闸门只在半套环境存在，
+另半套环境整仓进不去"）。
+处置：判据从模型层挪到请求边界——`_MAX_SIM_EVENTS = 10000` + `api_sim` 里一条 `HTTPException(422)`，
+两版 pydantic 同形；`Field` 随之从 import 里删掉（本仓再无 v2-only 构造，`grep field_validator|ConfigDict|Annotated|max_length src/` 只命中注释）。
+红/绿：新增两条端点测试在修复前 **FAILED**（`assert "10000" in r.json()["detail"]` 拿到的是 v2 的校验数组），修复后 16 passed。
+
+### 红因二：门禁自己用到 3.12+ 的 `ast.TypeAlias`，在 CI 的 3.11 上崩（`b5f0a7b`）
+
+`quality-gates` 作业日志原文（src 与 tests 两棵树各崩一次）：
+`File ".../scripts/check_undefined_names.py", line 99, in _bound_names` → `elif isinstance(node, ast.TypeAlias):`
+→ `AttributeError: module 'ast' has no attribute 'TypeAlias'`。
+更糟的是红因被写错了地方：崩完之后 gates.sh 打印 `结论：undefined-name 门禁红（src=1 / tests=1）`——
+**看日志的人会以为是产品代码里有未定义名**，其实红的是门禁自己。
+`ast.TypeAlias` 是 3.12 才有的节点，本仓 `requires-python = ">=3.11"`，CI 老实用 3.11.16，本机是 3.13.2 ⇒ 又只有 CI 红。
+处置：`_TYPE_ALIAS = getattr(ast, "TypeAlias", None)`，取不到就跳过这一类绑定形态（3.11 连 `type X = …` 都解析不了，本来就没有可绑的名字）。
+"能变红"补法：新测试**真把 `ast.TypeAlias` 从 `ast` 上删掉**再跑脚本，模拟 3.11 的 ast 面——本机 3.13 也能钉住这条。
+
+### 红因三：真 vhass 的 skip 判据问错了对象（`e674886`）
+
+`b5f0a7b` 之后 run 27 只剩 pytest 作业红：`2618 passed, 41 skipped, 10 errors`，
+10 条全是 `ERROR at setup of test_*_in_real_vhass` → `E  fixture 'hass' not found`。
+判据链：三个 `tests/acceptance/test_*vhass.py` 的模块级 `skipif` 只问
+`importlib.util.find_spec("homeassistant")` 与 `sys.platform != "win32"`；而 `pyproject.toml:65`
+`addopts = "-p no:homeassistant"`（Windows 上 HA runner 要 `fcntl`，插件加载阶段就崩）把插件整条禁掉 ⇒
+CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip。
+真 vhass 的权威场地本来就是容器：`docker/Dockerfile.test` 的 CMD 显式
+`-p pytest_homeassistant_custom_component.plugins`（该文件自陈"本机为 Windows，未经实跑验证"）。
+处置：判据改问 `config.pluginmanager.get_plugins()` 里有没有 `pytest_homeassistant_custom_component*`；
+不可用则给 `@pytest.mark.vhass` 挂 skip，理由写明"权威跑法 = docker run autoforge-test"。
+红/绿双向在**本机**复现过：造桩包让 `find_spec` 成功 + 用插件把 `sys.platform` 伪成 `linux`，
+撤除新判据 ⇒ `E fixture 'hass' not found`；加回 ⇒ `10 skipped`（理由即上面那句）。
+另加三条判据单测（"装了≠注册了"两个方向 + 当前会话确实判"不可用"）。
+
+### 修完之后本机读数
+
+`python -m pytest tests/ -q`：**2621 passed, 51 skipped, 7 subtests passed, RC=0**（Python 3.13.2 / pydantic 2.13.4）；
+`GATES_PYTHON=python bash gates.sh`：**RC=0**（`全量违规 104 / 上限 104`，主题白名单 7 处在表内）。
+
+### CI 侧收口读数（run 27 → run 28）
+
+- run 27（`b5f0a7b`）：`ui-typecheck-build` / `adm-linkage-contracts` / `quality-gates` / `layering-gates` **success**，pytest 仍红（`2618 passed, 41 skipped, 10 errors`）⇒ 红因一、二当场生效，只剩红因三。
+- run 28（`e674886`，2026-10-02T09:18:18Z → 09:27:22Z）：**`completed success`，五个作业全 success**（`ui-typecheck-build` / `adm-linkage-contracts` / `quality-gates` / `pytest` / `layering-gates`）。pytest 作业日志原样：`2621 passed, 51 skipped, 1 warning in 56.09s`。
+- **这是建仓以来第一条绿的 run**：run 1–27 的 `conclusion` 全是 `failure`（API 原样读数 `success runs: []`，`total_count 27`），run 28 是第一条 `success`。且 CI 与本机的通过/跳过数**逐字相同**（2621 / 51）——上一版只能各说各话（本机 2615，CI 一条没跑过）。
+
+### 这批的残留（登记，不静默）
+
+- **`/api/sessions` 与 `/api/live/run` 的 `events` 没有上限**：`8e8c725` 当年只给 `/api/sim` 装了闸门，
+  同一条 DoS 面留了两个口子。本批**只把已有那道闸门改成版本无关**，没顺手扩——扩它=改两个端点的现有行为，另案处理。
+- **CI 依赖仍未 pin**：`pip install -e ".[dev]"` 每次现解，v1/v2 之争正是漂移付的账。等 §五 第 5 件（镜像锁文件）裁定；
+  裁定前 CI 仍会随上游版本漂。
+- **"CI 绿"不等于"F14 第二道闸跑过"**：CI 上 10 条真 vhass 现在是 skip（41 → 51 skipped 口径变化），
+  容器才是它跑的场地，而容器路径在本机不可实跑（无 docker：`docker: command not found`）。
+- 门禁 AST 基线（104 条）与解释器版本无关，但 **undefined-name 门禁的覆盖面与解释器版本有关**：
+  3.11 上看不见 `type` 语句绑定的名字。这条不是缺陷（那种语法在 3.11 上先 SyntaxError），只是别把它当"两版等价"。
+
+---
+
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
 
 | commit | 内容 |
@@ -355,6 +451,10 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 | 本批之二（UI 类型硬门） | `vue-tsc -b --force` 15 条清零（4 处 `bordered="false"` 传成字符串、`SpecEditorView` 两个**死控件**补 `compile()`/`bindDevices()`、`DiffResponse` 按后端真形补 `old`/`new`、`SpecCompileResponse.ir` 改可空 + `error?`、5 处死 import）；`mock.ts` diff 夹具补成与真响应同形（类型门自己抓出来的假夹具）；`package.json` `type-check` 加 `--force`（防缓存假绿）；`ci.yml` 新增 `ui` job 作硬门；`VersionsView` 拆分 `loadError` 防错指；读数见 §二之二 |
 | 本批之三（API 层零 `any`） | `metrics`/`experience`/`telemetry`/`sessionAnswer` 四处 `request<any>` 换成 `MetricsResponse`/`ExperienceResponse`/`TelemetryResponse`/`SessionViewResponse`（形状取自后端返回语句，逐键与在线 HTTP 响应对账；`success_rate` 按后端"0 样本不伪造 0%"写成可空）；`MetricsView` 三个 `ref<any>` 收口；`sessionAnswer` 路径段补 `encodeURIComponent`；类型门红/绿双向读数（探针 TS2339 RC=2 → 撤除 RC=0）；读数见 §二之三 |
 | 本批之四（洞察面板 + `detail` 不再吞） | 新屏 `/#/insights`（`InsightsView.vue` + 路由 + 菜单「MA 洞察」+ 五个类型 + 三个 API 方法，facade 刻意不做 mock 夹具）：无 IR 提案的交接按钮 `disabled`、二次确认措辞写死"交接 ≠ 部署"、空态列四种成因并显示队列落点、`unreadable` 记账可见；端到端用 `PersistentInsightSink.submit` 真投递两条自测提案，approve 落到 `af_pending`（`a648a1aeb3c84751`）与 decided 的 `pending_op=` 把手两侧对上；顺带修 `client.ts` 把响应体 `detail` 丢掉的真缺陷（409/400/404 的后端原话以前在 UI 上只剩 "Conflict"）；读数见 §二之四 |
+| `17953c6` | 本批之四落盘（`feat(ui): ADM ④A 洞察面板…`），已推 origin/main |
+| 本批之五（CI 首读 + 两个永久红因） | `b5f0a7b`：`af_api.SimBody` 的 pydantic-v2-only `Field(max_length=)` 改成 `_MAX_SIM_EVENTS` + `/api/sim` 边界判据（CI 解到 pydantic 1.10.12 时 `import af_api` 直接 ValueError，pytest/contracts 两作业 0 条测试跑过）；`scripts/check_undefined_names.py` 的 `ast.TypeAlias` 改 `getattr`（3.11 无此属性，门禁自己崩且红因被写成"undefined-name 红"）；两条各钉一个能变红的反例（端点 422 测试 + subprocess 真删 `ast.TypeAlias`）。读数见 §二之五 |
+| 本批之六（CI 第三个红因） | `e674886`：`tests/conftest.py` 新增 `vhass_plugin_loaded()`，`@pytest.mark.vhass` 的 skip 判据从"包能否 find_spec"换成"插件真注册了没"——CI 上 10 条 `fixture 'hass' not found` 收口为带理由的 skip；本机用桩包 + 伪 `sys.platform` 取到红/绿双向读数 |
+
 
 ## 四、审计侧
 
@@ -370,7 +470,7 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 | 1 | 第 4 步契约面四问：MCP 工具面命名口径（`draft/verify/deploy` vs `af_draft`/`af_apply`）、`af/automation/fired` 的 `ref` 语义（实例 id 还是 deploy ref）、`/api/asks/answer` `ok=False(inbox_key_missing)` 的 DB 侧处置、`ma/insights` 提案队列是否要求持久化 | `inbox/20261002-AF-第4步契约面四问-决策申请.md` → **已裁定（①A ②A ③A ④A，全 A）**，AF 侧四条均已落地（见 §一 末"裁定 20261002"表） |
 | 2 | 第 0 步 ③④：0.3.1 记账缺口（源树 `time.py` 未入库 + NAS `VERSIONS.txt` 无 0.3.1 条目 ⇒ sha 不可复现）+ §四 合并停机窗排期与授权 | `inbox/20261002-homesdk0.3.1记账缺口与AF镜像重烤合并窗-决策申请.md` → **记账半边已裁定并已执行**（DCD §〇：源码+契约表入库 `5e4ba33`、VERSIONS 补条目、以重建 `b4b5d6bb…` 为权威，AF pin 与 vendored wheel 已跟新）；**镜像重烤半边 = 合并窗内做，尚未生效**（窗口未开） |
 | 3 | 第七轮 `StateProvider` 统一 fail-closed 的方向与代价（整段软失败 vs 逐实体可见漂移） | `inbox/20261002-AF-StateProvider统一fail-closed的方向与代价-决策申请.md` → **已裁定：A 先行 + B 排队**，B 启动条件 = 下次真实改动 `af_instance._refresh_snapshot` 或 AF v2.6；整段口径被裁定为**有意设计**；漂移须以 `entity_drift` 记账 |
-| 4 | 第 0 步 ④ 的记账载体：`E:/NAS/AgentOps` **不是 git 仓** ⇒ 已授权改的门禁模板无 commit、无 sha、不可回滚；三仓 CI 都依赖它，却没有任何版本账 | `inbox/20261002-AgentOps门禁模板无版本载体-决策申请.md`（**已提交，尚未裁定**）——本批 20261002 裁定的申请来源六件里**不含这一件**，实测裁定文首"申请来源"清单逐项对得上，唯独缺它。缺陷仍在：模板 sha `887c33dd…` 无版本账，AF 侧不动他仓 |
+| 4 | 第 0 步 ④ 的记账载体：`E:/NAS/AgentOps` **不是 git 仓** ⇒ 已授权改的门禁模板无 commit、无 sha、不可回滚；三仓 CI 都依赖它，却没有任何版本账 | `inbox/20261002-AgentOps门禁模板无版本载体-决策申请.md` → **已裁定**（`decisions/20261002-AgentOps与MA交付面-裁定.md` §一）：**A 建仓为目标态**（NAS bare 加 `agentops.git`、模板首次 commit、此后走 PR），**建仓与推送授权"与合并停机窗同批"** ⇒ AF 侧本窗不动；**C 兜底本窗已落**（申请区贴了模板 sha256 `887c33dd…`）。裁定另点名两件事：模板分发=**各仓按模板重写自己的 CI**（重写即该仓一次 CI 变更，走各自 PR），`memory-agent/.github/workflows/gates.yml:56` 的 `continue-on-error` 由 **MA 侧修**，AF 不碰他仓 main |
 | 5 | 新 `ui` CI job 将**首次**让 GitHub runner 按 lockfile 去第三方镜像拉 137 个包（`ui/package-lock.json` 实测 137/137 指 `registry.npmmirror.com`、0 条 npmjs、0 条缺 `integrity`；根因是用户级 `~/.npmrc` 漏进共享产物）。这是 DPP 同题申请（R7）在 AF 的**前提修正**：那边选"只登记"的承重句是"CI 只在我这台机器跑"，AF 今天把这句话拿掉了 | `inbox/20261002-AF-CI首次消费镜像锁文件-DPP-R7同题补充-决策申请.md`（**已提交，待裁**）。裁定前 AF **不动 lockfile 一个字节**；AF 倾向"只把 CI 侧改指官方源、本机开发不变"那一档 |
 
 ## 六、未在本版做（登记，不静默）
@@ -386,7 +486,10 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 - `SessionViewResponse` 的**应答成功分支 = EXEMPT**：`case04_ask_timeout` 带 seed + event 建会话后 `asks=0`（分支未走到挂起 ask），只实测到 404 失败面；顶层 9 键靠同族 `POST /sessions`/`GET /sessions/{sid}` 的同一 `_session_view` 坐实。下一次做洞察面板或真机 ask 流程时顺手补一条"应答成功 → 快照键"的实测。
 - `/api/metrics` 的 `runs/success/failed/audit_distribution` 仍是 0/空——`get_metrics` 的 docstring 写明这三项需**常驻进程**（`forge serve`/`watch`）才累计，原型期服务层无状态。本批只把"形状"钉成类型，没有把"数值来源"改成真累计；那是另一件事，不在类型面批里偷做。
 - 本机 `node_modules` 的完整性没有门禁：本批实测 `@types/node@22.20.2` 曾被装成 **37/74** 文件（见 §二之二）。我用 registry 同版本 tarball 增量补齐了缺的 37 个文件，但**成因未查**（不在本批范围），且这条只在开发机成立——CI 走 `npm ci` 从锁文件装，不复用本机 `node_modules`。若下次又冒出"某个 `node:*` 模块找不到"，先数 `node_modules/@types/node/*.d.ts` 再怀疑代码。
-- **新 `ui` CI job 的 CI 侧执行 = EXEMPT，不是 VERIFIED**：本机无 `gh`（`gh: command not found`）且 AF 是私有仓 ⇒ 读不到 Actions 运行结果。本地只有 `npm run type-check` RC=0 与 `npm run build` RC=0 两个读数，它们证明的是"这套命令在这台机器上会红也会绿"，**不证明 GitHub runner 上装得起来**。下一次能读 CI 时第一件事就是补这条。
+- **CI 读数这条路本身没有门禁**：本批能读到 run 1-26 全红，靠的是"本机 `~/.git-credentials` 里存着可用的 github.com 凭证 + `api.github.com` 可达"（同一时刻 `github.com` 网页面 `curl` 超时、浏览器 `ERR_CONNECTION_TIMED_OUT`）。这是**一次性条件**，不是可复跑的命令；下一次两者都不可达时又变成 EXEMPT。要收口就得做成脚本（且不能把凭证写进仓）。
+- **真 vhass 在 CI 上现在是 skip**：10 条 `*_in_real_vhass` 判"插件未注册 → skip（带理由）"，权威场地是 `docker run autoforge-test`；本机无 docker（`docker: command not found`），该文件也自陈"未经实跑验证" ⇒ **F14 第二道闸至今没有任何真跑读数**，"CI 绿"不许被读成"仿真复核过"。
+- **`/api/sessions` 与 `/api/live/run` 的 `events` 无上限**（`8e8c725` 只给 `/api/sim` 装闸门）：本批只把已有那道改成版本无关，扩到另两个端点=改现有行为，未做。
+- **CI 依赖未 pin**（`pip install -e ".[dev]"` 每次现解）：本批那条 pydantic v1/v2 红就是漂移付的账；改 lockfile/加 pin 等 §五 第 5 件裁定。
 - **CI 装依赖的源是第三方镜像**：`ui/package-lock.json` 实测 137/137 条 `resolved` 指 `registry.npmmirror.com`（0 条 npmjs、0 条缺 `integrity`），根因是用户级 `~/.npmrc` 漏进共享产物。已作为 DPP R7 同题的**前提修正**提 DCD（§五 第 5 件），裁定前不改 lockfile 一个字节。
 
 已收口（上一版登记、本版实测销账）：
@@ -395,6 +498,7 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 - ~~`/api/asks/answer` 的失败语义未裁（通道失败还是业务失败）~~ → 裁定 ③A：`channel_error` 字段，两个方向都有断言钉住。
 - ~~`ma/insights` 提案重启即清零~~ → 裁定 ④A：`af_insight_queue` 落盘队列，approve 只交接不部署。
 - ~~0.3.1 wheel sha 不可复现~~ → 裁定 §〇：DCD 补账 + 重建产物 `b4b5d6bb…` 为权威，AF vendored/pin 跟新，且 wheel 内 `time.py` 与源树逐字节相同（实测见 §一）。
+- ~~新 `ui` CI job 的 CI 侧执行 = EXEMPT，不是 VERIFIED~~ → 本批首次读到 Actions：**`ui-typecheck-build` 在 GitHub runner 上 success**（`npm ci` 从 137 条 npmmirror 锁文件装起来 → `vue-tsc -b --force` → `vite build` 三步全过）。同批读到的是更难看的事实：**CI 从 run 1（2026-09-29）到 run 26 一条没绿过**，三个红因（pydantic v2-only 上限写法 / 门禁自己用 3.12+ 的 `ast.TypeAlias` / vhass skip 判据问错对象）逐一修掉并各钉反例，读数见 §二之五。
 - ~~AF 的 UI 没有类型门禁（登记 16 条待清）~~ → 实测 **15 条**全部清掉（其中 `SpecEditorView` 的两个按钮是**从未接线的死控件**、`LiveView` 四处 `bordered="false"` 把字符串真值当布尔传），`type-check` 加 `--force` 防缓存假绿，`ci.yml` 新增 `ui` job 作硬门；红/绿双向都有实测读数（注入探针 RC=2 → 撤除 RC=0）。见 §二之二。
 - ~~API 层四处 `request<any>`（`metrics`/`experience`/`telemetry`/`sessionAnswer`）让新类型门对这四条通道失明~~ → 全部换成后端真形类型，且逐键与在线响应对账（`success_rate` 按后端语义写成可空）；`grep request<any> ui/src` = **No matches found**；类型门能因这些字段变红由探针 TS2339 实测。见 §二之三。
 - ~~洞察队列只有 API、UI 没有"MA 洞察"这一屏~~ → `/#/insights` 上线：账目四计数 + 队列落点路径 + `unreadable` 记账可见 + 无 IR 行交接按钮 `disabled` + 二次确认写死"交接 ≠ 部署" + 空态四种成因。approve/reject 两条分支都在真后端上点通，把手 `a648a1aeb3c84751` 在 `af_pending` 与 decided 两侧对得上。见 §二之四。
