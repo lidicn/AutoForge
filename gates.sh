@@ -39,6 +39,32 @@ echo "══ AST 门禁（不含冒烟）═════════════
 ast_rc=$?
 
 echo
+echo "══ 计数棘轮（全量总数对登记上限）══════════════════════════════"
+# 为什么单独立一条：AST 门判的是「新增」。有人往 .gates-baseline.txt 里追加指纹时，
+# 新增永远是 0，存量却在悄悄肥化。棘轮比的是**全量总数**对登记上限，堵的就是这条缝。
+# 提示文案里不要用反引号：双引号内的反引号会被 bash 当命令替换真的执行（本轮实测踩到）。
+if [ ! -f "$REPO/.gates-tally.txt" ]; then
+  echo "缺 $REPO/.gates-tally.txt —— 先跑一次「$PYTHON -m homesdk.gates \"$REPO\" --no-baseline --no-smoke」，把全量计数登记成「总数 # 日期 说明」。"
+  exit 2
+fi
+cap=$(awk '$1 ~ /^[0-9]+$/ {print $1; exit}' "$REPO/.gates-tally.txt")
+total=$("$PYTHON" -m homesdk.gates "$REPO" --no-baseline --no-smoke 2>&1 \
+        | sed -n 's|.*新增/未获批 \([0-9]\+\) 条.*|\1|p' | tail -1)
+if [ -z "$cap" ] || [ -z "$total" ]; then
+  echo "棘轮不判绿：解析不到计数（上限=${cap:-空} / 全量=${total:-空}）。输出格式变了就该红，不该沉默。"
+  exit 2
+fi
+echo "全量违规 $total 条 / 登记上限 $cap 条"
+tally_rc=0
+if [ "$total" -gt "$cap" ]; then
+  echo "棘轮红：总数从 $cap 涨到 $total。要么修掉，要么在「.gates-tally.txt」写明为什么必须上调——上调本身要评审。"
+  tally_rc=1
+elif [ "$total" -lt "$cap" ]; then
+  echo "棘轮提示：总数降到 $total，请把「.gates-tally.txt」的上限同步下调（只准降 = 防肥化）。"
+  tally_rc=1
+fi
+
+echo
 echo "══ undefined-name 门禁（标准库 AST，零依赖）═══════════════════"
 # 审计 REG-3：这一类（用了没定义的名字）在既有门禁体系里无人看守，而它能让整套测试
 # 连收集都跑不起来。只依赖标准库——本机禁 pip install，要装包的门禁等于没有门禁。
@@ -74,6 +100,10 @@ fi
 if [ $ast_rc -ne 0 ]; then
   echo "结论：AST 门禁红（exit=$ast_rc）。修，或在 .gates-baseline.txt 里逐条写明放行理由。"
   exit $ast_rc
+fi
+if [ $tally_rc -ne 0 ]; then
+  echo "结论：计数棘轮红（全量 $total / 上限 $cap）。基线只准减少——要么把新增的修掉，要么在评审里说明为什么必须上调上限。"
+  exit 1
 fi
 if [ $smoke_rc -ne 0 ]; then
   echo "结论：冒烟红（exit=$smoke_rc）。先在容器里复跑一次再定性——见 README 第三节。"
