@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { NAlert, NCard, NDataTable, NSpace, NText, NTag } from 'naive-ui'
-import { h } from 'vue'
+import { NAlert, NCard, NSpace, NText } from 'naive-ui'
 import { api } from '@/api/client'
 
 const loading = ref(true)

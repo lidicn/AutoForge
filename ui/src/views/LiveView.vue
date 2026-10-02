@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { h, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import {
   NAlert, NButton, NCard, NEmpty, NInput, NSpace, NSwitch, NTag, NText, NPopconfirm, useMessage,
 } from 'naive-ui'
@@ -143,7 +143,7 @@ onMounted(() => {
     <n-card title="可用性" :bordered="false" class="block">
       <template v-if="status">
         <n-space align="center" :size="12">
-          <n-tag :type="status.enabled ? 'success' : 'error'" round bordered="false">
+          <n-tag :type="status.enabled ? 'success' : 'error'" round :bordered="false">
             {{ status.enabled ? '已启用' : '未启用' }}
           </n-tag>
           <n-text depth="3">HA：{{ status.ha_url || '（未配置）' }}</n-text>
@@ -215,8 +215,8 @@ onMounted(() => {
 
     <n-card v-if="result" title="下发结果" :bordered="false" class="block">
       <n-space vertical :size="10">
-        <div>模式：<n-tag size="small" type="error" bordered="false">{{ result.mode }}</n-tag> · HA：{{ result.ha_url }}</div>
-        <div>写目标：<n-tag v-for="w in result.writes" :key="w" size="small" type="warning" bordered="false" style="margin-right:6px">{{ w }}</n-tag></div>
+        <div>模式：<n-tag size="small" type="error" :bordered="false">{{ result.mode }}</n-tag> · HA：{{ result.ha_url }}</div>
+        <div>写目标：<n-tag v-for="w in result.writes" :key="w" size="small" type="warning" :bordered="false" style="margin-right:6px">{{ w }}</n-tag></div>
         <n-alert
           v-if="result.missing_entities && result.missing_entities.length"
           type="warning"
@@ -224,7 +224,7 @@ onMounted(() => {
         >
           <code>{{ result.missing_entities.join('、') }}</code>
         </n-alert>
-        <div>允许列表：<n-tag v-for="a in result.allowlist" :key="a" size="small" bordered="false" style="margin-right:6px">{{ a }}</n-tag></div>
+        <div>允许列表：<n-tag v-for="a in result.allowlist" :key="a" size="small" :bordered="false" style="margin-right:6px">{{ a }}</n-tag></div>
         <div v-if="result.nl" class="nl">{{ result.nl }}</div>
         <div v-if="result.asks && result.asks.length" class="asks">有待应答 ask：{{ result.asks.length }} 条</div>
         <div v-if="result.undo_deploy_id" class="asks">

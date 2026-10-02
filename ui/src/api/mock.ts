@@ -115,9 +115,13 @@ export const mockApi = {
   intervene: (_name: string, automation_id: string) => delay(100).then(() => ({
     data: { ...mockData.confidences, items: mockData.confidences.items.map(i => i.automation_id === automation_id ? { ...i, confidence: Math.max(0, i.confidence - 0.25) } : i) } as ConfResponse,
   })),
-  diff: (_name: string, _old: string, _new: string) => delay(100).then(() => ({
+  diff: (_name: string, old: string, new_v: string) => delay(100).then(() => ({
     data: {
       render: `--- study_day_light v1\n+++ study_day_light v2\n@@ -nodes @@\n+  { id: "d1", kind: "do", name: "新增动作节点" }\n`,
+      // 真后端原样回显版本号并带两版备注，夹具必须同形
+      old: Number(old),
+      new: Number(new_v),
+      notes: { old: '首次归档', new: '新增动作节点' },
       structured: {
         added_automations: [], removed_automations: [],
         added_nodes: [{ node_id: 'study_day_light:d1', address: 'study_day_light:d1', automation_id: 'study_day_light', node: 'd1' }],

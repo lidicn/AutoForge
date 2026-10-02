@@ -51,6 +51,52 @@ const error = ref('')
 const bindResult = ref<BindResult | null>(null)
 const binding = ref(false)
 
+/** 编译：AF-Spec 文本 → IR + 诊断。后端把 Spec 语法/校验失败也当**正常响应**返回
+ * （HTTP 200 + `ok:false` + `error`），所以这里必须自己按 `ok` 分支，不能只 catch 异常。 */
+async function compile() {
+  loading.value = true
+  error.value = ''
+  bindResult.value = null
+  try {
+    const { data } = await facade.specCompile(specText.value)
+    if (data.error) {
+      // 语法/校验失败：响应里只有 error，没有可展示的 IR
+      error.value = `${data.error.code}：${data.error.message}`
+      result.value = null
+    } else {
+      // ok:false 且无 error = 静态扫描未通过，诊断仍然要展示
+      result.value = data
+    }
+  } catch (e) {
+    result.value = null
+    error.value = String(e)
+    message.error('编译请求失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+/** 绑定设备：把 IR 里的 `?占位符` 回填为真实 entity_id（fail-closed，歧义不回填）。 */
+async function bindDevices() {
+  const ir = result.value?.ir
+  if (!ir) {
+    message.warning('先编译出 IR 再绑定')
+    return
+  }
+  binding.value = true
+  try {
+    const { data } = await facade.bind(ir)
+    bindResult.value = data
+    if (data.ok) message.success(`绑定完成：${data.bound.length}/${data.total}`)
+    else message.warning(`绑定未完全：${data.unresolved.length} 项待澄清`)
+  } catch (e) {
+    bindResult.value = null
+    message.error(`绑定请求失败：${e}`)
+  } finally {
+    binding.value = false
+  }
+}
+
 // ── v1.7.0 expect 可视化编辑 ──
 const expects = ref<ExpectItem[]>([])
 const expectDirty = ref(false)
@@ -195,7 +241,7 @@ function applyExpects() {
           <n-input v-model:value="specText" type="textarea" :rows="20" class="editor" />
           <n-space style="margin-top: 12px">
             <n-button type="primary" :loading="loading" @click="compile">▶ 编译</n-button>
-            <n-button :loading="binding" :disabled="!result?.ir" @click="bind">🔗 绑定设备</n-button>
+            <n-button :loading="binding" :disabled="!result?.ir" @click="bindDevices">🔗 绑定设备</n-button>
           </n-space>
         </n-card>
 
@@ -283,7 +329,7 @@ function applyExpects() {
               </n-list-item>
             </n-list>
 
-            <template v-else-if="result">
+            <template v-if="result">
               <SafetyAlert
                 v-if="
                   result.diagnostics.some(
@@ -308,7 +354,7 @@ function applyExpects() {
               <DiagnosticPanel :diagnostics="result.diagnostics" />
             </template>
 
-            <div v-else class="hint">
+            <div v-if="!result && !bindResult" class="hint">
               <div class="hint-icon">⌘</div>
               点击「编译」查看结果
             </div>

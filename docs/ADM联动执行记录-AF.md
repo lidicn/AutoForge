@@ -22,6 +22,7 @@
 | 第七轮审计 | **finding 属实，已修** | 详见 `docs/audit/审计报告_第七轮_核实与修复.md`；第八轮尚未落 `docs/audit`（本回合实测目录内最新即第七轮，mtime `10-02 11:46`） |
 | 门禁肥化防护（计划外补刀） | **已交付** | `gates.sh` 计数棘轮 + `.gates-tally.txt`（上限 104），三条变异实测能红；AgentOps 模板同步去反引号缺陷 |
 | F4 ③ / F7 前端残留 | **已收口** | `/evidence` 生产态证据视图上线；真机下发的事件回放与撤销按钮端到端真点通（读数见 §一末） |
+| UI 类型门禁（上一版登记的债） | **已收口** | 15 条 `vue-tsc` 错误清零，`type-check` 改 `--force` 防缓存假绿，`ci.yml` 新增 `ui` 硬门 job；过程中抓到"两个按钮从未接线"与"mock 夹具少回两字段"两条真缺陷（§二之二） |
 | 部署 | **未部署** | 铁律 #3：文档/本地阶段不部署，镜像重烤须进合并停机窗 |
 
 ---
@@ -238,8 +239,47 @@ $ python scripts/mutation_check_templates.py /e/NAS/AgentOps/gates/templates/ci/
 
 AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），本轮**新增 0**，且全量总数与登记上限持平（棘轮绿）。中间态读数留档：写完后曾为 `fake-ok-const=80`/全量 107、`gates.sh` RC=1，删掉三处 `ok=True` 字面量后才回到 104——这条是棘轮第一次真的拦住 AF 自己的新代码。
 
-⚠️ 一条口径事实（登记，不等于已解决）：AF 的 **UI 类型检查今天不是门禁**。`npx vue-tsc --force` 有 16 条既有错误（`MetricsView`/`OverviewView`/`SpecEditorView`/`VersionsView`/`vite.config.ts`），`npx vue-tsc -b` 增量模式还会因缓存**假报 rc=0**。本回合只修掉了我改动的那个文件里的真错（`ui/src/api/client.ts` 用了 `WatchListResponse` 却没 import）。把 `vue-tsc` 升为 CI 硬门要先清这 16 条，属独立工作量，未塞进本批（见 §六）。
+⚠️ 一条口径事实（**本批已销账，见 §二之二**）：AF 的 **UI 类型检查曾不是门禁**。上一版这里记的读数有两处错，一并更正：命令写成了 `npx vue-tsc --force`（该写法直接 `error TS5093: Compiler option '--force' may only be used with '--build'`，**根本跑不起来**，能跑的口径是 `vue-tsc -b --force`），条数记成 16 条（实测 **15 条**）。`vue-tsc -b` 不带 `--force` 时因 tsbuildinfo 缓存**假报 rc=0** 这条判断属实，也正是本批把 `package.json` 脚本改成 `--force` 的原因。
 
+
+## 二之二、本批读数：UI 类型检查从"登记质量债"到"CI 硬门"
+
+起点是 §二 那条登记。清 15 条的过程中，**"类型错误"分成三种得完全不同的账**：真代码缺陷、类型面缺字段、本机环境残缺。逐条判过才动，不许一把 `any` 糊过去。
+
+| 报错（`vue-tsc -b --force`） | 根因 | 定性 | 处置 |
+|------|------|------|------|
+| `LiveView(2,10)` TS6133 `h` | 死 import | 真缺陷（无害） | 删 |
+| `LiveView(146,69)(218,50)(219,89)(227,78)` TS2322 `string → boolean\|undefined` | `bordered="false"` 传的是**字符串 "false"（真值）**，naive-ui 该属性要布尔——静态属性与绑定属性混用 | **真缺陷**：写作者以为关了边框，实际传进去的是 truthy | 四处改 `:bordered="false"`（同文件 `:141` 早就是正确写法，是参照物不是猜测） |
+| `MetricsView(3,25)(3,52)(4,1)` TS6133 | `NDataTable`/`NTag` 死 import + 第 4 行重复 `import { h } from 'vue'` | 真缺陷（无害） | 删（模板内 `<n-tag>`/`<n-data-table>` 实测 0 引用，删前 grep 过） |
+| `OverviewView(9,3)` TS6133 `NIcon` | 死 import | 真缺陷（无害） | 删 |
+| `SpecEditorView(197,65)(198,74)` TS2339 `compile`/`bind` 不存在 | **两个按钮从来没有处理函数**：`result`/`loading`/`bindResult`/`binding` 四个 ref 都在，函数一个没写，`facade` 因此也"未使用" | **真缺陷（最重）**：AF-Spec 工作台的「▶ 编译」「🔗 绑定设备」是死控件 | 补 `compile()` / `bindDevices()`；按后端真实语义分支（见下） |
+| `VersionsView(94,26)(98,26)` TS2339 `old`/`new` | 后端 `af_service.py:1173-1174` **确实回显** `old`/`new`，是 TS 侧 `DiffResponse` 少写两个字段 | 类型面缺字段（**不是**模板写错） | 按铁律 #1 补类型，不改模板；顺带把 `SpecCompileResponse.ir` 改成 `IR \| null` 并补 `error?`（后端失败时 HTTP 200 + `ok:false` + `ir:null` + `error{code,message}`，`compile_text:1221-1227`） |
+| `vite.config.ts(3,36)` TS2307 `Cannot find module 'node:url'` | **本机 node_modules 装残缺**：`@types/node@22.20.2` 盘上只有 **37/74** 个文件，`url.d.ts`/`stream.d.ts`/`util.d.ts` 等缺失，而 `index.d.ts` 仍 `/// <reference path="url.d.ts" />`；`skipLibCheck: true` 把包内断链也一起吞了 | **环境缺陷，不是代码缺陷** | **没改 `vite.config.ts`**。判据：从 registry 取同版本 tarball，`path.d.ts`/`index.d.ts`/`globals.d.ts`/`package.json` 四个同名文件 sha256 前 12 位与本地**逐字节一致**（`8b479a130ccb`/`71d3ae6a5e73`/`808069bba06b`/`8721a336fe0d`），只补缺的 37 个文件（纯增量、不删不动），补完该条错误消失 |
+
+**为什么 `compile()` 不能只 `try/catch`**：后端把 Spec 语法/IR 校验失败当**正常响应**返回（`af_api.py:528` → `compile_text` 的 `except` 分支返回 `{ok:false, ir:null, error:{...}}`，HTTP 200）。只 catch 异常 = 失败永远静默。所以实现按 `data.error` 分支：有 `error` 才置 `error.value` 并清空结果面板；`ok:false` 且无 `error`（静态扫描未通过）**仍然展示 IR + 诊断**，因为那时诊断才是有价值的读数。
+
+**门禁化（这才是"从登记到收口"的那一步）**：
+- `ui/package.json`：`type-check` 由 `vue-tsc -b` → `vue-tsc -b --force`。不带 `--force` 时 tsbuildinfo 命中缓存会**假报 rc=0**，等于装一个能自己闭眼的门。
+- `.github/workflows/ci.yml`：新增 `ui` job（`npm ci` → `npm run type-check` → `npm run build`），**无 `continue-on-error`**。用 `npm ci` 不用 `npm install`（`ui/package-lock.json` 在版本库内）。
+
+**铁律 #8 的反证（门能不能红）**：注入 `src/__typecheck_probe.ts`（`export const probe: number = 'deliberately-wrong'`）→ `src/__typecheck_probe.ts(1,14): error TS2322`，**RC=2**；删除该文件 → **RC=0**。红的是判据本身。
+
+**类型门第一跑就抓到一条假夹具**（这条最有说服力）：给 `DiffResponse` 补 `old`/`new` 之后，`ui/src/api/mock.ts:118` 的 diff 夹具立刻 `TS2352 … is missing the following properties from type 'DiffResponse': old, new`——**mock 一直在少回两个字段**，而真后端从来都回。也就是说用 mock 档开发时，版本 Diff 面板上的 `v{{ diffData.old }}` 永远是空的，没人当它是 bug。已把夹具补成与真响应同形（`old`/`new` 由入参回显 + `notes` 两条）。
+
+**顺带清掉两处同型缺陷**（都在本批改动文件内，不是顺手重构）：
+- `SpecEditorView` 的结果面板原本挂在 `v-else-if` 链上，而该链接的是"未绑定列表"的 `v-if` ⇒ 一旦有 `bindResult`，编译结果面板就消失。改成 `v-if="result"` + 空态 `v-if="!result && !bindResult"`。
+- `VersionsView` 的"取归档列表失败"和"对比失败"共用一个 `error` ref ⇒ 本批实测时列表 403 被渲染成标题「对比失败」，把人指向错的地方。拆出 `loadError`，标题各归各。
+
+**端到端实测（同源托管，非 mock）**：`AF_ALLOW_NOAUTH=1 forge serve --ui-dir ui/dist --port 8788`（生产构建内联 `VITE_USE_MOCK=false`）。
+- 编译：点「▶ 编译」→ 出 IR 面板 + 自然语言 + 扫描诊断「🟡 警告 (1) EXPECT_MISSING …未声明后置条件 expect」；「🔗 绑定设备」由 `disabled` 变可点。
+- 绑定：点「🔗 绑定设备」→ 「绑定完成」+「binding 完成：全部占位符已回填」。
+- 版本 Diff：点「对比」（`case01_day_light` v1→v2）→ 标签实测渲染 `v1 备注：bootstrap: examples/ir` / `v2 备注：bootstrap: examples/ir v2`——**修复前这两个数字位是 `undefined`**。
+- 回归面：`/#/live` 三卡（可用性/下发配置/可撤销的部署）+ tag「未启用」；`/#/metrics` 三卡；`/#/overview` 统计读数 `● 正常运行 / 0.1.0 / 8 / 11`。三页 `list_console_messages` 均 **0 条**（无 Vue 警告）。
+- 两条**不是回归**的读数留档：① 无令牌时 `/api/graphs`、`/api/diff` 返回 **403 `no API tokens configured (fail-closed); set AF_ALLOW_NOAUTH=1 for local dev`** = 鉴权门禁正常工作；② 实例起在 `readonly: true`（单写者租约被占），读端点与 `spec/compile`、`bind` 全通 = 铁律 #6 的一次现场印证。
+
+**门禁读数**：`npm run type-check` **RC=0**（15 → 0）；`npm run build` **RC=0**（`✓ built in 21.62s`）；`GATES_PYTHON=python bash gates.sh` **RC=0**（`全量违规 104 条 / 登记上限 104 条`）。本批**代码改动 0 处 Python**（全在 `ui/` 与 `.github/`，另加本记录文档），棘轮 104/104 不动是预期结果。
+
+---
 
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
 
@@ -257,6 +297,7 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 | `177aa1c` | F4 ③ `/#/evidence` 生产态证据视图 + `LiveView` 事件脚本回放与 `missing_entities` 读数（堵 F7 残留） |
 | `c5b13a9` | 本记录上一版读数 + `inbox/20261002-AgentOps门禁模板无版本载体-决策申请.md` |
 | 本批（即本条记录所在 commit） | **裁定 20261002 的 AF 侧落地**：`af_insight_queue` 只落盘队列 + `make_durable_ask_sink` 接线 + `approve_insight`/`reject_insight` + `/api/insights/*` 三端点；`/api/asks/answer` 加 `channel_error`（③A）；`_envelope` docstring 钉 `ref`=实例 id 与 v2.6 删除时点（②A）；vendored wheel 换 `b4b5d6bb…`；计划文档 §第 4 步 ①/§第 1 步 ③/§四 顺序与窗后验收对齐裁定；测试新增 13 项 |
+| 本批之二（UI 类型硬门） | `vue-tsc -b --force` 15 条清零（4 处 `bordered="false"` 传成字符串、`SpecEditorView` 两个**死控件**补 `compile()`/`bindDevices()`、`DiffResponse` 按后端真形补 `old`/`new`、`SpecCompileResponse.ir` 改可空 + `error?`、5 处死 import）；`mock.ts` diff 夹具补成与真响应同形（类型门自己抓出来的假夹具）；`package.json` `type-check` 加 `--force`（防缓存假绿）；`ci.yml` 新增 `ui` job 作硬门；`VersionsView` 拆分 `loadError` 防错指；读数见 §二之二 |
 
 ## 四、审计侧
 
@@ -281,10 +322,11 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 - 第 2 步 `kill -9` → broker 代发 offline 的真 broker 验收：同上，须进窗随镜像重烤一次跑。
 - ②A 的 `instance_id` 过渡字段**未删**（删除时点 = AF v2.6，属破坏性变更须与窗口同做）。
 - §四 的 B（逐实体可见漂移 + `entity_drift` 记账）**未做**，按裁定的启动条件排队：下一次真实改动 `af_instance._refresh_snapshot` 时顺手做，或 AF v2.6。
-- ④A 的队列**只有 API，没有面板**：`/api/insights/pending` 可读、approve/reject 可写，UI 上还没有"MA 洞察"这一屏（下一步做面板时，空态与"approve ≠ 部署"的措辞必须照 `EvidenceView` 的口径写，不许写"点了就上线"）。
+- 洞察队列**只有 API，没有面板**：`/api/insights/pending` 可读、approve/reject 可写，UI 上还没有"MA 洞察"这一屏（下一步做面板时，空态与"approve ≠ 部署"的措辞必须照 `EvidenceView` 的口径写，不许写"点了就上线"）。
 - `BoundedCache` 基类收敛（第五轮遗留）与"实现间契约不一致"的**静态**门禁：本轮以契约测试覆盖，未做静态门禁。
-- `vue-tsc` 未进 CI：既有 16 条类型错误要先清（§二 口径事实）。**当前 AF 的 UI 没有类型门禁**，本批未触碰 UI，这条区别不变。
 - 证据面板的 `evicted_automations` 只做"提示有自动化被挤出内存"，未做跨进程持久化——**注意这与 ④A 不是同一个问题**：④A 裁的是 MA 洞察提案队列（已持久化），证据档的进程内清零仍是遗留。
+- **新落门的 `ui` job 看不见四行**：`ui/src/api/client.ts:122-124,135` 的 `metrics`/`experience`/`telemetry`/`sessionAnswer` 仍是 `request<any>`，类型门对这四条通道只能证明"调用方没写错字段名以外的东西"。把它们换成真实响应类型是下一步（同一套判据：先读后端返回再定 TS 形状）。
+- 本机 `node_modules` 的完整性没有门禁：本批实测 `@types/node@22.20.2` 曾被装成 **37/74** 文件（见 §二之二）。我用 registry 同版本 tarball 增量补齐了缺的 37 个文件，但**成因未查**（不在本批范围），且这条只在开发机成立——CI 走 `npm ci` 从锁文件装，不复用本机 `node_modules`。若下次又冒出"某个 `node:*` 模块找不到"，先数 `node_modules/@types/node/*.d.ts` 再怀疑代码。
 
 已收口（上一版登记、本版实测销账）：
 - ~~`ui/src/views/LiveView.vue` `events=undefined` ⇒ `_replay_live` 空转~~ → 补事件脚本输入 + 回放读数，F7 端到端真点通（`dep-28bf327fe8d7`，假 HA `turn_on`→`turn_off`，设备回 `off`）。
@@ -292,6 +334,7 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 - ~~`/api/asks/answer` 的失败语义未裁（通道失败还是业务失败）~~ → 裁定 ③A：`channel_error` 字段，两个方向都有断言钉住。
 - ~~`ma/insights` 提案重启即清零~~ → 裁定 ④A：`af_insight_queue` 落盘队列，approve 只交接不部署。
 - ~~0.3.1 wheel sha 不可复现~~ → 裁定 §〇：DCD 补账 + 重建产物 `b4b5d6bb…` 为权威，AF vendored/pin 跟新，且 wheel 内 `time.py` 与源树逐字节相同（实测见 §一）。
+- ~~AF 的 UI 没有类型门禁（登记 16 条待清）~~ → 实测 **15 条**全部清掉（其中 `SpecEditorView` 的两个按钮是**从未接线的死控件**、`LiveView` 四处 `bordered="false"` 把字符串真值当布尔传），`type-check` 加 `--force` 防缓存假绿，`ci.yml` 新增 `ui` job 作硬门；红/绿双向都有实测读数（注入探针 RC=2 → 撤除 RC=0）。见 §二之二。
 
 ---
 

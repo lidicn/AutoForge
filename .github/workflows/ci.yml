@@ -90,3 +90,24 @@ jobs:
         # 稳定后再升失败门禁（去掉本行 continue-on-error）。
         run: lint-imports
         continue-on-error: true
+
+  ui:
+    name: ui-typecheck-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install deps（锁文件安装，不用 npm install）
+        run: npm ci
+        working-directory: ui
+      - name: 类型硬门（vue-tsc -b --force）
+        # 2026-10-02 登记质量债收口：此前 `vue-tsc -b`（无 --force）在本地有
+        # tsbuildinfo 时会**增量跳过**＝假绿；--force 保证每次全量真检查。
+        # 不带 continue-on-error：红就是红。
+        run: npm run type-check
+        working-directory: ui
+      - name: 构建产物（vite build + manifest）
+        run: npm run build
+        working-directory: ui

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build && node scripts/build-manifest.mjs",
     "manifest": "node scripts/build-manifest.mjs",
-    "type-check": "vue-tsc -b",
+    "type-check": "vue-tsc -b --force",
     "preview": "vite preview"
   },
   "dependencies": {

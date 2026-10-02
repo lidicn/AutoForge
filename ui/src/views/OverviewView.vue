@@ -6,7 +6,6 @@ import {
   NCard,
   NGi,
   NGrid,
-  NIcon,
   NSpace,
   NSpin,
   NStatistic,

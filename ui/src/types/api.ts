@@ -158,6 +158,9 @@ export interface DiffStructured {
 
 export interface DiffResponse {
   render: string
+  /** 对比的两个版本号（后端 `af_service.diff` 原样回显入参） */
+  old: number
+  new: number
   /** 两版本的归档备注（`note` 属归档元数据，不参与图内容比对） */
   notes?: { old: string; new: string }
   structured: DiffStructured
@@ -165,9 +168,12 @@ export interface DiffResponse {
 
 export interface SpecCompileResponse {
   ok: boolean
-  ir: IR
+  /** 编译失败时为 null（后端 HTTP 200 + `ok:false`，不是异常） */
+  ir: IR | null
   nl: string
   diagnostics: Diagnostic[]
+  /** 仅 Spec 语法/IR 校验失败时出现 */
+  error?: { code: string; message: string }
 }
 
 export interface SpecResponse {

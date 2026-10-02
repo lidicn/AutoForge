@@ -11,6 +11,9 @@ const selectedNew = ref('2')
 const diffData = ref<DiffResponse | null>(null)
 const diffLoading = ref(false)
 const error = ref('')
+// 归档列表加载失败与对比失败必须分开：此前两者写同一个 `error`，
+// 于是"取列表 403"会被渲染成「对比失败」，把人指向错的地方。
+const loadError = ref('')
 
 const versions = ref<number[]>([])
 const latestVersion = ref(1)
@@ -37,7 +40,7 @@ onMounted(async () => {
       syncVersions()
     }
   } catch (e) {
-    error.value = String(e)
+    loadError.value = `读取归档列表失败：${e}`
   }
 })
 
@@ -85,6 +88,7 @@ async function runDiff() {
       </p>
     </n-card>
 
+    <n-alert v-if="loadError" type="error" title="加载失败" style="margin-bottom: 16px">{{ loadError }}</n-alert>
     <n-alert v-if="error" type="error" title="对比失败" style="margin-bottom: 16px">{{ error }}</n-alert>
 
     <template v-if="diffData">
