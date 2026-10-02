@@ -54,6 +54,13 @@ export const facade = {
   // F4 ③ 生产态证据（只读；无 mock 夹具——证据来自真实运行喂入，伪造一份等于假安心）
   evidenceProd: () => api.evidenceProd(),
 
+  // ADM ④A MA 洞察提案队列（无 mock 夹具：提案的对端是 MA 真投递，
+  // 在 UI 里造一条假提案会让人对着假数据点"批准"，正是要防的假安心）
+  insightsPending: (includeDecided?: boolean) => api.insightsPending(includeDecided),
+  insightApprove: (proposal_id: string, reviewer?: string) => api.insightApprove(proposal_id, reviewer),
+  insightReject: (proposal_id: string, reason?: string, reviewer?: string) =>
+    api.insightReject(proposal_id, reason, reviewer),
+
   // ── v2 M3 结构化 Ask（原生控件 + clarify 流程）──
   asksPending: () => api.asksPending(),
   asksSidecar: () => api.asksSidecar(),

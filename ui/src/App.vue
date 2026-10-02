@@ -28,6 +28,7 @@ const menuOptions: MenuOption[] = [
   { label: () => h(RouterLink, { to: '/spec-editor' }, { default: () => 'AF-Spec 工作台' }), key: '/spec-editor' },
   { label: () => h(RouterLink, { to: '/data' }, { default: () => '数据管理' }), key: '/data' },
   { label: () => h(RouterLink, { to: '/pending' }, { default: () => '待批队列' }), key: '/pending' },
+  { label: () => h(RouterLink, { to: '/insights' }, { default: () => 'MA 洞察' }), key: '/insights' },
   { label: () => h(RouterLink, { to: '/live' }, { default: () => '真机下发' }), key: '/live' },
   { label: () => h(RouterLink, { to: '/governance' }, { default: () => '治理 / 设置' }), key: '/governance' },
   { label: () => h(RouterLink, { to: '/faults' }, { default: () => '故障注入图鉴' }), key: '/faults' },

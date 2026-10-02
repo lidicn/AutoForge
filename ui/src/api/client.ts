@@ -12,6 +12,7 @@ import type {
   EvidenceProdResponse, WatchListResponse,
   AsksResponse, AskAnswerResponse,
   MetricsResponse, ExperienceResponse, TelemetryResponse, SessionViewResponse,
+  InsightsPendingResponse, InsightApproveResponse, InsightRejectResponse,
 } from '../types/api'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8787/api'
@@ -29,11 +30,26 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     headers: { 'Content-Type': 'application/json', ..._authHeader() },
     body: body ? JSON.stringify(body) : undefined,
   })
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await _detail(res)}`)
   // 真后端返回**扁平**对象（无 { data } 外壳）；此处统一包装成 { data }，
   // 与 mock 层保持一致，视图侧无需改动。
   const json = (await res.json()) as T
   return { data: json }
+}
+
+/** 失败原因在响应体的 `detail` 里（403/404/409/422 都是）。只报 statusText
+ * 等于把"为什么被拒"咽下——审批类面板必须把后端原话显示给人。 */
+async function _detail(res: Response): Promise<string> {
+  const text = await res.text().catch(() => '')
+  if (!text) return res.statusText || '无响应体'
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown }
+    if (typeof parsed.detail === 'string') return parsed.detail
+    if (parsed.detail !== undefined) return JSON.stringify(parsed.detail)
+  } catch {
+    /* 非 JSON（网关错误页等）就原样显示 */
+  }
+  return text.slice(0, 300)
 }
 
 export const api = {
@@ -120,6 +136,14 @@ export const api = {
   watchList: () => request<WatchListResponse>('GET', '/watch/list'),
   // F4 ③：生产态验证证据三档（verified / failed / unmodeled）
   evidenceProd: () => request<EvidenceProdResponse>('GET', '/evidence/prod'),
+
+  // ── ADM 第 1 步 ④A：MA 洞察提案队列（approve 只交接进待批，**不部署**）──
+  insightsPending: (includeDecided = false) =>
+    request<InsightsPendingResponse>('GET', `/insights/pending?include_decided=${includeDecided}`),
+  insightApprove: (proposal_id: string, reviewer = '') =>
+    request<InsightApproveResponse>('POST', '/insights/approve', { proposal_id, reviewer }),
+  insightReject: (proposal_id: string, reason = '', reviewer = '') =>
+    request<InsightRejectResponse>('POST', '/insights/reject', { proposal_id, reason, reviewer }),
   metrics: () => request<MetricsResponse>('GET', '/metrics'),
   experience: (limit = 20) => request<ExperienceResponse>('GET', `/experience?limit=${limit}`),
   telemetry: (days = 30) => request<TelemetryResponse>('GET', `/telemetry?days=${days}`),

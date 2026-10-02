@@ -23,6 +23,8 @@ const router = createRouter({
     { path: '/running', name: 'running', component: () => import('@/views/RunningView.vue') },
     // v2.1 F4 ③ 生产态验证证据（监护视图）
     { path: '/evidence', name: 'evidence', component: () => import('@/views/EvidenceView.vue') },
+    // ADM 第 1 步 ④A：MA 洞察提案队列（approve 只交接进待批，不部署）
+    { path: '/insights', name: 'insights', component: () => import('@/views/InsightsView.vue') },
     // ── v2 M3 结构化 Ask 原生控件 + clarify 流程 ──
     { path: '/asks', name: 'asks', component: () => import('@/views/AsksView.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('@/views/NotFoundView.vue') },

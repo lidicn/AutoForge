@@ -133,7 +133,7 @@ to_house_iso(0) → 1970-01-01T08:00:00        RC=0
 | ①A 工具面命名 | 计划文档 §第 4 步 ① 措辞改为 `af_draft` → `af_apply(stage="simulate"/"dry_run"/"save")` 链；代码侧无需改名（现名即口径） | `af_apply.APPLY_STAGES` 与 `STAGE_ALIASES` 既有测试覆盖 | 正式**重发计划**由 DCD 出（裁定 §八.1）；AF 只对齐本地副本，不代替 DCD 定稿 |
 | ②A `ref` = 实例 id | `af_mqtt_bridge.py:258-271` `_envelope`：`ref` 与 `instance_id` 同值，docstring 写明"删除时点 = AF v2.6" | `tests/unit/test_af_mqtt_bridge.py:130-132` 钉住字段集与 `ref == instance_id == "inst-1"`；`instance_id` 双写仍是过渡字段 | v2.6 前不删（破坏性变更须与停机窗同做）；契约表的定义由 DCD 补（裁定 §八.3） |
 | ③A `channel_error` | `af_api.py:817`（`inbox_key_missing` → `True`）、`:821`（签名落盘成功 → `False`） | `tests/contract/test_af_ask_contract.py:172` `is False` / `:197` `is True` | **DB 侧的告警分支不在 AF**（裁定 §八.2 已把义务写进 DB 计划）；AF 单方面加字段≠该 ask 会被真的告警 |
-| ④A 洞察队列持久化 | 新模块 `src/autoforge/af_insight_queue.py`（`InsightRecord:41` / `InsightQueue:68` / `PersistentInsightSink:174` / `InsightQueueFull:36`，`DEFAULT_LIMIT=500`）；桥侧工厂 `af_mqtt_bridge.py:149` `make_durable_ask_sink`；接线 `af_cli.py:1315,1330`（真机/dry-live 起桥时落 `{store_root}/insight_proposals`）；交接 `af_service.py:500 approve_insight` / `:551 reject_insight`；HTTP `af_api.py:733 _insight_queue`、`:742 /api/insights/pending`、`:751 /api/insights/approve`、`:761 /api/insights/reject` | `tests/contract/test_af_insight_queue_contract.py` **13 项**（本回合新增）：落盘后换队列实例仍读得到、入桥 conf 被 `INSIGHT_CONF_CAP=0.59` 封顶仍在 ask 带、队列满 `InsightQueueFull` 且不丢旧条、approve 只生成 `af_pending` 一条 `af_save` 且归档目录 `*/v*.json` 为空（**没部署**）、重复 approve 409、无 IR / 两条自动化 400 且记录仍在 pending、未知 404、只读实例 200 读 + 503 写、坏 JSON 进 `stats()["unreadable"]`、结构约束（队列模块不 import `af_apply/af_pending/af_service/af_deploy/af_executor`，也不持有 `approve`/`deploy` 方法） | 队列没有 UI（`/api/insights/pending` 已可读，面板未做）；`ProposalManager` 的进程内 ask 档保留给测试与分诊，两条路径并存是刻意的 |
+| ④A 洞察队列持久化 | 新模块 `src/autoforge/af_insight_queue.py`（`InsightRecord:41` / `InsightQueue:68` / `PersistentInsightSink:174` / `InsightQueueFull:36`，`DEFAULT_LIMIT=500`）；桥侧工厂 `af_mqtt_bridge.py:149` `make_durable_ask_sink`；接线 `af_cli.py:1315,1330`（真机/dry-live 起桥时落 `{store_root}/insight_proposals`）；交接 `af_service.py:500 approve_insight` / `:551 reject_insight`；HTTP `af_api.py:733 _insight_queue`、`:742 /api/insights/pending`、`:751 /api/insights/approve`、`:761 /api/insights/reject` | `tests/contract/test_af_insight_queue_contract.py` **13 项**（本回合新增）：落盘后换队列实例仍读得到、入桥 conf 被 `INSIGHT_CONF_CAP=0.59` 封顶仍在 ask 带、队列满 `InsightQueueFull` 且不丢旧条、approve 只生成 `af_pending` 一条 `af_save` 且归档目录 `*/v*.json` 为空（**没部署**）、重复 approve 409、无 IR / 两条自动化 400 且记录仍在 pending、未知 404、只读实例 200 读 + 503 写、坏 JSON 进 `stats()["unreadable"]`、结构约束（队列模块不 import `af_apply/af_pending/af_service/af_deploy/af_executor`，也不持有 `approve`/`deploy` 方法） | 队列没有 UI（`/api/insights/pending` 已可读，面板未做）→ **面板已上线 `/#/insights`**（本批，读数见 §二之四）；`ProposalManager` 的进程内 ask 档保留给测试与分诊，两条路径并存是刻意的 |
 | §四 StateProvider | A（整段 fail-closed）已在 commit `628502a`（第七轮修复）落地，本轮无改动 | `tests/contract/test_state_provider_policy.py` **14 项**（本回合 `--collect-only` 实测）；裁定"共同要求：漂移必须以 `entity_drift` 记账、不许静默"的链是 `af_instance.py:374-392` 空快照回退 → 表达式逐条抛 `UnknownEntity` → `af_executor.py:596-609` `_soft_fail` 记 `ENTITY_DRIFT`（带 `node_id`/`instance_id`/`entity_id`） | **B（逐实体可见漂移）本轮不做**，启动条件按裁定：`af_instance._refresh_snapshot` 下次被真实改动时，或 AF v2.6 窗口。裁定把整段口径判为**有意设计**（不是遗留），所以 B 是加功能不是修 bug |
 | §一 合并停机窗 | AF 侧无代码动作 | — | 窗后验收四项（`compose ps` + `/health` 200 + `mosquitto_sub` 抓到一条含家庭墙钟 `ts` 的 `af/automation/fired` + `adm/autoforge/status` retained `online`）**缺任一项即第 0 步未完成**，本机无 paho-mqtt 且禁 pip install ⇒ 只能随窗做 |
 
@@ -309,6 +309,33 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 
 ---
 
+## 二之四、本批读数：`/#/insights` 洞察面板 + 客户端不再吞掉 `detail`
+
+裁定 ④A 的 AF 半边在 `4d7b070` 只有 API（`/api/insights/*` 三端点 + 落盘队列），UI 上没这一屏。本批补面板，判据仍是"措辞不许越过裁定的安全边界"。
+
+**落点**：`ui/src/views/InsightsView.vue`（新）· `ui/src/router/index.ts` `/insights` · `ui/src/App.vue` 菜单「MA 洞察」（排在「待批队列」之后，因为它是待批的上游）· `ui/src/types/api.ts` 五个新类型 · `ui/src/api/client.ts` 三方法 + `_detail()` · `ui/src/api/index.ts` facade 直连真 API、**不做 mock 夹具**（提案的对端是 MA 真投递，造一条假提案等于让人对着假数据点"交接"，与 `evidenceProd` 同口径）。
+
+**契约面逐键对账**（`InsightRecord` 12 个字段 = `af_insight_queue.InsightRecord` dataclass 字段，`to_dict()` 用 `asdict`）：在线 `GET /api/insights/pending` 实测 `keys: ['conf','decided_at','decided_by','hypothesis_id','natural_language','proposal_id','reason','received_at','source','status','suggested_ir','transport']` —— 与类型逐项相同；`queue` 实测 `{root, pending, decided, limit, unreadable}`。
+
+**投递用的是系统自己的把手**，不是手写 JSON：`PersistentInsightSink(queue).submit(...)` 两条明确标注「本地联调自测」的提案（一条只给自然语言、一条带 `case01_day_light` 的 IR），落盘后 `stats: {pending: 2, decided: 0, limit: 500, unreadable: []}`。
+
+**浏览器端到端（`AF_ALLOW_NOAUTH=1 … serve --ui-dir ui/dist --port 8791 --store-root .forge`）**：
+- 面板出两行：无 IR 那行渲染成红色标签「无 IR（不能批准）」，且**交接按钮 `disabled`** —— 这就是后端②"approve 不代为造图"在 UI 上的样子；另一行「含编译后 IR」可点。
+- 点「交接（不部署）」→ 二次确认文案写明"仍然不会部署；要落盘还得在待批队列里再批一次"→ 确认后账目从 `pending 2 / decided 0` 变 `pending 1 / decided 1`。
+- 交接**真落到了待批队列**（这是 ④A 唯一的可核对把手）：`POST /api/pending/list` → `a648a1aeb3c84751 | af_save | MA 洞察 ins-67e0-18daa47749786df8（conf=0.81）经批准后入待批 | submitted_by: webui`，`payload.note = ma_insight:hyp-localprobe-2`；`include_decided=true` 里同一条 `reason = pending_op=a648a1aeb3c84751`。两侧对得上 = 交接链闭合。
+- 点「拒绝」→ popover 里的理由输入框真接了线：归档行显示 `rejected by webui | 本地自测：无 IR 的提案按裁定②不能批准，改判拒绝留痕`。
+- 清空后空态不撒谎：`pending 目录里没有提案` + 四种成因（桥未上线 / 没订到 `ma/insights` / 都被裁定过 / 读的目录与写的目录不一致），并把**队列落点路径**当作判据显示出来。控制台 `(no console messages found)`。
+
+**顺手抓到一条影响所有面板的真缺陷**：`client.ts` 的 `request()` 过去抛 `HTTP ${status}: ${res.statusText}`，把响应体里的 `detail` 整个丢掉 ⇒ 后端精心写的 fail-closed 原话（403 无令牌、404 查不到、409 重复裁定、400 无 IR、422 应答校验被拒）在 UI 上全变成 "Conflict" / "Bad Request"。实测后端确实回原话：
+`HTTP 400 {"detail":"该提案只有自然语言、没有编译后的 IR：approve 不代为造图，请先走 af_draft"}`、`HTTP 404 {"detail":"洞察提案 'ins-does-not-exist' 在队列里查不到（不代为创建）"}`。
+`_detail()` 改为读出 `detail`（字符串直接用，FastAPI 校验数组则 JSON 原样，非 JSON 截 300 字）。**改后的错误面已用真后端点通**（上面的 400/404 读数就是它要显示的内容）。
+
+**门禁读数**：`npm run type-check` **RC=0**；`npm run build` **RC=0**（`✓ built in 25.15s`，`files=787`）；`GATES_PYTHON=python bash gates.sh` **RC=0**（`全量违规 104 条 / 登记上限 104 条`、主题白名单 7 处全在表内）。`git diff --stat` 五个文件 + 一个新视图全在 `ui/`，本批 **0 处 Python 改动**。
+
+**自测数据的处置（登记，不静默）**：`.forge/insight_proposals/decided/` 留了两条已裁定记录、`af_pending` 留了一条 `a648a1aeb3c84751`（若再批准它，会把 `case01_day_light` 归档进 dev store）。都在 gitignore 的本地开发 store 里，不入仓；故意不清，是为了下一次读 `/insights` 或「待批队列」时能对上本记录的读数。要清就删 `.forge/insight_proposals/**/*.json` 并对该 `op_id` 走 `POST /api/pending/reject`，**不要**直接批准它。
+
+---
+
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
 
 | commit | 内容 |
@@ -327,6 +354,7 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 | 本批（即本条记录所在 commit） | **裁定 20261002 的 AF 侧落地**：`af_insight_queue` 只落盘队列 + `make_durable_ask_sink` 接线 + `approve_insight`/`reject_insight` + `/api/insights/*` 三端点；`/api/asks/answer` 加 `channel_error`（③A）；`_envelope` docstring 钉 `ref`=实例 id 与 v2.6 删除时点（②A）；vendored wheel 换 `b4b5d6bb…`；计划文档 §第 4 步 ①/§第 1 步 ③/§四 顺序与窗后验收对齐裁定；测试新增 13 项 |
 | 本批之二（UI 类型硬门） | `vue-tsc -b --force` 15 条清零（4 处 `bordered="false"` 传成字符串、`SpecEditorView` 两个**死控件**补 `compile()`/`bindDevices()`、`DiffResponse` 按后端真形补 `old`/`new`、`SpecCompileResponse.ir` 改可空 + `error?`、5 处死 import）；`mock.ts` diff 夹具补成与真响应同形（类型门自己抓出来的假夹具）；`package.json` `type-check` 加 `--force`（防缓存假绿）；`ci.yml` 新增 `ui` job 作硬门；`VersionsView` 拆分 `loadError` 防错指；读数见 §二之二 |
 | 本批之三（API 层零 `any`） | `metrics`/`experience`/`telemetry`/`sessionAnswer` 四处 `request<any>` 换成 `MetricsResponse`/`ExperienceResponse`/`TelemetryResponse`/`SessionViewResponse`（形状取自后端返回语句，逐键与在线 HTTP 响应对账；`success_rate` 按后端"0 样本不伪造 0%"写成可空）；`MetricsView` 三个 `ref<any>` 收口；`sessionAnswer` 路径段补 `encodeURIComponent`；类型门红/绿双向读数（探针 TS2339 RC=2 → 撤除 RC=0）；读数见 §二之三 |
+| 本批之四（洞察面板 + `detail` 不再吞） | 新屏 `/#/insights`（`InsightsView.vue` + 路由 + 菜单「MA 洞察」+ 五个类型 + 三个 API 方法，facade 刻意不做 mock 夹具）：无 IR 提案的交接按钮 `disabled`、二次确认措辞写死"交接 ≠ 部署"、空态列四种成因并显示队列落点、`unreadable` 记账可见；端到端用 `PersistentInsightSink.submit` 真投递两条自测提案，approve 落到 `af_pending`（`a648a1aeb3c84751`）与 decided 的 `pending_op=` 把手两侧对上；顺带修 `client.ts` 把响应体 `detail` 丢掉的真缺陷（409/400/404 的后端原话以前在 UI 上只剩 "Conflict"）；读数见 §二之四 |
 
 ## 四、审计侧
 
@@ -352,7 +380,7 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 - 第 2 步 `kill -9` → broker 代发 offline 的真 broker 验收：同上，须进窗随镜像重烤一次跑。
 - ②A 的 `instance_id` 过渡字段**未删**（删除时点 = AF v2.6，属破坏性变更须与窗口同做）。
 - §四 的 B（逐实体可见漂移 + `entity_drift` 记账）**未做**，按裁定的启动条件排队：下一次真实改动 `af_instance._refresh_snapshot` 时顺手做，或 AF v2.6。
-- 洞察队列**只有 API，没有面板**：`/api/insights/pending` 可读、approve/reject 可写，UI 上还没有"MA 洞察"这一屏（下一步做面板时，空态与"approve ≠ 部署"的措辞必须照 `EvidenceView` 的口径写，不许写"点了就上线"）。
+- 洞察面板的**投递源仍是本机手投**：§二之四的两条提案是用 `PersistentInsightSink.submit()` 直接写进 dev store 的，走的是"落盘之后的那一段"。真 `ma/insights` MQTT 消息 → 桥回调 → 落盘 → 面板可见这**前半段仍未端到端**（同 §六 第 2 条：本机无 paho-mqtt 且禁 pip install），面板的空态文案因此把"桥未上线/没订到主题"列为四种成因之一，而不是当作已验证链路。
 - `BoundedCache` 基类收敛（第五轮遗留）与"实现间契约不一致"的**静态**门禁：本轮以契约测试覆盖，未做静态门禁。
 - 证据面板的 `evicted_automations` 只做"提示有自动化被挤出内存"，未做跨进程持久化——**注意这与 ④A 不是同一个问题**：④A 裁的是 MA 洞察提案队列（已持久化），证据档的进程内清零仍是遗留。
 - `SessionViewResponse` 的**应答成功分支 = EXEMPT**：`case04_ask_timeout` 带 seed + event 建会话后 `asks=0`（分支未走到挂起 ask），只实测到 404 失败面；顶层 9 键靠同族 `POST /sessions`/`GET /sessions/{sid}` 的同一 `_session_view` 坐实。下一次做洞察面板或真机 ask 流程时顺手补一条"应答成功 → 快照键"的实测。
@@ -369,6 +397,7 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 - ~~0.3.1 wheel sha 不可复现~~ → 裁定 §〇：DCD 补账 + 重建产物 `b4b5d6bb…` 为权威，AF vendored/pin 跟新，且 wheel 内 `time.py` 与源树逐字节相同（实测见 §一）。
 - ~~AF 的 UI 没有类型门禁（登记 16 条待清）~~ → 实测 **15 条**全部清掉（其中 `SpecEditorView` 的两个按钮是**从未接线的死控件**、`LiveView` 四处 `bordered="false"` 把字符串真值当布尔传），`type-check` 加 `--force` 防缓存假绿，`ci.yml` 新增 `ui` job 作硬门；红/绿双向都有实测读数（注入探针 RC=2 → 撤除 RC=0）。见 §二之二。
 - ~~API 层四处 `request<any>`（`metrics`/`experience`/`telemetry`/`sessionAnswer`）让新类型门对这四条通道失明~~ → 全部换成后端真形类型，且逐键与在线响应对账（`success_rate` 按后端语义写成可空）；`grep request<any> ui/src` = **No matches found**；类型门能因这些字段变红由探针 TS2339 实测。见 §二之三。
+- ~~洞察队列只有 API、UI 没有"MA 洞察"这一屏~~ → `/#/insights` 上线：账目四计数 + 队列落点路径 + `unreadable` 记账可见 + 无 IR 行交接按钮 `disabled` + 二次确认写死"交接 ≠ 部署" + 空态四种成因。approve/reject 两条分支都在真后端上点通，把手 `a648a1aeb3c84751` 在 `af_pending` 与 decided 两侧对得上。见 §二之四。
 
 ---
 

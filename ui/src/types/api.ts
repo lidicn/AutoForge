@@ -672,3 +672,54 @@ export interface SessionViewResponse {
   asks: AskItem[]
 }
 
+// ── ADM 第 1 步 ④A：MA 洞察提案队列（裁定 20261002 §三 ④A）──
+// 形状取自 `af_insight_queue.InsightRecord`（dataclass 字段 = to_dict 键）与
+// `af_service.approve_insight` / `reject_insight` 的返回语句。
+export interface InsightRecord {
+  proposal_id: string
+  hypothesis_id: string
+  natural_language: string
+  conf: number
+  source: string
+  received_at: number
+  /** null = MA 只给了自然语言；这种提案 approve 会被后端拒（不代为造图） */
+  suggested_ir: Record<string, unknown> | null
+  status: 'pending' | 'approved' | 'rejected'
+  decided_at: number | null
+  decided_by: string
+  reason: string
+  transport: Record<string, unknown>
+}
+
+export interface InsightQueueStats {
+  root: string
+  pending: number
+  decided: number
+  limit: number
+  /** 读不出来的队列文件（记账，不静默丢） */
+  unreadable: string[]
+}
+
+export interface InsightsPendingResponse {
+  count: number
+  proposals: InsightRecord[]
+  queue: InsightQueueStats
+  /** 仅 `include_decided=true` 时出现 */
+  decided?: InsightRecord[]
+}
+
+export interface InsightApproveResponse {
+  proposal_id: string
+  /** 交接进待批队列后的 op_id；后端可能给 null */
+  pending: string | null
+  name: string
+  /** 后端原话：进待批 ≠ 部署 */
+  note: string
+}
+
+export interface InsightRejectResponse {
+  proposal_id: string
+  status: 'approved' | 'rejected'
+  decided_at: number | null
+}
+
