@@ -49,7 +49,9 @@ def fake_pending(monkeypatch):
 
     def fake_submit(store, source, payload, submitted_by):
         rec.append(payload)
-        return {"ok": True}
+        # 真实 submit_pending 必然回 pending op_id——apply_group 的回滚把手就是它，
+        # 桩里没有就等于测不到"按 op_id 摘掉队列条目"这条路径。
+        return {"ok": True, "pending": f"op-{payload['name']}"}
 
     monkeypatch.setattr(af_service, "simulate", fake_sim)
     monkeypatch.setattr(af_service, "submit_pending", fake_submit)

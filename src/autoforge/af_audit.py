@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
-__all__ = ["AuditEvent", "AuditLog", "WRITE_CONFLICT", "record_conflict"]
+__all__ = ["AuditEvent", "AuditLog", "DEPLOY_AUDIT", "WRITE_CONFLICT", "record_conflict"]
 
 ENTITY_DRIFT = "entity_drift"
 ACTION_FAILED = "action_failed"
@@ -118,6 +118,14 @@ class AuditLog:
 
     def clear(self) -> None:
         self.events.clear()
+
+
+#: 部署链（`af_apply.issue_premiere` / `apply`）的进程级审计日志。
+#: 它**不是** `runtime.audit`：apply 这条链上没有 runtime 实例可挂载。过去四处都写成
+#: `AuditLog.add(event)`——把实例方法当类方法调，`event` 落到了 `self` 上，运行即
+#: `TypeError: AuditLog.add() missing 1 required positional argument`，于是
+#: "入队成功之后崩在记账上"，部署仪式整条路走不通。
+DEPLOY_AUDIT = AuditLog()
 
 
 def record_conflict(

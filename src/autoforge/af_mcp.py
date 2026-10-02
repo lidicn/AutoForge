@@ -399,12 +399,12 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
     ),
     (
         "af_apply",
-        "【黄金路径第2步】用 ref 一次走完 校验→仿真→入队。参数：ref(str 必填)、stage(str 可选: check/simulate/save 默认 save)。",
+        "【黄金路径第2步】用 ref 一次走完 校验→仿真→入队。参数：ref(str 必填)、stage(str 可选: check/simulate/dry_run/save，默认 save)。dry_run=只校验+仿真、不消费首演码、不入队（DB 侧「拟→验→批→部署」的「验」）。",
         {
             "type": "object",
             "properties": {
                 "ref": {"type": "string", "description": "af_draft 返回的 ref"},
-                "stage": {"type": "string", "description": "check/simulate/save，默认 save"},
+                "stage": {"type": "string", "description": "check/simulate/dry_run/save，默认 save"},
             },
             "required": ["ref"],
         },

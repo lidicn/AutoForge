@@ -4,6 +4,8 @@
 1. build（安全闸校验）
 2. simulate（仿真回放）
 3. save（入待批队列）
+
+`stage="dry_run"` 只跑 1、2 并且零写入（不消费首演码、不入队、不进试演期）。
 """
 
 from __future__ import annotations
@@ -17,7 +19,21 @@ from .af_draft import get_staged, DraftError
 from .af_spec import graph_to_raw
 from . import af_audit, af_premiere
 from . import af_service
-from .af_ir import Automation, load_graph
+from .af_ir import (
+    Automation,
+    GROUP_MODE_SEQUENCE,
+    load_graph,
+)
+
+#: `apply` 的合法 stage。`dry_run` = 只跑 build+simulate，既不消费首演码也不入队
+#: （ADM 联动执行计划·第 4 步①：DB 走的"拟→验→批→部署"里，"验"必须能在零写入前提下跑）。
+APPLY_STAGES: tuple[str, ...] = ("check", "simulate", "dry_run", "save")
+
+#: 组部署路径（`apply_group`）沿用的旧名，与 `save` 同义。不进 MCP 工具面，
+#: 但必须被 `apply` 接受——否则既有调用会从今天起判"未知 stage"。
+STAGE_ALIASES: dict[str, str] = {"apply": "save"}
+
+_ALLOWED_STAGES: tuple[str, ...] = APPLY_STAGES + tuple(STAGE_ALIASES)
 
 
 def _store_diff_sha(ref: str) -> str:
@@ -42,7 +58,7 @@ def issue_premiere(ref: str, store: Any = None, ttl_s: int = 300) -> dict[str, A
     """
     store_diff_sha = _store_diff_sha(ref)
     code = af_premiere.issue(store_diff_sha, ttl_s=ttl_s)
-    af_audit.AuditLog.add(
+    af_audit.DEPLOY_AUDIT.add(
         af_audit.AuditEvent(
             af_audit.PREMIERE_ISSUED,
             at=datetime.now(timezone.utc),
@@ -63,15 +79,29 @@ def apply(
 
     Args:
         ref: af_draft 返回的 ref
-        stage: 执行到哪一步（check / simulate / save）
+        stage: 执行到哪一步（check / simulate / dry_run / save）
         store: GraphStore 实例
         premiere_code: 部署前签发的首演码；提供则先消费闸门（哈希一致 + 未过期 +
             未重放）才放行，失败即中止并返回 ok=False。为 None 时不开闸门
-            （向后兼容既有调用 / 现有 forge run/watch --live 三重闸）。
+            （向后兼容既有调用 / 现有 forge run/watch --live 三重闸）。dry_run 一律
+            不开闸门——一次性码被"看一眼"就烧掉，等于把试演门槛变成消耗品。
 
     Returns:
         {ok, summary, build_report, sim_report, save_result}
     """
+    if stage not in _ALLOWED_STAGES:
+        # 未知 stage 过去会一路落到 save：打错一个字母 = 部署。这里改为拒绝。
+        return {
+            "ok": False,
+            "stage": "args",
+            "reason": "unknown_stage",
+            "error": f"未知 stage {stage!r}，允许的取值：{list(APPLY_STAGES)}",
+            "allowed_stages": list(APPLY_STAGES),
+            "ref": ref,
+        }
+    stage = STAGE_ALIASES.get(stage, stage)   # 旧名归一，下游只认 APPLY_STAGES
+    dry_run = stage == "dry_run"
+
     # 1. 从 staging 取 IR
     staged = get_staged(ref)
     graph = staged["graph"]
@@ -83,7 +113,7 @@ def apply(
     # 无 trial 记录 → 不拦截（向后兼容，保证既有测试/调用链不破）
     store_diff_sha = _store_diff_sha(ref)
     if af_premiere.is_paused(store_diff_sha):
-        af_audit.AuditLog.add(
+        af_audit.DEPLOY_AUDIT.add(
             af_audit.AuditEvent(
                 af_audit.PREMIERE_CONSUMED,
                 at=datetime.now(timezone.utc),
@@ -101,9 +131,10 @@ def apply(
         }
 
     # 1.6 首演码闸门（可选）：绑定 store diff SHA256 防掉包 + 过期 + 原子防重放
-    if premiere_code is not None:
+    # dry_run 不开闸门：一次性码消费掉就没了，"先看看"不该有代价。
+    if premiere_code is not None and not dry_run:
         res = af_premiere.consume(premiere_code, store_diff_sha)
-        af_audit.AuditLog.add(
+        af_audit.DEPLOY_AUDIT.add(
             af_audit.AuditEvent(
                 af_audit.PREMIERE_CONSUMED,
                 at=datetime.now(timezone.utc),
@@ -155,6 +186,12 @@ def apply(
     if stage == "simulate":
         return result
 
+    if dry_run:
+        # dry_run 的正面证据要写进返回值，而不是靠调用方"记得它没入队"：
+        # would_enqueue=True 表示真跑 save 就会入队，pending_ref=None 表示此刻队列里什么都没有。
+        return {**result, "stage": "dry_run", "dry_run": True,
+                "would_enqueue": True, "pending_ref": None}
+
     # 4. save（入待批队列）
     save_payload = {"ir": ir_payload, "name": staged.get("summary", "")}
     save_result = af_service.submit_pending(
@@ -170,7 +207,7 @@ def apply(
     if save_result.get("ok"):
         trial = af_premiere.enter_trial(store_diff_sha, hours=24)
         result["trial"] = trial
-        af_audit.AuditLog.add(
+        af_audit.DEPLOY_AUDIT.add(
             af_audit.AuditEvent(
                 af_audit.PREMIERE_TRIAL_STARTED,
                 at=datetime.now(timezone.utc),
@@ -269,6 +306,28 @@ def check_store_cross_conflicts(store: Any) -> list[dict[str, Any]]:
     return cross_automation_conflicts(autos)
 
 
+def _group_caveats(mode: str, children: list, stage: str, simulated: bool) -> list[str]:
+    """诚实报告：group 这次到底验到了什么、没验到什么（第 3 步③）。
+
+    组合的"原子性"目前只覆盖到**入待批队列**这一段；真正写 HA 发生在人工 approve 之后，
+    那时每条子自动化是独立的 save_graph，不再有 group 级的回滚把手。这句话必须让签核的
+    人看得到，否则 `ok=True` 会被读成"部署失败也能整体撤回"。
+    """
+    out = [
+        f"编排方式 {mode}：" + (
+            "子自动化按数组序逐条下发，任一失败即停并回滚已入队项"
+            if mode == GROUP_MODE_SEQUENCE
+            else "子自动化彼此声明为无依赖，全部尝试完再判定；失败同样整体回滚已入队项"
+        ),
+        "原子性范围 = 待批队列：approve 之后各子自动化独立落盘，届时撤回走 undo，不是 group 级回滚",
+    ]
+    if not simulated:
+        out.append("本次 simulate=False，子自动化未经仿真即入队（校验覆盖为空）")
+    elif stage not in ("apply", "save"):
+        out.append(f"stage={stage} 只仿真不入队，未验证入队侧的失败与回滚路径")
+    return out
+
+
 def apply_group(group_auto: Any, store: Any = None, *,
                 simulate: bool = True, stage: str = "apply") -> dict[str, Any]:
     """原子部署 group 复合自动化（v2.3/F9，决策 D 方案 B 并入 F10②）。
@@ -276,6 +335,9 @@ def apply_group(group_auto: Any, store: Any = None, *,
     - 先仿真全部子自动化（无副作用）；任一失败 → 整体 ok=False 且不入队（原子回滚单位 = group ref）。
     - 全量通过 → 依次入待批队列，统一打 group_ref 标签（单 ref 回滚）。
     - 组前做组合冲突预检（F10②）。
+    - 组内编排方式取 group 节点的 `mode`（第 3 步②）：`sequence`（默认）在第一个失败处即停，
+      `parallel` 把剩余子自动化也试完再判定。**两者都保证"有失败就不留半部署态"**：
+      已入队的条目按各自 pending op_id 逐条 reject 掉。
     """
     if not isinstance(group_auto, Automation):
         group_auto = Automation.from_dict(group_auto)
@@ -283,52 +345,105 @@ def apply_group(group_auto: Any, store: Any = None, *,
     if gnode is None:
         return {"ok": False, "error": {"code": "NO_GROUP", "message": "不是 group 复合 IR"}}
     children = list(gnode.children)
+    if not children:
+        return {"ok": False, "error": {"code": "EMPTY_GROUP",
+                                       "message": "group 没有子自动化，没有可部署单元"}}
+    mode = gnode.mode or GROUP_MODE_SEQUENCE
     conflicts = cross_automation_conflicts(children)
 
-    # 1. 全量仿真（原子性闸门）
-    for child in children:
-        if not simulate:
-            continue
-        sim = af_service.simulate(child.raw, store=store)
-        if not sim.get("ok"):
-            return {
-                "ok": False,
-                "stage": "simulate",
-                "error": {"code": "CHILD_SIM_FAILED", "message": f"子自动化 {child.id} 仿真失败", "child": child.id, "sim": sim},
-                "deployed": [],
-                "conflicts": conflicts,
-            }
+    # 1. 仿真（原子性闸门：此阶段任何失败都不需要回滚，因为一条都还没入队）
+    sim_failures: list[dict[str, Any]] = []
+    if simulate:
+        for child in children:
+            sim = af_service.simulate(child.raw, store=store)
+            if sim.get("ok"):
+                continue
+            sim_failures.append({"child": child.id, "sim": sim})
+            if mode == GROUP_MODE_SEQUENCE:
+                break
+    if sim_failures:
+        first = sim_failures[0]
+        return {
+            "ok": False,
+            "stage": "simulate",
+            "group_mode": mode,
+            "error": {"code": "CHILD_SIM_FAILED",
+                      "message": f"子自动化 {first['child']} 仿真失败",
+                      "child": first["child"], "sim": first["sim"],
+                      "failures": [f["child"] for f in sim_failures]},
+            "deployed": [],
+            "conflicts": conflicts,
+        }
 
     # 2. 全量入队（单 ref 回滚单位）
     group_ref = group_auto.id
     deployed: list[str] = []
+    refs: dict[str, str] = {}        # child.id -> pending op_id（回滚要按 op_id 删，不是按 child id）
+    submit_failures: list[dict[str, str]] = []
     if stage in ("apply", "save"):
         for child in children:
             save_payload = {"ir": child.raw, "name": child.name, "group_ref": group_ref}
-            res = af_service.submit_pending(store, "af_apply", save_payload, submitted_by="af_apply")
-            if not res.get("ok"):
-                rollback_failed: list[dict[str, str]] = []
-                for d in deployed:
-                    try:
-                        store.rollback_pending(d)
-                    except Exception as exc:  # noqa: BLE001
-                        # 回滚失败不能咽：咽下就变成"已回滚、deployed 为空"的假象，
-                        # 而待批队列里其实还留着条目（铁律 #5：回滚不了要 fail-closed 报出去）。
-                        rollback_failed.append(
-                            {"ref": d, "error": f"{type(exc).__name__}: {exc}"}
-                        )
-                return {
-                    "ok": False,
-                    "stage": "save",
-                    "error": {"code": "SUBMIT_FAILED", "child": child.id},
-                    "deployed": deployed if rollback_failed else [],
-                    "rollback_failed": rollback_failed,
-                    "conflicts": conflicts,
-                }
+            try:
+                # submit_pending 的拒绝形态是 **raise**（ServiceError：IR 非法 / 静态扫描不过 /
+                # 待批熔断），不是 ok=False。不接住它，异常会穿出 apply_group——前面已入队的
+                # 子自动化就留在队列里，"原子部署"当场变成半部署。
+                res = af_service.submit_pending(store, "af_apply", save_payload, submitted_by="af_apply")
+            except Exception as exc:  # noqa: BLE001
+                submit_failures.append({"child": child.id,
+                                        "error": f"{type(exc).__name__}: {exc}"})
+                if mode == GROUP_MODE_SEQUENCE:
+                    break
+                continue
+            op_id = res.get("pending") if isinstance(res, dict) else None
+            if not res.get("ok") or not op_id:
+                # 拿不到 pending op_id 就等于拿不到回滚把手，不能算"已部署"（铁律 #5）
+                submit_failures.append({
+                    "child": child.id,
+                    "error": ("submit 未返回 ok" if not res.get("ok")
+                              else "submit 成功但未返回 pending op_id（无法回滚）"),
+                })
+                if mode == GROUP_MODE_SEQUENCE:
+                    break
+                continue
             deployed.append(child.id)
+            refs[child.id] = str(op_id)
+
+    if submit_failures:
+        rollback_failed: list[dict[str, str]] = []
+        undone: list[str] = []
+        for child_id in deployed:
+            op_id = refs[child_id]
+            try:
+                # reject_pending 是既有唯一"把待批条目干净摘掉"的入口（load + delete + 留痕）。
+                # 原先调的 `store.rollback_pending(...)` 在真实 GraphStore 上根本不存在，
+                # 且传的是 child.id 而不是 op_id——生产路径上次真出事时报的会是 AttributeError。
+                af_service.reject_pending(store, op_id, reason=f"group {group_ref} 原子回滚")
+            except Exception as exc:  # noqa: BLE001
+                # 回滚失败不能咽：咽下就变成"已回滚、deployed 为空"的假象，
+                # 而待批队列里其实还留着条目（铁律 #5：回滚不了要 fail-closed 报出去）。
+                rollback_failed.append({"ref": op_id, "child": child_id,
+                                        "error": f"{type(exc).__name__}: {exc}"})
+                continue
+            undone.append(child_id)
+        residue = [c for c in deployed if c not in undone]
+        first = submit_failures[0]
+        return {
+            "ok": False,
+            "stage": "save",
+            "group_mode": mode,
+            "error": {"code": "SUBMIT_FAILED", "child": first["child"],
+                      "message": first["error"],
+                      "failures": [f["child"] for f in submit_failures]},
+            "deployed": residue if rollback_failed else [],
+            "rollback_failed": rollback_failed,
+            "rolled_back": undone,
+            "conflicts": conflicts,
+        }
 
     # ok 由"该 stage 应入队的子自动化确实全部拿到了 pending ref"决定，不是字面量：
     # apply/save 轨要求每个 child 都入队；其余 stage 没有入队义务，空集即成立。
     expected = [c.id for c in children] if stage in ("apply", "save") else []
     return {"ok": deployed == expected, "ref": group_ref, "children": [c.id for c in children],
-            "deployed": deployed, "conflicts": conflicts, "stage": stage}
+            "deployed": deployed, "pending_refs": refs, "conflicts": conflicts,
+            "group_mode": mode, "stage": stage,
+            "caveats": _group_caveats(mode, children, stage, simulate)}

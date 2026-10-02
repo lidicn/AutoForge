@@ -740,30 +740,41 @@ def build_app(
 
     @app.post("/api/asks/answer", dependencies=[Depends(_write)])
     def api_asks_answer(body: dict[str, Any]) -> dict[str, Any]:
-        """写答案到 watch 的 answer_inbox（由 watch ticker 注入 runtime）。"""
+        """写答案到 watch 的 answer_inbox（由 watch ticker 注入 runtime）。
+
+        `AUTOFORGE_INBOX_KEY` 未设时**如实报失败**：读侧 `af_live.read_answer_inbox`
+        无 key 一律拒收，过去这里照样返回 ok=True，就是"接口 200、答案蒸发"的假绿。
+        文件仍写盘（保留"用户答过"的证据链），但结论按通道未生效给。
+        """
         root = store.root if store else None
         if not root:
             return {"ok": False, "error": "no store"}
-        inbox = Path(root) / "answer_inbox"
-        inbox.mkdir(parents=True, exist_ok=True)
         # A6 write-side sign: mirror af_live._read_inbox _expect_sig
-        # (ask_id or None / text default "" / room as-is), else our own answer
-        # files are rejected fail-closed by the read side.
+        # (ask_id or None / text default "" / room as-is，answer 走 sort_keys JSON)。
         import hashlib as _hashlib
         import hmac as _hmac
         key = (os.environ.get("AUTOFORGE_INBOX_KEY") or "").strip()
+        inbox = Path(root) / "answer_inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
         ask_id = body.get("ask_id") or None
         text = body.get("text", "")
         room = body.get("room")
         answer = body.get("answer")  # v2 M3 结构化应答（AskAnswer dict）
         body = dict(body)
+        answer_json = json.dumps(answer or {}, sort_keys=True, ensure_ascii=False)
         if key:
-            answer_json = json.dumps(answer or {}, sort_keys=True, ensure_ascii=False)
             msg = f"{ask_id}|{text}|{room}|{answer_json}".encode("utf-8")
             body["sig"] = _hmac.new(key.encode("utf-8"), msg, _hashlib.sha256).hexdigest()
         fname = inbox / f"{int(time.time()*1000)}.json"
         fname.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
-        return {"ok": True, "inbox": str(fname)}
+        if not key:
+            return {
+                "ok": False,
+                "reason": "inbox_key_missing",
+                "inbox": str(fname),
+                "error": "AUTOFORGE_INBOX_KEY 未配置：答案无法签名，读侧必然拒收（裁定 Q5：key 是通道生效前提）",
+            }
+        return {"ok": True, "inbox": str(fname), "signed": True}
 
     @app.post("/api/watch/start", dependencies=[Depends(_write)])
     def api_watch_start(body: dict[str, Any]) -> dict[str, Any]:

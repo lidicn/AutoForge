@@ -225,8 +225,35 @@ def test_af_apply_apply_backward_compatible_signature():
 
     sig = inspect.signature(af_apply.apply)
     assert sig.parameters["premiere_code"].default is None
-    # 取码入口存在且可调用
-    assert callable(af_apply.issue_premiere)
+
+
+def test_issue_premiere_runs_and_is_consumable():
+    """验收 #8 的正身：过去这条只写 `assert callable(issue_premiere)`，从没调用过。
+
+    于是 `AuditLog.add(event)` 被当类方法用的 TypeError 藏了很久——一取码就崩，
+    部署仪式整条路走不通。这里真跑一次取码，并断言事件进了 DEPLOY_AUDIT、
+    签出来的码能用同一份 diff 哈希消费掉。
+    """
+    from autoforge import af_apply
+    from autoforge.af_draft import draft_intent
+
+    ref = draft_intent({
+        "name": "取码用例",
+        "when": {"type": "state", "entity": "前门", "to": "on"},
+        "do": {"action": "开灯", "target": "客厅灯"},
+    })["ref"]
+
+    before = len(af_audit.DEPLOY_AUDIT)
+    out = af_apply.issue_premiere(ref)
+    assert out["ok"] is True
+    assert len(out["code"]) == 6
+    assert len(af_audit.DEPLOY_AUDIT) == before + 1
+    assert af_audit.DEPLOY_AUDIT.of_type(af_audit.PREMIERE_ISSUED)
+
+    consumed = consume(out["code"], out["store_diff_sha256"])
+    assert bool(consumed) is True, f"签出的码消费不掉：{consumed}"
+    # 一次性：同一个码再来一次必须被拒
+    assert bool(consume(out["code"], out["store_diff_sha256"])) is False
 
 
 def test_af_audit_extended_with_premiere_types():
