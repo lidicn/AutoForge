@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/ADM联动执行计划-AF.md`（DCD 出品，v2.5 联动落地版）
 > 记录人：AutoForge 开发
-> 核实基准：**HEAD = `d602e93`**（本轮全部读数都在这个 commit 上当场实测；铁律 #11）
+> 核实基准：**HEAD = `3a8a4f3`**（已推 origin/main，`git ls-remote origin main` 实测 `3a8a4f38e8f1…`），另加**本回合 working-tree 改动**（`gates.sh` 计数棘轮 + `.gates-tally.txt`、UI 的 F4 ③/F7 两项、`scripts/mutation_check_templates.py` 判语断言）——这些与本条记录同批提交，故下文读数都在"上述改动已生效"的工作树上当场跑出（铁律 #11）
 > 契约真源：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
 > 交叉裁定：`20260929-ADM三仓联动七问`、`20261001-AF-homesdk接入四问`、`20260930-AutoForge后续优化三项`、`20261001-DB目标模式与AF三题` §H
 
@@ -18,7 +18,9 @@
 | 第 3 步 F9 group 节点 | **①②③④ 已交付** | schema 先行（铁律 #1），原子回滚把手修在 `0dd57b2`、其回归测试在 `34a540c` |
 | 第 4 步 MCP 工具面 | **②③ 已交付 / ① 部分** | ① 的 `draft/verify/deploy` 三件套命名与现工具面不一致，已提 DCD（见 §五） |
 | 第 5 步 后续优化三项 | **①②③④ 已交付** | 逐条 file:line 见 §二 |
-| 第七轮审计 | **finding 属实，已修** | 详见 `docs/audit/审计报告_第七轮_核实与修复.md` |
+| 第七轮审计 | **finding 属实，已修** | 详见 `docs/audit/审计报告_第七轮_核实与修复.md`；第八轮尚未落 `docs/audit`（本回合实测目录内最新即第七轮，mtime `10-02 11:46`） |
+| 门禁肥化防护（计划外补刀） | **已交付** | `gates.sh` 计数棘轮 + `.gates-tally.txt`（上限 104），三条变异实测能红；AgentOps 模板同步去反引号缺陷 |
+| F4 ③ / F7 前端残留 | **已收口** | `/evidence` 生产态证据视图上线；真机下发的事件回放与撤销按钮端到端真点通（读数见 §一末） |
 | 部署 | **未部署** | 铁律 #3：文档/本地阶段不部署，镜像重烤须进合并停机窗 |
 
 ---
@@ -101,30 +103,91 @@ $ sha256sum /e/NAS/homesdk/dist/homesdk-0.3.1-py3-none-any.whl \
 | ③ import-linter 分层（裁定 B→A 渐进：先告警） | 配置 + 违规清单 ≈0 | `pyproject.toml:79-95` `[tool.importlinter]` 契约 "Service boundary never imported by kernel"；实测 `lint-imports` → **Contracts: 1 kept, 0 broken**；`.github/workflows/ci.yml:91-92` 的 `continue-on-error: true` 是**观察窗**（DCD 观察裁定要求保留，不是假绿），真正的架构门禁是 `scripts/check_imports.py` → `Baseline lock: 95 modules, 0 violations` |
 | ④ tick 线程自愈，区分原因重启（裁定 C）+ 必补接缝测试 | "SAFE HALT 后 watchdog 不得重启"绿 | `src/autoforge/af_live.py:77-103` `tick_watchdog_pass`（唯一自愈分支是"意外终止"；`safe_halt`/`stop` 分别返回 `held_safe_halt`/`stopped` 且不重启）；接缝测试 `tests/unit/test_af_live.py:306` `test_watchdog_does_not_restart_after_safe_halt`（断言 `calls == []`），对照 `:315` 意外终止确实重启、`:325` 存活时不动作；`af_tick_supervisor.py:185` HALTED 短路、`:222-224` docstring 写明安全红线 |
 
+### 门禁肥化的另一半：计数棘轮（本回合新增，`gates.sh` + `.gates-tally.txt`）
+
+AST 门只看"新增=0"，指纹一旦进了 `.gates-baseline.txt` 就**永远绿**，存量却在涨。棘轮把**全量总数**钉在登记上限上：
+
+| 项 | 落点 / 实测 |
+|----|-------------|
+| 上限登记 | `.gates-tally.txt` → `104 # 2026-10-02 登记（AST 全量口径，--no-baseline --no-smoke）`（`except-pass-broad=27 \| fake-ok-const=77`） |
+| 判据 | `gates.sh` 的「计数棘轮」段：`total` 取自 `python -m homesdk.gates "$REPO" --no-baseline --no-smoke`，`cap` 取自 `.gates-tally.txt` 首个数字行 |
+| 上调 | 红：`棘轮红：总数从 103 涨到 104`（把 cap 改成 103 实测，rc=1） |
+| 下调不改账 | 也红：`棘轮提示：总数降到 104，请把「.gates-tally.txt」的上限同步下调（只准降 = 防肥化）`（cap 改成 105 实测，rc=1） |
+| 没登记 | rc=2：`缺 /e/NAS/AutoForge/.gates-tally.txt —— 先跑一次…把全量计数登记成「总数 # 日期 说明」`（把文件移走实测） |
+| 正常态 | `全量违规 104 条 / 登记上限 104 条`，整条 `gates.sh` rc=0 |
+
+### 第 0 步 ④ 的 AgentOps 模板：本轮抓到并修掉一个真缺陷
+
+模板里 `Tally ratchet (hard)` 的提示文案原先用反引号包文件名。**`run: |` 下那些字符串是双引号**，反引号被 bash 当命令替换真的执行了——实测表现是把 `.gates-tally.txt` 当脚本跑：
+
+```
+.gates-tally.txt: line 1: 104: command not found
+```
+
+后果不只是难看：命令替换的退出码会污染 `cap`/`total` 的取值路径，棘轮在真 CI 上的 `exit 2` 契约不可靠。修法：文案里的反引号换成「」（`E:/NAS/AgentOps/gates/templates/ci/gates.yml`，同文件已去 `continue-on-error`、加 smoke-gates/ast-gates 存在性硬检）。
+
+配套把 `scripts/mutation_check_templates.py`（模板自检）从"只比退出码"升级为**退出码 + 判语文案**双断言。理由记在脚本 docstring：只看 rc 会放过"因为别的原因红"——上面这个反引号缺陷正是靠两条变异"绿在 rc=1"上蒙过去的。本回合实测 10/10 符合预期、rc=0（读数见 §二）。
+
+⚠️ 记账事实：`E:/NAS/AgentOps` **不是 git 仓**（`git -C E:/NAS/AgentOps rev-parse` → `fatal: not a git repository`）。所以第 0 步④ 授权改的模板**没有提交记录、不可回滚、sha 无出处**——已提 DCD（§五 申请 4）。
+
+### F4 ③ 生产态证据视图 + F7 撤销端到端（本回合收口 §六 两项残留）
+
+| 项 | 落点 / 实测 |
+|----|-------------|
+| 新视图 | `ui/src/views/EvidenceView.vue`（路由 `/evidence`、菜单「生产态证据」，`ui/src/router/index.ts`、`ui/src/App.vue`）。三档**并列**渲染：验过 / 验出问题 / 无从验证，外加冲突仲裁计数、影子/金丝雀/冲突分列、最近一次时间戳（null 显示 `—`） |
+| 契约面 | `ui/src/types/api.ts` 加 `EvidenceAutomation`/`EvidenceSummary`/`EvidenceProdResponse`，字段与 `af_watch.verified_in_prod()`（`src/autoforge/af_watch.py:114-163`）逐字对齐；**刻意没有 `ok` 字段**——查询成败由 HTTP 状态表达 |
+| 前端取数 | `ui/src/api/client.ts` `evidenceProd()`；`ui/src/api/index.ts` **不做 mock 兜底**并写明原因：证据面板造 fixture = 假安心 |
+| 空态诚实 | `tracked_automations === 0` 时告警"这不等于自动化被验证过…服务重启即清零"；读失败分支**清空数据**而不是显示零 |
+| 三档实测（喂数） | 临时夹具起 8791：API 返回 `total_verified_in_prod:4 / failed:2 / unmodeled:1 / conflict:2 / tracked:3 / automations_with_failed:2`，页面读数与 JSON 逐项一致 |
+| 空态实测 | 8793（真跑过一次真机下发的进程，未喂 watch）显示 0 + 空态告警 |
+| 文案自纠 | 空态原文写"请让 watch 或真机下发跑起来再刷新"，实测**不带 canary 节点的普通真机下发不产证据**（`af_executor.py:494-500` 的 `use_canary` 要 `node.canary` + conf `auto` 带 + 非 dry-run 适配器）。文案改为点名三个来源并明说这一点——我自己的新视图里也不能留"跑了就看得见"这种承诺 |
+| F7 端到端 | 浏览器真点：真机下发 → `撤销 ID：dep-28bf327fe8d7` → 点「撤销」→ popconfirm「确认回滚」。假 HA 记账实测两条：`turn_on` 然后 `turn_off`，设备回 `off`；页面读数 `已完整回滚 / 已恢复：light.yeelink_cn_555003624_lamp22_s_2` |
+| `events=undefined` 缺陷 | `ui/src/views/LiveView.vue` 原把 `events` 留空 ⇒ 后端 `_replay_live`（`af_service.py:1522`）拿到空列表，trigger 型自动化在真机档**永远不命中**且页面照样报成功。现在补「事件脚本」输入框（非数组/坏 JSON 直接报回，不静默），并在无脚本时明确提示"trigger 型自动化不会命中"；上表那条 F7 端到端就是靠回放 `[{"entity_id":"binary_sensor.study_desk_motion","state":"on"}]` 才真的触发（页面回显 `真机下发完成（回放 1 条事件）`） |
+| 缺失实体读数 | `LiveView.vue` 增渲 `missing_entities`（类型加到 `LiveRunResponse`）：后端 `af_service.py:1652` 取数、`:1676` 放进响应，前端原来把它吞了——"读不到实体"比"整次失败"轻，但比"显示成正常"诚实得多 |
+
+⛔ 诚实标注：`ui/dist` 是 gitignore 产物（`.gitignore:49`），仓库里只有源码；本轮浏览器点验跑的是 `npm run build` 的真实产物（rc=0，`✓ built in 12.95s`），不是 dev server。
+
+
+
 ---
 
 ## 二、本轮 HEAD 实测读数（全部当场跑出，非引用）
 
 ```
 $ python -m pytest tests -q
-2602 passed, 51 skipped, 1 warning, 7 subtests passed in 158.76s (0:02:38)
+2602 passed, 51 skipped, 1 warning, 7 subtests passed in 91.48s (0:01:31)          RC=0
 
-$ GATES_PYTHON=python bash gates.sh        → rc=0
+$ GATES_PYTHON=python bash gates.sh                                                RC=0
+扫描完成：AutoForge  新增/未获批 0 条（error 0 / warn 0），基线内存量 104 条，过期基线条目 0 条
+计数：except-pass-broad=27 | fake-ok-const=77
+══ 计数棘轮（全量总数对登记上限）══════════════════════════════
+全量违规 104 条 / 登记上限 104 条
 ✓ undefined-name 门禁干净（扫描 95 个文件）
 ✓ undefined-name 门禁干净（扫描 149 个文件）
 ✓ 主题白名单门禁干净（7 处 topic 字面量全部在契约表内）
-扫描完成：AutoForge  新增/未获批 0 条（error 0 / warn 0），基线内存量 0 条，过期基线条目 0 条
 结论：门禁干净。
 
-$ python scripts/check_imports.py          → rc=0
+$ python scripts/check_imports.py                                                  RC=0
 ✅ Layer architecture clean — no reverse dependencies detected.
    Baseline lock: 95 modules, 0 violations.
 
-$ lint-imports
-Contracts: 1 kept, 0 broken
+$ lint-imports                                                                     RC=0
+Service boundary never imported by kernel KEPT
+Contracts: 1 kept, 0 broken.
+
+$ python scripts/mutation_check_templates.py /e/NAS/AgentOps/gates/templates/ci/gates.yml
+模板自检：全部符合预期                                                               RC=0
+（10 条变异：4 条 workflow 存在性/continue-on-error + 6 条棘轮，含"缺 tally 文件→rc=2"与"解析不到计数→rc=2"）
+
+$ cd ui && npm run build                                                           RC=0
+✓ built in 12.95s
+build-manifest.json: commit=3a8a4f38e8f122fdac7cbbc00c9120d88bbe206e files=589
 ```
 
-AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），本轮**新增 0**。
+AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），本轮**新增 0**，且全量总数与登记上限持平（棘轮绿）。
+
+⚠️ 一条口径事实（登记，不等于已解决）：AF 的 **UI 类型检查今天不是门禁**。`npx vue-tsc --force` 有 16 条既有错误（`MetricsView`/`OverviewView`/`SpecEditorView`/`VersionsView`/`vite.config.ts`），`npx vue-tsc -b` 增量模式还会因缓存**假报 rc=0**。本回合只修掉了我改动的那个文件里的真错（`ui/src/api/client.ts` 用了 `WatchListResponse` 却没 import）。把 `vue-tsc` 升为 CI 硬门要先清这 16 条，属独立工作量，未塞进本批（见 §六）。
+
 
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
 
@@ -136,6 +199,9 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 | `34a540c` | 第 3 步：group 节点 `mode(sequence|parallel)` schema 先行 + group 回归测试 |
 | `f2d0a5c` | 保真修复：group 容器把 `mode` 与整棵 `children` 纳入核心比对 |
 | `d602e93` | 门禁接线：主题白名单进 gates + 事件信封 `ts` 走家庭墙钟（对齐契约表 §四） |
+| `27c14a2` | 第 0 步 ①②：vendor 0.3.1 wheel 入库 + 时区主路径改调 `homesdk.time` |
+| `3a8a4f3` | 文档：本记录首版（逐步落点 + 第七轮核实链），**已推 origin/main** |
+| 本批（即本条记录所在 commit） | F4 ③ 生产态证据视图 + `LiveView` 事件脚本回放与 `missing_entities` 读数（堵 F7 残留）+ `gates.sh` 计数棘轮与 `.gates-tally.txt` + 模板自检判语断言 + AgentOps 模板反引号缺陷修复记录 |
 
 ## 四、审计侧
 
@@ -151,13 +217,19 @@ AST 基线口径：`except-pass-broad=27 | fake-ok-const=77`（合计 104），�
 | 1 | 第 4 步契约面四问：MCP 工具面命名口径（`draft/verify/deploy` vs `af_draft`/`af_apply`）、`af/automation/fired` 的 `ref` 语义（实例 id 还是 deploy ref）、`/api/asks/answer` `ok=False(inbox_key_missing)` 的 DB 侧处置、`ma/insights` 提案队列是否要求持久化 | `inbox/20261002-AF-第4步契约面四问-决策申请.md`（**已提交**） |
 | 2 | 第 0 步 ③④：0.3.1 记账缺口（源树 `time.py` 未入库 + NAS `VERSIONS.txt` 无 0.3.1 条目 ⇒ sha 不可复现）+ §四 合并停机窗排期与授权 | `inbox/20261002-homesdk0.3.1记账缺口与AF镜像重烤合并窗-决策申请.md`（**已提交**） |
 | 3 | 第七轮 `StateProvider` 统一 fail-closed 的方向与代价（整段软失败 vs 逐实体可见漂移） | `inbox/20261002-AF-StateProvider统一fail-closed的方向与代价-决策申请.md`（已提） |
+| 4 | 第 0 步 ④ 的记账载体：`E:/NAS/AgentOps` **不是 git 仓** ⇒ 已授权改的门禁模板无 commit、无 sha、不可回滚；三仓 CI 都依赖它，却没有任何版本账 | `inbox/20261002-AgentOps门禁模板无版本载体-决策申请.md`（**本回合已提交**） |
 
 ## 六、未在本版做（登记，不静默）
 
-- 第 0 步 ③④：等他仓 main 授权 + 合并停机窗（§五 申请 2）。
+- 第 0 步 ③④：等他仓 main 授权 + 合并停机窗（§五 申请 2）；模板改动无版本账另见 §五 申请 4。
 - 第 2 步 `kill -9` → broker 代发 offline 的真 broker 验收：本机无 paho-mqtt 且禁 pip install，须进窗随镜像重烤一次跑。
 - `BoundedCache` 基类收敛（第五轮遗留）与"实现间契约不一致"的**静态**门禁：本轮以契约测试覆盖，未做静态门禁。
-- `ui/.../LiveView.vue:102` `events=undefined` ⇒ `_replay_live` 空转（F4 ③ 监护视图前端残留，task #15）；F7 WebUI 撤销按钮端到端人工点验（task #13）。
+- `vue-tsc` 未进 CI：既有 16 条类型错误要先清（§二 口径事实）。**当前 AF 的 UI 没有类型门禁**，本批改动的类型正确性靠 `npm run build`（rc=0）+ 浏览器真点验兜住，这条区别要写清。
+- 证据面板的 `evicted_automations` 只做"提示有自动化被挤出内存"，未做跨进程持久化——持久化与否属 `ma/insights` 提案队列同一问（§五 申请 1 第 4 问），不自行拍。
+
+已收口（上一版登记、本版实测销账）：
+- ~~`ui/src/views/LiveView.vue` `events=undefined` ⇒ `_replay_live` 空转~~ → 补事件脚本输入 + 回放读数，F7 端到端真点通（`dep-28bf327fe8d7`，假 HA `turn_on`→`turn_off`，设备回 `off`）。
+- ~~F4 ③ 监护视图缺失~~ → `/#/evidence` 上线，三档并列 + 诚实空态，读数与 `/api/evidence/prod` JSON 逐项一致。
 
 ---
 
