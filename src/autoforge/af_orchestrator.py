@@ -21,7 +21,12 @@ import json
 import re
 import time
 import uuid
-from .af_ir import Automation, GROUP_IR_VERSION
+from .af_ir import (
+    Automation,
+    GROUP_IR_VERSION,
+    GROUP_MODES,
+    GROUP_MODE_SEQUENCE,
+)
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
@@ -726,15 +731,25 @@ def build_graph(draft: AutomationDraft) -> dict:
 
 
 def compose_group(name: str, children: list, group_id: str | None = None,
-                  ir_version: str = GROUP_IR_VERSION) -> "Automation":
+                  ir_version: str = GROUP_IR_VERSION,
+                  mode: str = GROUP_MODE_SEQUENCE) -> "Automation":
     """把多条已构建自动化（Automation 或 IR dict）组合成一个 group 复合 IR（v2.3/F9）。
 
     返回的 Automation 顶层只有一个 group 节点，children 为各子自动化的完整 IR；
     作为原子部署单元（单 ref 回滚）与组合冲突预检（F10②）的载体。
+
+    `mode`（第 3 步②）：`sequence` = 按 children 数组序逐条下发（依赖序即数组序），
+    任一子失败立即停；`parallel` = 子间无依赖，全部尝试完再判定。两种都保证
+    「失败即整体回滚已入队项」，差别只在失败时是否继续尝试后续子自动化。
     """
+    if mode not in GROUP_MODES:
+        raise ValueError(f"group mode 只能是 {list(GROUP_MODES)} 之一，收到 {mode!r}")
+    if not children:
+        raise ValueError("group 不能没有子自动化（空 group 会「一条都没部署」却报 ok）")
     gid = group_id or ("grp_" + uuid.uuid4().hex[:6])
     child_dicts = [c.raw if isinstance(c, Automation) else c for c in children]
-    group_node = {"id": "g1", "kind": "group", "name": name or "组合", "children": child_dicts}
+    group_node = {"id": "g1", "kind": "group", "name": name or "组合",
+                  "mode": mode, "children": child_dicts}
     return Automation.from_dict({
         "ir_version": ir_version,
         "id": gid,
@@ -776,6 +791,14 @@ def render_node(n: Mapping[str, Any]) -> str:
         return " ".join(p) + tail
     if kind == "set":
         return f'set {nid} var {n.get("var", "v")} {_dumps(n.get("value") or {})}{tail}'
+    if kind == "group":
+        # AF-Spec 文本没有 group 语法（af_spec._NODE_KINDS 里也没有）。落到下面的兜底
+        # 就会被渲染成 `pass g1`——一份「看起来合法、其实把整棵子树丢掉」的文本。
+        # 组合的文本形态归 NL（af_nl.render_automation），这里只能明确拒绝。
+        raise ValueError(
+            f"group 节点 {nid} 无法渲染为 AF-Spec 文本（子自动化 {len(n.get('children') or [])} 条会被静默丢弃）；"
+            "请用 af_nl.render_automation 或 af_apply.apply_group。"
+        )
     return f'pass {nid}{tail}'
 
 

@@ -14,6 +14,9 @@ from .models import (
     EDGE_KINDS,
     EDGE_PRIORITY,
     GROUP_IR_VERSION,
+    GROUP_MODE_PARALLEL,
+    GROUP_MODE_SEQUENCE,
+    GROUP_MODES,
     IR_VERSION,
     IRValidationError,
     NODE_KINDS,
@@ -36,6 +39,9 @@ from .models import (
 
 __all__ = [
     "GROUP_IR_VERSION",
+    "GROUP_MODES",
+    "GROUP_MODE_SEQUENCE",
+    "GROUP_MODE_PARALLEL",
     "IR_VERSION",
     "SUPPORTED_IR_VERSIONS",
     "is_supported_ir_version",

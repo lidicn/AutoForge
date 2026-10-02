@@ -219,7 +219,11 @@ def render_automation(auto: Automation) -> NLResult:
     for gnode in auto.nodes.values():
         if gnode.kind != "group":
             continue
-        lines.append(f"【组合 {gnode.name or gnode.id}】（{len(gnode.children)} 条子自动化 · 原子部署单元）")
+        lines.append(
+            f"【组合 {gnode.name or gnode.id}】（{len(gnode.children)} 条子自动化 · "
+            f"{'依次按序下发' if (gnode.mode or 'sequence') == 'sequence' else '声明为互不依赖、可并行下发'} · "
+            "原子部署单元：任一条不过则整组不入队）"
+        )
         covered.add(gnode.id)
         for i, child in enumerate(gnode.children, 1):
             res = render_automation(child)
@@ -269,7 +273,13 @@ def _walk(
         return
 
     covered.add(node.id)
-    lines.append(_indent(depth) + prefix + _node_text(auto, node))
+    if node.kind == "group":
+        # 组合节点由下方【组合】段统一展开。这里只留一个指针：既保证覆盖率计入，
+        # 又不会出现"未知节点 group + 下面又完整展开一遍"的双重叙述。
+        lines.append(_indent(depth) + prefix
+                     + f"组合「{node.name or node.id}」（{len(node.children)} 条子自动化，见下方组合段）")
+    else:
+        lines.append(_indent(depth) + prefix + _node_text(auto, node))
 
     for edge in _sorted_outgoing(auto, node.id):
         target = auto.nodes.get(edge.to)

@@ -58,6 +58,11 @@
       "properties": {
         "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$" },
         "kind": { "enum": ["on", "if", "do", "ask", "wait", "set", "pass", "group"] },
+        "mode": {
+          "enum": ["sequence", "parallel"],
+          "default": "sequence",
+          "description": "group 容器节点的子编排方式（v2.3/F9）：sequence=子自动化按数组序逐条下发、任一失败即停并回滚已入队项（依赖序即数组序）；parallel=子自动化彼此无依赖，全部尝试完再判定，失败同样整体回滚。非 group 节点带此字段一律忽略。单一真值源见 af_ir.GROUP_MODES。"
+        },
         "name": { "type": "string" },
 
         "trigger": { "$ref": "#/$defs/trigger" },
@@ -151,6 +156,14 @@
         {
           "if": { "properties": { "kind": { "const": "set" } }, "required": ["kind"] },
           "then": { "required": ["var"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "group" } }, "required": ["kind"] },
+          "then": {
+            "required": ["children"],
+            "properties": { "children": { "minItems": 1 } },
+            "description": "空 group 不许存在：它会「一条都没部署」却报 ok=True（假绿）。"
+          }
         }
       ]
     },

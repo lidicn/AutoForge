@@ -27,6 +27,9 @@ __all__ = [
     "SUPPORTED_IR_VERSIONS",
     "is_supported_ir_version",
     "NODE_KINDS",
+    "GROUP_MODES",
+    "GROUP_MODE_SEQUENCE",
+    "GROUP_MODE_PARALLEL",
     "EDGE_KINDS",
     "EDGE_PRIORITY",
     "VAR_TYPES",
@@ -61,8 +64,15 @@ def is_supported_ir_version(version: str) -> bool:
     """该 IR 版本是否被当前运行时接受（与 schema 的 ir_version.enum 同源）。"""
     return version in SUPPORTED_IR_VERSIONS
 
-#: 7 种节点（fn 为远期预留，G1 不实现）
+#: 8 种节点（fn 为远期预留，G1 不实现）
 NODE_KINDS = ("on", "if", "do", "ask", "wait", "set", "pass", "group")
+
+#: group 容器节点的子编排方式（v2.3/F9 第 3 步②）。schema 的 node.mode.enum 与此同源，
+#: 同步由 tests/test_af_ir_group_mode.py 钉住——历史上 kind/ir_version 两处枚举都靠人记，
+#: 结果 af_spec 的 _NODE_KINDS 已经漏了 group 而无人报红。
+GROUP_MODES: tuple[str, ...] = ("sequence", "parallel")
+GROUP_MODE_SEQUENCE = "sequence"
+GROUP_MODE_PARALLEL = "parallel"
 
 #: 6 种边（`on_error` 是 v0.2 新增的第 6 种）
 EDGE_KINDS = ("then", "yes", "no", "default", "on_timeout", "on_cancel", "on_error")
@@ -319,6 +329,8 @@ class Node:
     reserved: dict[str, Any] = field(default_factory=dict)
     # group 容器节点（v2.3/F9）：子自动化列表，原子部署单元
     children: tuple["Automation", ...] = ()
+    #: 仅 group 节点有意义（sequence|parallel）；None = 未声明，消费侧按 sequence 处理
+    mode: str | None = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Node":
@@ -349,6 +361,7 @@ class Node:
             value=data.get("value"),
             from_=data.get("from"),
             emit=EmitDecl.from_dict(data["emit"]) if data.get("emit") else None,
+            mode=data.get("mode"),
             children=tuple(Automation.from_dict(c, child=True) for c in data.get("children") or ()),
             reserved={k: data[k] for k in _RESERVED_NODE_KEYS if k in data},
         )

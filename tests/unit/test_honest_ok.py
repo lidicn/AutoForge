@@ -40,17 +40,24 @@ def _patch_sim_ok(monkeypatch):
     monkeypatch.setattr(af_service, "simulate", lambda ir, store=None: {"ok": True})
 
 
-class _Store:
-    """可控的回滚桩：记录调用，并可指定哪些 ref 回滚失败。"""
+class _Rejects:
+    """可控的回滚桩：记录被摘掉的 pending op_id，并可指定哪些摘不掉。"""
 
-    def __init__(self, fail_refs=()):
-        self.failed_refs = set(fail_refs)
-        self.rolled_back: list[str] = []
+    def __init__(self, fail_ids=()):
+        self.failed = set(fail_ids)
+        self.rolled: list[str] = []
 
-    def rollback_pending(self, ref):
-        if ref in self.failed_refs:
-            raise RuntimeError(f"persist 锁被占用：{ref}")
-        self.rolled_back.append(ref)
+    def __call__(self, store, op_id, reason=""):
+        if op_id in self.failed:
+            raise RuntimeError(f"persist 锁被占用：{op_id}")
+        self.rolled.append(op_id)
+        return {"ok": True, "rejected": op_id}
+
+
+def _reject(monkeypatch, fail=()):
+    stub = _Rejects(fail)
+    monkeypatch.setattr(af_service, "reject_pending", stub)
+    return stub
 
 
 @pytest.fixture
@@ -62,29 +69,72 @@ def submit_fails_on_second(monkeypatch):
     def fake_submit(store, source, payload, submitted_by):
         if seen:
             return {"ok": False}
-        seen.append(payload["name"])
-        return {"ok": True}
+        seen.append(payload["ir"]["id"])
+        return {"ok": True, "pending": f"op-{payload['ir']['id']}"}
 
     monkeypatch.setattr(af_service, "submit_pending", fake_submit)
     return seen
 
 
-def test_rollback_failure_reports_residue(submit_fails_on_second):
+def test_rollback_failure_reports_residue(monkeypatch, submit_fails_on_second):
     """回滚没干净时不许报 `deployed: []`——队列里还留着条目，那是半部署。"""
-    res = apply_group(_group(), store=_Store(fail_refs=["a_lamp"]), stage="apply")
+    _reject(monkeypatch, fail=["op-a_lamp"])
+    res = apply_group(_group(), store=object(), stage="apply")
     assert res["ok"] is False
     assert res["error"]["code"] == "SUBMIT_FAILED"
-    assert [f["ref"] for f in res["rollback_failed"]] == ["a_lamp"]
+    assert [f["ref"] for f in res["rollback_failed"]] == ["op-a_lamp"]
+    assert [f["child"] for f in res["rollback_failed"]] == ["a_lamp"]
     assert "persist 锁被占用" in res["rollback_failed"][0]["error"]
     assert res["deployed"] == ["a_lamp"]
 
 
-def test_clean_rollback_still_reports_empty_deployed(submit_fails_on_second):
+def test_clean_rollback_still_reports_empty_deployed(monkeypatch, submit_fails_on_second):
     """回滚全部成功 → 维持既有契约（deployed 为空），不因为新字段而变严。"""
-    res = apply_group(_group(), store=_Store(), stage="apply")
+    stub = _reject(monkeypatch)
+    res = apply_group(_group(), store=object(), stage="apply")
     assert res["ok"] is False
     assert res["rollback_failed"] == []
     assert res["deployed"] == []
+    # 摘除用的是 submit 回来的 pending op_id：真实 GraphStore 没有 rollback_pending，
+    # 而按 child.id 去删队列条目本来就删不到东西。
+    assert stub.rolled == ["op-a_lamp"]
+
+
+def test_submit_raising_still_rolls_back(monkeypatch):
+    """submit_pending 的拒绝形态是 raise（IR 非法/静态扫描不过/待批熔断）。
+
+    不接住它，异常穿出 apply_group，前面已入队的条目留在队列里——「原子部署」当场变半部署。
+    """
+    _patch_sim_ok(monkeypatch)
+    seen: list[str] = []
+
+    def raise_on_second(store, source, payload, submitted_by):
+        if seen:
+            raise af_service.ServiceError("拒绝归档：IR 未通过静态扫描", status=400)
+        seen.append(payload["ir"]["id"])
+        return {"ok": True, "pending": f"op-{payload['ir']['id']}"}
+
+    monkeypatch.setattr(af_service, "submit_pending", raise_on_second)
+    stub = _reject(monkeypatch)
+    res = apply_group(_group(), store=object(), stage="apply")
+    assert res["ok"] is False
+    assert "ServiceError" in res["error"]["message"]
+    assert stub.rolled == ["op-a_lamp"]
+    assert res["deployed"] == []
+
+
+def test_missing_pending_ref_is_not_deployed(monkeypatch):
+    """拿不到 pending op_id 就没有回滚把手，不能算已部署（铁律 #5）。"""
+    _patch_sim_ok(monkeypatch)
+    monkeypatch.setattr(
+        af_service, "submit_pending",
+        lambda store, source, payload, submitted_by: {"ok": True},
+    )
+    stub = _reject(monkeypatch)
+    res = apply_group(_group(), store=object(), stage="apply")
+    assert res["ok"] is False
+    assert "未返回 pending op_id" in res["error"]["message"]
+    assert stub.rolled == []
 
 
 def test_apply_ok_is_all_children_queued(monkeypatch):
@@ -93,18 +143,23 @@ def test_apply_ok_is_all_children_queued(monkeypatch):
     queued: list[str] = []
     monkeypatch.setattr(
         af_service, "submit_pending",
-        lambda store, source, payload, submitted_by: (queued.append(payload["name"]) or {"ok": True}),
+        lambda store, source, payload, submitted_by: (
+            queued.append(payload["name"]) or {"ok": True, "pending": f"op-{payload['ir']['id']}"}
+        ),
     )
-    res = apply_group(_group(), store=_Store(), stage="apply")
+    res = apply_group(_group(), store=object(), stage="apply")
     assert res["ok"] is True
     assert res["deployed"] == ["a_lamp", "b_lock"]
+    assert res["pending_refs"] == {"a_lamp": "op-a_lamp", "b_lock": "op-b_lock"}
     assert len(queued) == 2
+    assert res["group_mode"] == "sequence"
+    assert any("approve" in c for c in res["caveats"])
 
 
 def test_simulate_stage_has_no_queue_duty(monkeypatch):
     """stage=simulate 不入库，空集即成立——ok 不能因此变成 False（契约未变）。"""
     _patch_sim_ok(monkeypatch)
-    res = apply_group(_group(), store=_Store(), stage="simulate")
+    res = apply_group(_group(), store=object(), stage="simulate")
     assert res["ok"] is True
     assert res["deployed"] == []
 
