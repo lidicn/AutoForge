@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/ADM联动执行计划-AF.md`（DCD 出品，v2.5 联动落地版）
 > 记录人：AutoForge 开发
-> 核实基准：代码侧最新 commit = **`af2ee56`**（`e6d442a`/`0722828`/`9c6deb9` **只加测试**，`fc2bba6` 加的是**一门新门禁** `scripts/check_states_fanout.py` + `gates.sh` 一节 + 它的反例测试，`12cea64`/`dc8ac0d`/`af2ee56` 是动 `src/` 的三笔：时钟口径 + 三条判据（+11/−2）/ 真机闸门在 MCP 面两处 fail-open（4 文件 +196/−24）/ 观察期恢复路径丢 `auto_rollback` 旗子（+21/−8）。§二/二之二…二之十七 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
+> 核实基准：代码侧最新 commit = **`4a3e3b1`**（`9a83ead`+`4a3e3b1` 是**参数注入门禁**那一组：门禁脚本 + `gates.sh` 新节 + 22 条反例 + 一处真缺陷（`af_mcp._t_health` 从不探它服务的 store，+3/−1）+ 双轨对拍两条**带理由**的现场豁免，且门按 `store`/`readonly` **参数表**收、`clock` 有意不收；`e6d442a`/`0722828`/`9c6deb9` **只加测试**，`fc2bba6` 加的是**一门新门禁** `scripts/check_states_fanout.py` + `gates.sh` 一节 + 它的反例测试，`12cea64`/`dc8ac0d`/`af2ee56` 是动 `src/` 的三笔：时钟口径 + 三条判据（+11/−2）/ 真机闸门在 MCP 面两处 fail-open（4 文件 +196/−24）/ 观察期恢复路径丢 `auto_rollback` 旗子（+21/−8）。§二/二之二…二之十八 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
 > 契约真源：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
 > 交叉裁定：`20260929-ADM三仓联动七问`、`20261001-AF-homesdk接入四问`、`20260930-AutoForge后续优化三项`、`20261001-DB目标模式与AF三题` §H、**`20261002-homesdk记账与AF-DB-DPP六件-裁定`**（本轮落地依据，§一 末）
 
@@ -24,6 +24,7 @@
 | 真机路径口径对账（计划外补刀） | **已交付** | 接缝盘点的第二个产物：`live_run`（HTTP `/api/live/run` 与 MCP `af_live_run` 共用）此前用 `build_runtime(graph)` 的**仿真锚点**当墙钟用——同一次真机下发的 `trigger_time`/`audit.at`/canary `at` 与 `at:19:30` 判定全落在 2026-09-14 08:00，而 CLI 的 live/dry-live 分支早已取家庭墙钟。`12cea64` 统一为"锚在真实的现在、仍可推进"的虚拟钟并开 `clock=` 入参；`build_runtime(` 全部 8 个站点逐一点过，其余无 clock 的都在仿真面上（锚点是设计）。三次变异 `3 failed`/`1 failed`/`1 failed`（§二之十五） |
 | 真机入口面的闸门对账（计划外补刀） | **已交付两处 / 第三处待裁** | 接缝盘点的第三个产物：同一盘点前两条落在 `af_cli`/`af_service`，这条落在 **HTTP 与 MCP 两个入口面**。实测两处 fail-open——① `af_mcp._t_live` 没递 `store` ⇒ Tier-0 设备保护（`device_acl.json`）与实体健康在 Agent 路径上整个失效，人点被拦的设备 Agent 能写；② events 上限写在端点层 ⇒ MCP 三面（`af_live_run`/`af_simulate`/`af_sessions`）无上限。修法把判据上收到 `af_service`（两条入口共用的咽喉），`MAX_REPLAY_EVENTS` + 三个服务层调用点，`_t_live` 补 `store=store`（`dc8ac0d`）。反真空靠一条**正向对照**（无 ACL 时 MCP 路径真下发）。三次变异 `1 failed, 18 passed`/`2 failed, 17 passed`/`2 failed, 17 passed`（§二之十六）。**同批抓到的第三件（单写者租约只装 HTTP 面）不属 AF 可自决**：它要给 DB 新增一个可见的拒收模式 ⇒ 投裁定（§五 第 10 件），代码未动 |
 | 生产态验证证据与 canary 策略位盘点（计划外补刀） | **已交付** | 接缝盘点第六条命中，也是**第三条真缺陷**：`canary: {duration: "15m", auto_rollback: false}` 是"只观察、别自动反向下发"的显式选择，但 `pending_canary` 挂起元信息没存这个旗子 ⇒ 观察期结束的 `resume` 分支直接 `wrapped.rollback()`，绕开 `CanaryGuard.auto_rollback` 那一层判断；无 duration 的立即检查路径却尊重它。方向是"比要求的更自动"，且这条 resume 是挂起观察的**常规**唤醒路、不是崩溃恢复专用。`af2ee56` 把旗子带过接缝（缺键按 True，旧快照行为不变）、恢复侧改用真 `CanaryGuard.check_and_rollback`（回滚与否只留一处实现），不回滚仍记 `failed`+`entity_drift` 并在 reason 写明"未回滚"。同批盘了 `af_watch` 三个喂入点的 status 档对齐（shadow/立即 canary/冲突各在其位），并登记一处同名碰撞（`af_audit.record_conflict` vs `af_watch.record_conflict`，非缺陷）。三次变异各 `1 failed, 25 passed`（§二之十七） |
+| 参数递错那一族升成常驻门禁（计划外补刀） | **已交付，且抓到第四处真缺陷** | 前六条同族站点有五条靠手扫；这一批把判据做成 `scripts/check_param_injection.py` + `gates.sh` 新节（CI 的 `quality-gates` 跑的就是 `bash gates.sh` ⇒ 本机与 runner 同口径判红）。按**参数表**收（`store`/`readonly`），`clock` **有意不收**（默认值是仿真锚点、是设计，§二之十五）。首跑抓到 `af_mcp._t_health` 从不探它服务的 store ⇒ Agent 面 `store_ok` 永远 `null` 而 HTTP 面是 `true`（读面证据缺失，铁律 #5）；五处变异各红一次，读数见 §二之十八 |
 | F4 ③ / F7 前端残留 | **已收口** | `/evidence` 生产态证据视图上线；真机下发的事件回放与撤销按钮端到端真点通（读数见 §一末） |
 | GitHub CI | **首次可读，且从"永久红"修到连续绿；读数路已成脚本** | 实测 run 1–27 `conclusion` 全为 `failure`（建仓以来一条没绿过），三个红因全在版本/判据层而非产品逻辑：pydantic-v2-only 的 `Field(max_length=)` 让 CI（pydantic 1.10.12）**0 条测试跑过**、undefined-name 门禁自己用了 3.12+ 的 `ast.TypeAlias`（CI 是 3.11）、真 vhass 的 skip 判据问"包能否 import"而非"插件注册了没"。三条各钉能变红的反例后，run 28 五作业全 `success`，CI 与本机通过/跳过数逐字相同（2621/51）。**run 31（守卫那次提交）五作业再次全 `completed/success`**，且 runner 侧给出安装步的实测读数 `fetch 主机读数：npmmirror=0 npmjs=87`。读数路径固化为 `scripts/gh_ci_status.py`（`runs`/`jobs`/`annotate`/`log`，纯标准库、只 GET、不打印凭证；`log` 先停 302 再无凭证取正文，免得把 token 带给日志存储域）。读数与残留见 §二之五、§二之八。**run 36（commit `3144879`，含架构门禁口径修复那批）五作业再次全 `completed/success`，runner 侧读到 `Baseline lock: 96 modules, 0 violations` 与 `Contracts: 1 kept, 0 broken`** ⇒ CI 架构门的覆盖面与本机同口径已是实测，不再是"已修 + 待复测"（§二之十一）。**run 39（`daa3af7`）与 run 40（`cd5e1bc`）也已 `completed/success`**；**run 41（`1474a7f`）、run 42（`4a63b46`）、run 43（`3d25ed0`）三作业面全绿**，其中 run 43 五作业逐条 `completed/success`（`adm-linkage-contracts`/`ui-typecheck-build`/`quality-gates`/`pytest`/`layering-gates`，`failed_steps` 全空），runner 侧正文读数 `2652 passed, 51 skipped, 1 warning in 76.98s` 与本机 §二之十五 逐字相同，`quality-gates` 正文含新门禁那行 `✓ 状态源扇出门禁干净（扫描 96 个文件…）` ⇒ 连续绿已到 **10 条（run 34–43）**，且新门禁在 runner 上的口径与本机一致（不是只在本机生效的软门） |
 | DCD 20261002 §一（CI 锁文件源）| **裁定 (b) 已落地并已在 runner 上取到读数** | 只按原文写 `--registry=https://registry.npmjs.org` 经实测是**空操作**（fetch 87+87 行仍在 `registry.npmmirror.com`/`cdn.npmmirror.com`），必须配 `--replace-registry-host=always`；安装步另加"主机自证"守卫（CI 绿不能证明没吃镜像）。逐字节对账 137/137 `integrity` MATCH ⇒ 锁文件字节未动。§二之七 末尾"本机 npm 11.9.0 / runner 10.x，只有 push 之后才知道"的残留**已销账**（runner `npmmirror=0 npmjs=87`）。回执已投 DCD（含 §四 判例 2 的证据更正：`@types/node` tarball 两源逐字节相同、根目录差异不是重打包痕迹）。见 §二之七、§二之八 |
@@ -1352,6 +1353,102 @@ DRIVER_RC=0
   tests 156 文件（本批未新增测试文件）、主题白名单 7、包标记 96、状态源扇出 96 文件、import 冒烟 0
 - 生产代码：`af_executor.py` +21/−8；`docs/audit` 仍无第八轮，`decisions` 无新裁定
 
+## 二之十八、"参数递错"那一族升成常驻门禁：`check_param_injection.py`（`9a83ead` + `4a3e3b1`）
+
+### 为什么这一族该有门，而不是再手扫一次
+
+前面六条同族站点里有五条是"顺着验收点手动追问这根线谁在测"追问出来的（§二之十三 / 之十五 /
+之十六 / 之十七）。它们的共同机制只有一个：**带默认值的关键参数少递一个，不报错、不崩，只让
+那条入口面的闸门静默退化成"没有这道闸门"**。手扫的产物只能是"这一批修好了"，判不住下一次
+少写一个关键字。所以这一批把判据做成 `scripts/check_param_injection.py` + `gates.sh` 一节
+——CI 的 `quality-gates` 作业跑的就是 `bash gates.sh`，本机绿一次，runner 就同口径红得起来。
+
+### 门第一次跑就抓到第二处真缺陷：Agent 面的健康读数**从不探**它服务的 store
+
+`af_mcp._t_health(store, args)` 写的是 `return svc.health()`，而 HTTP 面 `af_api.py:381` 是
+`return svc.health(store)`。同一次健康检查，HTTP 给 `store_ok: true`、Agent 给 `store_ok: null`
+——签名里 `store: GraphStore | None = None` 那句"为 None 时 ok=True 保持向后兼容"就是把它当成了
+设计。与 §二之十六 那两件的差别在**代价由谁承担的形状**：那两处是写面闸门（Tier-0 设备保护、
+events 上限），这一处是**读面的证据缺失**：`null` 被下游读成"这一栏没问题"，正是 铁律 #5 的假安心
+（EXEMPT ≠ VERIFIED）。修法是递 store，不改 `health` 的向后兼容语义。
+
+**判据与修复同批写，所以这里的反向证据是变异而不是"先红"**（不含糊过去）：把 `svc.health(store)`
+退回 HEAD 形状的 `svc.health()` 之后，`test_dispatch_health_probes_the_store_it_serves` **RC=1**
+`1 failed in 2.36s`，同一时刻门禁与 `test_repo_src_is_clean` 也各自红。
+
+### 口径：只收"漏传即 fail-open"的参数，`clock` 有意不收
+
+- `TARGET_PARAMS = ("store", "readonly")`。第二参数是本批把门从"store 一面"升成"这一族"时加的：
+  `serve` 起 `build_app(..., readonly=…)` 漏 `readonly` 是 §二之十三 记录的本族最早一例，形状与
+  store 完全相同。**泛化不是装饰**：M-3 把 `readonly=readonly` 摘掉，门禁当场
+  `✗ …af_cli.py:1376: `af_api.build_app` 的签名里有 `readonly` 形参，这一处没递`。
+- **`clock` 有意不收**，且这是判据的一部分而不是遗漏：`build_runtime(graph)` 的默认时钟是**仿真锚点**，
+  那是设计（§二之十五 的结论是"live 路径必须锚墙钟"，不是"处处递 clock"）。按 `clock` 收会对 src 里
+  每一处仿真面喊狼来了，噪音会淹掉真漏传。真机时间轴的判据另在 `tests/unit/test_af_live_run_clock.py`，
+  本批用 `test_clock_is_deliberately_not_a_target` 把"为什么不收"钉成一条会随判据一起红的断言。
+- 目标 = **模块级**函数（首参非 `self`/`cls`）且形参表带某个关键参数；按 **(模块, 函数名)** 解析。
+  第一版按裸名查签名，把 `store.snapshot([...])`、`_direction(snapshot, ...)` 这类"变量恰好和函数
+  同名"的正常调用判成红——**28 处误报**（真缺陷 1 处混在里面）。重写后降到 3 处（1 真 + 2 合法）。
+  一堵会自己响的墙必须先做到不误响，所以 `_not_flagged` 那几条反例是本门的主干，不是边角。
+- 认三种调用写法：`别名.X(...)`（别名由 `from . import af_service as svc` 解析）、`X(...)`（只按
+  同模块或显式 `from .mod import name` 解析）、转发 `_svc(svc.X, ...)`（第一实参必须是**函数引用**，
+  此时关键参数要出现在转发关键字里）。`obj.method(...)` 一律不认（接收者静态判不出）；
+  `*`/`**` 解包放过。**已知漏判面**（不做控制流分析、`import *` 不解析、`importlib` 动态取函数不在射程）
+  写在脚本 docstring 里，不写成"已全覆盖"。
+- 现场豁免的形状是 `# param-injection: exempt(理由)`（调用行或紧邻上一行），**理由不能空**：
+  空理由的豁免和没有门禁没区别，且会随时间变成无人敢删的注释。M-5 就是把理由删空验证它还红。
+  本批从 `store-injection` 改名成 `param-injection`，并留一条 `test_old_marker_name_does_not_clear`
+  ——改名后旧前缀**不再作数**，豁免必须能被一次 grep 数干净。
+
+### 两处现场豁免不是"绕过"，是"这一面确实没有存储根"
+
+`af_vhass/dual_track.py:80,81` 的 `simulate_track("fake"/"hifi", …)`：`simulate_track` 的 `store`
+只用来回填报告里的 `root` 字段，双轨对拍是纯仿真面、拿不到也不需要存储根。留空是"没这一栏"，
+不是"验过了"——所以标记写的是理由，不是 `noqa`。
+
+### 能变红实测（铁律 #8，五处变异各钉一次）
+
+```
+sha256(工作区): {'af_mcp.py': 'bed6d41c30d7a228', 'dual_track.py': 'b19a6d64eadf3fcd', 'af_cli.py': '6d8183355a31bb82'}
+M-1 `_t_health` 退回 `svc.health()`        [af_mcp.py newline=CRLF]
+    gate  RC=1 | ✗ 参数注入门禁发现 1 处漏传（扫描 96 个文件）：af_mcp.py:102 `af_service.health` … `store` 形参
+    test_af_mcp::…probes_the_store_it_serves  RC=1 | 1 failed in 2.36s
+    test_param_injection_gate::test_repo_src_is_clean  RC=1 | 1 failed in 2.71s
+M-2 `_t_live` 少递 `store=store`（§二之十六 原缺陷形状）  gate RC=1 | af_mcp.py:259 `af_service.live_run` … `store`
+M-3 `serve` 少递 `readonly=readonly`（泛化的牙齿）        gate RC=1 | af_cli.py:1376 `af_api.build_app` … `readonly`
+M-4 删掉 dual_track 的豁免标记            gate RC=1 | dual_track.py:80 `af_service.simulate_track` … `store`
+M-5 豁免理由写空 `exempt()`                gate RC=1 | dual_track.py:80 同上（空理由不认）
+restored identical af_mcp.py: True / dual_track.py: True / af_cli.py: True
+DRIVER_RC=0
+```
+
+### 这批自己踩到的两个坑，比判据更值得留下
+
+1. **变异驱动用 `git checkout` 恢复 = 自毁**。上一版驱动恢复步骤写的是 `git checkout -- <file>`，
+   而这一批要恢复的是**未提交**的工作区改动 ⇒ checkout 把 `_t_health` 的修复一起抹回了 HEAD。
+   抓到它的是驱动末尾那句 `assert digest(path) == orig[path]`，报 `AssertionError: 恢复失败：af_mcp.py`；
+   按记录的 sha256 重新落回同一份字节（`bed6d41c30d7a228`）才继续。**口径**：驱动一律用内存字节备份恢复，
+   不碰 git。
+2. **编辑工具把整份 CRLF 文件重写成 LF**。`af_mcp.py` 入库是 CRLF，一次编辑后
+   `git diff --numstat` 报 **929/927**——不是"改了 3 行"，是全文件换行被换掉。本仓无 `.gitattributes`
+   且 `core.autocrlf=false`（§二之十六 记过一次），所以这种污染**不会让任何东西变红**，只会污染 blame。
+   修法与验证：从 HEAD 取回、按 `\r\n` 锚点重落那一处，`git diff --numstat` 回到 **3/1**，
+   并逐文件确认 `CRLF pairs 929 / bare LF 0`。**推论给判据用**：变异驱动的锚点必须按各文件实际换行
+   匹配，且匹配数 != 1 就中止——LF 锚点打在 CRLF 文件上会匹配 0 处，驱动会"没改动、照样绿"地假绿。
+
+### 本批全链读数（HEAD `4a3e3b1`，全部当场跑出）
+
+- 门的首跑（HEAD `a94ca71` + 未修 `_t_health`）：**RC=1** 三处命中
+  （`af_mcp.py:100` 真缺陷 + `dual_track.py:78,79` 合法），修完 + 加标记后：**RC=0**
+  `✓ 参数注入门禁干净（扫描 96 个文件，96 个带 store/readonly 的模块级函数，现场豁免 2 处）`
+- `python -m pytest -q` → **RC=0**，`2681 passed, 51 skipped, 1 warning, 7 subtests passed in 87.66s`
+  （2658 → +23：门禁反例 22 条 + Agent 面健康判据 1 条）
+- `GATES_PYTHON=python bash gates.sh` → **RC=0**：AST 0 新增/基线 104、棘轮 104/104、
+  undefined-name src 96 + tests **157** 文件（本批多一个测试文件）、主题白名单 7、包标记 96、
+  状态源扇出 96、**参数注入 96 文件/96 签名/豁免 2**、import 冒烟 0
+- 提交两笔：`9a83ead`（门禁 + `_t_health` 修复 + 判据，6 文件）与 `4a3e3b1`（同批把门按参数表泛化，
+  含脚本/测试改名与标记前缀改名）；`docs/audit` 仍无第八轮，`decisions` 无新裁定
+
 ---
 
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
@@ -1394,6 +1491,7 @@ DRIVER_RC=0
 | 本批之二十一（真机入口面的两处 fail-open，`dc8ac0d`） | 接缝盘点第三条命中：`af_mcp._t_live`（`:254`）调 `svc.live_run` 时**漏递 `store`** ⇒ Tier-0 设备保护与实体健康视图在 Agent 路径上整个不生效（人点同一个设备被 400 拦下并给原话，Agent 说同一句话直接把 `light.turn_off` 打到真设备）；events 上限此前在**端点层**（`a5c8aa9` 只补齐了 HTTP 三条）⇒ MCP 三面（`af_live_run`/`af_simulate`/`af_sessions`）无上限。修法一律走咽喉、不按面重抄：`af_service.MAX_REPLAY_EVENTS` + `_check_events_cap()` 在 `simulate_track:884`/`create_session:1472`/`live_run:1676` 三处调用，`af_api` 删自家常量只留指针注释，HTTP 侧 `_svc` 把 `ServiceError.status` 映射回 422（状态码一个没变）。**上限调用点在 `live_run` 第一句**是被测出来的：先判策略后判形状时，超上限请求在"live 未启用"环境得 403 而非 422，`test_event_cap_covers_every_events_endpoint[/api/live/run]` 当场红 ⇒ 顺序改为"形状判据先于策略判据"，既有断言未动。新判据 `tests/unit/test_af_live_entry_seams.py` 5 条，首条为**正向对照**（无 ACL 时 MCP 真下发 `light.turn_off`），否则两条守卫用例会红在"MCP 路径压根跑不通"上；三次变异 `1 failed, 18 passed`/`2 failed, 17 passed`/`2 failed, 17 passed`（RC 均 1，`restored identical: True` 逐字节自证）。**顺带一条口径事实**：`af_mcp.py`/`af_api.py` 入库 CRLF、`af_service.py` LF，本仓无 `.gitattributes` 且 `core.autocrlf=false` ⇒ 跨文件同一种换行的锚点替换**匹配 0 处**，驱动第一版就假绿在这里（未统一全仓换行：大 diff 污染 blame 且与验收点无关）。全链：`pytest -q` **2657 passed / 51 skipped RC=0（78.97s）**、`gates.sh` RC=0（undefined-name src 96 + tests **156**）。§二之十六 新篇 |
 | 本批之二十二（同批第三件定性为跨仓失败面，投 DCD） | `serve` 的单写者租约（`af_cli.py:1365` `FileLock(store_root/".serve.lock")`）与 `build_app(readonly=…)` 只在 HTTP 面（`af_api.py:344` 及 8 个写端点 `Depends`），`af_mcp.py` 对 `readonly|lease|acquire` **零命中** ⇒ MCP 进程可在 serve 已持写权时同时开真机写面。**与前两件的差别不在是不是缺口，在代价由谁承担**：前两件是把 AF 已承诺的策略装到漏掉的入口（只会更严、退路一条 revert），这一件要给 DB 新增一个可见的拒收模式（返回什么码、`check` 还是 `acquire`、是否只拦 live）⇒ 属"契约面改动走裁定"。申请投 `关键决策部/inbox/20261003-AF-单写者租约只装了HTTP面MCP真机写未受约束-决策申请.md`（§五 第 10 件，A/B/C，AF 建议 A=check-not-acquire + 只拦 live + `READONLY_DEGRADED:` 前缀 + 登记进契约表），**代码一个字节未动**。同批文档侧：核实基准 → `dc8ac0d`、§〇 加"真机入口面的闸门对账"行、§六 那条"未盘"残留收窄为两处已修 + 一件待裁 |
 | 本批之二十三（`af_watch` 那半张盘点：观察期把 `auto_rollback` 丢在接缝上，`af2ee56`） | 第三条真缺陷、也是本族第一次落在**安全策略位**上：`canary: {duration: "15m", auto_rollback: false}` 的旗子在 `pending_canary` 挂起元信息里**没有对应键** ⇒ `resume(kind="on_timeout")` 重建 `CanaryResult` 后用 `SimpleNamespace` 假 guard、直接 `wrapped.rollback(adapter)` 无条件反向下发；同 IR 无 duration 的立即检查路径却走 `CanaryGuard.check_and_rollback` 尊重它。错向是"比操作员要求的更自动"，`af_scanner` P1-2 只要求"配了 canary"不要求旗子为真 ⇒ 生产可达；且该 resume 是挂起观察的常规唤醒路（`pending_canary` 随实例快照持久化），不是崩溃恢复专用。修法三条：挂起元信息加 `auto_rollback`（读侧 `… .get("auto_rollback", True)`，**缺键按 True**=旧快照行为不变、不新增迁移），恢复侧改用真 `CanaryGuard(states, auto_rollback=旗子)` 并调 `check_and_rollback()`（回滚与否只留一处实现，两路不可能再分叉），不回滚照旧记 `failed`+`entity_drift` 且 reason 写"未回滚，留给人判断"（铁律 #5）。新判据 `test_observe_window_resume_honours_auto_rollback_false` 修复前先红（`1 failed, 9 passed` RC=1，红在调用序列多出一个 `light.turn_off`），正向对照用同文件既存的 `…_rolls_back_on_drift`（真出 turn_off）；三次变异（不带旗子 / 绕开 guard / 读了又覆盖）各 `1 failed, 25 passed` RC=1、`restored identical: True`。同批盘完 `af_watch` 三个喂入点的 status 档对齐（shadow 只在 MATCHED/MISSED 喂、立即 canary 三档齐、冲突 ALLOW 不喂），并登记 `af_audit.record_conflict` 与 `af_watch.record_conflict` 的同名碰撞为**非缺陷**。全链：`pytest -q` **2658 passed / 51 skipped RC=0（94.77s）**、`gates.sh` RC=0（undefined-name src 96 + tests 156）；`af_executor.py` +21/−8 |
+| 本批之二十四（参数递错那一族升成常驻门禁，`9a83ead`+`4a3e3b1`） | 第六条同族站点不再手扫：`scripts/check_param_injection.py` 静态判**调用了"签名里带关键参数且有默认值"的模块级函数却没递那个参数**，`gates.sh` 加一节 ⇒ CI `quality-gates` 继承为硬门。参数表 `TARGET_PARAMS = (store, readonly)`：`store` 是 §二之十六 那两处，`readonly` 是 §二之十三 记的本族最早一例；**`clock` 有意不收**并用 `test_clock_is_deliberately_not_a_target` 钉住理由。门首跑（HEAD `a94ca71`）报三处 ⇒ **第四处真缺陷** `af_mcp._t_health` 写的是 `svc.health()`（HTTP 面 `af_api.py:381` 早递了 store），Agent 面健康读数从不探自己服务的 store ⇒ `store_ok: null` 被下游读成"没问题"（铁律 #5 的假安心，与 §二之十六 那两处写面闸门同形状、不同代价）。新判据 `test_dispatch_health_probes_the_store_it_serves` 与修复同批写，反向证据是 M-1 变异（退回 HEAD 形状）`1 failed in 2.36s` RC=1。反例测试 22 条含**不误响**主干：(模块,名) 解析、`obj.method()` 不判、`*`/`**` 解包放过、`def f(store, *rest)` 位置数得出、转发 `_svc(svc.X, …)` 要带关键字、豁免必须有理由且旧前缀不再作数。现场豁免 2 处（`af_vhass/dual_track.py:80,81` 纯仿真对拍）。**两个自踩的坑记进 §二之十八**：变异驱动用 `git checkout` 恢复 ⇒ 把**未提交**的修复一起抹回 HEAD（`AssertionError: 恢复失败：af_mcp.py` 抓到，按 sha256 重新落回）；编辑工具把 CRLF 的 `af_mcp.py` 整文件重写成 LF（`git diff --numstat` 929/927 是唯一读数，修回后 3/1）⇒ 驱动锚点必须按各文件实际换行匹配、匹配数≠1 即中止。全链：`pytest -q` **2681 passed / 51 skipped RC=0（87.66s）**、`gates.sh` RC=0（undefined-name src 96 + tests **157**、参数注入 96 文件/96 签名/豁免 2） |
 
 
 ## 四、审计侧
@@ -1430,7 +1528,7 @@ DRIVER_RC=0
 - 洞察面板的**投递源仍是本机手投**：§二之四的两条提案是用 `PersistentInsightSink.submit()` 直接写进 dev store 的，走的是"落盘之后的那一段"。本批把**桥回调 → 落盘 → `/api/insights/pending`** 这一段用契约形状的假消息钉住了（`test_contract_shaped_insight_reaches_the_panel_with_its_accounting`，注入假 client、真桥、真队列、真 API），但**真 paho + 真 broker** 那一段仍未端到端（本机无 paho-mqtt 且禁 pip install），面板的空态文案因此把"桥未上线/没订到主题"列为四种成因之一，而不是当作已验证链路。
 - **契约表本身还欠三行改动，且都在 MA/DCD 手里**（§五 第 7 件）：`ma/insights` 的载荷行没有 `conf`、没有稳定的假设 id、也没有 IR 候选（AF 的 `intent`）。AF 已按可回退口径落地（别名 + 缺报记账），但只要契约行不改，MA 侧随时可能按自家形状发而 AF 无从判定"这条到底该不该有 conf"；面板上也因此会长期是「无 IR（不能批准）」。**这不是 AF 能单方面收口的残留**，登记以免被读成"入向已经全对齐"。
 - 第 5 步 ② 的「顺序追加」子句**未做**（不是漏，是不在裁定前擅自动存储格式）：af_persist 现为整文件原子重写，追加写会同时撞"不改格式头"与第五轮的有界化修法两面。校验和/坏文件跳过/原子替换三条已落，剩这一条等 DCD 定性（§五 第 9 件，判据与三条理由见 §二之十二）。
-- **接缝类判据：多路镜像这一族已结清，参数递错那一族扫过六条**：本批把"同一份值手抄进多条属性路径"这一族做成门禁（`scripts/check_states_fanout.py`，§二之十四 的 AST 盘点显示它覆盖的是 src 全集，不是抽样）。另补的四处判据属**参数递错**类（serve→`build_app` 的 `readonly`、CLI 起桥递出去的四样 kwargs、`_make_runtime` 的起桥条件与 clock 归属、`live_run` 的时钟锚点），靠的是顺着验收点手动追问"这根线谁在测"。第四条不只是"补一条测试"，它**实测出一个真缺陷**：两条真机路径对同一次下发给出两套时间轴（§二之十五，`12cea64` 已修）。同族里还剩 TOOLS→caps 之外有没有第二次工具名单映射**未做清单化盘点**，也没有对应门禁能判红——这类缺口不会让任何东西变红，只会让该红的不红，与 §二之十一 同族。**第五条已在上一批（§二之十六）扫掉并抓到两处真缺陷**（`af_service` 的 store 注入 + events 上限只装 HTTP 面，`dc8ac0d`，§二之十六）；同批扫到的第三处（单写者租约只在 HTTP 面）因涉及给 DB 新增可见拒收模式而投裁定（§五 第 10 件），代码未动。**第六条 = `af_watch` 的观察者装配，本批扫掉并抓到第三条真缺陷**（观察期把 `auto_rollback` 丢在接缝上，`af2ee56`，§二之十七）。已扫的**六条**覆盖 `af_cli` 的 serve/起桥/runtime 装配三面 + `af_service` 的 clock 与 store/cap 一面 + `af_watch` 的三个喂入点一面；`af_watch` 侧本批已盘（§二之十七，抓到第三条真缺陷：观察期把 `auto_rollback` 丢在接缝上）。同族里还剩 **TOOLS→caps 之外有没有第二次工具名单映射**未清单化，且这类洞没有门禁能判红。登记在此，避免被读成"接缝已系统扫过"。
+- **接缝类判据：多路镜像这一族已结清，参数递错那一族扫过六条**：本批把"同一份值手抄进多条属性路径"这一族做成门禁（`scripts/check_states_fanout.py`，§二之十四 的 AST 盘点显示它覆盖的是 src 全集，不是抽样）。另补的四处判据属**参数递错**类（serve→`build_app` 的 `readonly`、CLI 起桥递出去的四样 kwargs、`_make_runtime` 的起桥条件与 clock 归属、`live_run` 的时钟锚点），靠的是顺着验收点手动追问"这根线谁在测"。第四条不只是"补一条测试"，它**实测出一个真缺陷**：两条真机路径对同一次下发给出两套时间轴（§二之十五，`12cea64` 已修）。同族里还剩 TOOLS→caps 之外有没有第二次工具名单映射**未做清单化盘点**，也没有对应门禁能判红——这类缺口不会让任何东西变红，只会让该红的不红，与 §二之十一 同族。**第五条已在上一批（§二之十六）扫掉并抓到两处真缺陷**（`af_service` 的 store 注入 + events 上限只装 HTTP 面，`dc8ac0d`，§二之十六）；同批扫到的第三处（单写者租约只在 HTTP 面）因涉及给 DB 新增可见拒收模式而投裁定（§五 第 10 件），代码未动。**第六条 = `af_watch` 的观察者装配，本批扫掉并抓到第三条真缺陷**（观察期把 `auto_rollback` 丢在接缝上，`af2ee56`，§二之十七）。已扫的**六条**覆盖 `af_cli` 的 serve/起桥/runtime 装配三面 + `af_service` 的 clock 与 store/cap 一面 + `af_watch` 的三个喂入点一面；`af_watch` 侧本批已盘（§二之十七，抓到第三条真缺陷：观察期把 `auto_rollback` 丢在接缝上）。同族里还剩 **TOOLS→caps 之外有没有第二次工具名单映射**未清单化。**这一族的判据已常驻**（§二之十八：`scripts/check_param_injection.py`，按 `store`/`readonly` **参数表**收，`gates.sh` 新节 ⇒ CI `quality-gates` 同口径判红），所以"这类洞没有门禁能判红"从本批起只对**未被参数表收下的形状**成立（`clock` 属"默认即设计"、`obj.method()` 与 `**` 解包属静态判不出）。登记在此，避免被读成"接缝已系统扫过"。
 - `BoundedCache` 基类收敛（第五轮遗留）与"实现间契约不一致"的**静态**门禁：本轮以契约测试覆盖，未做静态门禁。
 - 证据面板的 `evicted_automations` 只做"提示有自动化被挤出内存"，未做跨进程持久化——**注意这与 ④A 不是同一个问题**：④A 裁的是 MA 洞察提案队列（已持久化），证据档的进程内清零仍是遗留。
 - `SessionViewResponse` 的**应答成功分支**（本批已收口，见下方"已收口"与 §二之九）：原登记为 EXEMPT——`case04_ask_timeout` 带 seed + event 建会话后 `asks=0`（分支未走到挂起 ask），只实测到 404 失败面；顶层 9 键靠同族 `POST /sessions`/`GET /sessions/{sid}` 的同一 `_session_view` 坐实。
