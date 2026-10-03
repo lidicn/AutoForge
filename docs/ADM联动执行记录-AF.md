@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/ADM联动执行计划-AF.md`（DCD 出品，v2.5 联动落地版）
 > 记录人：AutoForge 开发
-> 核实基准：代码侧最新 commit = **`6d7d2a1`**（已推 origin/main；本记录与后续文档提交只改文档，不再改判据）。§二/二之二…二之九 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
+> 核实基准：代码侧最新 commit = **`b7b158e`**（`git ls-remote origin main` → `b7b158e464cf754c19a451bbb3eda9013bb10d87`，与本机 HEAD 一致；本记录与后续文档提交只改文档，不再改判据）。§二/二之二…二之十一 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
 > 契约真源：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
 > 交叉裁定：`20260929-ADM三仓联动七问`、`20261001-AF-homesdk接入四问`、`20260930-AutoForge后续优化三项`、`20261001-DB目标模式与AF三题` §H、**`20261002-homesdk记账与AF-DB-DPP六件-裁定`**（本轮落地依据，§一 末）
 
@@ -152,7 +152,7 @@ to_house_iso(0) → 1970-01-01T08:00:00        RC=0
 |--------|--------|----------|
 | ① 单写者租约，抢不到锁降级只读（裁定 A） | serve 启动 `try_acquire` 失败→只读 | `src/autoforge/af_cli.py:1365` `readonly = not _lock.try_acquire()` → `:1375` 传给 `build_app(..., readonly=readonly)`；`af_api.py:340-348` `_readonly_guard`，挂在 `:449 /api/build`、`:457 /api/bind`、`:465 /api/sim`、`:528 /api/spec/compile`、`:696 /api/live/run`、`:716 /api/undo/{deploy_id}`（铁律 #6 写面 503） |
 | ② `af_persist` 加校验和（裁定 B，不做全量 eventlog） | 补 SHA256，对齐 `af_store` | `src/autoforge/af_persist.py:40` `_SHA256_KEY = "_sha256"`、`:78` 计算、`:84` 校验（无字段=旧格式视为通过，向后兼容） |
-| ③ import-linter 分层（裁定 B→A 渐进：先告警） | 配置 + 违规清单 ≈0 | `pyproject.toml:79-95` `[tool.importlinter]` 契约 "Service boundary never imported by kernel"；实测 `lint-imports` → **Contracts: 1 kept, 0 broken**；`.github/workflows/ci.yml:91-92` 的 `continue-on-error: true` 是**观察窗**（DCD 观察裁定要求保留，不是假绿），真正的架构门禁是 `scripts/check_imports.py` → `Baseline lock: 96 modules, 0 violations`（本回合 +1 = 新增 `af_insight_queue`；括号里的模块数是读数，判红的是 `violations != 0`） |
+| ③ import-linter 分层（裁定 B→A 渐进：**两档都已落**，第二档在本批） | 配置 + 违规清单 ≈0 ⇒ `pyproject.toml:79-98` `[tool.importlinter]` 契约 "Service boundary never imported by kernel"；实测 `lint-imports` → **Contracts: 1 kept, 0 broken**（RC=0），runner 同契约 `KEPT`；`.github/workflows/ci.yml:96` 的 `architecture` 作业里 `lint-imports` **已去 `continue-on-error`、作失败门禁**（观察窗 shortfall 与本批读数见 §二之十，追认申请见 §五 第 8 件）。真正的架构硬门仍是 `scripts/check_imports.py`（ci.yml:87）→ 本机 **`Baseline lock: 96 modules, 0 violations`**（判红的是 `violations != 0`，模块数是覆盖面读数）。⚠️ 本行曾写 86：那不是环境差异而是缺陷读数——`.gitignore` 的 `_*.py` 吞掉 `af_closedloop/__init__.py`、grimp 在 runner 上不递归该包，**CI 门比本机少分析 10 个模块**；已修（负向规则 + 新复发门 `scripts/check_pkg_markers.py` 进 `gates.sh`），全链与"还原原状仍能取红"的实测见 §二之十一 |
 | ④ tick 线程自愈，区分原因重启（裁定 C）+ 必补接缝测试 | "SAFE HALT 后 watchdog 不得重启"绿 | `src/autoforge/af_live.py:77-103` `tick_watchdog_pass`（唯一自愈分支是"意外终止"；`safe_halt`/`stop` 分别返回 `held_safe_halt`/`stopped` 且不重启）；接缝测试 `tests/unit/test_af_live.py:306` `test_watchdog_does_not_restart_after_safe_halt`（断言 `calls == []`），对照 `:315` 意外终止确实重启、`:325` 存活时不动作；`af_tick_supervisor.py:185` HALTED 短路、`:222-224` docstring 写明安全红线 |
 
 ### 门禁肥化的另一半：计数棘轮（本回合新增，`gates.sh` + `.gates-tally.txt`）
@@ -639,6 +639,130 @@ MA 到底会不会发结构化 `intent`（不发则生产里每条洞察都是�
 
 ---
 
+## 二之十、第 5 步 ③ 的第二档：`lint-imports` 从"告警"升为 CI **失败门禁**（并说明观察窗 shortfall）
+
+计划 §第 5 步 ③ 的验收写的是"配置 + 既有违规清单（预计≈0）"，裁定 20260930 子决策三的执行约束是
+**"先出配置（告警）→ 观察一个版本（或 2 周），确认无合法误伤 → 升为 CI 失败"**。
+本批把第二档落下：`.github/workflows/ci.yml` 的 `architecture` 作业里 `run: lint-imports`
+**去掉 `continue-on-error: true`**（改完用 `yaml.safe_load` 复解析整个 workflow，
+`jobs=[test, contracts, gates, architecture, ui]`，全文件 `continue-on-error` 命中数 **0**）。
+
+**读数的三个来源，各自当场跑出（不是互相引用）**：
+- 本机 `lint-imports` → **RC=0**，`Analyzed 96 files, 281 dependencies.` /
+  `Service boundary never imported by kernel KEPT` / `Contracts: 1 kept, 0 broken.`
+  （依赖数从第一次登记的 280 变 281，是 §二之十一 那批的副产品：`af_closedloop/__init__.py`
+  从"与 `runtime.py` 逐字节相同的副本"改成薄转发，多出 `af_closedloop → af_closedloop.runtime` 一条边。）
+- runner 侧（`python scripts/gh_ci_status.py log 111082312792 "KEPT"`，run 34 的 `layering-gates` 作业）
+  → 匹配 1 行原话 `Service boundary never imported by kernel KEPT`；同作业 `violat` 关键词只匹配到
+  架构硬门那行 `Baseline lock: 86 modules, 0 violations.`（**0 违规**）。
+  ⚠️ 那行的 **86 当时被原样抄进了本记录**，它不是"runner 与本机口径不同的经验值"，而是一个缺陷的读数
+  （`.gitignore` 的 `_*.py` 吞掉一个包的 `__init__.py`，grimp 因此不递归）——根因、修法与复发门见 §二之十一。
+- 误伤计数：**0 条 BROKEN**——裁定的观察窗要拦的是"合法耦合被误判"，这一条已经用读数回答。
+
+**"能变红"实测（铁律 #8）**：给 `src/autoforge/af_time.py` 末尾加一行 `from autoforge import af_service`
+⇒ `lint-imports` **RC=1**、`Contracts: 0 kept, 1 broken.`，并且它报出的不只是那一行——
+还连带给出间接链 `autoforge.af_ir -> autoforge.af_bus (l.156) -> autoforge.af_time (l.20) -> autoforge.af_service`，
+即 `af_ir` 这个 L0 内核经两跳摸到了 L2 服务层。这条**传递闭包**正是 `check_imports.py`（锁直接反向依赖 baseline）
+之外的另一覆盖面，也是把这道门留在 CI 的理由。撤销临时行后回到 KEPT/RC=0，`git status` 干净。
+
+**必须写下来的 shortfall**：裁定给的是"一个版本**或** 2 周"，而 `lint-imports` 进 CI 是
+`20356dc`（**2026-10-01**），日历上只走了 2 天（绿的是 run 28–34 这 7 条 push）。
+按"误伤 0 + 版本内已收口"这一档落的，日历那一档没满。所以这不叫"按裁定执行完毕"，
+而是**AF 单方提前落了第二档**，已投追认申请：
+`关键决策部/inbox/20261003-AF-import-linter升硬门时点与gitignore吞包标记-决策申请.md` 第 1 件（§五 第 8 件；
+同件第 2 件是 §二之十一 那个跨仓外溢问题）。DCD 若要按日历等到 2026-10-15，回一句即可撤——改动是一行 YAML，可逆，且不涉及他仓。
+落这档而不是继续等的理由也摆在这里：留着 `continue-on-error` 就是本项目自己在
+`tests/unit/test_honest_ok.py` 开头点名的那个同型缺陷（"CI 的门禁三步全挂 continue-on-error ⇒ 绿灯是假的"），
+而一条永远不红的架构门，等于没有门。
+
+**同批不受影响的两条**：真正的架构硬门 `python scripts/check_imports.py`（grimp baseline-lock）**本来就是硬门**
+（ci.yml:87，无 `continue-on-error`），本批没动；契约面本身（`pyproject.toml` 的
+`[[tool.importlinter.contracts]]`，只做 L0→L2 这一条窄面）**一个字没改**——
+配置注释里写明了更宽的 forbidden/layers 组合在本仓库会误报合法耦合，所以升的是**判据强度**，不是**判据范围**。
+门禁 `gates.sh` 计数棘轮不受影响：**RC=0**，`except-pass-broad=27 | fake-ok-const=77`，基线 104/104。
+
+---
+
+## 二之十一、`.gitignore` 的 `_*.py` 吞掉了包标记，导致**两条架构门禁在 CI 上比本机弱**（一条数字对账抓出来的真缺陷）
+
+### 起点是本记录自己写错的一行
+
+上一条（§二之十）把 runner 的 `Baseline lock: 86 modules, 0 violations.` 原样抄进了"读数"，
+而本机同一时刻的读数是 **96 modules**。两边都绿、都"0 violations"，所以我一开始把它当成
+"runner 环境差异的经验值"记下来。这个处置本身是错的：**架构门禁的分析面是判据的一部分，
+两个口径不一致就意味着两条门绿的不是同一份代码**。当场对账下去才定位到根因。
+
+### 根因：一条 git 原话就能定位到行
+
+```
+$ git check-ignore -v src/autoforge/af_closedloop/__init__.py
+.gitignore:83:_*.py	src/autoforge/af_closedloop/__init__.py
+```
+
+`.gitignore` 里"一次性调试脚本不入库"那条 `# 下划线前缀，用完即弃` 写的是 `_*.py`，
+语义为「`_` + 任意 + `.py`」，而 `__init__.py` 正好是 `_` + `__init__` + `.py` ⇒ **包标记被一起吞掉**。
+受害面实测（`git status --ignored --short` 里的 `.py` 只有三条）：
+`_tmp_patch_af_live.py`（真·一次性脚本，判对）、`tests/_test_helpers.py`（无已入库的引用者，留在忽略位不动它）、
+以及 `src/autoforge/af_closedloop/__init__.py`（**判错，且从未入库**）。
+同目录 9 个模块（`loop/deepfix/detectors/fixers/fixes/graphops/history/coverage/runtime`）全在库里，
+唯独包标记不在——所以 `git ls-files src/autoforge | grep -c '\.py$'` 一直是 95，磁盘上是 96。
+
+### 后果不是"少一个文件"，是 grimp 少分析一整个包
+
+grimp 对没有 `__init__.py` 的目录**不递归**。Python 3 的命名空间包让 `import autoforge.af_closedloop.loop`
+在两边都还能成功（所以 pytest 与冒烟全绿、没人察觉），但架构图里那 10 个模块（包本身 + 9 个子模块）
+在 runner 上直接不存在：
+
+| 读数 | 本机 | runner（run 34 / job `111082312792`） |
+|---|---|---|
+| `check_imports.py` modules | 96 | **86** |
+| L0 kernel / L1 runtime / L2 service | 9 / 82 / 5 | 9 / **72** / 5 |
+| Baseline lock | `96 modules, 0 violations` | `86 modules, 0 violations` |
+
+差的 10 个全在 L1。**这就是铁律 #5 的假安心**：门禁的覆盖面没人对账，绿变成自我声明；
+也解释了为什么这个缺陷能活十几天——它不会让任何东西变红，只会让该红的东西不红。
+
+### 修法与复发门（关键是判据选"索引"而不是"磁盘"）
+
+1. `.gitignore` 在 `_*.py/_*.sh/_*.conf` 之后加 **`!**/__init__.py`**，注释里写明实测后果。
+   一次性脚本的忽略语义保留，包标记永远入库。`git check-ignore` 复测：命中规则从
+   `.gitignore:83:_*.py` 变成 `.gitignore:90:!**/__init__.py`（负向规则生效），该文件在 `git status`
+   里从 `!!`（ignored）变 `??`（untracked），而 `tests/_test_helpers.py` 仍命中 `_*.py` ⇒ 忽略面没被放宽。
+2. `scripts/check_pkg_markers.py`（新增，纯标准库 + git CLI）：`src/` 下每个含 `.py` 的包目录，
+   必须在 **git 索引**里有 `__init__.py`。**为什么不判磁盘**：磁盘上文件在，本地永远检不出，
+   只有 CI 的 checkout 才缺——判磁盘等于把这条门做成"只在本机响的假门"；索引口径本机与 runner 一致。
+   `tests/` 不在管辖内（pytest 靠 rootdir 收集，测试目录刻意不放 `__init__.py`）。
+   接入 `gates.sh`（新增"包标记门禁"一节 + RC 聚合分支，RC=1/2 都拦）。
+3. 顺带暴露的另一处（**这是修 gitignore 才看见的**）：那个从未入库的 `__init__.py` 与
+   `runtime.py` **逐字节相同**（`diff` RC=0）。两份 `GuardViolation` 不是同一个类对象，
+   从包根导入的 `except GuardViolation` 抓不到 `runtime` 抛出的那个。改成薄转发
+   `from .runtime import GuardViolation, load_module, safe_call`，真身只留一份。
+   现有引用者不受影响：库里没人 `from autoforge.af_closedloop import X`，
+   `fixers.py:13` 与 `tests/test_closedloop.py:19` 都走 `.runtime`。
+
+### 能变红实测（铁律 #8，两条方向）
+
+- 造一个"有模块、无入库包标记"的假包（`src/autoforge/af_probe/mod.py` 入索引、不放 `__init__.py`）
+  ⇒ `check_pkg_markers.py` **RC=1**：`✗ src/autoforge/af_probe/__init__.py 不在 git 索引里`；探针随即撤除。
+- **还原历史原状**：把 `af_closedloop/__init__.py` 从索引临时摘掉（`git rm --cached`，磁盘保留）
+  ⇒ **RC=1** 且指名 `src/autoforge/af_closedloop/__init__.py`，`git add` 装回后 **RC=0**。
+  这条最有价值：它证明新门真能抓住已经发生的那次缺陷，不是只防假想形态。
+
+### 本批全链读数（当场跑出）
+
+- `python scripts/check_pkg_markers.py src` → **RC=0**，`✓ 包标记门禁干净（5 个包目录都有入库的 __init__.py，索引内 96 个 .py）`
+  ——索引内 `.py` 数与 grimp 的模块数第一次对上，这本身就是对账。
+- `python scripts/check_imports.py` → **RC=0**，`modules: 96 / L0 9 / L1 82 / L2 5`，`Baseline lock: 96 modules, 0 violations.`
+- `lint-imports` → **RC=0**，`Analyzed 96 files, 281 dependencies.` / `KEPT` / `Contracts: 1 kept, 0 broken.`
+- `GATES_PYTHON=python bash gates.sh` → **RC=0**（六道全跑：AST 104/104、棘轮 104/104、undefined-name src 96 + tests 151 文件、
+  主题白名单 7 处、**包标记**、import 冒烟）
+- `python -m pytest -q` → **RC=0**，`2635 passed, 51 skipped, 1 warning, 7 subtests passed in 77.83s`
+- runner 侧 96 的读数**尚未取到**（要等本批 push 后那条 run）⇒ 在取到之前，"CI 与本机同口径"是**已修的缺陷 + 待取的复测**，不是已验证事实。
+
+跨仓外溢（其余三仓 + AgentOps 模板是否有同款 `_*.py`）AF 不擅动他仓，已作为第 2 件提 DCD（§五 第 8 件）。
+
+---
+
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
 
 | commit | 内容 |
@@ -668,6 +792,8 @@ MA 到底会不会发结构化 `intent`（不发则生产里每条洞察都是�
 | 本批之十（`caps.version` 的静默空值门） | `start_from_env()` 的 `version` 默认值 `""` → `PRESENCE_CAPS_VERSION`：`adm/autoforge/caps` 是 retained、Q7 规定 `caps.version`=计划号，漏传一次就长期挂一条 `version:""` 给 DB 读（生产调用点 `af_cli.py:1329` 本就显式传号，所以这是签名里的一扇门而非在跑的错误）。新判据 `test_start_from_env_publishes_the_plan_caps_version`，红/绿双向实测（临时改回 `""` ⇒ `'version': ''` vs `'2.5'` 红；改回后 32 passed、全量 2632 passed / 51 skipped RC=0、门禁 RC=0）。`caps_payload()` 的通用默认值未绑计划号，理由见 §二之八 末段 |
 | 本批之十一（`{"conf": null}` 归到缺报而不是坏报） | `_conf_of_payload()` 的缺报判据从"键在不在"改成"取不取得到实数"：键缺失**或**值为 `null` 都算缺报（按 `0.0` 入 ask 档 + `conf_reported=false`），`conf: null` 时 `confidence` 别名顶上来；越界/NaN/字符串/布尔/列表仍是坏报照旧拒。`_conf_of()` 删除、判据并进一处。新判据 `test_explicit_null_conf_is_the_same_absence_as_a_missing_key`，红/绿双向实测（临时改回"null 不算缺报" ⇒ `assert (False is True)` 红在 `tests/unit/test_af_mqtt_bridge.py:349`、RED_RC=1；改回后 33 passed、全量 2633 passed / 51 skipped RC=0、门禁 RC=0）。读数见 §二之八 |
 | 本批之十二（`SessionViewResponse` 应答成功分支补实测） | `tests/contract/test_af_ask_contract.py` 末段两条：`POST /api/sessions`（带 `ask` 节点 + 事件打到挂起）⇒ 视图九键逐字对 `ui/src/types/api.ts:SessionViewResponse`、`asks` 一条的八个必需键与 `control` 整个 dict 对死、实例 `current_node=q1`；`POST /api/sessions/{sid}/answer` 结构化应答成功 ⇒ 同一份九键视图、`asks` 排空、`vars.ask_answer` 落值且 `vars.decided=yes`（then 边真跑）、`GET` 读回一致。**两处变异各自取红**（返回半个对象 ⇒ `1 failed`；`_session_view` 的 `asks` 写死 `[]` ⇒ `2 failed`），撤除后 14 passed、全量 2635 passed / 51 skipped RC=0、门禁 RC=0。**顺带抓到自家的账**：单跑绿、全量红——`_SESSIONS` 是进程内全局会话表，留挂起 ask 的用例把 `test_af_api.py::test_api_asks_aggregate_endpoint_registered` 带红（全量 `1 failed` PYTEST_RC=1），两条用例都以 `DELETE /api/sessions/{sid}` 收尾才回到 2635。§六 那条 EXEMPT 销账，读数见 §二之九 |
+| 本批之十三（第 5 步 ③ 第二档：架构门升硬） | `ci.yml` 的 `architecture` 作业 `run: lint-imports` **去 `continue-on-error`**（改后全文件该键命中数 0，`yaml.safe_load` 复解析五个作业）；`pyproject.toml` 只改注释、契约面一个字没动。读数：本机 `Contracts: 1 kept, 0 broken` RC=0、runner run 34 同契约 `KEPT`、`check_imports.py` 那行 `Baseline lock: 86 modules, 0 violations`（**这条 86 下一批被查明是缺陷读数、不是环境差异，见 §二之十一**）。**能变红实测**：给 `af_time.py` 加一行 `from autoforge import af_service` ⇒ RC=1 `0 kept, 1 broken`，并连带报出 `af_ir → af_bus → af_time → af_service` 的**间接**链（`check_imports.py` 只锁直接反向依赖）。**shortfall 已登记**：裁定是"一个版本**或** 2 周"，而该步进 CI 是 `20356dc`（10-01）、日历只走 2 天（绿的是 run 28–34）⇒ 属 AF 单方提前落第二档，投追认申请（§五 第 8 件）。门禁 RC=0、棘轮 104/104 不变。读数见 §二之十 |
+| 本批之十四（架构门禁口径修复：gitignore 吞包标记 + 复发门） | `.gitignore` 加 `!**/__init__.py`（并把 runner `86 modules` 的根因写进注释）；`src/autoforge/af_closedloop/__init__.py` **首次入库**，内容从"与 `runtime.py` 逐字节相同的副本"（`diff` RC=0，两份 `GuardViolation` 不同类、`except` 会漏）改成薄转发；新增 `scripts/check_pkg_markers.py`（判 **git 索引**而非磁盘：磁盘检不出、只有 checkout 才缺）并接进 `gates.sh` 一节 + RC 聚合分支。可红性两条实测：假包 `af_probe/mod.py` 入索引不放标记 ⇒ RC=1；`git rm --cached af_closedloop/__init__.py` 还原历史原状 ⇒ RC=1 并指名该目录，装回 RC=0。全链：包标记门 RC=0（5 包 / 索引 96 个 `.py`）、`check_imports.py` RC=0 / **96 modules**、`lint-imports` RC=0 / 96 files 281 deps KEPT、`gates.sh` RC=0、`pytest -q` RC=0（2635 passed / 51 skipped）。跨仓外溢 + 第二档时点追认合成一份 DCD 申请（§五 第 8 件）。读数见 §二之十一 |
 
 
 ## 四、审计侧
@@ -676,6 +802,8 @@ MA 到底会不会发结构化 `intent`（不发则生产里每条洞察都是�
 修复落点 5 处 + 契约测试 `tests/contract/test_state_provider_policy.py`（14 项，含两条铁律 #8 的"能变红"反证）。完整核实链、"连续六轮未修复"四条重验表、部署声明见 `docs/audit/审计报告_第七轮_核实与修复.md`。
 
 ⚠️ 审计口径事实：第六轮与第七轮读的是**同一个** zip 快照 `zip-snapshot-2026-09-29T22:43`（不是 GitHub HEAD），故其"连续多轮未修"多数条目已在 HEAD 修复；引用审计报告前须按铁律 #11 先对 commit 复测。
+
+**第八轮截至本批未投递**（`ls -lat docs/audit/*.md` 最新一条 = `审计报告_第七轮_核实与修复.md`，mtime `Oct 2 11:46`）。本批自审抓到一条与审计同型、但审计面按 zip 快照读不出来的**门禁级**缺陷：`.gitignore` 吞包标记 ⇒ CI 的架构门禁比本机少分析 10 个模块（86 vs 96）。它的难看之处在于**不会让任何东西变红**，只会让该红的东西不红，因此只能靠"两个口径的数字对账"发现——登记在此，避免被读成"本轮无自审产出"。见 §二之十一。
 
 ## 五、已提 / 待提 DCD
 
@@ -688,6 +816,7 @@ MA 到底会不会发结构化 `intent`（不发则生产里每条洞察都是�
 | 5 | 新 `ui` CI job 将**首次**让 GitHub runner 按 lockfile 去第三方镜像拉 137 个包（`ui/package-lock.json` 实测 137/137 指 `registry.npmmirror.com`、0 条 npmjs、0 条缺 `integrity`；根因是用户级 `~/.npmrc` 漏进共享产物）。这是 DPP 同题申请（R7）在 AF 的**前提修正**：那边选"只登记"的承重句是"CI 只在我这台机器跑"，AF 今天把这句话拿掉了 | `inbox/20261002-AF-CI首次消费镜像锁文件-DPP-R7同题补充-决策申请.md` → **已裁定 (b)**（`decisions/20261002-AF锁文件源与MA载荷键名-裁定.md` §一：只把 CI 侧改指官方源、**不动锁文件字节**、本机开发照旧）。**AF 已落地**，但落法比裁定原文多一条 flag：只写 `--registry=` 经实测是**空操作**（fetch 全在 `npmmirror` 的两个主机上），必须配 `--replace-registry-host=always`；同时给安装步加了主机自证守卫（CI 绿不能证明没吃镜像）。逐字节对账 137/137 MATCH ⇒ "不动锁文件"成立。读数见 §二之七 |
 | 6 | 上一条落地时抓到的两件事要回给 DCD：①裁定原文那条命令是空操作，落法已补一条 flag（问"算不算改判"）；②裁定 §四 判例 2 的证据不成立——`@types/node@22.20.2` 的 tarball 在**两个源逐字节相同**（`size=447116`、`sha256` 前缀同为 `64921eb9b6caae37`、解包根目录都是 `node v22.20`），"根目录不是 `package/`"是 DefinitelyTyped 自己的发布布局，不是镜像重打包的痕迹 | `inbox/20261002-AF-锁文件源裁定落法补正与判例2旁证更正-回执.md`（**已提交，待回话**）。同件另附一条小问：安装步那条"fetch 主机集合 ⊆ {批准的那一个域} 且该域命中数 > 0"的守卫形状要不要提升到 AgentOps 模板——按 20261002 §一"分发=各仓自写"的口径，AF 默认不动 |
 | 7 | `ma/insights` 载荷的三处契约空缺（AF 的入向此前按自家键必填，按契约发来的每条洞察都会被拒——判例 1 的静默归零换到了 AF 入口）：① `conf` 要不要正式进契约行（AF 已按"缺报按 0.0 入 ask 档 + `conf_reported=false`，面板显示「未上报」"落地，等追认）；② `trace_id` 是"一次联动的追踪号"还是"这条假设的稳定身份"——AF 现在拿它当 `hypothesis_id` 与回灌键 `hypothesis:{id}`，若每次播报都换，去重与回灌都会散；③ MA 会不会发结构化 `intent`（契约行没有这一项 ⇒ 生产里每条洞察都是「无 IR（不能批准）」，要改的是人的工作流还是契约，AF 不擅自扩面板） | `关键决策部/inbox/20261003-AF-ma-insights载荷conf与稳定id与intent-决策申请.md`（**已提交，待回话**）。AF 侧不等裁定：别名/缺报记账/有界 transport 已在同批进仓，判据见 §二之八 |
+| 8 | 两件合一份：①**第 5 步 ③ 第二档的时点**——裁定给的是"一个版本**或** 2 周"，`lint-imports` 进 CI 是 `20356dc`（10-01），AF 在 10-03（日历 2 天、无版本发完）就把 `continue-on-error` 去掉，判据是"runner 连续 7 条 run `KEPT` + 误伤 0 + 一次可红实测"；这是 AF 单方改窗口长度，故不求"裁定已满足"的认定，只求追认时点（A 追认 / B 判回退一行 YAML / C 把口径改成可判定的量）。②**`_*.py` 吞包标记的跨仓外溢**——`.gitignore` 的 `_*.py` 会连带吃掉 `__init__.py`，实测让 AF 两条架构门禁在 runner 上少分析 10 个模块（86 vs 96）；MA/DB/homesdk/AgentOps 模板是否有同款规则，AF 不擅动他仓，建议先做零改动探测（各仓一次 `git check-ignore -v` / `git status --ignored --short \| grep __init__`），是否把"包标记门禁"上收模板请一并裁定（注意 20261002 §三 对 fetch 守卫给过"先不落"） | `关键决策部/inbox/20261003-AF-import-linter升硬门时点与gitignore吞包标记-决策申请.md`（**已提交，待回话**）。AF 侧不等裁定：第 2 件已在本仓自闭合（负向规则 + `scripts/check_pkg_markers.py` 进 `gates.sh`，还原原状仍能取红），第 1 件若判 B 一条 `git revert` 即退，均不占停机窗。判据见 §二之十一 |
 
 ## 六、未在本版做（登记，不静默）
 
@@ -707,6 +836,8 @@ MA 到底会不会发结构化 `intent`（不发则生产里每条洞察都是�
 - **真 vhass 在 CI 上现在是 skip**：10 条 `*_in_real_vhass` 判"插件未注册 → skip（带理由）"，权威场地是 `docker run autoforge-test`；本机无 docker（`docker: command not found`），该文件也自陈"未经实跑验证" ⇒ **F14 第二道闸至今没有任何真跑读数**，"CI 绿"不许被读成"仿真复核过"。
 - **CI 依赖未 pin**（`pip install -e ".[dev]"` 每次现解）：本批那条 pydantic v1/v2 红就是漂移付的账；改 lockfile/加 pin 等 §五 第 5 件裁定。
 - **本机开发面仍在吃镜像**：AF 本机 `~/.npmrc` 指 `registry.npmmirror.com`，裁定 (b) 只管 CI 侧，本机不变（这是裁定选的档位，不是遗漏）。CI 侧的守卫已把"交付面必须从官方源"变成会红的判据；开发面要收口得另裁。
+- **runner 侧的模块数复测未取**（§二之十一 的修法只在本机验过）：本批把包标记入库之后，`check_imports.py`/`lint-imports` 在 GitHub runner 上应当读到 **96**，但这条读数的来源只能是 push 之后那条 run 的日志；`python scripts/gh_ci_status.py log <job_id> modules` 取到之前，"CI 与本机同口径"只是**已修 + 待复测**。同一条门 `check_pkg_markers.py` 也依赖 runner 上存在 git 索引（`actions/checkout` 成立）——若哪天改成 tarball 投递或浅剥离，它会以 RC=2 报"拿不到索引"而不是静默跳过。
+- 其余三仓 + AgentOps 模板是否有同款 `_*.py` 吞包标记的规则，**AF 未探测**（不擅动他仓，且探测本身要在那三个工作区跑命令）：已作为第 2 件提 DCD，建议的档位是各仓一次 `git check-ignore -v` 零改动探测（§五 第 8 件）。
 
 已收口（上一版登记、本版实测销账）：
 - ~~`ui/src/views/LiveView.vue` `events=undefined` ⇒ `_replay_live` 空转~~ → 补事件脚本输入 + 回放读数，F7 端到端真点通（`dep-28bf327fe8d7`，假 HA `turn_on`→`turn_off`，设备回 `off`）。
@@ -722,6 +853,7 @@ MA 到底会不会发结构化 `intent`（不发则生产里每条洞察都是�
 - ~~CI 读数靠"当场手搓 curl + `~/.git-credentials`"这条一次性条件~~ → `scripts/gh_ci_status.py`（纯标准库、只读 GET、不打印凭证）：`runs`/`jobs <run_id>`/`annotate <run_id>`/`log <job_id> <关键词>` 四个入口。`log` 那一步多一个安全点——日志端点是 **302 到签名 URL**，`urllib` 默认会在跳转时继续带自定义头，脚本因此先停在 302 取 `Location`、再**无凭证**取正文，避免把 token 发给日志存储域。首次 runner 侧读数（run 31 / job `111072195342`）：`fetch 主机读数：npmmirror=0 npmjs=87`，五个作业全 `completed/success`。见 §二之八。
 - ~~§二之七 登记的"本机预跑是 npm 11.9.0，runner 是 npm 10.x，改写是否在 CI 上真生效只有 push 之后才知道"~~ → 已由上一条取到实测：**守卫在 runner 上给的是读数而不是红**（`npmmirror=0 npmjs=87`），交付面确认走官方源。
 - ~~`SessionViewResponse` 的应答成功分支 = EXEMPT（UI 那九个顶层键里，"挂起 ask → 应答成功"那条分支从没经过 HTTP 面）~~ → 两条契约判据补上：`POST /api/sessions` 打到挂起态后九键与 `AskItem` 八键逐字对死、`control` 整个 dict 对死、实例 `current_node=q1`；`POST /api/sessions/{sid}/answer` 成功分支返回**同一份九键视图**、`asks` 排空、`vars.decided=yes` 证明 then 边真跑、`GET` 读回一致。两处变异分别取到 `1 failed` / `2 failed`（RED_RC=1），撤除后 14 passed、全量 **2635 passed / 51 skipped RC=0**、门禁 RC=0。**同批把自己写的用例照了一遍**：单跑绿、全量红（`_SESSIONS` 全局共享，留挂起 ask 的用法带红了 `test_af_api.py::test_api_asks_aggregate_endpoint_registered`），改用 `DELETE /api/sessions/{sid}` 收尾。见 §二之九。
+- ~~两条架构门禁（`check_imports.py` baseline-lock 与 `lint-imports` 契约）在 CI 上分析 86 个模块、本机 96 个，"CI 绿"覆盖的不是本机那份代码~~ → 根因查明是 `.gitignore:83` 的 `_*.py` 连带吞掉 `src/autoforge/af_closedloop/__init__.py`（`git check-ignore -v` 直接指到行），grimp 对无包标记的目录不递归。三件收口：负向规则 `!**/__init__.py`、包标记首次入库（并消掉它与 `runtime.py` 的逐字节重复——两份 `GuardViolation` 会让 `except` 漏抓）、复发门 `scripts/check_pkg_markers.py` 进 `gates.sh`。**判据取 git 索引不是磁盘**这条是关键：磁盘 walk 只能在本机响，本机恰恰是看不出问题的那一面。能变红两条实测（假包 RC=1 / `git rm --cached` 还原原状 RC=1 且指名 `af_closedloop`，装回 RC=0）。本机全链 RC=0：包标记门、`check_imports.py` 96 modules、`lint-imports` 96 files KEPT、`gates.sh`、`pytest` 2635 passed。**runner 侧 96 的复测读数还没取到**（要等本批 push 后的 run）⇒ 见下方残留，不许提前写成"两边已同口径"。见 §二之十一。
 
 ---
 
