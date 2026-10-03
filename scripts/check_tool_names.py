@@ -16,8 +16,9 @@
    / `dispatch(tool="af_x", …)` / 形参默认值 `build_tool="af_x"`、`tool="af_x"`。只认 `af_` 开头
    且整个串就是工具名形状的字面量，因此 `adapter.call("light.turn_on", …)`（另一套命名）和
    `logger.warning("af_persist: 校验和不匹配…")`（日志文案）都不在射程。
-2. **第二份名单本身**判红：非 `af_mcp.py` 里的字典字面量出现 ≥2 个 `af_*` 字符串键
-   ⇒ 这就是又一份手抄的工具表（`mcp_tools()` 当年的形状）。
+2. **第二份名单本身**判红：非 `af_mcp.py` 里的容器字面量（字典键 / 集合 / 列表 / 元组）出现
+   ≥2 个 `af_*` 字符串 ⇒ 这就是又一份手抄的工具表（`mcp_tools()` 当年是字典，`WRITE_TOOLS = {…}`
+   这一族是集合/列表——改名时同样一边不知道）。
 
 口径与边界：
 - 唯一真源 = `src/autoforge/af_mcp.py` 里 `TOOLS: list[...]` 每个元组的第一个字符串常量。
@@ -159,16 +160,18 @@ def check(root: Path, tools: set[str]) -> tuple[list[str], int, int]:
                     findings.append(
                         f"{rel}:{d.lineno}: `{node.name}` 的默认工具名 `{d.value}` 不在 `af_mcp.TOOLS` 里"
                     )
-            elif isinstance(node, ast.Dict) and not own_registry:
-                # 第二份工具名单：≥2 个 af_* 字符串键的字典字面量
-                keys = [k for k in node.keys if isinstance(k, ast.Constant)
-                        and isinstance(k.value, str) and _TOOL_RE.fullmatch(k.value)]
-                if len(keys) < 2:
+            elif not own_registry and isinstance(node, (ast.Dict, ast.Set, ast.List, ast.Tuple)):
+                # 第二份工具名单：≥2 个 af_* 字符串字面量的容器（字典键 / 集合 / 列表 / 元组元素）
+                items = ([k for k in node.keys if k is not None] if isinstance(node, ast.Dict)
+                         else list(node.elts))
+                names_lit = [e for e in items if isinstance(e, ast.Constant)
+                             and isinstance(e.value, str) and _TOOL_RE.fullmatch(e.value)]
+                if len(names_lit) < 2:
                     continue
                 if _is_exempt(lines, node.lineno):
                     exempted += 1
                     continue
-                names = "、".join(sorted({k.value for k in keys}))
+                names = "、".join(sorted({e.value for e in names_lit}))
                 findings.append(
                     f"{rel}:{node.lineno}: 这里是第二份工具名单（{names}）——"
                     "`TOOLS` 之外再抄一份，改名时一边不知道，且从未接线的名单随时可能被人接上写面"

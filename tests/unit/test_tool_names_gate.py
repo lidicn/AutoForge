@@ -104,6 +104,28 @@ def mcp_tools(grading):
     assert "af_approve_proposal" in findings[0]
 
 
+def test_set_of_tool_names_is_a_second_mapping(tmp_path):
+    """`WRITE_TOOLS = {…}` 这一族：集合里手抄两个注册名也是第二真源（改名时另一边不知道）。"""
+    findings = _check(tmp_path, """
+WRITE_TOOLS = {"af_live_run", "af_build"}
+""")
+    assert len(findings) == 1
+    assert "第二份工具名单" in findings[0]
+
+
+def test_tuple_of_tool_names_is_a_second_mapping(tmp_path):
+    findings = _check(tmp_path, """
+LIVE_ONLY = ("af_live_run", "af_health")
+""")
+    assert len(findings) == 1
+
+
+def test_list_with_one_tool_name_is_not_a_mapping(tmp_path):
+    assert _check(tmp_path, """
+SINGLE = ["af_live_run", "scope"]
+""") == []
+
+
 def test_tool_named_default_is_red(tmp_path):
     findings = _check(tmp_path, """
 def build(step, tool="af_build_ir"):
