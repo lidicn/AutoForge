@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from autoforge import af_mqtt_bridge
 from autoforge.af_audit import AuditLog
 from autoforge.af_conf import ConfidenceStore
 from autoforge.af_mqtt_bridge import (
@@ -19,6 +20,7 @@ from autoforge.af_mqtt_bridge import (
     FIRED_TOPIC,
     INSIGHT_CONF_CAP,
     INSIGHTS_TOPIC,
+    PRESENCE_CAPS_VERSION,
     AfMqttBridge,
     BridgeUnavailable,
     TRANSPORT_EVIDENCE_PREVIEW,
@@ -96,6 +98,26 @@ def test_stop_publishes_retained_offline():
     last = [p for p in client.published if p["topic"] == "adm/autoforge/status"][-1]
     assert last["payload"] == "offline" and last["retain"] is True
     assert bridge.started is False
+
+
+def test_start_from_env_publishes_the_plan_caps_version(monkeypatch):
+    """`caps` 是 retained，`caps.version` 按裁定 20261002 Q7 = 计划号。
+
+    入口工厂的 `version` 默认值以前是空串：`af_cli` 那条生产调用点显式传了号，所以今天是对的，
+    但"默认发一个没有版本号的 caps"留在签名里——retained 意味着这条空值会一直挂在 broker 上，
+    只有对端查账时才看得见。默认值改成计划号本身，漏传就不可能变成静默空值。
+    """
+    client = FakeClient()
+    monkeypatch.setenv("AUTOFORGE_MQTT", "1")
+    monkeypatch.setattr("autoforge.af_mqtt_bridge.make_client", lambda **kw: client)
+
+    bridge = af_mqtt_bridge.start_from_env(tools=["af_draft"])
+    assert bridge is not None, "AUTOFORGE_MQTT=1 时必须真起桥"
+
+    record = [p for p in client.published if p["topic"] == "adm/autoforge/caps"][0]
+    assert record["retain"] is True
+    caps = json.loads(record["payload"]) if isinstance(record["payload"], str) else record["payload"]
+    assert caps == {"mcp": True, "tools": ["af_draft"], "version": PRESENCE_CAPS_VERSION}
 
 
 # ── 出向：事件流（第 1 步②）────────────────────────────────────────────

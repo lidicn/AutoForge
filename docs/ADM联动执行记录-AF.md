@@ -558,6 +558,18 @@ runner 上 `npmmirror=0 npmjs=87`，交付面确实从官方源拉包，守卫�
 同一次 run 五个作业全 `completed/success`（`pytest` / `adm-linkage-contracts` / `ui-typecheck-build` /
 `layering-gates` / `quality-gates`，`failed_steps=[]`）。
 
+**同批用同一把尺子（"必填项问契约，默认值不许静默给空"）量出的第二处**：入口工厂
+`start_from_env(version="")` 的默认值是空串，而 `adm/autoforge/caps` 是 **retained** 主题，
+裁定 20261002 Q7 规定 `caps.version` = 计划号——默认值漏传一次，broker 上就会长期挂着一条
+`{"mcp":true,"tools":[…],"version":""}`，DB 读到的是"AF 报了个没有版本号的 caps"，且只有对端查账时才看得见。
+今天生产调用点 `af_cli.py:1329` 显式传了号（`version=PRESENCE_CAPS_VERSION`），所以**这不是在跑的错误，
+是留在签名里的一扇门**；默认值改成计划号本身，门就没了。
+判据 `test_start_from_env_publishes_the_plan_caps_version` 红/绿双向实测：把默认值临时改回 `""`
+⇒ `AssertionError: {'mcp': True, … 'version': ''} == {'mcp': True, … 'version': '2.5'}`（RED_RC=1），
+改回后 32 passed、全量 **2632 passed / 51 skipped RC=0**、门禁 RC=0。
+`caps_payload()` 自己的 `version=""` 默认**没动**：它是载荷拼装器，生产面唯一入口现在已安全，
+把一个通用函数的默认值绑成某个具体计划号反而妨碍复用。
+
 **跨仓的三件交 DCD**（AF 不自决，因为答案在 MA 侧）：`conf` 要不要正式进契约行、
 `trace_id` 是追踪号还是稳定假设身份（关系到 AF 的去重与回灌键 `hypothesis:{id}`）、
 MA 到底会不会发结构化 `intent`（不发则生产里每条洞察都是「无 IR（不能批准）」，要改的是人的工作流而不是 AF 的面板）。
@@ -591,6 +603,7 @@ MA 到底会不会发结构化 `intent`（不发则生产里每条洞察都是�
 | 本批之七（events 上限补齐） | `af_api.py`：`_MAX_SIM_EVENTS` → `_MAX_REPLAY_EVENTS` + `_check_event_cap()`，`/api/sim`/`/api/sessions`/`/api/live/run` 三条端点同形判据（8e8c725 只装了第一条）；`test_af_api.py` 参数化钉两条新端点（超上限 422 + 恰好上限非 422），摘掉判据实测 `2 failed`（400/403 而非 422）；本机全量 2623 passed / 51 skipped RC=0，门禁 RC=0。读数见 §二之六 |
 | 本批之八（裁定 (b) 落地 + 空操作证伪） | `ci.yml` 的 `ui` 安装步：`--registry=https://registry.npmjs.org` **配** `--replace-registry-host=always`（只写前者经实测是空操作——fetch 全在 `registry.npmmirror.com` 87 + `cdn.npmmirror.com` 87），并加主机自证（`npmmirror` 命中≠0 或 `npmjs` 命中=0 → `::error::` + `exit 1`，三份实测日志上红/红/绿）；逐字节对账 137/137 integrity MATCH，官方源 node_modules 上 type-check/build 均 RC=0。回执投 DCD：裁定落法补正 + §四 判例 2 证据更正。读数见 §二之七 |
 | 本批之九（`ma/insights` 入向按契约表收 + CI 日志可读） | `af_mqtt_bridge.ingest_insight()`：契约键优先、旧键别名（`trace_id`/`summary` 回退）、缺 `conf` 从"拒收"改为"按 0.0 入 ask 档 + `conf_reported=false`"（坏报照旧拒）、新增有界 `_transport_of()` 记账（kind/persons/room/证据计数与预览/ts/has_snapshot）；`PersistentInsightSink.submit` 与 `ProposalManager.submit` 同步加 `transport` 参数（两份签名保持对齐＝桥侧不分支），`Proposal` 补 `transport` 字段并进 `to_json`；UI：置信列对缺报显示「未上报」、`InsightRecord.transport` 收成具名 `InsightTransport`、「洞察内容」格补依据行；`scripts/gh_ci_status.py` 扩 `log <job_id> <关键词>`（停在 302 取 Location、无凭证取正文，不把 token 发给日志存储域）。测试新增 5 条 + 拒收表按新口径改写，临时改回旧行为实测 `4 failed` ⇒ 装回后 31 passed；全量 2631 passed / 51 skipped RC=0，门禁 RC=0，type-check/build RC=0。跨仓三件投 DCD（§五 第 7 件）。读数见 §二之八 |
+| 本批之十（`caps.version` 的静默空值门） | `start_from_env()` 的 `version` 默认值 `""` → `PRESENCE_CAPS_VERSION`：`adm/autoforge/caps` 是 retained、Q7 规定 `caps.version`=计划号，漏传一次就长期挂一条 `version:""` 给 DB 读（生产调用点 `af_cli.py:1329` 本就显式传号，所以这是签名里的一扇门而非在跑的错误）。新判据 `test_start_from_env_publishes_the_plan_caps_version`，红/绿双向实测（临时改回 `""` ⇒ `'version': ''` vs `'2.5'` 红；改回后 32 passed、全量 2632 passed / 51 skipped RC=0、门禁 RC=0）。`caps_payload()` 的通用默认值未绑计划号，理由见 §二之八 末段 |
 
 
 ## 四、审计侧

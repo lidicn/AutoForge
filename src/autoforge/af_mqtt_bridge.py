@@ -482,7 +482,7 @@ class AfMqttBridge:
 def start_from_env(
     *,
     tools: tuple[str, ...] | list[str] = (),
-    version: str = "",
+    version: str = PRESENCE_CAPS_VERSION,
     proposal_sink: Any = None,
     clock: TimeSource | None = None,
     allow_anonymous: bool = False,
@@ -491,6 +491,9 @@ def start_from_env(
 
     开启但配置不齐 → 抛 `BridgeUnavailable`（fail-closed：宁可拒绝启动，也不静默降级成
     "看起来在跑、其实一句都没说"的假桥）。
+
+    `version` 的默认值是**计划号本身**而不是空串：裁定 20261002 Q7 规定 `caps.version` = 计划号，
+    而这条是 retained 发布——空串会被 DB 读成"AF 报了一个没有版本号的 caps"，且要等对端查账才看得见。
     """
     if not env_enabled():
         return None
