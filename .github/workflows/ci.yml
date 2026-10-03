@@ -85,11 +85,15 @@ jobs:
       - name: 架构反向依赖硬门（check_imports.py，grimp baseline-lock）
         # L0 内核 → L1 运行时 → L2 服务，禁反向依赖；违规即 fail（已稳定，作硬闸门）。
         run: python scripts/check_imports.py
-      - name: import-linter 契约（渐进 B→A：先告警）
-        # DCD 后续优化三项裁定 · 分层 import-linter：观察一版本 continue-on-error，
-        # 稳定后再升失败门禁（去掉本行 continue-on-error）。
+      - name: import-linter 契约（裁定 20260930 子决策三：B→A 的第二档，已升为失败门禁）
+        # DCD 后续优化三项裁定 · 分层 import-linter：执行约束写的是"观察一个版本（或 2 周），
+        # 确认无合法误伤 → 升为 CI 失败"。观察窗内的读数：本机 `lint-imports` =
+        # `Contracts: 1 kept, 0 broken.`（RC=0），runner 上同一契约连续多轮 `KEPT`
+        # （run 34 / job 111082312792 原话 `Service boundary never imported by kernel KEPT`），
+        # 误伤 0 条 ⇒ 按裁定去 `continue-on-error`。能变红由本地实测：给 `af_time.py`
+        # 加一行 `from autoforge import af_service` ⇒ RC=1 + `BROKEN`，并连带报出
+        # `af_ir -> af_bus -> af_time -> af_service` 这条**间接**链（check_imports.py 锁的是直接反向依赖）。
         run: lint-imports
-        continue-on-error: true
 
   ui:
     name: ui-typecheck-build

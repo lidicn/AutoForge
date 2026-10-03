@@ -82,7 +82,10 @@ line-length = 100
 # （如仿真胶水层 harness 依赖 Runtime、af_bus 审计回调等）。
 # 真正的架构门禁使用 scripts/check_imports.py（grimp API 直接锁零反向依赖 baseline）。
 # pyproject.toml 保留此配置是为了让 lint-imports CLI 至少能跑通。
-# 观察一版本后，再决定是否升级为 CI 失败门禁。
+# 观察窗读数：本机 `Contracts: 1 kept, 0 broken`，runner 连续多轮 `KEPT`，误伤 0 条
+# ⇒ 裁定 20260930 子决策三的第二档已落（`.github/workflows/ci.yml` 的 `lint-imports` 去
+# continue-on-error，升为失败门禁）。契约刻意只做 L0→L2 这一条窄面：更宽的
+# forbidden/layers 组合在本仓库会误报合法耦合，全量反向依赖由 check_imports.py 锁。
 root_package = "autoforge"
 include_external_packages = false
 
