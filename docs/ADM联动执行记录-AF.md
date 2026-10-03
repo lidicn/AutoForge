@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/ADM联动执行计划-AF.md`（DCD 出品，v2.5 联动落地版）
 > 记录人：AutoForge 开发
-> 核实基准：代码侧最新 commit = **`38051ca`**（已推 origin/main；本记录与后续文档提交只改文档，不再改判据）。§二/二之二…二之八 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
+> 核实基准：代码侧最新 commit = **`6d7d2a1`**（已推 origin/main；本记录与后续文档提交只改文档，不再改判据）。§二/二之二…二之九 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
 > 契约真源：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
 > 交叉裁定：`20260929-ADM三仓联动七问`、`20261001-AF-homesdk接入四问`、`20260930-AutoForge后续优化三项`、`20261001-DB目标模式与AF三题` §H、**`20261002-homesdk记账与AF-DB-DPP六件-裁定`**（本轮落地依据，§一 末）
 
@@ -593,6 +593,52 @@ MA 到底会不会发结构化 `intent`（不发则生产里每条洞察都是�
 
 ---
 
+## 二之九、本批读数：`SessionViewResponse` 的**应答成功分支**从 EXEMPT 变成实测（顺带抓到自家用例漏的账）
+
+§六 登记的那条 EXEMPT 是这么来的：`SessionViewResponse`（UI 侧九个顶层键）只在两种形态下被读到过——
+`asks=[]` 的会话，和 404 的失败面。理由是 `case04_ask_timeout` 带 seed + event 建完会话之后 `asks` 就是 0，
+**"挂起 ask → 人答了 → 返回同一份视图"这条分支从来没经过 HTTP 面**。
+应答语义本身在 service 层是有真 runtime 用例的（`tests/unit/test_af_ask_flow.py`），
+所以这不是"逻辑没测"，是**UI 那份类型的真源没被实测坐实**——`ui/src/types/api.ts` 里写着的
+`SessionViewResponse` / `AskItem` 两组键，此前靠的是"读代码抄下来的"。
+
+**补的两条判据**（`tests/contract/test_af_ask_contract.py` 末段，走真 `build_app` + `TestClient`）：
+1. `test_suspended_ask_shows_up_in_the_http_session_view`：`POST /api/sessions`（IR 带 `ask` 节点 +
+   seed `binary_sensor.motion=off` + 事件把它打到 `on`）之后，视图顶层键**逐字等于**九键集合，
+   `asks` 恰一条，且该条的键**逐字等于** `AskItem` 的八个必需键；`control` 整个 dict 对死
+   （`{"widget":"select","kind":"choice","prompt":"开灯吗？","options":["开","关"]}`——前端只认
+   `widget`/`kind`/`options`，生产者改名而这里不红，面板会静默退化成输入框）；
+   实例的 `current_node` 停在 `q1`，证明"真挂在 ask 上"而不是跑完再补记录；`GET /api/sessions/{sid}` 读回同一条。
+2. `test_answer_success_branch_returns_the_same_view_with_asks_drained`：`POST /api/sessions/{sid}/answer`
+   带结构化应答（`{"kind":"choice","value":"开"}`）⇒ 200、**同一份九键视图**（不是半个对象）、
+   `asks` 排空、实例 `vars.ask_answer` 落值且 `vars.decided=="yes"`（走 then 边进了 `d1`），
+   随后 `GET` 仍读回 `asks=[]`（应答效果在会话上，不只在那次 POST 的返回值里）。
+
+**两处红/绿读数（当场跑出）**：
+- 把 `answer_session` 的返回改成 `{"ok","session_id","asks"}` 三键（即"成功分支只回半个对象"）
+  ⇒ `1 failed`，RED_RC=1，原话 `AssertionError: 成功分支返回的是同一份会话视图，不是半个对象`
+  + `assert {'asks','ok','session_id'} == {'asks','aud…, 'mode', …}`（六个键逐个列为缺失）。
+- 把 `_session_view()` 的 `"asks": _asks_of(runtime)` 改成 `"asks": []`（即"挂起 ask 不进视图"）
+  ⇒ **两条新判据同时红**，`2 failed, 12 passed`，RED_RC=1，原话 `事件触发后应停在挂起 ask，实际 []` /
+  `assert 0 == 1`（另一条红在后续 `IndexError`，因为它按同一条前置取 `asks[0]`）。
+- 撤除两处临时改动后：`tests/contract/test_af_ask_contract.py` **14 passed**；
+  全量 `python -m pytest tests/ -q` → **RC=0**，`2635 passed, 51 skipped, 1 warning, 7 subtests passed in 85.39s`；
+  `GATES_PYTHON=python bash gates.sh` → **RC=0**（结论原话"门禁干净"）。
+
+**这一条把自己写的用例照了一遍（值得记）**：单跑契约文件是绿的，**全量跑才红**——
+`tests/unit/test_af_api.py::test_api_asks_aggregate_endpoint_registered` 断言 `GET /api/asks` 聚合端点
+"当前没有挂起 ask"，而 `af_service._SESSIONS` 是**进程内全局**会话表；第一条新判据故意留一条挂起 ask 不答，
+就漂到了后面那条用例里 ⇒ 全量 `1 failed, 2634 passed`（PYTEST_RC=1）。
+两条都以 `DELETE /api/sessions/{sid}`（返回 `deleted: True`）收尾后全量回到 **2635 passed / RC=0**。
+这不是聚合端点的判据写错了——它正好演示了"会话表全局共享、留挂起 ask 就会污染别人"；
+登记在此是因为**下一次谁再往这批里加留挂起态的用例，单跑绿不等于全量绿**（铁律 #11 的另一种形态）。
+
+**CI 读数（用 §二之八 那条固化路径取，非手搓）**：run 33（`38051ca`，caps 默认值那次）`completed/success`，
+连 run 28–32 一起是**连续六条绿**；本批这次提交的 run 34（`6d7d2a1`）取读数时仍 `in_progress`，
+结论留待下一次读，不提前写成绿（铁律 #5）。
+
+---
+
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
 
 | commit | 内容 |
@@ -621,6 +667,7 @@ MA 到底会不会发结构化 `intent`（不发则生产里每条洞察都是�
 | 本批之九（`ma/insights` 入向按契约表收 + CI 日志可读） | `af_mqtt_bridge.ingest_insight()`：契约键优先、旧键别名（`trace_id`/`summary` 回退）、缺 `conf` 从"拒收"改为"按 0.0 入 ask 档 + `conf_reported=false`"（坏报照旧拒）、新增有界 `_transport_of()` 记账（kind/persons/room/证据计数与预览/ts/has_snapshot）；`PersistentInsightSink.submit` 与 `ProposalManager.submit` 同步加 `transport` 参数（两份签名保持对齐＝桥侧不分支），`Proposal` 补 `transport` 字段并进 `to_json`；UI：置信列对缺报显示「未上报」、`InsightRecord.transport` 收成具名 `InsightTransport`、「洞察内容」格补依据行；`scripts/gh_ci_status.py` 扩 `log <job_id> <关键词>`（停在 302 取 Location、无凭证取正文，不把 token 发给日志存储域）。测试新增 5 条 + 拒收表按新口径改写，临时改回旧行为实测 `4 failed` ⇒ 装回后 31 passed；全量 2631 passed / 51 skipped RC=0，门禁 RC=0，type-check/build RC=0。跨仓三件投 DCD（§五 第 7 件）。读数见 §二之八 |
 | 本批之十（`caps.version` 的静默空值门） | `start_from_env()` 的 `version` 默认值 `""` → `PRESENCE_CAPS_VERSION`：`adm/autoforge/caps` 是 retained、Q7 规定 `caps.version`=计划号，漏传一次就长期挂一条 `version:""` 给 DB 读（生产调用点 `af_cli.py:1329` 本就显式传号，所以这是签名里的一扇门而非在跑的错误）。新判据 `test_start_from_env_publishes_the_plan_caps_version`，红/绿双向实测（临时改回 `""` ⇒ `'version': ''` vs `'2.5'` 红；改回后 32 passed、全量 2632 passed / 51 skipped RC=0、门禁 RC=0）。`caps_payload()` 的通用默认值未绑计划号，理由见 §二之八 末段 |
 | 本批之十一（`{"conf": null}` 归到缺报而不是坏报） | `_conf_of_payload()` 的缺报判据从"键在不在"改成"取不取得到实数"：键缺失**或**值为 `null` 都算缺报（按 `0.0` 入 ask 档 + `conf_reported=false`），`conf: null` 时 `confidence` 别名顶上来；越界/NaN/字符串/布尔/列表仍是坏报照旧拒。`_conf_of()` 删除、判据并进一处。新判据 `test_explicit_null_conf_is_the_same_absence_as_a_missing_key`，红/绿双向实测（临时改回"null 不算缺报" ⇒ `assert (False is True)` 红在 `tests/unit/test_af_mqtt_bridge.py:349`、RED_RC=1；改回后 33 passed、全量 2633 passed / 51 skipped RC=0、门禁 RC=0）。读数见 §二之八 |
+| 本批之十二（`SessionViewResponse` 应答成功分支补实测） | `tests/contract/test_af_ask_contract.py` 末段两条：`POST /api/sessions`（带 `ask` 节点 + 事件打到挂起）⇒ 视图九键逐字对 `ui/src/types/api.ts:SessionViewResponse`、`asks` 一条的八个必需键与 `control` 整个 dict 对死、实例 `current_node=q1`；`POST /api/sessions/{sid}/answer` 结构化应答成功 ⇒ 同一份九键视图、`asks` 排空、`vars.ask_answer` 落值且 `vars.decided=yes`（then 边真跑）、`GET` 读回一致。**两处变异各自取红**（返回半个对象 ⇒ `1 failed`；`_session_view` 的 `asks` 写死 `[]` ⇒ `2 failed`），撤除后 14 passed、全量 2635 passed / 51 skipped RC=0、门禁 RC=0。**顺带抓到自家的账**：单跑绿、全量红——`_SESSIONS` 是进程内全局会话表，留挂起 ask 的用例把 `test_af_api.py::test_api_asks_aggregate_endpoint_registered` 带红（全量 `1 failed` PYTEST_RC=1），两条用例都以 `DELETE /api/sessions/{sid}` 收尾才回到 2635。§六 那条 EXEMPT 销账，读数见 §二之九 |
 
 
 ## 四、审计侧
@@ -653,7 +700,7 @@ MA 到底会不会发结构化 `intent`（不发则生产里每条洞察都是�
 - **契约表本身还欠三行改动，且都在 MA/DCD 手里**（§五 第 7 件）：`ma/insights` 的载荷行没有 `conf`、没有稳定的假设 id、也没有 IR 候选（AF 的 `intent`）。AF 已按可回退口径落地（别名 + 缺报记账），但只要契约行不改，MA 侧随时可能按自家形状发而 AF 无从判定"这条到底该不该有 conf"；面板上也因此会长期是「无 IR（不能批准）」。**这不是 AF 能单方面收口的残留**，登记以免被读成"入向已经全对齐"。
 - `BoundedCache` 基类收敛（第五轮遗留）与"实现间契约不一致"的**静态**门禁：本轮以契约测试覆盖，未做静态门禁。
 - 证据面板的 `evicted_automations` 只做"提示有自动化被挤出内存"，未做跨进程持久化——**注意这与 ④A 不是同一个问题**：④A 裁的是 MA 洞察提案队列（已持久化），证据档的进程内清零仍是遗留。
-- `SessionViewResponse` 的**应答成功分支 = EXEMPT**：`case04_ask_timeout` 带 seed + event 建会话后 `asks=0`（分支未走到挂起 ask），只实测到 404 失败面；顶层 9 键靠同族 `POST /sessions`/`GET /sessions/{sid}` 的同一 `_session_view` 坐实。下一次做洞察面板或真机 ask 流程时顺手补一条"应答成功 → 快照键"的实测。
+- `SessionViewResponse` 的**应答成功分支**（本批已收口，见下方"已收口"与 §二之九）：原登记为 EXEMPT——`case04_ask_timeout` 带 seed + event 建会话后 `asks=0`（分支未走到挂起 ask），只实测到 404 失败面；顶层 9 键靠同族 `POST /sessions`/`GET /sessions/{sid}` 的同一 `_session_view` 坐实。
 - `/api/metrics` 的 `runs/success/failed/audit_distribution` 仍是 0/空——`get_metrics` 的 docstring 写明这三项需**常驻进程**（`forge serve`/`watch`）才累计，原型期服务层无状态。本批只把"形状"钉成类型，没有把"数值来源"改成真累计；那是另一件事，不在类型面批里偷做。
 - 本机 `node_modules` 的完整性没有门禁：本批实测 `@types/node@22.20.2` 曾被装成 **37/74** 文件（见 §二之二）。我用 registry 同版本 tarball 增量补齐了缺的 37 个文件，但**成因未查**（不在本批范围），且这条只在开发机成立——CI 走 `npm ci` 从锁文件装，不复用本机 `node_modules`。若下次又冒出"某个 `node:*` 模块找不到"，先数 `node_modules/@types/node/*.d.ts` 再怀疑代码。
 - **CI 读数这条路本身没有门禁**（本批已收口，见下方"已收口"）：本批能读到 run 1–27 全红，靠的是"本机 `~/.git-credentials` 里存着可用的 github.com 凭证 + `api.github.com` 可达"（同一时刻 `github.com` 网页面 `curl` 超时、浏览器 `ERR_CONNECTION_TIMED_OUT`）。这是**一次性条件**，不是可复跑的命令；下一次两者都不可达时又变成 EXEMPT。要收口就得做成脚本（且不能把凭证写进仓）。
@@ -674,7 +721,8 @@ MA 到底会不会发结构化 `intent`（不发则生产里每条洞察都是�
 - ~~`/api/sessions` 与 `/api/live/run` 的 `events` 无上限~~ → `_MAX_REPLAY_EVENTS` + `_check_event_cap()` 覆盖三条 events 端点（`grep -c` = 3）；参数化测试在两处摘掉判据后**实测变红**（`assert 400 == 422` / `assert 403 == 422`，即 10001 条 events 修复前一路走进业务层），装回 11 passed、全量 2623 passed RC=0。见 §二之六。
 - ~~CI 读数靠"当场手搓 curl + `~/.git-credentials`"这条一次性条件~~ → `scripts/gh_ci_status.py`（纯标准库、只读 GET、不打印凭证）：`runs`/`jobs <run_id>`/`annotate <run_id>`/`log <job_id> <关键词>` 四个入口。`log` 那一步多一个安全点——日志端点是 **302 到签名 URL**，`urllib` 默认会在跳转时继续带自定义头，脚本因此先停在 302 取 `Location`、再**无凭证**取正文，避免把 token 发给日志存储域。首次 runner 侧读数（run 31 / job `111072195342`）：`fetch 主机读数：npmmirror=0 npmjs=87`，五个作业全 `completed/success`。见 §二之八。
 - ~~§二之七 登记的"本机预跑是 npm 11.9.0，runner 是 npm 10.x，改写是否在 CI 上真生效只有 push 之后才知道"~~ → 已由上一条取到实测：**守卫在 runner 上给的是读数而不是红**（`npmmirror=0 npmjs=87`），交付面确认走官方源。
+- ~~`SessionViewResponse` 的应答成功分支 = EXEMPT（UI 那九个顶层键里，"挂起 ask → 应答成功"那条分支从没经过 HTTP 面）~~ → 两条契约判据补上：`POST /api/sessions` 打到挂起态后九键与 `AskItem` 八键逐字对死、`control` 整个 dict 对死、实例 `current_node=q1`；`POST /api/sessions/{sid}/answer` 成功分支返回**同一份九键视图**、`asks` 排空、`vars.decided=yes` 证明 then 边真跑、`GET` 读回一致。两处变异分别取到 `1 failed` / `2 failed`（RED_RC=1），撤除后 14 passed、全量 **2635 passed / 51 skipped RC=0**、门禁 RC=0。**同批把自己写的用例照了一遍**：单跑绿、全量红（`_SESSIONS` 全局共享，留挂起 ask 的用法带红了 `test_af_api.py::test_api_asks_aggregate_endpoint_registered`），改用 `DELETE /api/sessions/{sid}` 收尾。见 §二之九。
 
 ---
 
-—— AutoForge 开发 · 2026-10-02
+—— AutoForge 开发 · 2026-10-03

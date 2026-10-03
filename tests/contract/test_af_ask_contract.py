@@ -3,11 +3,14 @@
 本文件是 **跨仓接口的机器化契约**（而非普通单测）：它把 doubao-butler（DB）轮询
 AutoForge（AF）时所依赖的 ASK 通道 schema 冻结下来，进 CI 防漂移。
 
-涉及两条端点（代码事实见 `src/autoforge/af_api.py`）：
+涉及的端点（代码事实见 `src/autoforge/af_api.py`）：
 - `GET  /api/asks/pending` ：watch 进程写出的 `pending_asks.json` sidecar，DB 每 5s 轮询发现
   挂起 ask。**无 `_read` 依赖**（设计上可供 DB 免令牌发现）。证据 `af_api.api_asks_pending`。
 - `POST /api/asks/answer`  ：把人类答案写入 `answer_inbox/`，由 watch ticker 注回 runtime。
   **需 `_write` 依赖**（fail-closed：无令牌即 403）。证据 `af_api.api_asks_answer`。
+- `POST /api/sessions` + `POST /api/sessions/{sid}/answer`：进程内会话视图（`af_service._session_view`）
+  的顶层九键与挂起 ask 项（`_asks_of`）。DB/UI 侧类型 `SessionViewResponse`/`AskItem` 的键集以此为真源；
+  **"应答成功"分支此前只经过 service 层（`tests/unit/test_af_ask_flow.py`），没走过 HTTP 面**——本文件末尾两条补上。
 
 契约的"真相来源"是生产者 `af_live.py:_write_asks`（ask 项形状）与 `af_ir/models.py:
 AskSpec.control()`（控件元数据）。若任一生产者改了 schema 而忘了同步这里，CI 会红——
@@ -297,3 +300,118 @@ def test_answer_tolerates_extra_keys(tmp_path, monkeypatch):
     stored = json.loads(list((tmp_path / "answer_inbox").glob("*.json"))[0].read_text(encoding="utf-8"))
     assert stored["source"] == "butler"
     assert stored["trace_id"] == "abc-123"
+
+
+# =====================================================================
+# 进程内会话视图：POST /api/sessions → 挂起 ask → POST .../answer（成功分支）
+# 登记在册的 EXEMPT（执行记录 §六）：`SessionViewResponse` 此前只在 `asks=[]` 的形态
+# 与 404 失败面上被读到过，"应答成功"那一条分支从来没经过 HTTP 面。
+# =====================================================================
+
+#: `ui/src/types/api.ts:SessionViewResponse` 的顶层键 = `af_service._session_view()` 的返回键
+SESSION_VIEW_KEYS = {
+    "ok", "session_id", "mode", "instances", "audit", "bus", "final_states", "nl", "asks",
+}
+
+#: `ui/src/types/api.ts:AskItem` 的必需键 = `af_service._asks_of()` 的产出键（`session_id` 只在聚合端点出现）
+ASK_ITEM_KEYS = {"ask_id", "instance_id", "node_id", "room", "prompt", "automation_id", "spec", "control"}
+
+SESSION_ASK_IR: dict = {
+    "ir_version": "0.2.1",
+    "id": "contract_ask_choice",
+    "name": "契约用例：挂起 ask 后经 HTTP 应答",
+    "version": 1,
+    "mode": "single",
+    "nodes": [
+        {"id": "a1", "kind": "on", "trigger": {"type": "state", "entity_id": "binary_sensor.motion", "to": "on"}},
+        {
+            "id": "q1",
+            "kind": "ask",
+            "prompt": "开灯吗？",
+            "session": "room",
+            "room": "study",
+            "timeout": "60s",
+            "ask": {"kind": "choice", "options": ["开", "关"]},
+        },
+        {"id": "d1", "kind": "set", "var": "decided", "value": "yes"},
+        {"id": "p1", "kind": "pass"},
+    ],
+    "edges": [
+        {"from": "a1", "to": "q1", "kind": "then"},
+        {"from": "q1", "to": "d1", "kind": "then"},  # 结构化应答走 then（不是 yes）
+        {"from": "q1", "to": "p1", "kind": "no"},
+        {"from": "q1", "to": "p1", "kind": "on_timeout"},
+        {"from": "q1", "to": "p1", "kind": "default"},
+        {"from": "d1", "to": "p1", "kind": "then"},
+    ],
+}
+
+
+def _suspend_one_ask(client) -> dict:
+    r = client.post(
+        "/api/sessions",
+        json={
+            "ir": SESSION_ASK_IR,
+            "seed": {"binary_sensor.motion": "off"},
+            "events": [{"entity_id": "binary_sensor.motion", "state": "on"}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_suspended_ask_shows_up_in_the_http_session_view(tmp_path, monkeypatch):
+    """挂起态的视图形状：`asks` 非空、每条带 DB/前端渲染所依赖的全部键。
+
+    `control` 是 `AskSpec.control()` 的产物——前端只认 `widget`/`kind`/`options`，
+    生产者改字段名而这里不跟着红，面板就会静默退化成输入框。
+    """
+    client = _build(str(tmp_path), noauth=True, monkeypatch=monkeypatch)
+    view = _suspend_one_ask(client)
+
+    assert set(view) == SESSION_VIEW_KEYS
+    assert view["ok"] is True and view["mode"] == "sim" and view["nl"]
+    assert len(view["asks"]) == 1, f"事件触发后应停在挂起 ask，实际 {view['asks']}"
+
+    ask = view["asks"][0]
+    assert set(ask) == ASK_ITEM_KEYS
+    assert ask["node_id"] == "q1" and ask["room"] == "study" and ask["prompt"] == "开灯吗？"
+    assert ask["automation_id"] == "contract_ask_choice"
+    assert ask["spec"]["kind"] == "choice" and ask["spec"]["options"] == ["开", "关"]
+    assert ask["control"] == {
+        "widget": "select", "kind": "choice", "prompt": "开灯吗？", "options": ["开", "关"],
+    }
+    # 实例确实停在 ask 节点上，而不是跑完了再补一条记录
+    assert next(i for i in view["instances"] if i["instance_id"] == ask["instance_id"])["current_node"] == "q1"
+
+    assert client.get(f"/api/sessions/{view['session_id']}").json()["asks"] == [ask]
+    # 会话表是**进程内全局**：这条故意留一个挂起 ask，不清掉就会漂到后面的用例里
+    # （`GET /api/asks` 的聚合端点断言"当前没有挂起 ask"，全量跑时会被这里带红）。
+    assert client.delete(f"/api/sessions/{view['session_id']}").json()["deleted"] is True
+
+
+def test_answer_success_branch_returns_the_same_view_with_asks_drained(tmp_path, monkeypatch):
+    """应答**成功**分支（§六 登记的 EXEMPT）：返回同一份九键视图，挂起队列排空，then 边真跑了。"""
+    client = _build(str(tmp_path), noauth=True, monkeypatch=monkeypatch)
+    view = _suspend_one_ask(client)
+    ask = view["asks"][0]
+    sid = view["session_id"]
+
+    r = client.post(
+        f"/api/sessions/{sid}/answer",
+        json={"ask_id": ask["ask_id"], "room": "study", "answer": {"kind": "choice", "value": "开"}},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    assert set(body) == SESSION_VIEW_KEYS, "成功分支返回的是同一份会话视图，不是半个对象"
+    assert body["session_id"] == sid and body["mode"] == "sim"
+    assert body["asks"] == [], "应答成功后挂起 ask 必须消失（否则面板会一直显示待答）"
+
+    inst = next(i for i in body["instances"] if i["instance_id"] == ask["instance_id"])
+    assert inst["vars"].get("ask_answer") == {"kind": "choice", "value": "开"}
+    assert inst["vars"].get("decided") == "yes"  # 走 then 边进了 d1，不是 no/default 直奔 p1
+
+    # 应答效果落在会话上，不只是那次 POST 的返回值
+    assert client.get(f"/api/sessions/{sid}").json()["asks"] == []
+    assert client.delete(f"/api/sessions/{sid}").json()["deleted"] is True
