@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/ADM联动执行计划-AF.md`（DCD 出品，v2.5 联动落地版）
 > 记录人：AutoForge 开发
-> 核实基准：代码侧最新 commit = **`64ca83c`**（其后 `3144879`、`e675c01` 与本条记录所在提交均为文档提交；`git ls-remote origin main` → `e675c012c1d6595e54f5bdb373c1480200ee8190`，与本机 HEAD 一致；本记录与后续文档提交只改文档，不再改判据）。§二/二之二…二之十二 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
+> 核实基准：代码侧最新 commit = **`e6d442a`**（该提交**只新增一份测试** `tests/unit/test_af_cli_serve_lease.py`，生产代码一字未动；其前一个代码侧提交是 `64ca83c`，再往前 `c14503d`；本批文档提交在其后单独入库并同批推送 origin/main）。§二/二之二…二之十三 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
 > 契约真源：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
 > 交叉裁定：`20260929-ADM三仓联动七问`、`20261001-AF-homesdk接入四问`、`20260930-AutoForge后续优化三项`、`20261001-DB目标模式与AF三题` §H、**`20261002-homesdk记账与AF-DB-DPP六件-裁定`**（本轮落地依据，§一 末）
 
@@ -15,10 +15,10 @@
 | 第 0 步 homesdk 0.3.1 接入 | **①② 已交付 / ③④ 不在本回合** | ③ NAS 镜像重烤、④ AgentOps 模板是他仓 main + 生产动作，AF 单方面有代码无权生效 |
 | 第 1 步 AF MQTT 桥 | **①②③④ 已交付** | ④ 为"不订阅 `butler/inbox/*`"，实测白名单门禁只有 7 处 topic 且全在契约表内 |
 | 第 2 步 presence 发布 | **①② 已交付** | LWT + 优雅下线双路；`kill -9` 分支需真 broker，本机无数 |
-| 第 3 步 F9 group 节点 | **①②③④ 已交付** | schema 先行（铁律 #1），原子回滚把手修在 `0dd57b2`、其回归测试在 `34a540c` |
-| 第 4 步 MCP 工具面 | **①②③ 已交付** | ① 命名口径按裁定 ①A 以 AF 现名为准（计划文档已改口径，正式重发由 DCD 出）；② 加 `channel_error` 判别字段（③A）；③ 契约测试随批绿 |
+| 第 3 步 F9 group 节点 | **①②③④ 已交付** | schema 先行（铁律 #1），原子回滚把手修在 `0dd57b2`、其回归测试在 `34a540c`；验收点按点复测：group 三文件分跑 **`31 passed` RC=0**，④ 的"全回滚、无半部署态"由 `test_af_ir_group_apply.py:91` 钉住（§二之十三） |
+| 第 4 步 MCP 工具面 | **①②③ 已交付** | ① 命名口径按裁定 ①A 以 AF 现名为准（计划文档已改口径，正式重发由 DCD 出）；② 加 `channel_error` 判别字段（③A）；③ 契约测试分跑 **`5 passed` + `14 passed` RC=0**（队列侧 14 ≥ 计划写的 13，§二之十三） |
 | 裁定 20261002 · AF 侧六件 | **①A ②A(部分) ③A ④A 已落地；StateProvider B 排队；合并窗后验收未做** | ②A 的 `instance_id` 删除时点 = AF v2.6，本轮不删；窗口后验收需真 broker，本机无 paho-mqtt 且禁 pip install |
-| 第 5 步 后续优化三项 | **①③④ 已交付；② 只落了半边** | ① 时钟单源、③ import-linter 分层、④ tick 自愈逐条 file:line 见 §二；② af_persist 的「顺序追加」子句**未落**（裁定执行约束第 2 条要求「追加写 + 文件头部元信息」，现实现仍是整文件重写）⇒ 已提 DCD（§五 第 9 件），读数与不自主实现的三条理由见 §二之十二 |
+| 第 5 步 后续优化三项 | **①③④ 已交付；② 只落了半边** | ① 单写者租约降级只读、③ import-linter 分层两档、④ tick 线程自愈，逐条 file:line 见 §一；① 的**接缝判据**（serve 抢不到锁 ⇒ `build_app(readonly=True)`）本批补上，两次变异各取到红（§二之十三）；② af_persist 的「顺序追加」子句**未落**（裁定执行约束第 2 条要求「追加写 + 文件头部元信息」，现实现仍是整文件重写）⇒ 已提 DCD（§五 第 9 件），读数与不自主实现的三条理由见 §二之十二 |
 | 第七轮审计 | **finding 属实，已修** | 详见 `docs/audit/审计报告_第七轮_核实与修复.md`；第八轮尚未落 `docs/audit`（本回合实测目录内最新即第七轮，mtime `10-02 11:46`） |
 | 门禁肥化防护（计划外补刀） | **已交付** | `gates.sh` 计数棘轮 + `.gates-tally.txt`（上限 104），三条变异实测能红；AgentOps 模板同步去反引号缺陷 |
 | F4 ③ / F7 前端残留 | **已收口** | `/evidence` 生产态证据视图上线；真机下发的事件回放与撤销按钮端到端真点通（读数见 §一末） |
@@ -39,7 +39,7 @@
 | `pyproject.toml` pin | `pyproject.toml:48` → `homesdk>=0.3.1`（不是 `==`，允许库侧前向修复） |
 | 机制层主路径 | `src/autoforge/af_time.py:110-116` `homesdk_time()` 取 `homesdk.time`；`:149-153` 主路径调机制层，缺席才走 AF fallback |
 | 键名口径（裁定 §五 的 AF 半边） | `af_time.py:90-103`：规范键 `HOMESDK_TZ`，`HOMESDK_` 前缀优先于裸键，与 `homesdk.config` 同一约定；`:84-85` `AF_TZ` 降为过渡别名 |
-| 时区例 | `tests/unit/test_af_house_tz.py` 在本轮 2602 项全绿内含 |
+| 时区例（裁定 §五 的验收量） | `tests/unit/test_af_house_tz.py` 分跑 = **`9 passed` RC=0**（正是计划验收列写的"9 例"；此前记录只写"在全量内内含"，本批按点复测，见 §二之十三） |
 
 **0.3.1 wheel 逐字节核验（本轮新增实测，此前只有本地哈希）**：
 
@@ -136,7 +136,7 @@ to_house_iso(0) → 1970-01-01T08:00:00        RC=0
 | ①A 工具面命名 | 计划文档 §第 4 步 ① 措辞改为 `af_draft` → `af_apply(stage="simulate"/"dry_run"/"save")` 链；代码侧无需改名（现名即口径） | `af_apply.APPLY_STAGES` 与 `STAGE_ALIASES` 既有测试覆盖 | 正式**重发计划**由 DCD 出（裁定 §八.1）；AF 只对齐本地副本，不代替 DCD 定稿 |
 | ②A `ref` = 实例 id | `af_mqtt_bridge.py:258-271` `_envelope`：`ref` 与 `instance_id` 同值，docstring 写明"删除时点 = AF v2.6" | `tests/unit/test_af_mqtt_bridge.py:130-132` 钉住字段集与 `ref == instance_id == "inst-1"`；`instance_id` 双写仍是过渡字段 | v2.6 前不删（破坏性变更须与停机窗同做）；契约表的定义由 DCD 补（裁定 §八.3） |
 | ③A `channel_error` | `af_api.py:817`（`inbox_key_missing` → `True`）、`:821`（签名落盘成功 → `False`） | `tests/contract/test_af_ask_contract.py:172` `is False` / `:197` `is True` | **DB 侧的告警分支不在 AF**（裁定 §八.2 已把义务写进 DB 计划）；AF 单方面加字段≠该 ask 会被真的告警 |
-| ④A 洞察队列持久化 | 新模块 `src/autoforge/af_insight_queue.py`（`InsightRecord:41` / `InsightQueue:68` / `PersistentInsightSink:174` / `InsightQueueFull:36`，`DEFAULT_LIMIT=500`）；桥侧工厂 `af_mqtt_bridge.py:149` `make_durable_ask_sink`；接线 `af_cli.py:1315,1330`（真机/dry-live 起桥时落 `{store_root}/insight_proposals`）；交接 `af_service.py:500 approve_insight` / `:551 reject_insight`；HTTP `af_api.py:733 _insight_queue`、`:742 /api/insights/pending`、`:751 /api/insights/approve`、`:761 /api/insights/reject` | `tests/contract/test_af_insight_queue_contract.py` **13 项**（本回合新增）：落盘后换队列实例仍读得到、入桥 conf 被 `INSIGHT_CONF_CAP=0.59` 封顶仍在 ask 带、队列满 `InsightQueueFull` 且不丢旧条、approve 只生成 `af_pending` 一条 `af_save` 且归档目录 `*/v*.json` 为空（**没部署**）、重复 approve 409、无 IR / 两条自动化 400 且记录仍在 pending、未知 404、只读实例 200 读 + 503 写、坏 JSON 进 `stats()["unreadable"]`、结构约束（队列模块不 import `af_apply/af_pending/af_service/af_deploy/af_executor`，也不持有 `approve`/`deploy` 方法） | 队列没有 UI（`/api/insights/pending` 已可读，面板未做）→ **面板已上线 `/#/insights`**（本批，读数见 §二之四）；`ProposalManager` 的进程内 ask 档保留给测试与分诊，两条路径并存是刻意的 |
+| ④A 洞察队列持久化 | 新模块 `src/autoforge/af_insight_queue.py`（`InsightRecord:41` / `InsightQueue:68` / `PersistentInsightSink:174` / `InsightQueueFull:36`，`DEFAULT_LIMIT=500`）；桥侧工厂 `af_mqtt_bridge.py:149` `make_durable_ask_sink`；接线 `af_cli.py:1315,1330`（真机/dry-live 起桥时落 `{store_root}/insight_proposals`）；交接 `af_service.py:500 approve_insight` / `:551 reject_insight`；HTTP `af_api.py:752 _insight_queue`、`:761 /api/insights/pending`、`:770 /api/insights/approve`、`:780 /api/insights/reject`（行号按 HEAD 重取；旧读数 `:733/:742/:751/:761` 因 `a5c8aa9` 的 events 上限而下移） | `tests/contract/test_af_insight_queue_contract.py` 当时 **13 项**（本回合新增；该文件现为 **`14 passed` RC=0**，后一批补了"契约形状入向到面板带记账"那条，分跑读数见 §二之十三）：落盘后换队列实例仍读得到、入桥 conf 被 `INSIGHT_CONF_CAP=0.59` 封顶仍在 ask 带、队列满 `InsightQueueFull` 且不丢旧条、approve 只生成 `af_pending` 一条 `af_save` 且归档目录 `*/v*.json` 为空（**没部署**）、重复 approve 409、无 IR / 两条自动化 400 且记录仍在 pending、未知 404、只读实例 200 读 + 503 写、坏 JSON 进 `stats()["unreadable"]`、结构约束（队列模块不 import `af_apply/af_pending/af_service/af_deploy/af_executor`，也不持有 `approve`/`deploy` 方法） | 队列没有 UI（`/api/insights/pending` 已可读，面板未做）→ **面板已上线 `/#/insights`**（本批，读数见 §二之四）；`ProposalManager` 的进程内 ask 档保留给测试与分诊，两条路径并存是刻意的 |
 | §四 StateProvider | A（整段 fail-closed）已在 commit `628502a`（第七轮修复）落地，本轮无改动 | `tests/contract/test_state_provider_policy.py` **14 项**（本回合 `--collect-only` 实测）；裁定"共同要求：漂移必须以 `entity_drift` 记账、不许静默"的链是 `af_instance.py:374-392` 空快照回退 → 表达式逐条抛 `UnknownEntity` → `af_executor.py:596-609` `_soft_fail` 记 `ENTITY_DRIFT`（带 `node_id`/`instance_id`/`entity_id`） | **B（逐实体可见漂移）本轮不做**，启动条件按裁定：`af_instance._refresh_snapshot` 下次被真实改动时，或 AF v2.6 窗口。裁定把整段口径判为**有意设计**（不是遗留），所以 B 是加功能不是修 bug |
 | §一 合并停机窗 | AF 侧无代码动作 | — | 窗后验收四项（`compose ps` + `/health` 200 + `mosquitto_sub` 抓到一条含家庭墙钟 `ts` 的 `af/automation/fired` + `adm/autoforge/status` retained `online`）**缺任一项即第 0 步未完成**，本机无 paho-mqtt 且禁 pip install ⇒ 只能随窗做 |
 
@@ -150,7 +150,7 @@ to_house_iso(0) → 1970-01-01T08:00:00        RC=0
 
 | 子任务 | 验收点 | 实测落点 |
 |--------|--------|----------|
-| ① 单写者租约，抢不到锁降级只读（裁定 A） | serve 启动 `try_acquire` 失败→只读 | `src/autoforge/af_cli.py:1365` `readonly = not _lock.try_acquire()` → `:1375` 传给 `build_app(..., readonly=readonly)`；`af_api.py:340-348` `_readonly_guard`，挂在 `:449 /api/build`、`:457 /api/bind`、`:465 /api/sim`、`:528 /api/spec/compile`、`:696 /api/live/run`、`:716 /api/undo/{deploy_id}`（铁律 #6 写面 503） |
+| ① 单写者租约，抢不到锁降级只读（裁定 A） | serve 启动 `try_acquire` 失败→只读 | `src/autoforge/af_cli.py:1366` `readonly = not _lock.try_acquire()` → `:1376` 传给 `build_app(..., readonly=readonly)`；`af_api.py:357-362` `_readonly_guard`，挂在 `:465 /api/build`、`:473 /api/bind`、`:481 /api/sim`、`:545 /api/spec/compile`、`:714 /api/live/run`、`:735 /api/undo/{deploy_id}`（铁律 #6 写面 503）。**接缝判据本批补上**（此前两端各自有测试、中间那根线一条判据都没有）：`tests/unit/test_af_cli_serve_lease.py` 两条，桩 `uvicorn`/`build_app`/桥，锁分别返回 `False`/`True` ⇒ 断言 `build_app` 收到的 `readonly` 为 `True`/`False`；两次变异各取到红（`readonly=False` ⇒ `1 failed` `assert False is True` @ `:70` RC=1；`readonly=True` ⇒ `1 failed` `assert True is False` @ `:81` RC=1），复原后 `2 passed` RC=0。⚠️ 本行旧读数是 `:1365/:1375/:340-348/:449…`，因 `a5c8aa9` 给 `/api/sessions`、`/api/live/run` 装 events 上限而下移了行号，本批按 HEAD 逐条 `grep -n` 重取 |
 | ② `af_persist` 加校验和（裁定 B，不做全量 eventlog） | **本计划的验收点已落；裁定的执行约束少一条子句** | 已落：`src/autoforge/af_persist.py:40` `_SHA256_KEY`、`:76-82` 计算、`:83-89` 校验（无字段=旧格式视为通过，向后兼容）、`records():223-238` 坏文件/校验不过**跳过并 warning**、`save():171-187` 原子替换且**未改存储格式头**；单测三条在库（`tests/unit/test_af_persist.py:106/:224/:235/:249`）。**未落**："顺序追加"这一子句——现状是每实例一个快照文件、覆盖式写。它同裁定另一条"不改存储格式头/不迁移"相抵，也与第五轮把"每条全量重写 + 明细无上限"收成有界的修法反向 ⇒ 不擅自动存储面，提 DCD（§五 第 9 件，见 §二之十二） |
 | ③ import-linter 分层（裁定 B→A 渐进：**两档都已落**，第二档在本批） | 配置 + 违规清单 ≈0 ⇒ `pyproject.toml:79-98` `[tool.importlinter]` 契约 "Service boundary never imported by kernel"；实测 `lint-imports` → **Contracts: 1 kept, 0 broken**（RC=0），runner 同契约 `KEPT`；`.github/workflows/ci.yml:96` 的 `architecture` 作业里 `lint-imports` **已去 `continue-on-error`、作失败门禁**（观察窗 shortfall 与本批读数见 §二之十，追认申请见 §五 第 8 件）。真正的架构硬门仍是 `scripts/check_imports.py`（ci.yml:87）→ 本机 **`Baseline lock: 96 modules, 0 violations`**（判红的是 `violations != 0`，模块数是覆盖面读数）。⚠️ 本行曾写 86：那不是环境差异而是缺陷读数——`.gitignore` 的 `_*.py` 吞掉 `af_closedloop/__init__.py`、grimp 在 runner 上不递归该包，**CI 门比本机少分析 10 个模块**；已修（负向规则 + 新复发门 `scripts/check_pkg_markers.py` 进 `gates.sh`），全链与"还原原状仍能取红"的实测见 §二之十一；**runner 侧的 96 已复测取到**（run 36 日志：`Baseline lock: 96 modules, 0 violations`） |
 | ④ tick 线程自愈，区分原因重启（裁定 C）+ 必补接缝测试 | "SAFE HALT 后 watchdog 不得重启"绿 | `src/autoforge/af_live.py:77-103` `tick_watchdog_pass`（唯一自愈分支是"意外终止"；`safe_halt`/`stop` 分别返回 `held_safe_halt`/`stopped` 且不重启）；接缝测试 `tests/unit/test_af_live.py:306` `test_watchdog_does_not_restart_after_safe_halt`（断言 `calls == []`），对照 `:315` 意外终止确实重启、`:325` 存活时不动作；`af_tick_supervisor.py:185` HALTED 短路、`:222-224` docstring 写明安全红线 |
@@ -863,6 +863,55 @@ $ python scripts/gh_ci_status.py log 111090382310 包标记
 
 ---
 
+## 二之十三、本批读数：验收点按"点"复测，抓到第 5 步 ① 的**接缝无判据**与一批过期行号
+
+上一批的自审方式是"整步对整步"，这一批改成**把计划验收列的原文逐条当判据去跑**。差异在于：
+整步对账看的是"有没有测试覆盖这块"，逐条对账看的是"验收列写的那个量，实测到没到"。三条读数：
+
+| 计划验收列（原文） | 当场跑的判据 | 实测 |
+|---|---|---|
+| 第 0 步 ②：`tests/unit/test_af_house_tz.py` **9 例**仍绿 | `python -m pytest -q tests/unit/test_af_house_tz.py` | **`9 passed` RC=0**（此前记录只写"在全量 2602 项内含"，没按 9 例这个量对过） |
+| 第 4 步 ③：`test_af_db_contract.py` + `test_af_insight_queue_contract.py`（队列 **13 项**） | 两文件分跑 | `5 passed` + **`14 passed`** RC=0 ⇒ 队列侧 14 ≥ 计划的 13 |
+| 第 3 步 ④：编排后模拟中途失败 ⇒ 已部署部分全回滚、无半部署态 | `python -m pytest -q tests/test_af_ir_group{,_apply,_mode}.py` | **`31 passed` RC=0**，其中 `tests/test_af_ir_group_apply.py:91` `test_group_atomic_rollback_on_sim_failure` 就是这一条；① 的"旧图可共存读"由 `tests/test_af_ir_group.py:66` `test_ir_version_0_3_0_supported_and_old_coexists`（0.3.0/0.2.1 支持、0.4.0 拒）钉住 |
+
+### 抓到的一条：① 的两端都有测试，中间那根线没有
+
+`FileLock.try_acquire` 的互斥语义有测试（`tests/unit/test_v0_9_multiproc.py:316-323`），API 层只读拒绝有测试
+（`tests/unit/test_af_api.py:89/:96`、`test_af_undo_http.py:142`、`test_af_watch_f4_feeds.py:314`），
+但 **serve 把 `not try_acquire()` 的结果传给 `build_app` 这一步一条判据都没有**——按铁律 #5，
+"两端绿"不等于"接缝绿"（EXEMPT ≠ VERIFIED）；按铁律 #8，这条接缝当时**不可能变红**。
+
+补上 `tests/unit/test_af_cli_serve_lease.py`（桩 `uvicorn`/`build_app`/联动桥，锁分别返回 `False`/`True`）：
+
+```
+$ python -m pytest -q tests/unit/test_af_cli_serve_lease.py
+2 passed in 1.43s                                    RC=0
+
+# 变异一：af_cli.py:1376 的 readonly=readonly → readonly=False
+1 failed, 1 passed     tests/unit/test_af_cli_serve_lease.py:70: assert False is True   PYTEST_RC=1
+# 变异二：同处 → readonly=True
+1 failed, 1 passed     tests/unit/test_af_cli_serve_lease.py:81: assert True is False   PYTEST_RC=1
+# 复原（`git diff -- src/autoforge/af_cli.py` 空）
+2 passed in 1.43s                                    RC=0
+```
+
+### 顺带纠的账：§一 第 5 步 ① 那行的行号整批过期
+
+`a5c8aa9` 给 `/api/sessions`、`/api/live/run` 装 events 上限之后，`af_api.py`/`af_cli.py` 的行号整体下移，
+而记录里仍写 `:1365/:1375/:340-348/:449/:457/:465/:528/:696/:716`。本批按 HEAD 逐条 `grep -n` 重取为
+`:1366/:1376/:357-362/:465/:473/:481/:545/:714/:735`（见 §一 该行的 ⚠️ 注）。**这类过期不会让任何东西变红**，
+只会让下一个人按行号跳到别的函数上——和 §二之十一 那条 `.gitignore` 缺陷同属"静默失真"一族，只是危害小一个量级。
+
+### 本批全链读数（HEAD 含新增测试）
+
+- `python -m pytest -q` → **RC=0**，`2637 passed, 51 skipped, 1 warning, 7 subtests passed in 90.97s`（比上批 2635 多两条＝本批接缝测试）
+- `GATES_PYTHON=python bash gates.sh` → **RC=0**：AST 新增 0 / 存量 104、棘轮 104/104、
+  undefined-name src **96** + tests **152** 文件（上批 151，本批多一个测试文件）、主题白名单 7 处、包标记 5 包 / 索引 96 个 `.py`、import 冒烟 0 违规
+
+一个字节没改生产代码（两处变异都已复原并核过 `git diff` 为空）；本批产物 = 一条接缝判据 + 一次验收点逐条对账 + 行号纠偏。
+
+---
+
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
 
 | commit | 内容 |
@@ -895,6 +944,7 @@ $ python scripts/gh_ci_status.py log 111090382310 包标记
 | 本批之十三（第 5 步 ③ 第二档：架构门升硬，`64ca83c` 已推） | `ci.yml` 的 `architecture` 作业 `run: lint-imports` **去 `continue-on-error`**（改后全文件该键命中数 0，`yaml.safe_load` 复解析五个作业）；`pyproject.toml` 只改注释、契约面一个字没动。读数：本机 `Contracts: 1 kept, 0 broken` RC=0、runner run 34 同契约 `KEPT`、`check_imports.py` 那行 `Baseline lock: 86 modules, 0 violations`（**这条 86 下一批被查明是缺陷读数、不是环境差异，见 §二之十一**）。**能变红实测**：给 `af_time.py` 加一行 `from autoforge import af_service` ⇒ RC=1 `0 kept, 1 broken`，并连带报出 `af_ir → af_bus → af_time → af_service` 的**间接**链（`check_imports.py` 只锁直接反向依赖）。**shortfall 已登记**：裁定是"一个版本**或** 2 周"，而该步进 CI 是 `20356dc`（10-01）、日历只走 2 天（绿的是 run 28–34）⇒ 属 AF 单方提前落第二档，投追认申请（§五 第 8 件）。门禁 RC=0、棘轮 104/104 不变。读数见 §二之十 |
 | 本批之十四（架构门禁口径修复：gitignore 吞包标记 + 复发门，`c14503d` 已推） | `.gitignore` 加 `!**/__init__.py`（并把 runner `86 modules` 的根因写进注释）；`src/autoforge/af_closedloop/__init__.py` **首次入库**，内容从"与 `runtime.py` 逐字节相同的副本"（`diff` RC=0，两份 `GuardViolation` 不同类、`except` 会漏）改成薄转发；新增 `scripts/check_pkg_markers.py`（判 **git 索引**而非磁盘：磁盘检不出、只有 checkout 才缺）并接进 `gates.sh` 一节 + RC 聚合分支。可红性两条实测：假包 `af_probe/mod.py` 入索引不放标记 ⇒ RC=1；`git rm --cached af_closedloop/__init__.py` 还原历史原状 ⇒ RC=1 并指名该目录，装回 RC=0。全链：包标记门 RC=0（5 包 / 索引 96 个 `.py`）、`check_imports.py` RC=0 / **96 modules**、`lint-imports` RC=0 / 96 files 281 deps KEPT、`gates.sh` RC=0、`pytest -q` RC=0（2635 passed / 51 skipped）。跨仓外溢 + 第二档时点追认合成一份 DCD 申请（§五 第 8 件）。读数见 §二之十一 |
 | 本批之十五（完成度自审抓到第 5 步 ② 半边未落 + runner 96 复测销账） | **纯文档，`af_persist` 一个字节没动**。§〇/§一 把"①②③④ 已交付""裁定全部落地"改成逐条精确状态（校验和 + 损坏段跳过已落、顺序追加未落、格式头未动）；新增 §二之十二 记三条张力；DCD 申请投 `20261003-AF-af_persist追加写半边与裁定执行约束张力-决策申请.md`（§五 第 9 件，A/B/C，AF 倾向 A）；§六 增一条残留并与 `BoundedCache` 那条分列。同批把 §二之十一 的"runner 侧 96 待取"补齐为实测（run 36 五作业全 `completed/success`；`log 111090382332 modules` → `Baseline lock: 96 modules, 0 violations`；`log … Contracts` → `1 kept, 0 broken`；`log 111090382310 包标记` → 索引内 96 个 `.py`），§六 该条残留随之销账 |
+| 本批之十六（验收点按"点"复测 + ① 的接缝判据，`e6d442a`） | 新增 `tests/unit/test_af_cli_serve_lease.py` 两条：桩 `uvicorn`/`build_app`/联动桥，锁分别返回 `False`/`True` ⇒ `build_app` 收到的 `readonly` 为 `True`/`False`。两次变异各取到红（`readonly=False` ⇒ `:70 assert False is True` RC=1；`readonly=True` ⇒ `:81 assert True is False` RC=1），复原后 `2 passed` RC=0 且 `git diff -- src/autoforge/af_cli.py` 为空。文档侧：§一 第 5 步① 的行号按 HEAD 重取（`:1366/:1376/:357-362/:465/:473/:481/:545/:714/:735`，旧读数因 `a5c8aa9` 全部下移）；§一 第 0 步② 改记"9 例"实测量；§〇 第 3/4 步行补分跑读数（`31 passed`、`5 + 14 passed`）；新增 §二之十三。全链：`pytest -q` **2637 passed / 51 skipped RC=0**、`gates.sh` RC=0（AST 0 新增/存量 104、棘轮 104/104、undefined-name src 96 + tests **152**、主题 7、包标记 96、冒烟 0） |
 
 
 ## 四、审计侧
