@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/ADM联动执行计划-AF.md`（DCD 出品，v2.5 联动落地版）
 > 记录人：AutoForge 开发
-> 核实基准：代码侧最新 commit = **`743aadf`**（`743aadf` 是**工具名单门禁**那一组：`scripts/check_tool_names.py` + `gates.sh` 新节 + 22 条反例 + **两处死映射删除**（`af_orchestrator.observe()` 按名调注册表里没有的 `af_live`、`af_runtime_ext.mcp_tools()` 另抄一份含 `af_approve_proposal` 的五人名单），净 `0 3` / `1 14`；`9a83ead`+`4a3e3b1` 是**参数注入门禁**那一组：门禁脚本 + `gates.sh` 新节 + 22 条反例 + 一处真缺陷（`af_mcp._t_health` 从不探它服务的 store，+3/−1）+ 双轨对拍两条**带理由**的现场豁免，且门按 `store`/`readonly` **参数表**收、`clock` 有意不收；`e6d442a`/`0722828`/`9c6deb9` **只加测试**，`fc2bba6` 加的是**一门新门禁** `scripts/check_states_fanout.py` + `gates.sh` 一节 + 它的反例测试，`12cea64`/`dc8ac0d`/`af2ee56` 是动 `src/` 的三笔：时钟口径 + 三条判据（+11/−2）/ 真机闸门在 MCP 面两处 fail-open（4 文件 +196/−24）/ 观察期恢复路径丢 `auto_rollback` 旗子（+21/−8）。§二/二之二…二之十九 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
+> 核实基准：代码侧最新 commit = **`c7b97b9`**（`c7b97b9` 把**工具名单门禁**的"第二份名单"形状从字典键扩到集合/列表/元组（+3 反例，M-6 实测 `RC=1` 两处行号）；`743aadf` 是那一族的**首版**：`scripts/check_tool_names.py` + `gates.sh` 新节 + 22 条反例 + **两处死映射删除**（`af_orchestrator.observe()` 按名调注册表里没有的 `af_live`、`af_runtime_ext.mcp_tools()` 另抄一份含 `af_approve_proposal` 的五人名单），净 `0 3` / `1 14`；`9a83ead`+`4a3e3b1` 是**参数注入门禁**那一组：门禁脚本 + `gates.sh` 新节 + 22 条反例 + 一处真缺陷（`af_mcp._t_health` 从不探它服务的 store，+3/−1）+ 双轨对拍两条**带理由**的现场豁免，且门按 `store`/`readonly` **参数表**收、`clock` 有意不收；`e6d442a`/`0722828`/`9c6deb9` **只加测试**，`fc2bba6` 加的是**一门新门禁** `scripts/check_states_fanout.py` + `gates.sh` 一节 + 它的反例测试，`12cea64`/`dc8ac0d`/`af2ee56` 是动 `src/` 的三笔：时钟口径 + 三条判据（+11/−2）/ 真机闸门在 MCP 面两处 fail-open（4 文件 +196/−24）/ 观察期恢复路径丢 `auto_rollback` 旗子（+21/−8）。§二/二之二…二之十九 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
 > 契约真源：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
 > 交叉裁定：`20260929-ADM三仓联动七问`、`20261001-AF-homesdk接入四问`、`20260930-AutoForge后续优化三项`、`20261001-DB目标模式与AF三题` §H、**`20261002-homesdk记账与AF-DB-DPP六件-裁定`**（本轮落地依据，§一 末）
 
@@ -25,9 +25,9 @@
 | 真机入口面的闸门对账（计划外补刀） | **已交付两处 / 第三处待裁** | 接缝盘点的第三个产物：同一盘点前两条落在 `af_cli`/`af_service`，这条落在 **HTTP 与 MCP 两个入口面**。实测两处 fail-open——① `af_mcp._t_live` 没递 `store` ⇒ Tier-0 设备保护（`device_acl.json`）与实体健康在 Agent 路径上整个失效，人点被拦的设备 Agent 能写；② events 上限写在端点层 ⇒ MCP 三面（`af_live_run`/`af_simulate`/`af_sessions`）无上限。修法把判据上收到 `af_service`（两条入口共用的咽喉），`MAX_REPLAY_EVENTS` + 三个服务层调用点，`_t_live` 补 `store=store`（`dc8ac0d`）。反真空靠一条**正向对照**（无 ACL 时 MCP 路径真下发）。三次变异 `1 failed, 18 passed`/`2 failed, 17 passed`/`2 failed, 17 passed`（§二之十六）。**同批抓到的第三件（单写者租约只装 HTTP 面）不属 AF 可自决**：它要给 DB 新增一个可见的拒收模式 ⇒ 投裁定（§五 第 10 件），代码未动 |
 | 生产态验证证据与 canary 策略位盘点（计划外补刀） | **已交付** | 接缝盘点第六条命中，也是**第三条真缺陷**：`canary: {duration: "15m", auto_rollback: false}` 是"只观察、别自动反向下发"的显式选择，但 `pending_canary` 挂起元信息没存这个旗子 ⇒ 观察期结束的 `resume` 分支直接 `wrapped.rollback()`，绕开 `CanaryGuard.auto_rollback` 那一层判断；无 duration 的立即检查路径却尊重它。方向是"比要求的更自动"，且这条 resume 是挂起观察的**常规**唤醒路、不是崩溃恢复专用。`af2ee56` 把旗子带过接缝（缺键按 True，旧快照行为不变）、恢复侧改用真 `CanaryGuard.check_and_rollback`（回滚与否只留一处实现），不回滚仍记 `failed`+`entity_drift` 并在 reason 写明"未回滚"。同批盘了 `af_watch` 三个喂入点的 status 档对齐（shadow/立即 canary/冲突各在其位），并登记一处同名碰撞（`af_audit.record_conflict` vs `af_watch.record_conflict`，非缺陷）。三次变异各 `1 failed, 25 passed`（§二之十七） |
 | 参数递错那一族升成常驻门禁（计划外补刀） | **已交付，且抓到第四处真缺陷** | 前六条同族站点有五条靠手扫；这一批把判据做成 `scripts/check_param_injection.py` + `gates.sh` 新节（CI 的 `quality-gates` 跑的就是 `bash gates.sh` ⇒ 本机与 runner 同口径判红）。按**参数表**收（`store`/`readonly`），`clock` **有意不收**（默认值是仿真锚点、是设计，§二之十五）。首跑抓到 `af_mcp._t_health` 从不探它服务的 store ⇒ Agent 面 `store_ok` 永远 `null` 而 HTTP 面是 `true`（读面证据缺失，铁律 #5）；五处变异各红一次，读数见 §二之十八 |
-| 名单手抄那一族扫掉＝§六 挂了四批的最后一条接缝（计划外补刀） | **已交付，盘到两处第二份名单并删除** | 「TOOLS→caps 之外有没有第二次工具名单映射」这条以前**既没清单化也没有能判红的门**。盘点必须走 AST：全文正则扫 `af_*` 得 108 个串/77 个不在注册表，几乎全是模块名（`af_live.py` 本身就是模块）；只取字符串常量且整串 fullmatch 工具名形状 ⇒ 34 个/3 个不在 `TOOLS`（那 3 个是指标标签名，非工具名）。删除前的读数是 40/9，多出的 6 个就是两处真映射：`af_orchestrator.observe()` 按名调 `af_live`（真名 `af_live_run`，`_call_safe` 吞异常 ⇒ 这条路**永不响**）、`af_runtime_ext.mcp_tools()` 另抄五人名单且从未接线，其中 `af_approve_proposal` 与裁定 20261002 §三 ④A「人批后才进可执行队列」正面冲突。两处都是死代码 ⇒ **删除而非接线**（单提交可 revert）。新门 `scripts/check_tool_names.py`：按名调用必须命中 `TOOLS`、`TOOLS` 之外 ≥2 个 `af_*` 键的字典即第二份名单、**读不到注册表锚点 exit 2**（不做假绿）；22 条反例含"不误响"主干。五处变异分档红（`1/1/1/2/0`），并记账两处自踩：变异驱动把四次 patch 都写在循环前 ⇒ 前三条读数被第四条遮蔽成同一种红（"全红同一句"不是门严是没隔离变量）；自家 `gates.sh` 红分支里的裸反引号被 bash 当命令替换 ⇒ `readonly` 把整个 shell 环境 dump 进结论行（三行已转义并实跑复读）。见 §二之十九 |
+| 名单手抄那一族扫掉＝§六 挂了四批的最后一条接缝（计划外补刀） | **已交付，盘到两处第二份名单并删除** | 「TOOLS→caps 之外有没有第二次工具名单映射」这条以前**既没清单化也没有能判红的门**。盘点必须走 AST：全文正则扫 `af_*` 得 108 个串/77 个不在注册表，几乎全是模块名（`af_live.py` 本身就是模块）；只取字符串常量且整串 fullmatch 工具名形状 ⇒ 34 个/3 个不在 `TOOLS`（那 3 个是指标标签名，非工具名）。删除前的读数是 40/9，多出的 6 个就是两处真映射：`af_orchestrator.observe()` 按名调 `af_live`（真名 `af_live_run`，`_call_safe` 吞异常 ⇒ 这条路**永不响**）、`af_runtime_ext.mcp_tools()` 另抄五人名单且从未接线，其中 `af_approve_proposal` 与裁定 20261002 §三 ④A「人批后才进可执行队列」正面冲突。两处都是死代码 ⇒ **删除而非接线**（单提交可 revert）。新门 `scripts/check_tool_names.py`：按名调用必须命中 `TOOLS`、`TOOLS` 之外 ≥2 个 `af_*` 键的字典即第二份名单、**读不到注册表锚点 exit 2**（不做假绿）；22 条反例含"不误响"主干。五处变异分档红（`1/1/1/2/0`），并记账两处自踩：变异驱动把四次 patch 都写在循环前 ⇒ 前三条读数被第四条遮蔽成同一种红（"全红同一句"不是门严是没隔离变量）；自家 `gates.sh` 红分支里的裸反引号被 bash 当命令替换 ⇒ `readonly` 把整个 shell 环境 dump 进结论行（三行已转义并实跑复读）。**同批把门扩到集合/列表/元组**（`c7b97b9`：第二份名单不只长成像字典，`WRITE_TOOLS = {…}` 这一族同样算，扩前盘 src 该形状 **0 处** ⇒ 不误响；M-6 实测 `RC=1` 指到两行行号），并把 `TOOLS→caps` 的另一半盘成读数：**scope/caps 是 `TOOLS` 每个元组的第 5 项、与名字同源**，不是第二份名单。见 §二之十九 |
 | F4 ③ / F7 前端残留 | **已收口** | `/evidence` 生产态证据视图上线；真机下发的事件回放与撤销按钮端到端真点通（读数见 §一末） |
-| GitHub CI | **首次可读，且从"永久红"修到连续绿；读数路已成脚本** | 实测 run 1–27 `conclusion` 全为 `failure`（建仓以来一条没绿过），三个红因全在版本/判据层而非产品逻辑：pydantic-v2-only 的 `Field(max_length=)` 让 CI（pydantic 1.10.12）**0 条测试跑过**、undefined-name 门禁自己用了 3.12+ 的 `ast.TypeAlias`（CI 是 3.11）、真 vhass 的 skip 判据问"包能否 import"而非"插件注册了没"。三条各钉能变红的反例后，run 28 五作业全 `success`，CI 与本机通过/跳过数逐字相同（2621/51）。**run 31（守卫那次提交）五作业再次全 `completed/success`**，且 runner 侧给出安装步的实测读数 `fetch 主机读数：npmmirror=0 npmjs=87`。读数路径固化为 `scripts/gh_ci_status.py`（`runs`/`jobs`/`annotate`/`log`，纯标准库、只 GET、不打印凭证；`log` 先停 302 再无凭证取正文，免得把 token 带给日志存储域）。读数与残留见 §二之五、§二之八。**run 36（commit `3144879`，含架构门禁口径修复那批）五作业再次全 `completed/success`，runner 侧读到 `Baseline lock: 96 modules, 0 violations` 与 `Contracts: 1 kept, 0 broken`** ⇒ CI 架构门的覆盖面与本机同口径已是实测，不再是"已修 + 待复测"（§二之十一）。**run 39（`daa3af7`）与 run 40（`cd5e1bc`）也已 `completed/success`**；**run 41（`1474a7f`）、run 42（`4a63b46`）、run 43（`3d25ed0`）三作业面全绿**，其中 run 43 五作业逐条 `completed/success`（`adm-linkage-contracts`/`ui-typecheck-build`/`quality-gates`/`pytest`/`layering-gates`，`failed_steps` 全空），runner 侧正文读数 `2652 passed, 51 skipped, 1 warning in 76.98s` 与本机 §二之十五 逐字相同，`quality-gates` 正文含新门禁那行 `✓ 状态源扇出门禁干净（扫描 96 个文件…）` ⇒ 连续绿已到 **10 条（run 34–43）**，且新门禁在 runner 上的口径与本机一致（不是只在本机生效的软门） |
+| GitHub CI | **首次可读，且从"永久红"修到连续绿；读数路已成脚本** | 实测 run 1–27 `conclusion` 全为 `failure`（建仓以来一条没绿过），三个红因全在版本/判据层而非产品逻辑：pydantic-v2-only 的 `Field(max_length=)` 让 CI（pydantic 1.10.12）**0 条测试跑过**、undefined-name 门禁自己用了 3.12+ 的 `ast.TypeAlias`（CI 是 3.11）、真 vhass 的 skip 判据问"包能否 import"而非"插件注册了没"。三条各钉能变红的反例后，run 28 五作业全 `success`，CI 与本机通过/跳过数逐字相同（2621/51）。**run 31（守卫那次提交）五作业再次全 `completed/success`**，且 runner 侧给出安装步的实测读数 `fetch 主机读数：npmmirror=0 npmjs=87`。读数路径固化为 `scripts/gh_ci_status.py`（`runs`/`jobs`/`annotate`/`log`，纯标准库、只 GET、不打印凭证；`log` 先停 302 再无凭证取正文，免得把 token 带给日志存储域）。读数与残留见 §二之五、§二之八。**run 36（commit `3144879`，含架构门禁口径修复那批）五作业再次全 `completed/success`，runner 侧读到 `Baseline lock: 96 modules, 0 violations` 与 `Contracts: 1 kept, 0 broken`** ⇒ CI 架构门的覆盖面与本机同口径已是实测，不再是"已修 + 待复测"（§二之十一）。**run 39（`daa3af7`）与 run 40（`cd5e1bc`）也已 `completed/success`**；**run 41（`1474a7f`）、run 42（`4a63b46`）、run 43（`3d25ed0`）三作业面全绿**，其中 run 43 五作业逐条 `completed/success`（`adm-linkage-contracts`/`ui-typecheck-build`/`quality-gates`/`pytest`/`layering-gates`，`failed_steps` 全空），runner 侧正文读数 `2652 passed, 51 skipped, 1 warning in 76.98s` 与本机 §二之十五 逐字相同，`quality-gates` 正文含新门禁那行 `✓ 状态源扇出门禁干净（扫描 96 个文件…）` ⇒ 连续绿已到 **10 条（run 34–43）**，且新门禁在 runner 上的口径与本机一致（不是只在本机生效的软门）。**此后 run 44（`cf6160d`）、run 45（`a94ca71`）、run 46（`d992f29`）三条 `completed/success`**，**run 47（`b1f0ec4`，工具名单门禁那批）的 `quality-gates` 与 `ui-typecheck-build` 已 `completed/success`**，且 `quality-gates` 正文逐字读到 `✓ 工具名单门禁干净（扫描 96 个文件，注册表 31 个工具，按名调用点全部命中，现场豁免 0 处）`——与本机 §二之十九 的读数**逐字相同**（runner Python 3.11 / 本机 3.13.2，纯标准库 AST 门两版都跑）⇒ 连续绿延伸到 **13 条（run 34–46）**，run 47 其余三作业取读数时仍 `in_progress`（§二之十九） |
 | DCD 20261002 §一（CI 锁文件源）| **裁定 (b) 已落地并已在 runner 上取到读数** | 只按原文写 `--registry=https://registry.npmjs.org` 经实测是**空操作**（fetch 87+87 行仍在 `registry.npmmirror.com`/`cdn.npmmirror.com`），必须配 `--replace-registry-host=always`；安装步另加"主机自证"守卫（CI 绿不能证明没吃镜像）。逐字节对账 137/137 `integrity` MATCH ⇒ 锁文件字节未动。§二之七 末尾"本机 npm 11.9.0 / runner 10.x，只有 push 之后才知道"的残留**已销账**（runner `npmmirror=0 npmjs=87`）。回执已投 DCD（含 §四 判例 2 的证据更正：`@types/node` tarball 两源逐字节相同、根目录差异不是重打包痕迹）。见 §二之七、§二之八 |
 | `ma/insights` **入向与契约表对账**（本批新抓） | **AF 侧已按契约收，跨仓三问已交 DCD** | 拿着裁定 Q3 之后的载荷行逐条对 AF 的 `ingest_insight()`：必填的 `hypothesis_id`/`natural_language`/`conf` **三项契约一个都不发** ⇒ 每一条按契约发来的洞察都被拒（判例 1 的静默归零，面换到 AF 入口）。改法：契约键优先 + 旧键别名、缺 `conf`（含 `{"conf": null}` 这种空占位）按 0.0 入 ask 档并记 `conf_reported=false`（坏报照旧拒、封顶 0.59 不动）、契约字段有界落 `transport` 并出 `/api/insights/pending`，面板对缺报显示「未上报」而不是 `0.00`。`conf`/稳定 id/`intent` 三处空缺 AF 不能自决 → §五 第 7 件。见 §二之八 |
 | UI 类型门禁（上一版登记的债） | **已收口（含下一批零 `any`）** | 15 条 `vue-tsc` 错误清零，`type-check` 改 `--force` 防缓存假绿，`ci.yml` 新增 `ui` 硬门 job；过程中抓到"两个按钮从未接线"与"mock 夹具少回两字段"两条真缺陷（§二之二）。同族第二批：API 层四处 `request<any>` 换成后端真形类型并逐键与在线响应对账，`grep request<any> ui/src` 已无匹配（§二之三） |
@@ -1452,7 +1452,7 @@ DRIVER_RC=0
 
 ---
 
-## 二之十九、"名单手抄"这一族扫掉：`check_tool_names.py` 与它删掉的两处死映射（`743aadf`）
+## 二之十九、"名单手抄"这一族扫掉：`check_tool_names.py` 与它删掉的两处死映射（`743aadf` + `c7b97b9`）
 
 §六 挂了四批的最后一条同族缺口是「**TOOLS→caps 之外有没有第二次工具名单映射**」——它和
 §二之十四/十五/十六/十七 那几条一样，**不会让任何东西变红，只会让该红的不红**。本批盘点并做成门禁。
@@ -1533,17 +1533,48 @@ bash: line 1: store: command not found
 ```
 这是铁律 #8 的另一面：**红路径自身也要读一次**——一条从没走过的输出分支和一条从没写过的判据一样不可信。
 
+**`TOOLS→caps` 那一半的答案：caps 不是第二份名单**。`af_mcp.py:812` 解包的是
+`_name, _desc, _schema, fn, scope = tool`——scope/caps 是 **`TOOLS` 每个元组的第 5 项**，
+和名字同源，不存在"改名时 caps 那边不知道"。所以这一半无需第二真源，登记为已盘。
+
+**同批将门扩到集合/列表/元组（`c7b97b9`）**：上一版只判字典键，但"手抄枚举"这一族不只长成像字典——
+`WRITE_TOOLS = {"af_save", "af_live_run"}` 这种集合/元组同样是第二真源。扩之前当场盘 src：
+容器字面量里 ≥2 个工具名形状字符串的形状 **0 处**（今天没有 ⇒ 扩过去不会误响）。变异 M-6 实测：
+```
+[M-6 集合/元组式第二份名单贴进 af_orchestrator] RC= 1
+  src/autoforge/af_orchestrator.py:2618: 这里是第二份工具名单（af_live_run、af_save）——…
+  src/autoforge/af_orchestrator.py:2619: 这里是第二份工具名单（af_health、af_live_run）——…
+还原逐字节一致 = True
+[收尾复跑] RC= 0
+```
+反例 +3 条（集合红 / 元组红 / 只有一个工具名的列表不红）。**`bytes` 字面量只能 ASCII 这个坑本批又踩一次**
+（驱动里写 `anchor=b'\n\n# ---------- 内部流程 ----------'` 直接 `SyntaxError`）——§二之十八 记过，
+记了还会踩，说明它得靠"写完立刻跑一遍"而不是靠记忆兜。
+
+**CI 复测（`743aadf`+`b1f0ec4` 那次 push）**：run 46（`d992f29`）`completed/success`；
+**run 47（`b1f0ec4`）`quality-gates` 与 `ui-typecheck-build` 已 `completed/success`**，runner（Python 3.11）
+正文逐字读到新门那两行：
+```
+2026-10-03T03:34:25.7364258Z ══ 工具名单门禁（MCP 工具名只有一个注册表）═══════════════════════
+2026-10-03T03:34:26.1934643Z ✓ 工具名单门禁干净（扫描 96 个文件，注册表 31 个工具，按名调用点全部命中，现场豁免 0 处）
+```
+——与本机 §二之十九 的读数**逐字相同**（96 文件 / 31 工具 / 豁免 0），新门不是只在本机生效的软门。
+`pytest`/`adm-linkage-contracts`/`layering-gates` 三作业读数写作时仍 `in_progress`，取到结论后另记。
+
 **本批全链读数**：
 - `python scripts/check_tool_names.py src` → **RC=0**，
   `✓ 工具名单门禁干净（扫描 96 个文件，注册表 31 个工具，按名调用点全部命中，现场豁免 0 处）`
-- `python -m pytest -q` → **RC=0**，`2703 passed, 51 skipped, 1 warning, 7 subtests passed in 101.45s`
-  （2681 → +22：门禁反例 22 条，全部当场新增）
+- `python -m pytest -q`（`743aadf` 那次）→ **RC=0**，
+  `2703 passed, 51 skipped, 1 warning, 7 subtests passed in 101.45s`（2681 → +22：门禁反例 22 条）
+- `python -m pytest -q`（扩到集合/元组之后，`c7b97b9`）→ **RC=0**，
+  `2706 passed, 51 skipped, 1 warning, 7 subtests passed in 89.08s`（再 +3：集合红 / 元组红 / 单名列表不红）
 - `GATES_PYTHON=python bash gates.sh` → **RC=0**：AST 0 新增/基线 104、棘轮 104/104、
   undefined-name src 96 + tests **158** 文件、主题白名单 7、包标记 96、状态源扇出 96、
   参数注入 96/96/豁免 2、**工具名单 96 文件/31 工具/豁免 0**、import 冒烟 0
 - `git diff --numstat`（删除前后各读一次）→ `0 3 af_orchestrator.py` / `1 14 af_runtime_ext.py`，
   两个文件都是 LF 文件、净删行为无异常；`gates.sh` 仍 `CRLF 0`
-- 提交 `743aadf`（门禁 + 两处删除 + 22 条反例 + `gates.sh` 新节与红分支转义）
+- 提交两笔：`743aadf`（门禁 + 两处死映射删除 + 22 条反例 + `gates.sh` 新节与红分支转义）与
+  `c7b97b9`（同族扩到集合/列表/元组 + 3 条反例 + caps 同源这一条盘成读数）
 
 ---
 
@@ -1589,6 +1620,7 @@ bash: line 1: store: command not found
 | 本批之二十三（`af_watch` 那半张盘点：观察期把 `auto_rollback` 丢在接缝上，`af2ee56`） | 第三条真缺陷、也是本族第一次落在**安全策略位**上：`canary: {duration: "15m", auto_rollback: false}` 的旗子在 `pending_canary` 挂起元信息里**没有对应键** ⇒ `resume(kind="on_timeout")` 重建 `CanaryResult` 后用 `SimpleNamespace` 假 guard、直接 `wrapped.rollback(adapter)` 无条件反向下发；同 IR 无 duration 的立即检查路径却走 `CanaryGuard.check_and_rollback` 尊重它。错向是"比操作员要求的更自动"，`af_scanner` P1-2 只要求"配了 canary"不要求旗子为真 ⇒ 生产可达；且该 resume 是挂起观察的常规唤醒路（`pending_canary` 随实例快照持久化），不是崩溃恢复专用。修法三条：挂起元信息加 `auto_rollback`（读侧 `… .get("auto_rollback", True)`，**缺键按 True**=旧快照行为不变、不新增迁移），恢复侧改用真 `CanaryGuard(states, auto_rollback=旗子)` 并调 `check_and_rollback()`（回滚与否只留一处实现，两路不可能再分叉），不回滚照旧记 `failed`+`entity_drift` 且 reason 写"未回滚，留给人判断"（铁律 #5）。新判据 `test_observe_window_resume_honours_auto_rollback_false` 修复前先红（`1 failed, 9 passed` RC=1，红在调用序列多出一个 `light.turn_off`），正向对照用同文件既存的 `…_rolls_back_on_drift`（真出 turn_off）；三次变异（不带旗子 / 绕开 guard / 读了又覆盖）各 `1 failed, 25 passed` RC=1、`restored identical: True`。同批盘完 `af_watch` 三个喂入点的 status 档对齐（shadow 只在 MATCHED/MISSED 喂、立即 canary 三档齐、冲突 ALLOW 不喂），并登记 `af_audit.record_conflict` 与 `af_watch.record_conflict` 的同名碰撞为**非缺陷**。全链：`pytest -q` **2658 passed / 51 skipped RC=0（94.77s）**、`gates.sh` RC=0（undefined-name src 96 + tests 156）；`af_executor.py` +21/−8 |
 | 本批之二十四（参数递错那一族升成常驻门禁，`9a83ead`+`4a3e3b1`） | 第六条同族站点不再手扫：`scripts/check_param_injection.py` 静态判**调用了"签名里带关键参数且有默认值"的模块级函数却没递那个参数**，`gates.sh` 加一节 ⇒ CI `quality-gates` 继承为硬门。参数表 `TARGET_PARAMS = (store, readonly)`：`store` 是 §二之十六 那两处，`readonly` 是 §二之十三 记的本族最早一例；**`clock` 有意不收**并用 `test_clock_is_deliberately_not_a_target` 钉住理由。门首跑（HEAD `a94ca71`）报三处 ⇒ **第四处真缺陷** `af_mcp._t_health` 写的是 `svc.health()`（HTTP 面 `af_api.py:381` 早递了 store），Agent 面健康读数从不探自己服务的 store ⇒ `store_ok: null` 被下游读成"没问题"（铁律 #5 的假安心，与 §二之十六 那两处写面闸门同形状、不同代价）。新判据 `test_dispatch_health_probes_the_store_it_serves` 与修复同批写，反向证据是 M-1 变异（退回 HEAD 形状）`1 failed in 2.36s` RC=1。反例测试 22 条含**不误响**主干：(模块,名) 解析、`obj.method()` 不判、`*`/`**` 解包放过、`def f(store, *rest)` 位置数得出、转发 `_svc(svc.X, …)` 要带关键字、豁免必须有理由且旧前缀不再作数。现场豁免 2 处（`af_vhass/dual_track.py:80,81` 纯仿真对拍）。**两个自踩的坑记进 §二之十八**：变异驱动用 `git checkout` 恢复 ⇒ 把**未提交**的修复一起抹回 HEAD（`AssertionError: 恢复失败：af_mcp.py` 抓到，按 sha256 重新落回）；编辑工具把 CRLF 的 `af_mcp.py` 整文件重写成 LF（`git diff --numstat` 929/927 是唯一读数，修回后 3/1）⇒ 驱动锚点必须按各文件实际换行匹配、匹配数≠1 即中止。全链：`pytest -q` **2681 passed / 51 skipped RC=0（87.66s）**、`gates.sh` RC=0（undefined-name src 96 + tests **157**、参数注入 96 文件/96 签名/豁免 2） |
 | 本批之二十五（名单手抄那一族扫掉，`743aadf`） | §六 挂了四批的最后一条接缝「TOOLS→caps 之外有没有**第二次工具名单映射**」本批清单化并做成常驻门。盘点必须走 AST 而非 grep：全文正则 108 串/77 不在注册表（几乎全是模块名，`af_live.py` 本身就是模块）⇒ 只取字符串常量且整串 fullmatch 工具名形状 = 删除前 **40/9**、删除后 **34/3**（剩三个是指标标签名 `af_action_dispatched`/`af_caused`/`af_local`，不是工具名）。两处真映射：`af_orchestrator.observe()` 按名调 `af_live`（注册名 `af_live_run`；`_call_safe` 吞异常 ⇒ 这条路**永远不会响**、无任何测试依赖）、`af_runtime_ext.mcp_tools()` 另抄五人名单**从未接线**，其中 `af_approve_proposal` 与裁定 20261002 §三 ④A + `af_api.py`「approve 只在服务层，MCP 面绝不注册」+ orchestrator `_call` 里那道 `if "approve" in …: raise` 三层冲突 ⇒ **删除而非接线**（净 `0 3`/`1 14`，单提交可回退）。新门 `scripts/check_tool_names.py` + `gates.sh` 新节（CI `quality-gates` 继承为硬门）：按名调用的字面量必须在 `TOOLS`（调用面白名单 `_call`/`_call_safe`/`call`/`dispatch` + `submit_pending` 第二实参 + `tool=` 关键字）、形参默认值只在形参名是 `tool`/`*_tool` 时判、`TOOLS` 之外 ≥2 个 `af_*` 键的字典即第二份名单、**注册表锚点读不到 exit 2**（§二之十四 的教训：报"0 处发现"就是假绿）、豁免 `# tool-name: exempt(理由)` 必须有理由且隔壁门标记不作数。反例 22 条含不误响主干（第一版没查调用面 ⇒ 4 处日志文案误报）。五处变异**分档**红：M-1/M-2/M-3 `RC=1` 各指到文件行、M-4 `RC=2`、M-5 豁免正控制 `RC=0` 且报「现场豁免 1 处」，五个文件还原逐字节一致。**两处自踩记账**：① 变异驱动 v1 把四次 `patch()` 写在循环之前 ⇒ M-1/M-2/M-3 三条读数全被 M-4 遮蔽成同一句「读不到注册表」——看着像门很灵敏，实际一条本职判据都没验到；② 自家 `gates.sh` 结论行在双引号里用裸反引号 ⇒ bash 命令替换，`readonly` 把**整个 shell 环境 dump** 进红消息、`store: command not found`（实测输出见 §二之十九），三行已转义并实跑红分支复读——红路径自身也要读一次。全链：`pytest -q` **2703 passed / 51 skipped RC=0（101.45s）**、`gates.sh` RC=0（undefined-name src 96 + tests **158**、参数注入 96/96/豁免 2、**工具名单 96 文件/31 工具/豁免 0**） |
+| 本批之二十六（名单族的形状扩面 + caps 同源盘成读数，`c7b97b9`） | 两件事都是"顺着验收点再问一句"问出来的。① `TOOLS→caps` 的**另一半**：`af_mcp.py:812` 解包 `_name, _desc, _schema, fn, scope = tool` ⇒ scope/caps 是注册表元组的第 5 项、**与名字同源**，不存在"改名时 caps 那边不知道"，这一半登记为已盘而非新门。② "第二份名单"上一版只判**字典键**，而手抄枚举也会长成 `WRITE_TOOLS = {"af_save", "af_live_run"}` 这种集合/元组 ⇒ 扩到 `Dict/Set/List/Tuple`（`own_registry` 仍跳过 `af_mcp.py` 自己），扩之前当场盘 src：容器字面量里 ≥2 个工具名形状字符串 = **0 处**，所以扩过去不误响。变异 M-6：往 `af_orchestrator.py` 贴集合+元组各一条 ⇒ `RC=1` 且两行各自指到行号，还原 `True`、收尾复跑 `RC=0`。反例 +3（集合红/元组红/单名列表不红），全链 `pytest -q` **2706 passed / 51 skipped RC=0（89.08s）**、`gates.sh` RC=0。**CI 侧首次读到新门在 runner 上的正文**：run 46（`d992f29`）`completed/success`；run 47（`b1f0ec4`）`quality-gates`+`ui-typecheck-build` `completed/success`，`quality-gates` 正文逐字为 `✓ 工具名单门禁干净（扫描 96 个文件，注册表 31 个工具，按名调用点全部命中，现场豁免 0 处）`——与本机读数逐字相同（Python 3.11 vs 本机 3.13.2，纯标准库 AST 门两版都能跑）。另记一次**重复踩坑**：驱动里 `anchor=b'…中文注释…'` 又触发 `bytes 只能 ASCII` 的 `SyntaxError`（§二之十八 记过同一件事）⇒ 这类坑要靠"写完立刻跑"而不是靠记忆 |
 
 
 ## 四、审计侧
