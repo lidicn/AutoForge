@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/ADM联动执行计划-AF.md`（DCD 出品，v2.5 联动落地版）
 > 记录人：AutoForge 开发
-> 核实基准：代码侧最新 commit = **`d7d1fff`**（`d7d1fff` 是**状态源 fail-closed 静态门禁**：`scripts/check_snapshot_policy.py` + `gates.sh` 新节与两条红分支 + 16 条反例，**产品代码一个字节未动**；射程判据取"标注 `-> Snapshot` ∪ 体里造 `Snapshot`"的并集，起因是第一版只认标注被自家三条反例打红，而本仓 `tests/contract` 里的反面样本 `_FailOpenProvider` 正是"没有标注却造 `Snapshot`"那一种；锚点读不到 exit 2、豁免单独计数）；`c7b97b9` 把**工具名单门禁**的"第二份名单"形状从字典键扩到集合/列表/元组（+3 反例，M-6 实测 `RC=1` 两处行号）；`743aadf` 是那一族的**首版**：`scripts/check_tool_names.py` + `gates.sh` 新节 + 22 条反例 + **两处死映射删除**（`af_orchestrator.observe()` 按名调注册表里没有的 `af_live`、`af_runtime_ext.mcp_tools()` 另抄一份含 `af_approve_proposal` 的五人名单），净 `0 3` / `1 14`；`9a83ead`+`4a3e3b1` 是**参数注入门禁**那一组：门禁脚本 + `gates.sh` 新节 + 22 条反例 + 一处真缺陷（`af_mcp._t_health` 从不探它服务的 store，+3/−1）+ 双轨对拍两条**带理由**的现场豁免，且门按 `store`/`readonly` **参数表**收、`clock` 有意不收；`e6d442a`/`0722828`/`9c6deb9` **只加测试**，`fc2bba6` 加的是**一门新门禁** `scripts/check_states_fanout.py` + `gates.sh` 一节 + 它的反例测试，`12cea64`/`dc8ac0d`/`af2ee56` 是动 `src/` 的三笔：时钟口径 + 三条判据（+11/−2）/ 真机闸门在 MCP 面两处 fail-open（4 文件 +196/−24）/ 观察期恢复路径丢 `auto_rollback` 旗子（+21/−8）。§二/二之二…二之二十 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
+> 核实基准：代码侧最新 commit = **`5ff1ea6`**（`5ff1ea6` 是**出向事件 `error` 装真原因**那一笔：`observe_terminal()` 不再把状态名当 `error` 发，改读 `ctx.context["fail_reason"]`、缺原因发诚实占位句并按契约表 §1.3 的 500 封顶；`+23/−1` 产品码 + `+58/−0` 三条新判据，四档变异 `0/2/1/1` 各自钉一次；同批对完的 `trace_id` 那一半属契约语义 ⇒ **代码未动**、投 DCD §五 第 12 件，读数见 §二之二十二）；上一笔 `d7d1fff` 是**状态源 fail-closed 静态门禁**：`scripts/check_snapshot_policy.py` + `gates.sh` 新节与两条红分支 + 16 条反例，**产品代码一个字节未动**；射程判据取"标注 `-> Snapshot` ∪ 体里造 `Snapshot`"的并集，起因是第一版只认标注被自家三条反例打红，而本仓 `tests/contract` 里的反面样本 `_FailOpenProvider` 正是"没有标注却造 `Snapshot`"那一种；锚点读不到 exit 2、豁免单独计数）；`c7b97b9` 把**工具名单门禁**的"第二份名单"形状从字典键扩到集合/列表/元组（+3 反例，M-6 实测 `RC=1` 两处行号）；`743aadf` 是那一族的**首版**：`scripts/check_tool_names.py` + `gates.sh` 新节 + 22 条反例 + **两处死映射删除**（`af_orchestrator.observe()` 按名调注册表里没有的 `af_live`、`af_runtime_ext.mcp_tools()` 另抄一份含 `af_approve_proposal` 的五人名单），净 `0 3` / `1 14`；`9a83ead`+`4a3e3b1` 是**参数注入门禁**那一组：门禁脚本 + `gates.sh` 新节 + 22 条反例 + 一处真缺陷（`af_mcp._t_health` 从不探它服务的 store，+3/−1）+ 双轨对拍两条**带理由**的现场豁免，且门按 `store`/`readonly` **参数表**收、`clock` 有意不收；`e6d442a`/`0722828`/`9c6deb9` **只加测试**，`fc2bba6` 加的是**一门新门禁** `scripts/check_states_fanout.py` + `gates.sh` 一节 + 它的反例测试，`12cea64`/`dc8ac0d`/`af2ee56` 是动 `src/` 的三笔：时钟口径 + 三条判据（+11/−2）/ 真机闸门在 MCP 面两处 fail-open（4 文件 +196/−24）/ 观察期恢复路径丢 `auto_rollback` 旗子（+21/−8）。§二/二之二…二之二十 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
 > 契约真源：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
 > 交叉裁定：`20260929-ADM三仓联动七问`、`20261001-AF-homesdk接入四问`、`20260930-AutoForge后续优化三项`、`20261001-DB目标模式与AF三题` §H、**`20261002-homesdk记账与AF-DB-DPP六件-裁定`**（本轮落地依据，§一 末）
 
@@ -31,6 +31,7 @@
 | GitHub CI | **首次可读，且从"永久红"修到连续绿；读数路已成脚本** | 实测 run 1–27 `conclusion` 全为 `failure`（建仓以来一条没绿过），三个红因全在版本/判据层而非产品逻辑：pydantic-v2-only 的 `Field(max_length=)` 让 CI（pydantic 1.10.12）**0 条测试跑过**、undefined-name 门禁自己用了 3.12+ 的 `ast.TypeAlias`（CI 是 3.11）、真 vhass 的 skip 判据问"包能否 import"而非"插件注册了没"。三条各钉能变红的反例后，run 28 五作业全 `success`，CI 与本机通过/跳过数逐字相同（2621/51）。**run 31（守卫那次提交）五作业再次全 `completed/success`**，且 runner 侧给出安装步的实测读数 `fetch 主机读数：npmmirror=0 npmjs=87`。读数路径固化为 `scripts/gh_ci_status.py`（`runs`/`jobs`/`annotate`/`log`，纯标准库、只 GET、不打印凭证；`log` 先停 302 再无凭证取正文，免得把 token 带给日志存储域）。读数与残留见 §二之五、§二之八。**run 36（commit `3144879`，含架构门禁口径修复那批）五作业再次全 `completed/success`，runner 侧读到 `Baseline lock: 96 modules, 0 violations` 与 `Contracts: 1 kept, 0 broken`** ⇒ CI 架构门的覆盖面与本机同口径已是实测，不再是"已修 + 待复测"（§二之十一）。**run 39（`daa3af7`）与 run 40（`cd5e1bc`）也已 `completed/success`**；**run 41（`1474a7f`）、run 42（`4a63b46`）、run 43（`3d25ed0`）三作业面全绿**，其中 run 43 五作业逐条 `completed/success`（`adm-linkage-contracts`/`ui-typecheck-build`/`quality-gates`/`pytest`/`layering-gates`，`failed_steps` 全空），runner 侧正文读数 `2652 passed, 51 skipped, 1 warning in 76.98s` 与本机 §二之十五 逐字相同，`quality-gates` 正文含新门禁那行 `✓ 状态源扇出门禁干净（扫描 96 个文件…）` ⇒ 连续绿已到 **10 条（run 34–43）**，且新门禁在 runner 上的口径与本机一致（不是只在本机生效的软门）。**此后 run 44（`cf6160d`）、run 45（`a94ca71`）、run 46（`d992f29`）三条 `completed/success`**，**run 47（`b1f0ec4`，工具名单门禁那批）的 `quality-gates` 与 `ui-typecheck-build` 已 `completed/success`**，且 `quality-gates` 正文逐字读到 `✓ 工具名单门禁干净（扫描 96 个文件，注册表 31 个工具，按名调用点全部命中，现场豁免 0 处）`——与本机 §二之十九 的读数**逐字相同**（runner Python 3.11 / 本机 3.13.2，纯标准库 AST 门两版都跑）⇒ 连续绿延伸到 **13 条（run 34–46）**，run 47 其余三作业取读数时仍 `in_progress`（§二之十九）。**run 47/48 事后复查也已 `completed/success`；run 49（`d7d1fff`，状态源 fail-closed 静态门禁那批）五作业逐条 `completed/success`、`failed_steps` 全空**，runner 侧 `quality-gates` 正文读到新门那行 `✓ 状态源 fail-closed 门禁干净（5 个状态源 snapshot() 实现：抛 UnknownEntity 5 / 现场豁免 0）`、`pytest` 正文 `2722 passed, 51 skipped, 1 warning in 81.27s`（与本机通过/跳过数逐字相同）⇒ 连续绿 **18 条（run 34–51）**（run 50/51 为纯文档提交也已绿；run 52 取数时在飞），读数见 §二之二十之一 |
 | DCD 20261002 §一（CI 锁文件源）| **裁定 (b) 已落地并已在 runner 上取到读数** | 只按原文写 `--registry=https://registry.npmjs.org` 经实测是**空操作**（fetch 87+87 行仍在 `registry.npmmirror.com`/`cdn.npmmirror.com`），必须配 `--replace-registry-host=always`；安装步另加"主机自证"守卫（CI 绿不能证明没吃镜像）。逐字节对账 137/137 `integrity` MATCH ⇒ 锁文件字节未动。§二之七 末尾"本机 npm 11.9.0 / runner 10.x，只有 push 之后才知道"的残留**已销账**（runner `npmmirror=0 npmjs=87`）。回执已投 DCD（含 §四 判例 2 的证据更正：`@types/node` tarball 两源逐字节相同、根目录差异不是重打包痕迹）。见 §二之七、§二之八 |
 | `ma/insights` **入向与契约表对账**（本批新抓） | **AF 侧已按契约收，跨仓三问已交 DCD** | 拿着裁定 Q3 之后的载荷行逐条对 AF 的 `ingest_insight()`：必填的 `hypothesis_id`/`natural_language`/`conf` **三项契约一个都不发** ⇒ 每一条按契约发来的洞察都被拒（判例 1 的静默归零，面换到 AF 入口）。改法：契约键优先 + 旧键别名、缺 `conf`（含 `{"conf": null}` 这种空占位）按 0.0 入 ask 档并记 `conf_reported=false`（坏报照旧拒、封顶 0.59 不动）、契约字段有界落 `transport` 并出 `/api/insights/pending`，面板对缺报显示「未上报」而不是 `0.00`。`conf`/稳定 id/`intent` 三处空缺 AF 不能自决 → §五 第 7 件。见 §二之八 |
+| AF **出向**载荷与契约表对账（本批新抓，与上一行同族、方向相反） | **`error` 那半已自决修；`trace_id` 那半交 DCD** | 对着 §1.2 两行逐字段读码：`fired` 齐（`ref`=实例 id、`ts`=家庭墙钟）；**`failed` 的 `error` 此前恒等于字符串 `"failed"`**（`observe_terminal()` 传 `error=state`），而真原因一直写在 `ctx.context["fail_reason"]`（`af_instance.py:287`）、且 `af_executor.py` 每条 `_fail()` 都带语义（失败的动作 / 软失效异常 / 收敛违约）⇒ DB 唯一能向用户显示的那句话被换成了状态名。修法只装契约已定义的东西、字段名与类型没动：桥读出真原因，缺原因发诚实占位句而不是状态名，按 §1.3 已定过的 500 封顶（`5ff1ea6`，+3 判据：真原因穿得到 / 退化成状态名即红 / 跨模块改键名即红，四档变异 `0/2/1/1` 各自钉一次）。**"为什么不升成静态门"**：`error=state` 与 `error=reason` 在 AST 上同形，静态可判的是 §二之十八 那族的"**没递**"、不是"递错"。`trace_id` 每次现场新造那一半 **AF 未动**：§1.3 那句"trace_id 必填、贯穿洞察→收件箱→播报"实测挂在**收件箱三面**护栏下（`grep -rn "publish.*butler/inbox" src/autoforge` = 0 ⇒ AF 不踩），§1.2 事件面只列了字段名；上游那枚号 AF 收了并落到 GraphStore 记录 `note`，但 `hypothesis_id` 在 `af_ir/`+`af_instance.py`+`af_executor.py` **0 命中** ⇒ 到不了发射点，三种修法两种要动载荷面/DB 检索语义（1:1→1:N）⇒ §五 第 12 件，A/B/C 齐、AF 建议 C（明确为事件级，因果链靠 `ref`＋各自存储元数据）。见 §二之二十二 |
 | UI 类型门禁（上一版登记的债） | **已收口（含下一批零 `any`）** | 15 条 `vue-tsc` 错误清零，`type-check` 改 `--force` 防缓存假绿，`ci.yml` 新增 `ui` 硬门 job；过程中抓到"两个按钮从未接线"与"mock 夹具少回两字段"两条真缺陷（§二之二）。同族第二批：API 层四处 `request<any>` 换成后端真形类型并逐键与在线响应对账，`grep request<any> ui/src` 已无匹配（§二之三） |
 | 部署 | **未部署** | 铁律 #3：文档/本地阶段不部署，镜像重烤须进合并停机窗 |
 
@@ -97,7 +98,7 @@ to_house_iso(0) → 1970-01-01T08:00:00        RC=0
 | 子任务 | 落点 |
 |--------|------|
 | ① 新建桥，复用 homesdk `mqtt`/`presence`，缺凭据 fail-closed | `src/autoforge/af_mqtt_bridge.py`（模块级 docstring 即写"只发自己的语义主题"）；`start_from_env()` :395 起 |
-| ② 发 `af/automation/fired|failed`，**不 retained** | `:51-52` 主题常量、`:258-262` `publish_fired/publish_failed`；`:240-252` 信封 `{trace_id, ts, automation_id, ref}` |
+| ② 发 `af/automation/fired` 与 `failed`，**不 retained** | `:51-52` 主题常量、`:258-262` `publish_fired/publish_failed`；`:240-252` 信封 `{trace_id, ts, automation_id, ref}` |
 | ③ 只读 `ma/insights` → 编译候选 → 进审批，不自动部署 | `:53` `INSIGHTS_TOPIC`、`:311` 回调只认该主题、`:340-378` reject 缺 `hypothesis_id`/`conf`、`conf` 被 `INSIGHT_CONF_CAP` 封顶后 `proposal_sink.submit(..., source="ma")` |
 | ④ 不订阅 `butler/inbox/*` | 白名单门禁实测：`✓ 主题白名单门禁干净（7 处 topic 字面量全部在契约表内）`（`scripts/check_topic_whitelist.py`，本轮 gates 内） |
 
@@ -1734,6 +1735,78 @@ M-0**——它管的是"门自己是不是坏的"，而这恰恰是解包类错�
 
 ---
 
+## 二之二十二、出向载荷与契约表对账：`failed` 的 `error` 一直在发状态名（`5ff1ea6`），`trace_id` 的语义去问 DCD
+
+第 7 件把 **入向**（`ma/insights` → AF）对完了，本批对**出向**（AF → DB）那两面。对着契约表 §1.2 两行逐字段读码：
+
+| 字段 | 契约 | AF 现状（读码，非推测） | 定性 |
+|---|---|---|---|
+| `af/automation/fired` = `{trace_id, ts, automation_id, ref}` | 消费方"DB（告知用户）" | `_envelope()` 全给，`ref`=实例 id（裁定 ②A）、`ts` 家庭墙钟 ⇒ **符合** | — |
+| `af/automation/failed` 多一个 `error` | 消费方 DB | `observe_terminal()` 传的是 **`error=state`**，而它只在 `state == "failed"` 分支里被调用 ⇒ **每条失败事件的 `error` 恒等于字符串 `"failed"`** | **真缺陷，AF 自决修**：字段名与类型都没动，只是把契约定义的那个东西装进去 |
+| 两条的 `trace_id` | §1.2 只列字段名；§1.3 护栏第 4 条"必填、贯穿'洞察→收件箱→播报'" | 每次发布现场 `uuid4().hex[:12]` ⇒ 同一实例的 fired 与 failed 也不是同一枚号 | **不是缺陷，是 §1.2 没写清**（见下） |
+
+### `error`：原因一直存在，只是没被递到接缝上
+
+- 写侧一直在写：`af_instance.py:287` `instance.ctx.context["fail_reason"] = reason`，由
+  `InstanceManager.fail()` 在 `_transition(FAILED)` **之前**调用 ⇒ 观察者拿到的实例上必然已就位。
+- 内容是真原因，不是日志点缀：`af_executor.py` 每条 `_fail()` 都带语义 —— `:123` 段步数上限、
+  `:605` "`{action}` 失败且无 on_error/default 兜底：`{result.error}`"、`:625` 软失效无兜底（含异常本身）、
+  `:662` 收敛纪律违反。也就是说 **DB 唯一能向用户显示的那句话，此前被换成了 `"failed"`**。
+- 修法（`5ff1ea6`）：桥读 `ctx.context["fail_reason"]`；读不到（无 `ctx` 的鸭子类型、空串、纯空白）
+  发 `NO_FAILURE_REASON = "未记录失败原因（执行链未写入 fail_reason）"` —— **诚实占位，不拿状态名冒充原因**；
+  封顶 `MAX_ERROR_CHARS = 500`，取契约表 §1.3 给展示类文本已经定过的那个数（原因里会拼异常 repr 与真机回执，
+  不封顶等于把任意长度正文塞进 QoS 1 事件流）。跨模块键名不做第二份真源：两侧都走 `InstanceManager.fail()`
+  这条写路，测试从真状态机产出实例（见下 M-2）。
+
+### 变异读数（四档，全部从内存字节还原、收尾逐字节自证）
+
+```
+M-0 不改（基线：门自身必须是绿的） -> RC=0   | 36 passed in 0.23s
+M-1 error 退回状态名               -> RC=1   | 2 failed, 34 passed in 0.98s
+M-2 桥读的键名和写入侧不一致        -> RC=1   | 1 failed, 35 passed in 0.95s
+M-3 error 不封顶                    -> RC=1   | 1 failed, 35 passed in 0.92s
+还原后 -> RC=0 | 36 passed in 0.23s
+结论： 全部符合预期
+```
+
+M-0 那行驱动打的是它对各档的通用标签"BAD(未抓到)"，对基线档的正确预期正是 **RC=0**（§二之二十 记过：
+M-0 存在的理由就是抓"判据自己坏了"）。M-1 红 **两条**而不是零条，是这批想要的形状：一条正向（真原因穿到载荷）、
+一条反向（退化成状态名即红）；M-2 是**跨模块改名**那条唯一的真实失败模式——桥把读键写成 `failure_reason`
+即红，说明锁住了接缝而不是只锁住了字符串；M-3 证明 500 那个数不是装饰。
+
+### 为什么这一件没升成静态门禁（同族的第 7 条判据）
+
+`error=state` 与 `error=reason` 在 AST 上**同形**（都是"把一个局部变量递给某个关键字"），静态无从判定哪个是原因、
+哪个是状态名——这与 §二之十八 的"参数递错"不同族：那门判的是**没递**（漏关键参数，静态可数），
+这族判的是**递错**（值语义）。唯一能判红的是行为断言 ⇒ 三条测试各钉一次，不造一条只会误报的门。
+
+### `trace_id`：AF 不动，去问裁定（§五 第 12 件）
+
+三条实测决定了这不是 AF 可自决的一件：
+
+1. §1.3 那句"trace_id 必填：贯穿'洞察→收件箱→播报'"挂在**收件箱三面**（`butler/inbox/speak|notify|tv`）的护栏下；
+   `grep -rn "publish.*butler/inbox" src/autoforge` = **0**，`grep -rn "butler/inbox" src/autoforge` 的 6 处命中全是
+   拒订判定 ⇒ AF 没有违反那条，问题是 §1.2 对事件面**只列了字段名**。
+2. 上游那枚号在 AF 侧并没丢：`ingest_insight()` 把 `payload["trace_id"]` 收进 `hypothesis_id`（`af_mqtt_bridge.py:427`）
+   → 提案落盘（`af_proposal.py:242`、`af_insight_queue.py:199`）→ approve 时写进 GraphStore 记录元数据
+   `note="ma_insight:{hypothesis_id}"`（`af_service.py:552` → `af_store.py:232`，可经 `load_record`/版本列表读回）。
+   **但它不进 IR、不进实例上下文**（`grep -rn hypothesis_id src/autoforge/af_ir/ …/af_instance.py …/af_executor.py` = **0**）
+   ⇒ 发射点手上只有 `automation_id` + `instance_id`，拿不到那枚号。
+3. 于是三种修法代价不同且都超出实现选择：沿用上游 = 同一字段两种语义、DB 的"按 trace_id 拉一屏日志"从 1:1 变 1:N；
+   新增 `insight_trace_id` = 三方共读面；把口径写成"事件级、因果链靠 `ref`＋各自存储" = 只欠契约表一句话（AF 建议）。
+   ⇒ 按 20261002 §一"契约面改动走裁定"投申请，**`_envelope()` 的 trace_id 生成方式一个字节未动**。
+
+### 本批全链读数（HEAD `5ff1ea6`，全部当场跑出）
+
+- `python -m pytest -q`：**2725 passed / 51 skipped / 7 subtests passed，RC=0（94.78s）**（较上批 2722 净 +3，即本批三条新判据）
+- `GATES_PYTHON=python bash gates.sh`：**RC=0**，逐节同前（undefined-name src 96 + tests **159** 未变——本批没新增测试文件；
+  主题白名单 7 处全在契约表内；参数注入 96/96/豁免 2；工具名单 96/31/豁免 0；状态源 fail-closed 5 实现/抛 5/豁免 0；计数棘轮 104/104）
+- 分跑 `tests/unit/test_af_mqtt_bridge.py`：**36 passed RC=0**
+- 文档/代码换行：`src/autoforge/af_mqtt_bridge.py`、`tests/unit/test_af_mqtt_bridge.py`、本记录 **CRLF: 0**；
+  `git diff --numstat` = `23 1` / `58 0`（无整文件重写）
+
+---
+
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
 
 | commit | 内容 |
@@ -1781,6 +1854,8 @@ M-0**——它管的是"门自己是不是坏的"，而这恰恰是解包类错�
 | 本批之二十八（有界缓存约定投 DCD + run 49 五作业复查，纯文档） | 两件事。**① §五 第 11 件**：上一行拆出来的第二件不是"记一句待办"，而是先把"能不能做成门"问到有读数——AST 口径（类里 `self.X = {}/[]/deque/dict/list` 且同类内 `X[k]=`/`append`/`update`）在 src 全集得 **7 个候选**，5 个同类内已有界证据（与第六轮"四条腿 + `_SESSIONS`"账一致），**"缺界"那 2 个逐条读码全是误报**（`PreTriggerService._stats` 固定键计数器 / `DeviceSM.attributes` 键集由 domain 属性词表决定）⇒ **真阳性 0/2**，结论是"扫无界容器"静态上判不出可靠口径、硬做上门第一天就带两条永久红只能挂豁免表（与 §二之十九 刚扫掉的第二真源同形）。三档 A/B/C 已投 `关键决策部/inbox/20261003-AF-有界缓存生命周期约定要不要升级为硬门禁-决策申请.md`，AF 建议 B（注册表式门），**代码一个字节未动**。同批把 `af_vhass` 的"未建模服务"面也盘了一遍并登记为**已盘非新缝**：`is_modeled()` vhass/FakeHA 共用同一判据、未建模动作单列 `unmodeled_actions` 档进诚实报告（`af_expect.py:310-329` 还把"间接触发已展开 effects"的移出），不是静默 OK。**② CI 复查**：run 47/48 事后均 `completed/success`；**run 49（`d7d1fff`）五作业逐条 `completed/success`、`failed_steps` 全空**，runner 正文读到新门那行与本机逐字相同、`pytest` 正文 `2722 passed, 51 skipped, 1 warning in 81.27s`（通过/跳过数与本机同，墙钟 81.27s vs 本机 93.00s）⇒ 连续绿 13 → **18 条（run 34–51）**（run 50/51 两笔纯文档提交事后亦 `completed/success`，run 52 取数时在飞）；读数进 §二之二十之一 与 §〇 CI 行 |
 
 
+| 本批之二十九（出向载荷与契约表对账：`error` 修、`trace_id` 交裁，`5ff1ea6`） | 第 7 件对完入向，本批对**出向**两面（AF → DB 的 `af/automation/fired` 与 `failed`）。逐字段读码抓到一条真缺陷：**`failed` 的 `error` 恒等于字符串 `"failed"`**——`observe_terminal()` 传的是 `error=state`，而它只在 `state == "failed"` 分支里跑；真原因一直存在（`af_instance.py:287` 由 `InstanceManager.fail()` 在转 `FAILED` **之前**写入 `ctx.context["fail_reason"]`，`af_executor.py:123/605/625/662` 每条 `_fail()` 都带语义：段步数上限、"`{action}` 失败且无 on_error/default 兜底：`{result.error}`"、软失效异常、收敛纪律违反）⇒ **契约表写明消费方是 DB 且用途"告知用户"，而 DB 唯一能显示的那句话被换成了状态名**。修法定性为"补 AF 漏装的自家闸门"：字段名/类型一个没动，只是把契约已定义的那个东西装进去——桥读出真原因，缺原因（无 `ctx` 的鸭子类型 / 空串 / 纯空白）发 `NO_FAILURE_REASON` 诚实占位而**不拿状态名冒充**，封顶 `MAX_ERROR_CHARS=500` 取契约 §1.3 给展示类文本已定过的同一个数（原因会拼异常 repr 与真机回执，不封顶=任意长度正文进 QoS 1）。判据 3 条从**真状态机**产出实例（`InstanceManager.spawn` + `.fail`）而不是手搓 SimpleNamespace，为的是锁住跨模块键名：**四档变异 `0/2/1/1`**（M-0 基线必须绿、M-1 退回状态名红两条、M-2 桥把读键写成 `failure_reason` 红一条、M-3 不封顶红一条），全部从内存字节还原、收尾逐字节自证。**为什么这一件不升成静态门**（同族第 7 条判据，登记理由而非静默不做）：`error=state` 与 `error=reason` 在 AST 上同形，§二之十八 那门判的是"**没递**"（漏关键参数，静态可数），这族判的是"递错"（值语义）⇒ 唯一能判红的是行为断言。**`trace_id` 那一半不动代码、投裁定**（§五 第 12 件）：§1.3 那句"trace_id 必填、贯穿洞察→收件箱→播报"实测挂在**收件箱三面**护栏下且 `grep -rn "publish.*butler/inbox" src/autoforge` = **0** ⇒ 不是 AF 违规而是 §1.2 对事件面只列字段名；上游那枚号 AF 收了（`af_mqtt_bridge.py:427` → `af_proposal.py:242`/`af_insight_queue.py:199` → approve 时 `af_service.py:552` 写进 GraphStore 记录 `note`，`load_record` 读得回）**但到不了发射点**（`hypothesis_id` 在 `af_ir/`+`af_instance.py`+`af_executor.py` **0 命中**），三种修法两种要动三方共读面或把 DB 的 trace 检索从 1:1 变 1:N ⇒ 按 20261002 §一"契约面改动走裁定"上交，A/B/C 齐、AF 建议 C（`trace_id` 明确为事件级，因果链靠 `ref`=实例 id＋各自存储元数据）。全链：`pytest -q` **2725 passed / 51 skipped / 7 subtests RC=0（94.78s）**（较上批 +3）、`gates.sh` **RC=0**（undefined-name tests **159** 未变=本批无新测试文件；余逐项同前），`test_af_mqtt_bridge.py` 分跑 `36 passed RC=0`；两文件 `CRLF: 0`、`git diff --numstat` `23 1`/`58 0`（无整文件重写）。文档侧：§二之二十二 新篇、§〇 加"出向对账"行、§五 第 12 件、核实基准 → `5ff1ea6`
+
 ## 四、审计侧
 
 第七轮唯一 finding 在 HEAD 上**属实**（不是已修项的重报）：`HAStateProvider` / `HassStateProvider` 对未知实体静默跳过，而仿真侧 `InMemoryStateProvider` 抛 `UnknownEntity`，同一 IR 两判相反。短路口是 `af_ir/expr.py:514-517`（`and`→`all()`、`or`→`any()` 生成器表达式，未求值分支根本不碰 `Snapshot.get`），所以生产把条件判真、仿真把条件判假。
@@ -1805,6 +1880,8 @@ M-0**——它管的是"门自己是不是坏的"，而这恰恰是解包类错�
 | 9 | **第 5 步 ② 的「顺序追加」半边**：裁定 20260930 给 af_persist 的执行约束第 2 条要求"追加写 + 文件头部元信息"，而现实现是每实例一个快照文件、`save()` 整文件原子重写（`af_persist.py:171-187`）。三条张力不是 AF 能自决的：①它同同一份裁定的"不改存储格式头/不迁移"相抵（改成追加写**必然**动格式头）；②第五轮审计已把"每条全量重写 + 明细无上限"收成有界（`docs/audit/审计报告_第五轮_核实与修复.md:38-74`），再上追加写等于把那一轮的修法反向；③裁定本身把这一项降级为"不做全量 eventlog"。要么 A 判该子句对 `af_persist` **不适用**（AF 倾向：B 的形状要新增一类存储产物，已越出裁定自己给的"改动小、不迁移"档位）、要么 B 判必须做但给有界形状（每实例 `.jsonl` 只留最后 N=8 条、写侧纯追加 O(1)、读侧仍以 `.json` 快照为权威）、要么 C 判并入未来 `af_eventlog` 另立项 | `关键决策部/inbox/20261003-AF-af_persist追加写半边与裁定执行约束张力-决策申请.md`（**已提交，待回话**）。AF 侧不在裁定前擅自动存储面：本批只把 §〇/§一 的"全部落地"过度声明改成本节口径。判据见 §二之十二 |
 | 10 | **单写者租约只装了 HTTP 一面，MCP 真机写未受约束**：AF 自己定的"一个 store 只能有一个写者"这条纪律目前有三处落点却只在一面上生效——`af_cli.py:1365` 的 `FileLock(store_root/".serve.lock")`（抢不到即 `readonly=True`）、`af_api.py:344` 的 `_readonly_guard`（8 个写端点挂 `Depends`）、以及 `build_app(readonly=…)` 这个入参本身；而 `af_mcp.serve_mcp` 与 `dispatch` 对 `readonly|lease|acquire` 三个词 **grep 零命中**（实测），`af_live_run` 的 scope 又确实是 `"live"` ⇒ Agent 侧可以在 serve 已持写权时并行开真机写。这与 §五 第 1/7 件不同：**它不是补 AF 漏装的自家闸门**（那种我直接落地，见本批 §二之十六 的两处），而是要给 DB 新增一个它此前不会遇到的**拒收模式**——MCP 在锁被占用时返回什么码、用 `check` 还是 `acquire`（Agent 进程与 serve 同机/分机两种拓扑答案不同）、是否只拦 `live` 还是连 `apply`/`bind` 一起拦，三项都会改变 DB 看到的失败面 ⇒ 按 20261002 §一"契约面改动走裁定"的口径申请 | `关键决策部/inbox/20261003-AF-单写者租约只装了HTTP面MCP真机写未受约束-决策申请.md`（**已提交，待回话**）。AF 侧**代码一个字节未动**；同批已自主落地的是前两件（`dc8ac0d`：`_t_live` 补 `store`、events 上限上收到 `af_service`），判据与三次变异读数见 §二之十六 |
 | 11 | **"新增有界缓存必须同时给 TTL 与硬上限 + 纯写不读也必须被回收"这条约定要不要升级成能判红的门禁**：本批拆 §六 那行混写时盘出来的。约定的两处落点现状不对等——"加统一基类"那一半第六轮 §三 已判**不做**（`git log -S"BoundedCache" --all -- src tests` **0 命中**，该符号从未进过代码；第七轮 `:86` 重申），但"**门禁可见**"那一半是**真空**：`grep -rn "有界\|TTL" gates.sh scripts/*.py` 零命中 ⇒ 约定只活在审计正文里（§二之十一 记过同一族"写在正文里的约定"）。AF 本批把静态口径真做到有读数：AST 扫"类里 `self.X = {}/[]/deque` 且同类内 `X[k]=`/`append`/`update`" ⇒ src 全集 **7 个候选**，5 个同类内已有界证据（`ConflictAuditor.events`/`JsonFireStore._records`/`InstanceManager.context`/`PreferenceModel._records`/`UndoStore._records`，与第六轮"四条腿 + `_SESSIONS`"的账一致），**"缺界"那 2 个逐条读码后全是误报**（`PreTriggerService._stats` 固定键计数器、`DeviceSM.attributes` 键集由 domain 属性词表决定）⇒ 真阳性 **0/2**，"扫无界容器"静态上判不出可靠口径，硬做上门第一天就带两条永久红、只能挂豁免表，而豁免表正是 §二之十九 刚扫掉的那族第二真源。三档 A（清单 + 成对断言测试，无门）/ **B（注册表式门：仿 `af_mcp.TOOLS` 形状，判"双腿齐全 + 测试 id 真被收集 + 新增增长容器必须登记"，AF 建议）** / C（统一基类 + 无界扫描 ⇒ 动 `af_audit`/`af_preference` 持久化层，需停机窗）；请 DCD 定向两点：①存量是否接受"基线冻结、新增必须登记"；②"固定键 / 词表有界"这一类给不给正式豁免 | `关键决策部/inbox/20261003-AF-有界缓存生命周期约定要不要升级为硬门禁-决策申请.md`（**已提交，待回话**）。AF 侧**代码一个字节未动**；本题不涉 ADM 契约表（无跨仓载荷、无主题），但严格度选型会决定这道门以后拦人还是拦格式 ⇒ 不自裁 |
+
+| 12 | **出向事件 `trace_id` 的语义：事件级还是因果链级**（与第 7 件同族、方向相反——那件是入向载荷，这件是 AF 自己发的两条）。契约表 §1.2 只列字段名（`{trace_id, ts, automation_id, ref}`，failed 多 `error`），没写谁造、是否须等于上游、一条 trace_id 允许对应几条事件；AF 现状每次发布现场 `uuid4().hex[:12]` ⇒ 同一实例的 fired 与 failed 也不是同一枚号，MA→AF→DB 的因果链在 AF 这一跳断。上游那枚号在 AF 侧并没丢（`ingest_insight` 收进 `hypothesis_id` → 提案落盘 → approve 时写进 GraphStore 记录 `note="ma_insight:{…}"`），**但到不了发射点**：`grep -rn hypothesis_id src/autoforge/af_ir/ src/autoforge/af_instance.py src/autoforge/af_executor.py` = 0。三档 A（因果链级：同一字段两种语义、DB 检索由 1:1 变 1:N、要把号搬进 IR/实例上下文）/ B（新增 `insight_trace_id`：三方共读面）/ **C（AF 建议：`trace_id` 明确为事件级，契约表加一句口径，因果链靠 `ref`＋各自存储元数据）**；另核到 §1.3 护栏第 4 条那句"trace_id 必填：贯穿洞察→收件箱→播报"**挂在收件箱三面之下**，而 `grep -rn "publish.*butler/inbox" src/autoforge` = **0** ⇒ AF 不踩那条，本题不是违规而是 §1.2 没写清。同批已自决的另一件（`error` 恒等于状态名）在 §二之二十二，申请里另向 DB 问了展示宽度 | `inbox/20261003-AF-事件载荷trace_id是事件级还是因果链级-决策申请.md`（**已提交，待回话**）。trace_id 生成方式 **AF 侧一个字节未动**
 
 ## 六、未在本版做（登记，不静默）
 
