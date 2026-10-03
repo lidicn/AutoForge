@@ -747,6 +747,11 @@ grimp 对没有 `__init__.py` 的目录**不递归**。Python 3 的命名空间�
 - **还原历史原状**：把 `af_closedloop/__init__.py` 从索引临时摘掉（`git rm --cached`，磁盘保留）
   ⇒ **RC=1** 且指名 `src/autoforge/af_closedloop/__init__.py`，`git add` 装回后 **RC=0**。
   这条最有价值：它证明新门真能抓住已经发生的那次缺陷，不是只防假想形态。
+- **整条 `gates.sh` 而不是单脚本**（CI 的 `quality-gates` 作业跑的是这条）：同样 `git rm --cached` 之后
+  `GATES_PYTHON=python bash gates.sh` → **RC=1**，末行原话
+  `结论：包标记门禁红（exit=1）。1=有包目录的 __init__.py 没入库，CI 上 grimp 不递归、架构门禁比本机少分析模块；2=拿不到 git 索引。`
+  ——这条门的红走的是 `gates.sh` 末尾的 RC 聚合，且排在 AST/棘轮/冒烟之前判定，
+  所以不会因为前后段各自绿过而被冲淡；装回后单脚本复测 **RC=0**（5 包 / 索引 96 个 `.py`）。
 
 ### 本批全链读数（当场跑出）
 
@@ -760,6 +765,42 @@ grimp 对没有 `__init__.py` 的目录**不递归**。Python 3 的命名空间�
 - runner 侧 96 的读数**尚未取到**（要等本批 push 后那条 run）⇒ 在取到之前，"CI 与本机同口径"是**已修的缺陷 + 待取的复测**，不是已验证事实。
 
 跨仓外溢（其余三仓 + AgentOps 模板是否有同款 `_*.py`）AF 不擅动他仓，已作为第 2 件提 DCD（§五 第 8 件）。
+
+### 同族扫描（不止步于抓到的那一个）
+
+缺陷既然是"忽略规则吞掉构建输入"，就把手上三条口径都过了一遍，读数如下：
+
+- `git status --ignored --short`（排除 `node_modules`/`__pycache__`/`dist` 等构建目录后）只剩两条：
+  `src/autoforge.egg-info/`（构建产物，忽略正确）与 `tests/_test_helpers.py`。后者按
+  `grep -rn --exclude-dir=__pycache__ "_test_helpers" src tests scripts examples docs` 复测
+  = **0 命中**（连它自己都不提这个名字，没有任何 import 面）⇒ 是死文件，留在忽略位不动，
+  给它补入库等于把一份无人引用的测试副本变成"已验证资产"。
+- 磁盘 vs 索引逐文件对账：`find src -type f -not -path '*__pycache__*'` = **103**，`git ls-files src` = **97**，
+  差的 6 个经 `comm -23` 列名**全部**是 `src/autoforge.egg-info/*`（PKG-INFO/SOURCES.txt/dependency_links.txt/
+  entry_points.txt/requires.txt/top_level.txt）⇒ 源码树除已修的那一个之外，没有第二个被吞的文件。
+- `.dockerignore` 是同一类"上下文面"的入口，专门查过：里面**没有** `_*.py` 之类的模式，也不会吃包标记；
+  它排除的路径里唯一命中"已入库文件"的是三份 `ui*/.env.production`，而这三份实测不含密钥
+  （只有 `VITE_USE_MOCK=false` 与 `VITE_API_BASE=/api`），且 API 镜像本就不带前端——
+  `docker/docker-compose.api.yml:20-23` 是 `--ui-dir /ui` + 把 NAS 上的 `.../autoforge/ui/dist` 以卷挂进来。
+  所以这条不构成同族缺陷，但**记一笔**：前端的交付是"宿主构建 + 挂卷"，不在镜像里，
+  窗后验收若只看 `compose ps` 与 `/health`，WebUI 那一路是没被覆盖的。
+
+runner 侧的复测读数由 `gh_ci_status.py` 取，取到之前本节的结论只到"本机两侧同口径"。
+
+### 推送后的 runner 读数（`3144879` → run 36 / id 37083993838，当场取）
+
+先记两件已经取到的：
+
+- **上一条 push 的 run 35（`b7b158e`）= `completed/success`** ——`runs` 读数里
+  `success runs: [35, 34, 33, 32, 31, 30, 29, 28]`，§二之九 登记时那条 run 还是 `in_progress`，现已闭合。
+- **本批 `quality-gates` 作业 = `completed/success`**（job `111090382310`，`failed_steps=[]`）
+  ⇒ 新门在**真 checkout** 上不 false-red：runner 拿得到 git 索引、`src/` 五个包目录都有入库的包标记，
+  RC=0。这条不是"没跑到"——同一作业里 AST/棘轮/undefined-name/主题白名单/冒烟六段都跑到了。
+
+`layering-gates`（job `111090382332`）与 `pytest`/`adm-linkage-contracts` 取数时仍 `in_progress`，
+其中"runner 是否读到 `Baseline lock: 96 modules`"这条**必须**等它完成后再取（日志只在作业结束时上传，
+中途 `log` 会 404：实测 `HTTP Error 404: The specified blob does not exist.`）。
+在它变绿之前，本节结论停在"缺陷已修、CI 侧覆盖面对账**待取**"，不提前写成"两边已同口径"。
 
 ---
 
