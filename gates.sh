@@ -90,6 +90,14 @@ echo "══ 包标记门禁（grimp 递归的前提交互，锁 CI/本机同口
 pkg_rc=$?
 
 echo
+echo "══ 状态源扇出门禁（换 runtime.states 必须四个消费方同步）════════"
+# Runtime.__post_init__ 只在构造时把 states 交给 instances/scheduler/executor；构造之后再换源
+# 就靠调用点手抄四行。少抄一行不报错、不崩，只让那一方继续读旧状态源（canary 漂移检测读到空
+# InMemoryStateProvider 就是第七轮审计那一族），且现有测试对"少一行"没有一条会变红 ⇒ 判据进门禁。
+"$PYTHON" "$REPO/scripts/check_states_fanout.py" "$REPO/src"
+fanout_rc=$?
+
+echo
 echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）════════════════════"
 # 单跑冒烟：只走 `import` 子进程，慢但一次性看清。
 # 注意：这条在开发机上的红多半是「依赖没装齐 / 本地副本不完整」，
@@ -110,6 +118,11 @@ if [ $pkg_rc -ne 0 ]; then
   echo "结论：包标记门禁红（exit=$pkg_rc）。1=有包目录的 __init__.py 没入库，CI 上 grimp 不递归、架构门禁比本机少分析模块；2=拿不到 git 索引。"
   exit $pkg_rc
 fi
+if [ $fanout_rc -ne 0 ]; then
+  echo "结论：状态源扇出门禁红（exit=$fanout_rc）。换 runtime 的 states 必须同时写 instances/scheduler/executor 四条；少写的那方会继续读旧状态源，而这类改法没有任何测试会红。"
+  exit $fanout_rc
+fi
+
 if [ $ast_rc -ne 0 ]; then
   echo "结论：AST 门禁红（exit=$ast_rc）。修，或在 .gates-baseline.txt 里逐条写明放行理由。"
   exit $ast_rc
