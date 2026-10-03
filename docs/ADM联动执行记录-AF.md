@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/ADM联动执行计划-AF.md`（DCD 出品，v2.5 联动落地版）
 > 记录人：AutoForge 开发
-> 核实基准：代码侧最新 commit = **`159ba00`**（`159ba00` 是**只加测试**的一笔：把 `observe_terminal()` 真实发出的键集合钉死，产品码 `0` 变动；它顺带让一个从未登记的差额可见——观察者路径比契约表 §1.2 多发 `node_id`（`instance_id` 那份额是裁定 20261002 ②A 已登记过的），读数与四档变异见 §二之二十二）；上一笔 `5ff1ea6` 是**出向事件 `error` 装真原因**那一笔：`observe_terminal()` 不再把状态名当 `error` 发，改读 `ctx.context["fail_reason"]`、缺原因发诚实占位句并按契约表 §1.3 的 500 封顶；`+23/−1` 产品码 + `+58/−0` 三条新判据，四档变异 `0/2/1/1` 各自钉一次；同批对完的 `trace_id` 那一半属契约语义 ⇒ **代码未动**、投 DCD §五 第 12 件，读数见 §二之二十二）；上一笔 `d7d1fff` 是**状态源 fail-closed 静态门禁**：`scripts/check_snapshot_policy.py` + `gates.sh` 新节与两条红分支 + 16 条反例，**产品代码一个字节未动**；射程判据取"标注 `-> Snapshot` ∪ 体里造 `Snapshot`"的并集，起因是第一版只认标注被自家三条反例打红，而本仓 `tests/contract` 里的反面样本 `_FailOpenProvider` 正是"没有标注却造 `Snapshot`"那一种；锚点读不到 exit 2、豁免单独计数）；`c7b97b9` 把**工具名单门禁**的"第二份名单"形状从字典键扩到集合/列表/元组（+3 反例，M-6 实测 `RC=1` 两处行号）；`743aadf` 是那一族的**首版**：`scripts/check_tool_names.py` + `gates.sh` 新节 + 22 条反例 + **两处死映射删除**（`af_orchestrator.observe()` 按名调注册表里没有的 `af_live`、`af_runtime_ext.mcp_tools()` 另抄一份含 `af_approve_proposal` 的五人名单），净 `0 3` / `1 14`；`9a83ead`+`4a3e3b1` 是**参数注入门禁**那一组：门禁脚本 + `gates.sh` 新节 + 22 条反例 + 一处真缺陷（`af_mcp._t_health` 从不探它服务的 store，+3/−1）+ 双轨对拍两条**带理由**的现场豁免，且门按 `store`/`readonly` **参数表**收、`clock` 有意不收；`e6d442a`/`0722828`/`9c6deb9` **只加测试**，`fc2bba6` 加的是**一门新门禁** `scripts/check_states_fanout.py` + `gates.sh` 一节 + 它的反例测试，`12cea64`/`dc8ac0d`/`af2ee56` 是动 `src/` 的三笔：时钟口径 + 三条判据（+11/−2）/ 真机闸门在 MCP 面两处 fail-open（4 文件 +196/−24）/ 观察期恢复路径丢 `auto_rollback` 旗子（+21/−8）。§二/二之二…二之二十 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
+> 核实基准：代码侧最新 commit = **`8b629b8`**（`8b629b8` 是**出向 MQTT 写者门禁**那一笔：`scripts/check_mqtt_writers.py` 三条判据（写者唯一 / 事件只许 `observe_terminal()` 产生 / 载荷必经 `_envelope()`，位置式与 `payload=` 关键字式都认）+ `gates.sh` 新节与两条红分支（`exit 1` 红、`exit 2` 读不到锚点）+ 18 条反例，**产品代码一个字节未动**；真实 src 的实测计数是"写者 2 处/1 个文件、生产者 2 处/1 个文件、`_publish` 载荷 2 处且 2 处来自 `_envelope()`、豁免 0"，读数与两个自踩的坑见 §二之二十三）；上一笔 `159ba00` 是**只加测试**：把 `observe_terminal()` 真实发出的键集合钉死，产品码 `0` 变动；它顺带让一个从未登记的差额可见——观察者路径比契约表 §1.2 多发 `node_id`（`instance_id` 那份额是裁定 20261002 ②A 已登记过的），读数与四档变异见 §二之二十二）；上一笔 `5ff1ea6` 是**出向事件 `error` 装真原因**那一笔：`observe_terminal()` 不再把状态名当 `error` 发，改读 `ctx.context["fail_reason"]`、缺原因发诚实占位句并按契约表 §1.3 的 500 封顶；`+23/−1` 产品码 + `+58/−0` 三条新判据，四档变异 `0/2/1/1` 各自钉一次；同批对完的 `trace_id` 那一半属契约语义 ⇒ **代码未动**、投 DCD §五 第 12 件，读数见 §二之二十二）；上一笔 `d7d1fff` 是**状态源 fail-closed 静态门禁**：`scripts/check_snapshot_policy.py` + `gates.sh` 新节与两条红分支 + 16 条反例，**产品代码一个字节未动**；射程判据取"标注 `-> Snapshot` ∪ 体里造 `Snapshot`"的并集，起因是第一版只认标注被自家三条反例打红，而本仓 `tests/contract` 里的反面样本 `_FailOpenProvider` 正是"没有标注却造 `Snapshot`"那一种；锚点读不到 exit 2、豁免单独计数）；`c7b97b9` 把**工具名单门禁**的"第二份名单"形状从字典键扩到集合/列表/元组（+3 反例，M-6 实测 `RC=1` 两处行号）；`743aadf` 是那一族的**首版**：`scripts/check_tool_names.py` + `gates.sh` 新节 + 22 条反例 + **两处死映射删除**（`af_orchestrator.observe()` 按名调注册表里没有的 `af_live`、`af_runtime_ext.mcp_tools()` 另抄一份含 `af_approve_proposal` 的五人名单），净 `0 3` / `1 14`；`9a83ead`+`4a3e3b1` 是**参数注入门禁**那一组：门禁脚本 + `gates.sh` 新节 + 22 条反例 + 一处真缺陷（`af_mcp._t_health` 从不探它服务的 store，+3/−1）+ 双轨对拍两条**带理由**的现场豁免，且门按 `store`/`readonly` **参数表**收、`clock` 有意不收；`e6d442a`/`0722828`/`9c6deb9` **只加测试**，`fc2bba6` 加的是**一门新门禁** `scripts/check_states_fanout.py` + `gates.sh` 一节 + 它的反例测试，`12cea64`/`dc8ac0d`/`af2ee56` 是动 `src/` 的三笔：时钟口径 + 三条判据（+11/−2）/ 真机闸门在 MCP 面两处 fail-open（4 文件 +196/−24）/ 观察期恢复路径丢 `auto_rollback` 旗子（+21/−8）。§二/二之二…二之二十 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
 > 契约真源：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
 > 交叉裁定：`20260929-ADM三仓联动七问`、`20261001-AF-homesdk接入四问`、`20260930-AutoForge后续优化三项`、`20261001-DB目标模式与AF三题` §H、**`20261002-homesdk记账与AF-DB-DPP六件-裁定`**（本轮落地依据，§一 末）
 
@@ -32,6 +32,7 @@
 | DCD 20261002 §一（CI 锁文件源）| **裁定 (b) 已落地并已在 runner 上取到读数** | 只按原文写 `--registry=https://registry.npmjs.org` 经实测是**空操作**（fetch 87+87 行仍在 `registry.npmmirror.com`/`cdn.npmmirror.com`），必须配 `--replace-registry-host=always`；安装步另加"主机自证"守卫（CI 绿不能证明没吃镜像）。逐字节对账 137/137 `integrity` MATCH ⇒ 锁文件字节未动。§二之七 末尾"本机 npm 11.9.0 / runner 10.x，只有 push 之后才知道"的残留**已销账**（runner `npmmirror=0 npmjs=87`）。回执已投 DCD（含 §四 判例 2 的证据更正：`@types/node` tarball 两源逐字节相同、根目录差异不是重打包痕迹）。见 §二之七、§二之八 |
 | `ma/insights` **入向与契约表对账**（本批新抓） | **AF 侧已按契约收，跨仓三问已交 DCD** | 拿着裁定 Q3 之后的载荷行逐条对 AF 的 `ingest_insight()`：必填的 `hypothesis_id`/`natural_language`/`conf` **三项契约一个都不发** ⇒ 每一条按契约发来的洞察都被拒（判例 1 的静默归零，面换到 AF 入口）。改法：契约键优先 + 旧键别名、缺 `conf`（含 `{"conf": null}` 这种空占位）按 0.0 入 ask 档并记 `conf_reported=false`（坏报照旧拒、封顶 0.59 不动）、契约字段有界落 `transport` 并出 `/api/insights/pending`，面板对缺报显示「未上报」而不是 `0.00`。`conf`/稳定 id/`intent` 三处空缺 AF 不能自决 → §五 第 7 件。见 §二之八 |
 | AF **出向**载荷与契约表对账（本批新抓，与上一行同族、方向相反） | **`error` 那半已自决修；`trace_id` 那半交 DCD** | 对着 §1.2 两行逐字段读码：`fired` 齐（`ref`=实例 id、`ts`=家庭墙钟）；**`failed` 的 `error` 此前恒等于字符串 `"failed"`**（`observe_terminal()` 传 `error=state`），而真原因一直写在 `ctx.context["fail_reason"]`（`af_instance.py:287`）、且 `af_executor.py` 每条 `_fail()` 都带语义（失败的动作 / 软失效异常 / 收敛违约）⇒ DB 唯一能向用户显示的那句话被换成了状态名。修法只装契约已定义的东西、字段名与类型没动：桥读出真原因，缺原因发诚实占位句而不是状态名，按 §1.3 已定过的 500 封顶（`5ff1ea6`，+3 判据：真原因穿得到 / 退化成状态名即红 / 跨模块改键名即红，四档变异 `0/2/1/1` 各自钉一次）。**"为什么不升成静态门"**：`error=state` 与 `error=reason` 在 AST 上同形，静态可判的是 §二之十八 那族的"**没递**"、不是"递错"。`trace_id` 每次现场新造那一半 **AF 未动**：§1.3 那句"trace_id 必填、贯穿洞察→收件箱→播报"实测挂在**收件箱三面**护栏下（`grep -rn "publish.*butler/inbox" src/autoforge` = 0 ⇒ AF 不踩），§1.2 事件面只列了字段名；上游那枚号 AF 收了并落到 GraphStore 记录 `note`，但 `hypothesis_id` 在 `af_ir/`+`af_instance.py`+`af_executor.py` **0 命中** ⇒ 到不了发射点，三种修法两种要动载荷面/DB 检索语义（1:1→1:N）⇒ §五 第 12 件，A/B/C 齐、AF 建议 C（明确为事件级，因果链靠 `ref`＋各自存储元数据）。**同批打真载荷又盘出第三个差额**：观察者路径比契约行多发一个 `node_id`（`instance_id` 那份额是 ②A 登记过的，它没有任何登记）⇒ 已用 `159ba00` 把真实键集合钉死（四档变异 `0/1/1/2`），并作为第 12 件的**第三问**交裁（AF 倾向：DB 不读就删）。见 §二之二十二 |
+| AF 出向 MQTT 的**生产者形状**升成静态门禁（`8b629b8`，本批） | **已上线为 CI 硬门，产品码 0 变动** | 上一行那个差额暴露的不是"某个字段错"，而是"**测试绿在一条生产不走的路径上**"。这一族能静态判（判的是调用图形状：哪个文件、哪个函数体内、载荷实参是不是 `_envelope()` 的产物），与 §二之二十二 那条"值语义判不了"正好成对。三条判据：出向 MQTT 写者只在 `af_mqtt_bridge`；`publish_fired/publish_failed` 只在 `observe_terminal()` 体内（最内层归属，闭包也算）；`_publish` 的载荷必须来自 `_envelope()`（位置式与 `payload=` 关键字式都认，只认前者=静默放行）。锚点缺失 `exit 2` 不做假绿；`af_bus`/`af_runtime` 的 `publish()` 是进程内总线，不在射程。真实 src 实测：写者 2 处/1 文件、生产者 2 处/1 文件、载荷 2 处全部经 `_envelope()`、豁免 0；18 条反例 + 三档变异（`RC=1/1/2`），M-1 那处违例另走**完整 `gates.sh`** 取到 `RC=1` 与新结论行。见 §二之二十三 |
 | UI 类型门禁（上一版登记的债） | **已收口（含下一批零 `any`）** | 15 条 `vue-tsc` 错误清零，`type-check` 改 `--force` 防缓存假绿，`ci.yml` 新增 `ui` 硬门 job；过程中抓到"两个按钮从未接线"与"mock 夹具少回两字段"两条真缺陷（§二之二）。同族第二批：API 层四处 `request<any>` 换成后端真形类型并逐键与在线响应对账，`grep request<any> ui/src` 已无匹配（§二之三） |
 | 部署 | **未部署** | 铁律 #3：文档/本地阶段不部署，镜像重烤须进合并停机窗 |
 
@@ -1886,6 +1887,82 @@ af/automation/failed ['automation_id', 'error', 'instance_id', 'node_id', 'ref',
 
 ---
 
+## 二之二十三、把 §二之二十二 那个形状升成静态门禁：出向 MQTT 只有一个写者、事件只有一条生产者、载荷必经 `_envelope()`（`8b629b8`）
+
+### 为什么这一件**能**升成静态门（与上一节那条"为什么不升"正好成对）
+
+§二之二十二 记的那族判据是"值语义"——`error=state` 与 `error=reason` 在 AST 上同形，静态无从分辨，
+只能靠行为断言。本节这一族判的不是值，是**调用图形状**：这次调用发生在**哪个文件的哪个函数体内**、
+载荷实参**是不是 `_envelope()` 的产物**——这三问在 AST 上都有确定答案，所以能做成 CI 硬门。
+同一条教训（"测试绿了很久，而它测的是生产不走的那条路"）能升成门，恰好说明**能不能升成门取决于判据的形状，
+不取决于事情大小**。
+
+### 三条判据（各自单独可红）
+
+- **A 写者唯一**：`_mqtt.publish(…)` / `_presence.advertise(…)` 的调用点只允许出现在 `af_mqtt_bridge.py`。
+  桥外自己拿 client 发 = 同时绕过 QoS、`ts` 家庭墙钟口径、`ref` 语义与"发布失败要留痕不冒到执行链"这四项，
+  而主题白名单门只认字面量在不在契约表内，管不住载荷形态。
+- **B 事件唯一生产者**：`publish_fired(…)` / `publish_failed(…)` 的调用点必须落在 `af_mqtt_bridge.py` 的
+  `observe_terminal()` **函数体内**。归属取**最内层**包围函数——塞进 `observe_terminal()` 里的闭包也算第二条路径。
+- **C 载荷必经信封**：桥内 `self._publish(<topic>, payload)` 的 payload 必须是 `self._envelope(...)` 的返回值
+  （直接调用，或本函数内先由它赋值、再补 `error` 那种字段——`publish_failed` 现在就是这个形状）。
+  **位置式与 `payload=` 关键字式都认**：只认位置参数等于留一条静默放行，而判据的红必须只在真违例时出现。
+- **锚点**（读不到 `exit 2`，不做假绿）：模块级 `FIRED_TOPIC`/`FAILED_TOPIC` + 类里
+  `_envelope` / `observe_terminal` / 两个 `publish_*` 必须在——三条判据全长在这几个符号上。
+- **豁免** `# mqtt-writers: exempt(理由)`：理由不能空，且**单独计入读数**；绿色行的每个数字都是本轮实测计数，
+  不写"只在/全部"这类没数过的断言（铁律 #5，反例 `test_green_line_prints_the_counts_not_adjectives` 钉住）。
+- **射程边界**：`af_bus` / `af_runtime` 的 `publish()` 是进程内事件总线，不是出向 MQTT ⇒ 不判。
+  按方法名一刀切会让本门天天红在无关代码上，最后被人当噪音跳过。
+
+### 真实 src 的实测计数（本轮跑出，非引用上一节）
+
+```
+$ python scripts/check_mqtt_writers.py src
+✓ 出向 MQTT 写者门禁干净（出向写者调用点 2 处、分布在 1 个文件；事件生产者 2 处、分布在 1 个文件；桥内 `_publish(topic, payload)` 2 处，其中载荷来自 `_envelope()` 的 2 处；现场豁免 0 处）
+```
+
+⇒ §二之二十二 盘出的那两条"路"在静态上确实是**一条生产者**：`src` 内 `publish_fired`/`publish_failed`
+的调用点只有 2 处，且都在 `observe_terminal()` 体内（`af_mqtt_bridge.py:376/379`）。
+
+### 反例与变异（门本身必须能红，铁律 #8）
+
+`tests/unit/test_mqtt_writers_gate.py` **18 条**（`18 passed RC=0`）：三条判据各正反两组、
+关键字调用形式、内部总线不算射程、豁免空理由仍红 / 带理由转绿且计数 `exempted=1`、
+锚点三种缺失形状各 `exit 2`、真实 src 干净且计数非零。
+
+对**产品码**注入违例（从内存字节还原）：
+
+```
+M-1 桥内多一条生产者（resend 里调 publish_fired） | gate RC=1 | src/autoforge/af_mqtt_bridge.py:367: `…` 的 `resend()` 里调了 `publish_fired()`…
+    同一处违例走完整 gates.sh | RC=1 | 结论：出向 MQTT 写者门禁红（exit=1）…
+M-2 手搓 dict 当载荷（绕过 _envelope）          | gate RC=1 | `_publish(…, {'automation_id': …})` 的载荷不是 `_envelope()` 的产物…
+M-3 锚点被改名（_envelope → wrap）              | gate RC=2 | 读不到锚点：类里找不到 `_envelope()`…
+还原后 逐字节一致=True | gate RC=0（绿色行同实测计数）
+```
+
+M-1 特意跑了**完整 `gates.sh`** 而不只跑脚本：要证的是"接线也在"——新节名、`exit 1` 与那条 `结论：出向 MQTT 写者门禁红…`
+都从 CI 同一入口的正文里读到了。
+
+### 这一批自己踩的两个坑（一样记账，不吞）
+
+1. **变异驱动脚本崩在半路 ⇒ 还原没执行**：第一版驱动在打印 gates.sh 结论时 `IndexError`，`write_bytes(ORIG)` 那行没走到，
+   `af_mqtt_bridge.py` 带着 `resend()` 留在盘上。当场用 `git checkout -- <该文件>` 恢复（**变异前该文件与 HEAD 逐字节相同，
+   `git diff --stat` 只有我插入的 3 行**，所以这条恢复路径此刻安全），第二版起改成 `try/finally` 包裹全部变异。
+   规矩本身不变：**默认仍是从内存字节还原**，`git checkout` 只在"变异前已核实等于 HEAD"时才可用。
+2. **`subprocess` 里的 `bash` 不是 Git Bash**：那次 RC=1 的真身是 `C:\Windows\System32\bash.exe` 报
+   "适用于 Linux 的 Windows 子系统没有已安装的分发"（UTF-16 输出，346 字节），**不是门禁判红**。
+   换成 `C:\Program Files\Git\bin\bash.exe` 绝对路径才拿到真的 `结论：出向 MQTT 写者门禁红（exit=1）`。
+   这是"退出码必须实测、代理信号不算结论"的又一次现场版。
+
+### 全链读数（HEAD `8b629b8`，全部当场跑出）
+
+- `python -m pytest -q`：**2744 passed / 51 skipped / 7 subtests，RC=0（97.39s）**（较 `159ba00` 那批净 +18，即本批 18 条反例）
+- `GATES_PYTHON=python bash gates.sh`：**RC=0**，新节正文与本机同口径；undefined-name 的 tests 侧从 **159 → 160 个文件**（本批新增一个测试文件），
+  其余逐项未变（主题白名单 7 处、包标记 5 目录/96 文件、状态源扇出 96、参数注入 96/96 豁免 2、工具名单 96/31 豁免 0、状态源 fail-closed 5/5 豁免 0）
+- `gates.sh` diff 为纯增（`+18/−0`）；三个文件 `CRLF: 0`
+
+---
+
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
 
 | commit | 内容 |
@@ -1938,6 +2015,7 @@ af/automation/failed ['automation_id', 'error', 'instance_id', 'node_id', 'ref',
 | 本批之三十（CI 复查 + 一次推错分支的自证与纠正，纯文档） | **run 52（`64f4935`）/run 53（`24ef0c0`）事后复查 `completed/success`** ⇒ §〇 那行"连续绿 18 条（run 34–51）"过时，实际 **20 条（run 34–53）**。**自己的错要一样记账**：推这批提交时用了 `git push -q origin master`，而本仓**本地叫 `master`、GitHub 默认叫 `main`**（`git status -sb` 就写 `## master...origin/main`）⇒ 在远端**新建**了 `refs/heads/master`（GitHub 回 "Create a pull request for 'master'"），加上 `ci.yml:5` 触发分支含 `[main, master, dev]` ⇒ 多跑一套 CI（run 54），而 main 当时仍停在 `24ef0c0`。纠正 `git push origin master:main`（`24ef0c0..0a834b9`，`PUSH_MAIN_RC=0`），删除误建分支 `git push origin --delete master`（`DEL_RC=0`；删前先确认它等于本地 HEAD、且是 90 秒前自己新建的，无其他引用），删后 `git ls-remote --heads origin` 只剩 `refs/heads/main = 0a834b9` ⇒ 远端回到单分支原状。**同时抓到自家一条取证规矩的破口**：第一次打印的 `PUSH_RC=0` 是管道尾巴 `tail` 的退出码、不是 push 的（`${PIPESTATUS[0]}` 才是），修正后每次推送都取真实 RC 并补 `ls-remote` 自证。取数时 run 54/55 的 `quality-gates` 均 `completed/success`（55 正文读到六节绿行、末行 `结论：门禁干净…`），`pytest`/`adm-linkage-contracts`/`layering-gates` 仍 `in_progress` ⇒ 两套都**不计入**连续绿，等结论再记。另把"覆盖面/兼容面"两条实测补进 §二之二十二：`FAILED` 只有 `af_instance.py:288` 一处入口（且排在 `on_terminal()` 前）⇒ 修复覆盖每条 failed 事件；AF 内部无任何消费方读 `error`（除发布点只剩白名单脚本与 CLI 文案）⇒ 不存在"有人指望它是状态名"的自家兼容风险 |
 | 本批之三十一（把观察者路径的真实键集钉死，盘出契约外多发的 `node_id`，`159ba00`，只加测试） | 打完 `error` 那半之后，按**真发出去的载荷**对契约 §1.2 做最后一次全字段清点，读到 `fired = {automation_id, instance_id, node_id, ref, trace_id, ts}`、`failed` 再多一个 `error` ⇒ **`node_id` 既不在契约行也不在裁定 20261002 里**（`instance_id` 那份额是 ②A 登记过的过渡字段）。老那条"逐字段对契约"的判据没有错：它把**直接调用面**钉成 `{trace_id, ts, automation_id, ref, instance_id}`，而 `node_id` 是 `observe_terminal()` 在调用点经 `**extra` 注进去的——生产唯一发事件的路径是后者 ⇒ 两条路各测一头，铁律 #5 意义上的"测到 ≠ 覆盖到"。补一条按真实例断言**观察者路径**键集合的判据（并验多发的键真等于 `instance.current_node_id`，不许是空壳）：**四档变异 `0/1/1/2`**（M-0 `37 passed RC=0` 必须绿；M-1 fired 少发、M-2 failed 少发各红一条；M-3 在 `_envelope()` 凭空加键 `phase` 红**两条**，实测 `--tb=no` 点名的正是新老这两条），从内存字节还原、收尾 `逐字节一致=True`。顺带核到 `node_id` 的语义坑：`current_node_id` 只是 `ctx.current_node` 读数（`af_instance.py:150-151`），`fail()`/`_transition()` 都不改它、由执行链跳边时推进（`af_executor.py:156/252/781`）⇒ failed 事件带的是"失败时刻停在哪"而非"哪个节点失败"。**删字段属三方共读面 ⇒ 不自裁**，作为**第 12 件第三问**并入同一份申请（同根：§1.2 载荷行没写清），AF 倾向"DB 不读就删"。另把 §二之二十二 里 `af_mqtt_bridge.py:427` 两处**过时行号**就地更正为 `:449`（本仓 `5ff1ea6` 之后该文件整体下移，铁律：正文行级引用对当前工作区复测）。全链：`pytest -q` **2726 passed / 51 skipped / 7 subtests RC=0（93.36s）**（较上批 +1）、`gates.sh` **RC=0**（undefined-name tests **159** 未变、主题白名单 7 处、包标记 5/96、参数注入 96/96 豁免 2、工具名单 96/31 豁免 0、状态源 fail-closed 5/5/豁免 0），分跑桥测试 `37 passed RC=0`；测试文件 `CRLF: 0`、`git diff --numstat` `21 0` |
 | 本批之三十二（CI 复查到 run 57，纯文档） | `gh_ci_status.py runs` → `success runs: [57, 56, 55, 54, 53, 52, 51, 50, 49, 48]`（`RUNS_RC=0`）⇒ **run 54/55/56/57 四套全 `completed/success`**，上一版"两套不计入"的那句已落地；按 main 计**连续绿 23 条（run 34–57）**，run 54 是误建 `master` 分支那套重复（同样绿，单列不混进 streak 口径）。run 57 五作业逐条 success、`failed_steps` 全空；runner `pytest` 正文 `2726 passed, 51 skipped, 1 warning in 80.41s (0:01:20)` **与本机逐字相同**，对照 run 56 的 `2725 passed…` ⇒ +1 判据确实来自 `159ba00` 而非口径漂移。推送按规矩走 `git push origin master:main`（`PUSH_RC=0`，`f06b162..b148574`），收尾 `git ls-remote --heads origin` 只有 `refs/heads/main = b148574…` ⇒ 远端仍单分支 |
+| 本批之三十三（把"测到 ≠ 覆盖到"升成硬门：出向 MQTT 写者门禁上线，`8b629b8`） | 本批之三十一那条不是个案，是**结构缺口**：一条测试长期绿，绿的却是一条生产永远不走的路。契约测试补一条只钉住**已知这一个形状**，下一个破例得有人记得替它补用例 ⇒ 把这轮根因教训 generalize 成静态门。能升成门取决于**判据的形状**：`error=state` 与 `error=reason` 在 AST 上同形（价值语义只能行为断言），而"哪个文件、哪个最内层函数、载荷是不是 `_envelope()` 派生"是调用图形状 ⇒ 可硬判。三条规则（`scripts/check_mqtt_writers.py`，纯标准库 AST）：**A** 事件发布器 `publish_fired`/`publish_failed` 只许出现在 `af_mqtt_bridge.py` 内、且只许由 `observe_terminal()` 调用（归属取**最内层包围函数**，函数里再定义闭包发事件也照样红）；**B** 出向写者调用点（`_mqtt.publish`、`_presence.advertise`）只许在桥内；**C** 桥内 `_publish(topic, payload)` 的载荷必经 `_envelope()`。锚点 = 桥里的 `FIRED_TOPIC`/`FAILED_TOPIC` 两个模块级常量 + `_envelope`/`observe_terminal`/`publish_*` 五个函数名，**读不到即 exit 2**（§二之十四 同一课：改名会让门静默全绿）。本机实测 src 读数：**出向写者调用点 2 处、分布在 1 个文件；事件生产者 2 处、分布在 1 个文件；桥内 `_publish(topic, payload)` 2 处，其中载荷来自 `_envelope()` 的 2 处；现场豁免 0 处** ⇒ 绿色行逐字节只报这些数字。反例 **18 条**（`tests/unit/test_mqtt_writers_gate.py`）覆盖三条规则各自的红/绿两侧、`af_bus.publish` 不在射程、桥内 `advertise` 不误红、手写 dict 与 `json.loads` 载荷皆红、豁免理由不能空且单独计入读数、三种锚点缺失形状皆 `exit 2`。变异三档：**M-1 `RC=1`**（桥内 `resend()` 里多接一条生产者，finding 点名 `resend()`），且**同一处违例另跑完整 `gates.sh`** 拿到真红行 `结论：出向 MQTT 写者门禁红（exit=1）`（要证的是接线也在，不只脚本能红）；**M-2 `RC=1`**（手搓 dict 当载荷、绕过 `_envelope()`）；**M-3 `RC=2`**（`_envelope` 改名 ⇒ 锚点读不到）。两个**自捕的坑**都记进 §二之二十三：① 第一版绿行硬写了"写者 1 个模块"这个形容词式结论（铁律 #5——把未计数当已验证）⇒ 改成逐文件计数并加一条测试，断言打印数字 == `check()` 的 stats 且"只在/全部"这类字样绝不出现；② 规则 C 初版只认位置参数，`self._publish(topic=…, payload=…)` 会**静默放行** ⇒ `_payload_arg` 两态都认，并各钉一条红/绿测试。另有两处执行事故如实记账：变异驱动器首跑崩在还原之前（`subprocess` 文本模式吃 GBK 输出抛 `UnicodeDecodeError`，`af_mqtt_bridge.py` 残留 `resend()`），先 `git diff --stat` 核实差异恰为那 3 行新增、无在飞工作，才用 `git checkout --` 复原（默认口径仍是**内存字节还原**，此为已核实的例外）；第二次是**代理信号**——`bash` 解析到 `C:\Windows\System32\bash.exe`（WSL 无发行版，UTF-16 提示）返回 `RC=1` 看着像门禁红，换 `C:\Program Files\Git\bin\bash.exe` 才拿到上面那条真红行。全链：`pytest -q` **2744 passed / 51 skipped / 7 subtests RC=0（97.39s）**、`GATES_PYTHON=python bash gates.sh` **RC=0**、undefined-name tests **159→160**（+本门测试文件）、门本体 src 实跑 `RC=0`、还原后 `逐字节一致=True`、三份新/改文件 `CRLF: 0`。文档随本条一并落盘：新增 `## 二之二十三`、§〇 加本门一行、核实基准 → `8b629b8` |
 
 ## 四、审计侧
 
