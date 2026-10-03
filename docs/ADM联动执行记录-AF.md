@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/ADM联动执行计划-AF.md`（DCD 出品，v2.5 联动落地版）
 > 记录人：AutoForge 开发
-> 核实基准：代码侧最新 commit = **`fc2bba6`**（前三个提交里 `e6d442a`/`0722828`/`9c6deb9` **只加测试**，`fc2bba6` 加的是**一门新门禁** `scripts/check_states_fanout.py` + `gates.sh` 一节 + 它的反例测试；`src/` 生产代码一字未动，其前一个动生产面的提交是 `64ca83c`/`c14503d`）。§二/二之二…二之十四 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
+> 核实基准：代码侧最新 commit = **`12cea64`**（`e6d442a`/`0722828`/`9c6deb9` **只加测试**，`fc2bba6` 加的是**一门新门禁** `scripts/check_states_fanout.py` + `gates.sh` 一节 + 它的反例测试，`12cea64` 是这批里**唯一动 `src/` 的提交**：`af_service.live_run` 的时钟口径 + 三条判据，+11/−2）。§二/二之二…二之十五 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
 > 契约真源：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
 > 交叉裁定：`20260929-ADM三仓联动七问`、`20261001-AF-homesdk接入四问`、`20260930-AutoForge后续优化三项`、`20261001-DB目标模式与AF三题` §H、**`20261002-homesdk记账与AF-DB-DPP六件-裁定`**（本轮落地依据，§一 末）
 
@@ -21,6 +21,7 @@
 | 第 5 步 后续优化三项 | **①③④ 已交付；② 只落了半边** | ① 单写者租约降级只读、③ import-linter 分层两档、④ tick 线程自愈，逐条 file:line 见 §一；① 的**接缝判据**（serve 抢不到锁 ⇒ `build_app(readonly=True)`）本批补上，两次变异各取到红（§二之十三）；② af_persist 的「顺序追加」子句**未落**（裁定执行约束第 2 条要求「追加写 + 文件头部元信息」，现实现仍是整文件重写）⇒ 已提 DCD（§五 第 9 件），读数与不自主实现的三条理由见 §二之十二 |
 | 第七轮审计 | **finding 属实，已修** | 详见 `docs/audit/审计报告_第七轮_核实与修复.md`；第八轮尚未落 `docs/audit`（本回合实测目录内最新即第七轮，mtime `10-02 11:46`） |
 | 门禁肥化防护（计划外补刀） | **已交付，本批又加一门** | `gates.sh` 计数棘轮 + `.gates-tally.txt`（上限 104），三条变异实测能红；AgentOps 模板同步去反引号缺陷。本批新增**状态源扇出门禁** `scripts/check_states_fanout.py`（换 `runtime.states` 必须四个消费方同步；HEAD 绿、两处变异红），并自带反例测试 `test_states_fanout_gate.py` 7 条——第一版实现自己是个假洞（对 HEAD 与对变异同时报绿），那一次形状也钉成用例（§二之十四） |
+| 真机路径口径对账（计划外补刀） | **已交付** | 接缝盘点的第二个产物：`live_run`（HTTP `/api/live/run` 与 MCP `af_live_run` 共用）此前用 `build_runtime(graph)` 的**仿真锚点**当墙钟用——同一次真机下发的 `trigger_time`/`audit.at`/canary `at` 与 `at:19:30` 判定全落在 2026-09-14 08:00，而 CLI 的 live/dry-live 分支早已取家庭墙钟。`12cea64` 统一为"锚在真实的现在、仍可推进"的虚拟钟并开 `clock=` 入参；`build_runtime(` 全部 8 个站点逐一点过，其余无 clock 的都在仿真面上（锚点是设计）。三次变异 `3 failed`/`1 failed`/`1 failed`（§二之十五） |
 | F4 ③ / F7 前端残留 | **已收口** | `/evidence` 生产态证据视图上线；真机下发的事件回放与撤销按钮端到端真点通（读数见 §一末） |
 | GitHub CI | **首次可读，且从"永久红"修到连续绿；读数路已成脚本** | 实测 run 1–27 `conclusion` 全为 `failure`（建仓以来一条没绿过），三个红因全在版本/判据层而非产品逻辑：pydantic-v2-only 的 `Field(max_length=)` 让 CI（pydantic 1.10.12）**0 条测试跑过**、undefined-name 门禁自己用了 3.12+ 的 `ast.TypeAlias`（CI 是 3.11）、真 vhass 的 skip 判据问"包能否 import"而非"插件注册了没"。三条各钉能变红的反例后，run 28 五作业全 `success`，CI 与本机通过/跳过数逐字相同（2621/51）。**run 31（守卫那次提交）五作业再次全 `completed/success`**，且 runner 侧给出安装步的实测读数 `fetch 主机读数：npmmirror=0 npmjs=87`。读数路径固化为 `scripts/gh_ci_status.py`（`runs`/`jobs`/`annotate`/`log`，纯标准库、只 GET、不打印凭证；`log` 先停 302 再无凭证取正文，免得把 token 带给日志存储域）。读数与残留见 §二之五、§二之八。**run 36（commit `3144879`，含架构门禁口径修复那批）五作业再次全 `completed/success`，runner 侧读到 `Baseline lock: 96 modules, 0 violations` 与 `Contracts: 1 kept, 0 broken`** ⇒ CI 架构门的覆盖面与本机同口径已是实测，不再是"已修 + 待复测"（§二之十一）。**run 39（`daa3af7`）与 run 40（`cd5e1bc`）也已 `completed/success`**，本批新增门禁的 run 41（`1474a7f`）读数为 `in_progress`（记录写就时未定，稍后按 §二之五 的口径补读） |
 | DCD 20261002 §一（CI 锁文件源）| **裁定 (b) 已落地并已在 runner 上取到读数** | 只按原文写 `--registry=https://registry.npmjs.org` 经实测是**空操作**（fetch 87+87 行仍在 `registry.npmmirror.com`/`cdn.npmmirror.com`），必须配 `--replace-registry-host=always`；安装步另加"主机自证"守卫（CI 绿不能证明没吃镜像）。逐字节对账 137/137 `integrity` MATCH ⇒ 锁文件字节未动。§二之七 末尾"本机 npm 11.9.0 / runner 10.x，只有 push 之后才知道"的残留**已销账**（runner `npmmirror=0 npmjs=87`）。回执已投 DCD（含 §四 判例 2 的证据更正：`@types/node` tarball 两源逐字节相同、根目录差异不是重打包痕迹）。见 §二之七、§二之八 |
@@ -1051,6 +1052,131 @@ af_service.py::simulate_track / _build_sim_runtime / live_run         （各一�
   包标记 5 包 / 索引 96 个 `.py`、**状态源扇出 96 文件干净**、import 冒烟 0 违规
 - 生产代码：本批**只动 `gates.sh` 与新脚本**，`src/` 一个字节没改（六处手抄点原样保留，门只负责盯着它们）
 
+## 二之十五、`af_service` 那半张盘点：两条真机路径的时间轴曾差一天又二十天（`12cea64`）
+
+§二之十四 结尾把 `af_service` 的 clock 注入登记成"参数递错类，未盘"。本批就去盘它。盘法与上批同：
+不问"哪里可能有问题"，问"**同一件事在这个仓里有几条路径在做，它们的答案是同一个来源吗**"。
+
+### 缺陷本体
+
+`live_run` 是**唯一**的真机下发服务层，HTTP `/api/live/run` 与 MCP `af_live_run`（DB 实际调的那条）都进这里。
+它此前是：
+
+```python
+runtime = build_runtime(graph)          # HEAD 之前
+```
+
+`build_runtime` 的默认钟是 `VirtualTimeSource(datetime(2026, 9, 14, 8, 0, tzinfo=utc))`——那是**仿真**的锚点，
+`af_runtime.build_runtime` 的签名注释写得很清楚。于是同一次对**真实设备**的下发：
+
+- `context.trigger_time`（`af_instance` v1.7.1 明确"取时间源而非墙钟"，因为 `time_hour(context.trigger_time)`
+  这类时间窗判断依赖它）= 2026-09-14 08:00；
+- `audit[].at`、canary 证据的 `at` 同源；
+- `at:19:30` 这类 time 触发按锚点判定。
+
+而 CLI 的 live/dry-live 分支（`af_cli._make_runtime`）早已显式 `clock=SystemTimeSource()`。
+**同一个 IR、同一次真机下发，`forge run --live` 与 WebUI/MCP 下发给出两套时间轴**——
+第七轮审计"同一 IR 判相反结论"那一族，只是这次歪在时间上。今天（2026-10-03）下发的证据会被记成
+09-14，差 **19 天**；按 `at:19:30` 的窗判，晚上七点半的真机下发永远不触发。
+
+### 范围：把 `build_runtime(` 全数点过，不是"看到一处改一处"
+
+```
+af_cli.py:295              clock=SystemTimeSource()      真机/dry-live ⇒ 本来看墙钟
+af_cli.py:340              无 clock                       仿真分支 ⇒ 锚点是刻意的
+af_cli.py:1033             无 clock                       `_metrics_snapshot`：本地回放 ⇒ 刻意
+af_service.py:881/884      clock=clock                    `simulate_track` hifi/fake ⇒ 入参，默认仍是仿真锚点
+af_service.py:1346         无 clock                       `_build_sim_runtime`（会话/ask）⇒ FakeHA，刻意
+af_service.py:1701         本批改：clock=clock             `live_run` ⇒ 唯一歪的那条
+af_vhass/harness.py:165    clock=clock                    HiFi 对拍台 ⇒ 入参
+```
+
+`undo_deploy` 那条撤销链不建 runtime（直接对 transport 回放快照），不受影响。
+⇒ 需要改的只有 `live_run` 一处，其余无 clock 的站点都在仿真面上，锚点是设计而非缺陷。
+
+### 改法：锚在真实"现在"的**虚拟**钟，不是墙钟本体
+
+```python
+if clock is None:
+    clock = VirtualTimeSource(SystemTimeSource().now())
+runtime = build_runtime(graph, clock=clock)
+```
+
+为什么不干脆 `SystemTimeSource()`：`_replay_live` 的 `advance_s` 要用 `runtime.advance()`（负值还走
+`clock.jump()`），而 `SystemTimeSource` 两个方法都没有——`Runtime.advance` 会当场
+`TypeError: 当前时间源 SystemTimeSource 不支持时间旅行`，真机回放能力（`events` 里前跳一小时）会随
+这次"修正"一起消失。锚点取"现在的墙钟"、语义仍是可推进的虚拟钟，才同时满足两件事；
+需要确定性的调用方显式传 `clock=`（新增的入参就是这条接缝的测试面）。
+
+判这是 AF 内部口径、不必走 DCD：契约表里 `af/automation/fired` 的 ts 由 CLI 那条路径产生，本已按墙钟；
+本批改的是让 MCP/HTTP 这条**向同一契约靠**，没有新 topic、没有改任何载荷字段含义。
+
+### 第一版判据是空的——而且它当时报"绿"
+
+先写的三条用例拿 `out["audit"]` 当时间轴。首跑读数 `2 failed, 1 passed`，我把那条 passed 当成了
+"显式 clock 已被支持"的证据。拿脚本直接 dump 两条路径的返回体才发现：
+
+```
+== default(now-anchored)
+  audit: []
+  instances: [{... "trigger_time": "2026-10-03T02:01:22.254465+00:00" ...
+== explicit 2027
+  audit: []
+  instances: [{... "trigger_time": "2027-03-04T05:06:07+00:00" ...
+```
+
+一次**顺利**的真机下发一条审计都不会产生——`AuditLog` 只记 `entity_drift`/`action_failed`/总线与配额类
+事件，成功路径上没有这类事件。于是 `assert all(t.year == 2027 for t in _audit_times(out))` 在空表上恒真，
+**那条"绿"是假绿**，而且假在我自己刚写完的判据上（铁律 #8：判据要能红；铁律 #5：EXEMPT ≠ VERIFIED）。
+换成必然存在的 `instances[].context.trigger_time`，并把"表为空"本身写成断言：
+
+```python
+def _trigger_times(out: dict) -> list[datetime]:
+    """取实例上下文里的触发时刻；空表直接判红，避免下游断言在 `all()` 上空转。"""
+    times = [datetime.fromisoformat(i["context"]["trigger_time"]) for i in out["instances"]]
+    assert times, "真机跑完一个实例都没有 ⇒ 时间轴无从判定，这条用例等于没跑"
+    return times
+```
+
+这条 guard 不是防御性代码，是**这条判据的唯一防假绿结构**：`all()`/`max()` 面对空表一个是恒真、一个是
+`ValueError`，前者静默后者吵，本批实测就是这个静默咬到了我。
+
+### 三次变异：每条用例各钉一次
+
+`tests/unit/test_af_live_run_clock.py` 分跑 **`3 passed` RC=0**。变异驱动 `read_bytes`/`write_bytes`
+（避开上次 CRLF 那一坑），锚点块匹配次数先断言 `== 1` 再替换：
+
+```
+orig sha256: bda63c532b044b33
+M-a 真机路径退回 build_runtime 默认仿真锚点: RC=1  `3 failed in 2.18s`
+    FAILED ::test_live_run_anchors_the_real_wall_clock
+    FAILED ::test_explicit_clock_is_honoured
+    FAILED ::test_advance_s_still_moves_the_live_clock
+    restored identical: True
+M-b 显式 clock= 被忽略                    : RC=1  `1 failed, 2 passed in 1.14s`
+    FAILED ::test_explicit_clock_is_honoured
+    restored identical: True
+M-c 默认钟换成 SystemTimeSource（不可推进） : RC=1  `1 failed, 2 passed in 1.17s`
+    FAILED ::test_advance_s_still_moves_the_live_clock
+    restored identical: True
+DRIVER_RC=0
+```
+
+M-a 一次红三条是预期的（把 clock 整个丢掉，三条断言分别落在锚点、显式入参、可推进面上）；
+M-b/M-c 各只红自己那条，说明三条判据问的确实是三件事。`restored identical: True` 是**逐字节**比回
+原文件（本批 `af_service.py` 有意是脏的，所以这里不看 `git diff`，看哈希）。
+
+### 本批全链读数（HEAD `12cea64`）
+
+- `python -m pytest -q` → **RC=0**，`2652 passed, 51 skipped, 1 warning, 7 subtests passed in 80.50s`
+  （2649 → +3 真机时间轴判据）
+- `GATES_PYTHON=python bash gates.sh` → **RC=0**：AST 新增 0 / 存量 104、棘轮 104/104、
+  undefined-name src **96** + tests **155** 文件（本批新增 1 个测试文件）、主题白名单 7 处、
+  包标记 5 包 / 索引 96 个 `.py`、状态源扇出 96 文件干净、import 冒烟 0 违规
+- 生产代码：本批动 **1 个文件**（`src/autoforge/af_service.py`，+11/−2：新增 `clock` 入参、
+  `VirtualTimeSource` 导入、默认锚点与 docstring 口径），这是自 `64ca83c`/`c14503d` 之后第一次改 `src/`
+- `docs/audit` 无新报告（最新仍是第七轮，含 `审计报告_第七轮_核实与修复.md`），DCD 无新裁定到达
+
 ---
 
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
@@ -1089,6 +1215,7 @@ af_service.py::simulate_track / _build_sim_runtime / live_run         （各一�
 | 本批之十七（同族第二条接缝：CLI 起桥的接线判据，`0722828`） | 新增 `tests/unit/test_af_cli_linkage_wiring.py` 三条：桩 `start_from_env`/`attach` 判 kwargs 与落盘副作用 ⇒ `proposal_sink` 是 `PersistentInsightSink` 且**没有** `approve` 把手、一条 `submit()` 真落到 `{store_root}/insight_proposals/pending/*.json`、`version == PRESENCE_CAPS_VERSION`、`tools == [t[0] for t in af_mcp.TOOLS]`、`attach` 收到桥本体、env 未开启 ⇒ 返回 `None` 且**一次都不调** `start_from_env`。三次变异分别 `2 failed` / `1 failed` / `1 failed`（RC 均 1），脚本自证还原 `restored identical: True` + `git diff -- src/autoforge/af_cli.py` 空。全链：`pytest -q` **2640 passed / 51 skipped RC=0**、`gates.sh` RC=0（undefined-name tests **153** 文件）。§二之十三 加"同族第二条接缝"小节，§〇 第 1/2 步行补判据 |
 | 本批之十八（同族第三条接缝：`_make_runtime` 的起桥条件与 clock 归属，`9c6deb9`） | `tests/unit/test_af_cli_linkage_wiring.py` 扩两条（桩 `_start_linkage_bridge` 只记 kwargs）：dry-live 分支 ⇒ 恰好起一次桥、`clock is runtime.clock` 且 `isinstance(runtime.clock, SystemTimeSource)`、`store_root` 原样递到；仿真分支 ⇒ **一次都不起**。两次变异各 `1 failed, 4 passed`（RC=1：`clock=runtime.clock`→`clock=None`；仿真分支 `typer.echo("· 仿真底座：FakeHA…")` 前插一次起桥调用），脚本自证 `restored identical: True` + `git diff -- src/autoforge/af_cli.py` 空。文件分跑 `5 passed` RC=0。全链：`pytest -q` **2642 passed / 51 skipped RC=0（80.01s）**、`gates.sh` RC=0（undefined-name src 96 + tests **153**，本批未加文件故计数不变；AST 0/104、棘轮 104/104、主题 7、包标记 96、冒烟 0）。文档侧：§二之十三 加"同族第三条接缝"与本批读数小节，§〇 第 1 步行、§一 窗后验收行补判据并写明"接线判据 ≠ 抓包已发生"（该项仍 EXEMPT） |
 | 本批之十九（接缝盘点的首个产物：状态源扇出门禁，`fc2bba6`） | 新门禁 `scripts/check_states_fanout.py`（按 (根名, 递出去的状态源) 分组，要求 `states`/`instances.states`/`scheduler.states`/`executor.states` 四条齐）接进 `gates.sh` 并加 RC 聚合分支（`pkg` 之后、`ast` 之前），CI 的 `quality-gates` 作业自动继承为硬门。红/绿实测：HEAD 绿（96 文件 RC=0），`af_cli.py:345` 删一行 ⇒ RC=1 指名缺 `executor.states`，`af_cli.py:301` 换成不同源 ⇒ RC=1 两条 finding。反例测试 `tests/unit/test_states_fanout_gate.py` 7 条（含"根名解析错=假洞"那一形状）；两次"让门自己变瞎"的变异各 `3 failed`（RC=1）。全链：`pytest -q` **2649 passed / 51 skipped RC=0（82.87s）**、`gates.sh` RC=0（undefined-name tests **154**）。§二之十四 新篇（含那次假绿的自证），§〇 门禁行与 CI 行、§六 残留随之改写 |
+| 本批之二十（`af_service` 那半张盘点：真机时间轴，`12cea64`） | `af_service.live_run` 由 `build_runtime(graph)`（仿真锚点 2026-09-14 08:00）改为 `build_runtime(graph, clock=VirtualTimeSource(SystemTimeSource().now()))`，并新增 `clock=` 入参给确定性调用方——HTTP `/api/live/run` 与 MCP `af_live_run` 两条真机路径此前与 CLI live/dry-live 分支（已取墙钟）对同一 IR 给出两套时间轴。范围把 `build_runtime(` 八个站点全数点过（§二之十五 表格），撤销链不建 runtime。新判据 `tests/unit/test_af_live_run_clock.py` 3 条分跑 `3 passed` RC=0，取 `instances[].context.trigger_time` 而非 `audit`（**一次顺利下发零条审计**，`all()` 在空表上恒真——我第一版就假绿在这里，M-a 一次红三条、M-b/M-c 各红自己那条，还原逐字节自证 `restored identical: True`）。全链：`pytest -q` **2652 passed / 51 skipped RC=0（80.50s）**、`gates.sh` RC=0（undefined-name src 96 + tests **155**、扇出门禁 96 文件仍绿）。文档侧：§二之十五 新篇、§〇 加"真机路径口径对账"行、核实基准改 `12cea64`、§六 残留收窄 |
 
 
 ## 四、审计侧
@@ -1125,7 +1252,7 @@ af_service.py::simulate_track / _build_sim_runtime / live_run         （各一�
 - 洞察面板的**投递源仍是本机手投**：§二之四的两条提案是用 `PersistentInsightSink.submit()` 直接写进 dev store 的，走的是"落盘之后的那一段"。本批把**桥回调 → 落盘 → `/api/insights/pending`** 这一段用契约形状的假消息钉住了（`test_contract_shaped_insight_reaches_the_panel_with_its_accounting`，注入假 client、真桥、真队列、真 API），但**真 paho + 真 broker** 那一段仍未端到端（本机无 paho-mqtt 且禁 pip install），面板的空态文案因此把"桥未上线/没订到主题"列为四种成因之一，而不是当作已验证链路。
 - **契约表本身还欠三行改动，且都在 MA/DCD 手里**（§五 第 7 件）：`ma/insights` 的载荷行没有 `conf`、没有稳定的假设 id、也没有 IR 候选（AF 的 `intent`）。AF 已按可回退口径落地（别名 + 缺报记账），但只要契约行不改，MA 侧随时可能按自家形状发而 AF 无从判定"这条到底该不该有 conf"；面板上也因此会长期是「无 IR（不能批准）」。**这不是 AF 能单方面收口的残留**，登记以免被读成"入向已经全对齐"。
 - 第 5 步 ② 的「顺序追加」子句**未做**（不是漏，是不在裁定前擅自动存储格式）：af_persist 现为整文件原子重写，追加写会同时撞"不改格式头"与第五轮的有界化修法两面。校验和/坏文件跳过/原子替换三条已落，剩这一条等 DCD 定性（§五 第 9 件，判据与三条理由见 §二之十二）。
-- **接缝类判据：多路镜像这一族已结清，参数递错那一族仍只扫了三条**：本批把"同一份值手抄进多条属性路径"这一族做成门禁（`scripts/check_states_fanout.py`，§二之十四 的 AST 盘点显示它覆盖的是 src 全集，不是抽样）。另补的三处判据属**参数递错**类（serve→`build_app` 的 `readonly`、CLI 起桥递出去的四样 kwargs、`_make_runtime` 的起桥条件与 clock 归属），靠的是顺着验收点手动追问"这根线谁在测"。同族里还剩 `af_watch` 的观察者装配、`af_service` 的 store/clock 注入、TOOLS→caps 之外有没有第二次工具名单映射**未做清单化盘点**，也没有对应门禁能判红——这类缺口不会让任何东西变红，只会让该红的不红，与 §二之十一 同族。已扫的三条只覆盖 `af_cli` 的 serve/起桥/runtime 装配三面（`_make_runtime` 的 live/dry-live/sim 三分支现已有判据），`af_service`/`af_watch` 侧仍未盘。登记在此，避免被读成"接缝已系统扫过"。
+- **接缝类判据：多路镜像这一族已结清，参数递错那一族扫过四条**：本批把"同一份值手抄进多条属性路径"这一族做成门禁（`scripts/check_states_fanout.py`，§二之十四 的 AST 盘点显示它覆盖的是 src 全集，不是抽样）。另补的四处判据属**参数递错**类（serve→`build_app` 的 `readonly`、CLI 起桥递出去的四样 kwargs、`_make_runtime` 的起桥条件与 clock 归属、`live_run` 的时钟锚点），靠的是顺着验收点手动追问"这根线谁在测"。第四条不只是"补一条测试"，它**实测出一个真缺陷**：两条真机路径对同一次下发给出两套时间轴（§二之十五，`12cea64` 已修）。同族里还剩 `af_watch` 的观察者装配、`af_service` 的 **store 注入**（`live_run` 把 `store` 递进 `StaticScanner` 的 `device_guard`/`entity_health`，`store=None` 与递错目录之间有没有判据未核）、TOOLS→caps 之外有没有第二次工具名单映射**未做清单化盘点**，也没有对应门禁能判红——这类缺口不会让任何东西变红，只会让该红的不红，与 §二之十一 同族。已扫的四条覆盖 `af_cli` 的 serve/起桥/runtime 装配三面 + `af_service` 的 clock 一面；`af_service` 的 store 面与 `af_watch` 侧仍未盘。登记在此，避免被读成"接缝已系统扫过"。
 - `BoundedCache` 基类收敛（第五轮遗留）与"实现间契约不一致"的**静态**门禁：本轮以契约测试覆盖，未做静态门禁。
 - 证据面板的 `evicted_automations` 只做"提示有自动化被挤出内存"，未做跨进程持久化——**注意这与 ④A 不是同一个问题**：④A 裁的是 MA 洞察提案队列（已持久化），证据档的进程内清零仍是遗留。
 - `SessionViewResponse` 的**应答成功分支**（本批已收口，见下方"已收口"与 §二之九）：原登记为 EXEMPT——`case04_ask_timeout` 带 seed + event 建会话后 `asks=0`（分支未走到挂起 ask），只实测到 404 失败面；顶层 9 键靠同族 `POST /sessions`/`GET /sessions/{sid}` 的同一 `_session_view` 坐实。
