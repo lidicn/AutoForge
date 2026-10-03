@@ -127,6 +127,15 @@ echo "══ 状态源 fail-closed 门禁（snapshot() 不许静默省略未知�
 snap_rc=$?
 
 echo
+echo "══ 出向 MQTT 写者门禁（事件只许一条生产者，载荷必经 _envelope）══"
+# §二之二十二 盘出的形状：那条"逐字段对契约"的测试一直绿，但它测的是 publish_fired/publish_failed 的
+# 直接调用路径，而生产唯一发事件的路径是 observe_terminal()——后者多发一个契约表 §1.2 没列的 node_id。
+# 两条路各测一头 ⇒ 真实载荷与契约行不一致而**没有一条测试红过**。本门把"下一个写者"钉住：
+# 出向 MQTT 只能从 af_mqtt_bridge 走、事件只能由 observe_terminal 产生、载荷必须经 _envelope()。
+"$PYTHON" "$REPO/scripts/check_mqtt_writers.py" "$REPO/src"
+writers_rc=$?
+
+echo
 echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）════════════════════"
 # 单跑冒烟：只走 `import` 子进程，慢但一次性看清。
 # 注意：这条在开发机上的红多半是「依赖没装齐 / 本地副本不完整」，
@@ -171,6 +180,15 @@ fi
 if [ $snap_rc -ne 0 ]; then
   echo "结论：状态源 fail-closed 门禁红（exit=$snap_rc）。返回 \`Snapshot\` 的状态源必须对未知实体 \`raise UnknownEntity(…)\`：\`and\`/\`or\` 短路 ⇒ fail-open 的实现永远读不到缺的那一支，仿真与生产会对同一条 IR 给出相反结论。故意 fail-open 且已裁定就地写 \`# fail-closed: exempt(理由)\`。"
   exit $snap_rc
+fi
+
+if [ $writers_rc -eq 2 ]; then
+  echo "结论：出向 MQTT 写者门禁读不到锚点（exit=$writers_rc）。\`FIRED_TOPIC\`/\`FAILED_TOPIC\`/\`_envelope()\`/\`observe_terminal()\` 是三条判据的地基——改名或挪走会让本门静默全绿，先把口径对上真实模块再说干净。"
+  exit $writers_rc
+fi
+if [ $writers_rc -ne 0 ]; then
+  echo "结论：出向 MQTT 写者门禁红（exit=$writers_rc）。出向消息只允许 \`af_mqtt_bridge\` 一个写者、事件只在 \`observe_terminal()\` 里产生、载荷必须经 \`_envelope()\`：绕过任何一条，对端收到的就是没人验过的形态（\`ts\` 口径、\`ref\` 语义、QoS、发布失败留痕都在桥里）。破例要裁定，就地写 \`# mqtt-writers: exempt(理由)\`。"
+  exit $writers_rc
 fi
 
 if [ $ast_rc -ne 0 ]; then
