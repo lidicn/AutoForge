@@ -97,7 +97,9 @@ class ServiceError(Exception):
 
 
 def _t_health(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    return svc.health()
+    # 真机/Agent 面的 health 读数必须探自己服务的那个 store：不递就是 `store_ok: null`，
+    # 等于告诉调用方"存储层我没看"（HTTP 面 af_api 早已递 store，两面对不上）。
+    return svc.health(store)
 
 
 def _t_build(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:

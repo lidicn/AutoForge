@@ -68,6 +68,19 @@ def test_dispatch_health_no_auth(tmp_path):
     assert _load(ok[0]["text"])["ok"] is True
 
 
+def test_dispatch_health_probes_the_store_it_serves(tmp_path):
+    """Agent 面的 health 读数必须探它自己服务的那个 store。
+
+    `_t_health` 一度写成 `svc.health()`：`store` 形参带默认值 ⇒ 漏传不报错、不崩，
+    只是 `store_ok` 永远是 `null`——"这一栏我没看"被下游读成"这一栏没问题"（铁律 #5）。
+    HTTP 面（`af_api`）早就递了 store，两面对不上是本缺陷的形状；`scripts/check_store_injection.py` 常驻判这一族。
+    """
+    store = GraphStore(tmp_path)
+    ok, err = dispatch("af_health", {}, store, None)
+    assert err is False
+    assert _load(ok[0]["text"])["store_ok"] is True
+
+
 def test_dispatch_build_accepts_valid_ir(tmp_path):
     store = GraphStore(tmp_path)
     content, is_error = dispatch("af_build", {"ir": _DEMO_IR}, store, None)

@@ -98,6 +98,15 @@ echo "══ 状态源扇出门禁（换 runtime.states 必须四个消费方同
 fanout_rc=$?
 
 echo
+echo "══ store 注入门禁（带默认值的 store 不许静默漏传）═══════════════"
+# §二之十六 那一族的通用形状：`live_run`/`health` 的 `store` 形参带默认值 ⇒ 调用点少递
+# 一个关键字参数**不报错、不崩**，只把那条入口面的 Tier-0 设备保护与存储健康读数静默
+# 退化成"没有 store"。默认值把漏传变成静默降级，所以判据落在调用边界上静态判，
+# 不靠人记得"两面都要递"。豁免必须带理由：空理由的豁免和没有门禁没区别。
+"$PYTHON" "$REPO/scripts/check_store_injection.py" "$REPO/src"
+store_rc=$?
+
+echo
 echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）════════════════════"
 # 单跑冒烟：只走 `import` 子进程，慢但一次性看清。
 # 注意：这条在开发机上的红多半是「依赖没装齐 / 本地副本不完整」，
@@ -121,6 +130,10 @@ fi
 if [ $fanout_rc -ne 0 ]; then
   echo "结论：状态源扇出门禁红（exit=$fanout_rc）。换 runtime 的 states 必须同时写 instances/scheduler/executor 四条；少写的那方会继续读旧状态源，而这类改法没有任何测试会红。"
   exit $fanout_rc
+fi
+if [ $store_rc -ne 0 ]; then
+  echo "结论：store 注入门禁红（exit=$store_rc）。签名里有 `store` 的函数，调用点必须把它递过去；确实不需要（如纯仿真面）就地写 `# store-injection: exempt(理由)`——漏传不报错，只会让那道闸门静默少装一面。"
+  exit $store_rc
 fi
 
 if [ $ast_rc -ne 0 ]; then
