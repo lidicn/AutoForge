@@ -98,12 +98,12 @@ echo "══ 状态源扇出门禁（换 runtime.states 必须四个消费方同
 fanout_rc=$?
 
 echo
-echo "══ store 注入门禁（带默认值的 store 不许静默漏传）═══════════════"
-# §二之十六 那一族的通用形状：`live_run`/`health` 的 `store` 形参带默认值 ⇒ 调用点少递
-# 一个关键字参数**不报错、不崩**，只把那条入口面的 Tier-0 设备保护与存储健康读数静默
-# 退化成"没有 store"。默认值把漏传变成静默降级，所以判据落在调用边界上静态判，
-# 不靠人记得"两面都要递"。豁免必须带理由：空理由的豁免和没有门禁没区别。
-"$PYTHON" "$REPO/scripts/check_store_injection.py" "$REPO/src"
+echo "══ 参数注入门禁（带默认值的关键参数不许静默漏传）════════════════"
+# §二之十六 / §二之十八 各抓到一处：`live_run`/`health` 的 `store`、`build_app` 的 `readonly`
+# 都带默认值 ⇒ 调用点少递一个关键字参数**不报错、不崩**，只把那条入口面的 Tier-0 设备保护、
+# 存储健康读数、只读闸门静默退化成"没有这道闸门"。默认值把漏传变成静默降级，所以判据落在
+# 调用边界上静态判，不靠人记得"两面都要递"。`clock` 有意不收：它的默认值是仿真锚点、是设计。
+"$PYTHON" "$REPO/scripts/check_param_injection.py" "$REPO/src"
 store_rc=$?
 
 echo
@@ -132,7 +132,7 @@ if [ $fanout_rc -ne 0 ]; then
   exit $fanout_rc
 fi
 if [ $store_rc -ne 0 ]; then
-  echo "结论：store 注入门禁红（exit=$store_rc）。签名里有 `store` 的函数，调用点必须把它递过去；确实不需要（如纯仿真面）就地写 `# store-injection: exempt(理由)`——漏传不报错，只会让那道闸门静默少装一面。"
+  echo "结论：参数注入门禁红（exit=$store_rc）。签名里有 `store`/`readonly` 的函数，调用点必须把它递过去；确实不需要（如纯仿真面、默认值就是设计）就地写 `# param-injection: exempt(理由)`——漏传不报错，只会让那道闸门静默少装一面。"
   exit $store_rc
 fi
 

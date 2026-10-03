@@ -1,13 +1,13 @@
-"""store 注入门禁必须"能变红"（铁律 #8），且必须"不误响"。
+"""参数注入门禁必须"能变红"（铁律 #8），且必须"不误响"。
 
-判据针对的形状（本仓 §二之十六 第一处真缺陷）：`af_mcp._t_live` 调 `svc.live_run(...)`
-漏了 `store=store`，而 `live_run` 的 `store` 形参带默认值 ⇒ **少递一个关键字参数不报错、
-不崩**，只让那条入口面的 Tier-0 设备保护静默退化成"没有 store"。默认值把漏传变成静默
-降级，所以判据只能在调用边界上静态判。
+判据针对的形状（本仓 §二之十六 / §二之十八 各抓到一处真缺陷）：`af_mcp._t_live` 调
+`svc.live_run(...)` 漏了 `store=store`、`af_mcp._t_health` 写成 `svc.health()`——两者都
+**不报错、不崩**，只让那条入口面的 Tier-0 设备保护或存储健康读数静默退化成"没有 store"。
+默认值把漏传变成静默降级，所以判据只能在调用边界上静态判。
 
 第一版按**裸函数名**查签名，把 `store.snapshot([...])`、`_direction(snapshot, ...)` 这类
 "变量恰好和函数同名"的正常调用判成红——28 处误报。一堵会自己响的墙必须先做到不误响，
-所以 `_t_*_is_not_flagged` 那几条不是凑数：它们钉的是"这扇门又会变成噪音"的那条回去的路。
+所以 `_not_flagged` 那几条不是凑数：它们钉的是"这扇门又会变成噪音"的那条回去的路。
 """
 from __future__ import annotations
 
@@ -15,9 +15,10 @@ import importlib.util
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "check_store_injection.py"
+SCRIPT = ROOT / "scripts" / "check_param_injection.py"
 
-# 目标函数库：三种签名形状各一条——可选关键字 store、keyword-only store、必填位置 store。
+# 目标函数库：三种签名形状各一条——可选位置 store、keyword-only store、必填位置 store，
+# 外加一条本门不收的参数（clock）和一条没有关键参数的函数。
 TARGETS = '''
 def live_run(graph, store=None):
     ...
@@ -31,13 +32,21 @@ def status(store):
     ...
 
 
+def build_app(root, examples=None, *, readonly=True):
+    ...
+
+
+def build_runtime(graph, clock=None):
+    ...
+
+
 def no_store(arg):
     ...
 '''
 
 
 def _module():
-    spec = importlib.util.spec_from_file_location("check_store_injection", SCRIPT)
+    spec = importlib.util.spec_from_file_location("check_param_injection", SCRIPT)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -45,7 +54,7 @@ def _module():
 
 
 def _check(tmp_path: pathlib.Path, caller: str) -> tuple[list[str], int]:
-    """写一颗两颗模块的小树（`af_service` 提供签名、`caller.py` 提供调用点），返回（漏传, 豁免数）。"""
+    """写一颗两模块的小树（`af_service` 提供签名、`caller.py` 提供调用点），返回（漏传, 豁免数）。"""
     (tmp_path / "af_service.py").write_text(TARGETS, encoding="utf-8")
     (tmp_path / "caller.py").write_text(caller, encoding="utf-8")
     findings, _files, exempted = _module().check(tmp_path)
@@ -76,7 +85,37 @@ def handler(store, args):
 """)
     assert len(findings) == 1
     assert "af_service.live_run" in findings[0]
+    assert "`store` 形参" in findings[0]
     assert "caller.py:" in findings[0]  # 判据要能指路：报的是文件+行号，不是抽象描述
+
+
+def test_readonly_is_a_target_param_too(tmp_path):
+    """同一形状不限于 store：`serve` 起 `build_app(..., readonly=…)` 漏 readonly 是本族最早一例。"""
+    findings, _ = _check(tmp_path, """
+from . import af_service as svc
+
+
+def serve(store_root):
+    return svc.build_app(store_root, None)
+""")
+    assert len(findings) == 1
+    assert "`readonly` 形参" in findings[0]
+
+
+def test_two_params_on_one_signature_are_each_checked(tmp_path):
+    """一个签名里两条关键参数都要递：递了一条不算递了另一条。"""
+    (tmp_path / "af_service.py").write_text(
+        "def serve_it(root, store=None, *, readonly=True):\n    ...\n", encoding="utf-8")
+    (tmp_path / "caller.py").write_text("""
+from . import af_service as svc
+
+
+def handler(root, store):
+    return svc.serve_it(root, store=store)
+""", encoding="utf-8")
+    findings = _module().check(tmp_path)[0]
+    assert len(findings) == 1
+    assert "`readonly` 形参" in findings[0]
 
 
 def test_positional_store_counts_as_passed(tmp_path):
@@ -128,7 +167,7 @@ def handler(the_store):
     assert _module().check(tmp_path)[0] == []
 
 
-# ── 转发形状：`_svc(svc.live_run, ...)` 里 store 要出现在转发关键字上 ──
+# ── 转发形状：`_svc(svc.live_run, ...)` 里关键参数要出现在转发关键字上 ──
 
 def test_forwarding_ref_without_store_is_red(tmp_path):
     findings, _ = _check(tmp_path, """
@@ -177,26 +216,41 @@ def handler(store):
 
 
 def test_same_name_in_other_module_is_not_flagged(tmp_path):
-    """按 (模块, 函数名) 解析：caller 自己模块里的同名函数没有 store，就不该被邻模块的签名判红。"""
-    (tmp_path / "af_service.py").write_text(TARGETS, encoding="utf-8")
-    (tmp_path / "caller.py").write_text("""
+    """按 (模块, 函数名) 解析：caller 自己模块里的同名函数没有关键参数，就不该被邻模块的签名判红。"""
+    findings, _ = _check(tmp_path, """
 def live_run(graph):
     ...
 
 
 def handler(store, args):
     return live_run(args["graph"])
-""", encoding="utf-8")
-    assert _module().check(tmp_path)[0] == []
+""")
+    assert findings == []
 
 
-def test_functions_without_store_param_are_never_flagged(tmp_path):
+def test_functions_without_target_params_are_never_flagged(tmp_path):
     findings, _ = _check(tmp_path, """
 from . import af_service as svc
 
 
 def handler(store, args):
     return svc.no_store(args["graph"])
+""")
+    assert findings == []
+
+
+def test_clock_is_deliberately_not_a_target(tmp_path):
+    """`clock` 有意**不收**：`build_runtime(graph)` 的默认时钟是仿真锚点，那是设计不是缺口。
+
+    把它判红等于对 src 里每一处仿真面喊狼来了，噪音会淹掉真漏传（§二之十五）。
+    真机时间轴的判据在 `tests/unit/test_af_live_run_clock.py`——它问"live 路径锚在真实的现在"。
+    """
+    findings, _ = _check(tmp_path, """
+from . import af_service as svc
+
+
+def handler(graph):
+    return svc.build_runtime(graph)
 """)
     assert findings == []
 
@@ -241,7 +295,7 @@ from . import af_service as svc
 
 
 def handler(args):
-    return svc.live_run(args["graph"])  # store-injection: exempt(纯仿真面，拿不到存储根)
+    return svc.live_run(args["graph"])  # param-injection: exempt(纯仿真面，拿不到存储根)
 """)
     assert findings == []
     assert exempted == 1
@@ -253,7 +307,7 @@ from . import af_service as svc
 
 
 def handler(args):
-    # store-injection: exempt(纯仿真面)
+    # param-injection: exempt(纯仿真面)
     return svc.live_run(args["graph"])
 """)
     assert findings == []
@@ -267,10 +321,22 @@ from . import af_service as svc
 
 
 def handler(args):
-    return svc.live_run(args["graph"])  # store-injection: exempt()
+    return svc.live_run(args["graph"])  # param-injection: exempt()
 """)
     assert len(findings) == 1
     assert exempted == 0
+
+
+def test_old_marker_name_does_not_clear(tmp_path):
+    """标记改名成 `param-injection` 之后，`store-injection` 那种旧写法不再作数——豁免必须能被grep到全部。"""
+    findings, _ = _check(tmp_path, """
+from . import af_service as svc
+
+
+def handler(args):
+    return svc.live_run(args["graph"])  # store-injection: exempt(旧前缀)
+""")
+    assert len(findings) == 1
 
 
 def test_unrelated_comment_does_not_clear(tmp_path):

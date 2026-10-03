@@ -77,8 +77,8 @@ def compare_dual_track(
     """
     # 两轨对拍是纯仿真面：simulate_track 的 store 只用来回填报告里的 `root` 字段，
     # 这里拿不到也不需要存储根（铁律 #5：留空是"没这一栏"，不是"验过"）。
-    fake = simulate_track("fake", ir, seed, events, clock=clock)  # store-injection: exempt(纯仿真对拍，store 只喂 root 读数)
-    hifi = simulate_track("hifi", ir, seed, events, clock=clock)  # store-injection: exempt(同上)
+    fake = simulate_track("fake", ir, seed, events, clock=clock)  # param-injection: exempt(纯仿真对拍，store 只喂 root 读数)
+    hifi = simulate_track("hifi", ir, seed, events, clock=clock)  # param-injection: exempt(同上)
     graph = load_graph(dict(ir))
     whitelisted = set(sun_trigger_automation_ids(ir))
 
