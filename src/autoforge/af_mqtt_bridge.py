@@ -69,6 +69,14 @@ ENV_ENABLED = "AUTOFORGE_MQTT"
 #: 进程内保留的发布/拒绝记录上限（"只增不减"家族的既有纪律：有界，不是无限流水）。
 MAX_HISTORY = 50
 
+#: `af/automation/failed` 的 `error` 封顶。取契约表 §1.3 给展示类文本定的同一个数（500 字），
+#: 因为 `fail_reason` 里会拼进异常 repr 与真机回执——不封顶等于把任意长度正文塞进 QoS 1 事件流。
+MAX_ERROR_CHARS = 500
+
+#: 执行链没写原因时的诚实占位。**不许退化成状态名**：`error` 恒等于 `"failed"` 时，
+#: 这个字段携带的信息量是零，而 DB 侧正是拿它向用户解释"为什么失败"。
+NO_FAILURE_REASON = "未记录失败原因（执行链未写入 fail_reason）"
+
 #: `adm/autoforge/caps` 里对外声明的联动版本（ADM v2.5 联动，不是 AF 的发布号）。
 PRESENCE_CAPS_VERSION = "2.5"
 
@@ -266,6 +274,17 @@ def _transport_of(
     return transport
 
 
+def _failure_reason(instance: Any) -> str:
+    """出向 `error` 取执行链写下的原因：`InstanceManager.fail()` 把它落在 `ctx.context["fail_reason"]`。
+
+    传状态名会让契约字段恒等于 `"failed"`——DB 拿到"失败了"而不是"为什么失败"，
+    而 `af_executor` 的每条 `_fail()` 都带了具体原因（失败的动作、软失效的异常、收敛违约）。
+    """
+    context = getattr(getattr(instance, "ctx", None), "context", None)
+    raw = context.get("fail_reason") if isinstance(context, Mapping) else None
+    return _clip(str(raw or "").strip() or NO_FAILURE_REASON, MAX_ERROR_CHARS)
+
+
 class AfMqttBridge:
     """把 AF 的终态事件发出去、把 MA 洞察收进来。client 由调用方注入（生产用 `make_client`）。"""
 
@@ -358,7 +377,10 @@ class AfMqttBridge:
         if state == "failed":
             self.counts["failed"] += 1
             return self.publish_failed(
-                automation_id=automation_id, instance_id=instance_id, node_id=node_id, error=state
+                automation_id=automation_id,
+                instance_id=instance_id,
+                node_id=node_id,
+                error=_failure_reason(instance),
             )
         return None
 

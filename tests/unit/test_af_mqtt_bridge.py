@@ -20,6 +20,8 @@ from autoforge.af_mqtt_bridge import (
     FIRED_TOPIC,
     INSIGHT_CONF_CAP,
     INSIGHTS_TOPIC,
+    MAX_ERROR_CHARS,
+    NO_FAILURE_REASON,
     PRESENCE_CAPS_VERSION,
     AfMqttBridge,
     BridgeUnavailable,
@@ -33,7 +35,10 @@ from autoforge.af_mqtt_bridge import (
     env_enabled,
     preflight,
 )
+from autoforge.af_instance import InstanceManager
+from autoforge.af_ir import load_automation
 from autoforge.af_runtime import Runtime
+from autoforge.af_state import InMemoryStateProvider
 from autoforge.af_time import VirtualTimeSource, load_tz
 
 
@@ -176,6 +181,59 @@ def test_observe_terminal_uses_instance_id_and_ignores_other_states():
     assert fired["instance_id"] != "WRONG"
     assert [p["topic"] for p in client.published] == [FIRED_TOPIC, FAILED_TOPIC]
     assert bridge.counts["fired"] == 1 and bridge.counts["failed"] == 1
+
+
+MINIMAL_AUTO = {
+    "ir_version": "0.2.1", "id": "demo", "name": "示例", "version": 1, "mode": "single",
+    "nodes": [
+        {"id": "a1", "kind": "on",
+         "trigger": {"type": "state", "entity_id": "binary_sensor.motion", "to": "on"}},
+        {"id": "p1", "kind": "pass"},
+    ],
+    "edges": [{"from": "a1", "to": "p1", "kind": "then"}],
+}
+
+
+def _failed_inst(reason: str = ""):
+    """真状态机产出的失败实例：`fail_reason` 由 `InstanceManager.fail()` 写，桥只负责读出来。"""
+    manager = InstanceManager(InMemoryStateProvider())
+    inst = manager.spawn(load_automation(MINIMAL_AUTO))
+    manager.fail(inst, reason)
+    return inst
+
+
+def test_failed_event_carries_the_reason_the_state_machine_recorded():
+    """契约表 §1.2 把 `error` 定为失败原因，DB 拿它向用户解释"为什么失败"。
+
+    锁的是**跨模块字段名**：桥读的是 `ctx.context["fail_reason"]`，写它的是 `af_instance.InstanceManager.fail()`。
+    两边任何一侧改键名，这条就红——而不是让线上每条失败事件静默退化成占位句。
+    """
+    client = FakeClient()
+    bridge = _bridge(client)
+    bridge.observe_terminal(_failed_inst("light.turn_on 失败且无兜底：HA 返回 502"), "failed")
+
+    assert _body(client.published[-1])["error"] == "light.turn_on 失败且无兜底：HA 返回 502"
+
+
+def test_failed_event_error_is_never_the_state_name():
+    """执行链没留原因时诚实说"没记录"。恒等于 `"failed"` 的字段携带零信息，而它正是 DB 唯一能显示的东西。"""
+    for inst in (
+        _failed_inst(),                                                      # 真状态机、空原因
+        _failed_inst("   "),                                                 # 键在、只有空白
+        SimpleNamespace(automation=SimpleNamespace(id="a"), instance_id="i"),  # 没有 ctx 的鸭子类型
+    ):
+        client = FakeClient()
+        _bridge(client).observe_terminal(inst, "failed")
+        error = _body(client.published[-1])["error"]
+        assert error == NO_FAILURE_REASON
+        assert error != "failed"
+
+
+def test_failed_event_error_is_bounded():
+    """原因里会拼异常 repr 与真机回执；封顶用契约表给展示类文本定过的同一个数（§1.3 = 500）。"""
+    client = FakeClient()
+    _bridge(client).observe_terminal(_failed_inst("很长的回执" * 400), "failed")
+    assert len(_body(client.published[-1])["error"]) <= MAX_ERROR_CHARS
 
 
 def test_publish_error_is_recorded_not_raised():
