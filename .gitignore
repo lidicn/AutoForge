@@ -83,3 +83,8 @@ tmp_*.py
 _*.py
 _*.sh
 _*.conf
+# ⛔ 上面 `_*.py` 会连带吃掉包标记 `__init__.py`（`_` + `*`=`__init__` + `.py`），
+# 实测受害：`src/autoforge/af_closedloop/__init__.py` 从未入库 ⇒ runner 上 grimp 不递归进无
+# `__init__.py` 的目录 ⇒ 两条架构门禁在 CI 只分析 86 个模块、本机 96 个，CI 门比本机门弱
+# （正好是本项目 fight 的"假绿"类）。故包标记必须永远入库。
+!**/__init__.py

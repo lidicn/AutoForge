@@ -81,6 +81,15 @@ echo "══ 主题白名单门禁（ADM 契约表为唯一真源）════
 topic_rc=$?
 
 echo
+echo "══ 包标记门禁（grimp 递归的前提交互，锁 CI/本机同口径）══════════"
+# 实测缺陷：`.gitignore` 的 `_*.py` 连带吃掉 `__init__.py`（`_`+`*`=`__init__`+`.py`），
+# src/autoforge/af_closedloop/__init__.py 在盘上躺了十几天、从未入库。grimp 对没有包标记的
+# 目录不递归 ⇒ runner 上架构门禁只分析 86 个模块、本机 96 个，CI 门比本机门弱。
+# 判据取 git 索引（不是磁盘 walk）：磁盘上文件在、本地永远检不出，只有索引口径两边一致。
+"$PYTHON" "$REPO/scripts/check_pkg_markers.py" "$REPO/src"
+pkg_rc=$?
+
+echo
 echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）════════════════════"
 # 单跑冒烟：只走 `import` 子进程，慢但一次性看清。
 # 注意：这条在开发机上的红多半是「依赖没装齐 / 本地副本不完整」，
@@ -96,6 +105,10 @@ fi
 if [ $topic_rc -ne 0 ]; then
   echo "结论：主题白名单门禁红（exit=$topic_rc）。先在 ADM 主题契约表登记，再改代码；不存在『基线放行』。"
   exit $topic_rc
+fi
+if [ $pkg_rc -ne 0 ]; then
+  echo "结论：包标记门禁红（exit=$pkg_rc）。1=有包目录的 __init__.py 没入库，CI 上 grimp 不递归、架构门禁比本机少分析模块；2=拿不到 git 索引。"
+  exit $pkg_rc
 fi
 if [ $ast_rc -ne 0 ]; then
   echo "结论：AST 门禁红（exit=$ast_rc）。修，或在 .gates-baseline.txt 里逐条写明放行理由。"
