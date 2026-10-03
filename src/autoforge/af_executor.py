@@ -197,16 +197,21 @@ class NodeExecutor:
                         )
                     )
                 else:
-                    from types import SimpleNamespace
+                    from .af_canary import CanaryGuard, CanaryResult
 
-                    from .af_canary import CanaryResult
-
+                    # `auto_rollback` 随挂起元信息一起带过 suspend→resume 这道接缝：缺键
+                    # （改动前落盘的旧快照）按 True，与原行为一致。回滚一律走 CanaryGuard，
+                    # 不在恢复分支里另写一套"要不要回滚"的判断。
+                    observe_guard = CanaryGuard(
+                        states=self.states,
+                        auto_rollback=bool(pending_canary.get("auto_rollback", True)),
+                    )
                     wrapped = CanaryResult(
                         action=pending_canary.get("action", ""),
                         params=pending_canary.get("params", {}),
                         result=None,  # 恢复路径不依赖 result，has_drift/rollback 只用到 guard.states 与 pre_snapshot
                         pre_states=pending_canary.get("pre_snapshot", {}),
-                        guard=SimpleNamespace(states=self.states),
+                        guard=observe_guard,
                         pre_snapshot=pending_canary.get("pre_snapshot", {}),
                     )
                     if wrapped.expected_state() is None:
@@ -214,15 +219,21 @@ class NodeExecutor:
                             "reason": "观察期动作无 SERVICE_STATE 映射，漂移不可判",
                         })
                     elif wrapped.has_drift():
-                        rolled = wrapped.rollback(adapter)
+                        rolled = observe_guard.check_and_rollback(adapter, wrapped)
+                        # 不回滚不等于没验出问题：漂移照旧记 failed + entity_drift（铁律 #5）
+                        reason = (
+                            "canary 观察期漂移，已自动回滚"
+                            if rolled
+                            else "canary 观察期漂移，auto_rollback=false ⇒ 未回滚，留给人判断"
+                        )
                         self._feed_canary_evidence(instance, node, "failed", {
-                            "reason": "canary 观察期漂移，已自动回滚", "rollback_calls": len(rolled),
+                            "reason": reason, "rollback_calls": len(rolled),
                         })
                         self.audit.add(
                             AuditEvent(
                                 type=ENTITY_DRIFT,
                                 at=self.clock.now(),
-                                message=f"canary 观察期检测到漂移 {wrapped.action}，已自动回滚（{len(rolled)} 次反向下发）",
+                                message=f"canary 观察期检测到漂移 {wrapped.action}：{reason}（{len(rolled)} 次反向下发）",
                                 automation_id=instance.automation.id,
                                 instance_id=instance.instance_id,
                                 node_id=node.id,
@@ -530,6 +541,8 @@ class NodeExecutor:
                     "params": dict(node.params),
                     "pre_snapshot": wrapped.pre_snapshot,
                     "adapter": node.adapter or "",
+                    # 观察期结束时这个旗子还得在场：不带过来，恢复分支就只能无条件回滚
+                    "auto_rollback": guard.auto_rollback,
                 }
                 self.instances.suspend(instance, node.id, canary_duration, kind="canary_observe")
                 return None

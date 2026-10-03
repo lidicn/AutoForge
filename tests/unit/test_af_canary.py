@@ -206,3 +206,67 @@ def test_executor_soft_fails_when_pre_snapshot_missing():
 
     assert any(ev.type == ENTITY_DRIFT for ev in runtime.audit)
     assert runtime.adapters.get("mock").calls == [], "取不到回滚把手就不该下发"
+
+
+def test_observe_window_resume_honours_auto_rollback_false(monkeypatch):
+    """`auto_rollback: false` 必须一路带到观察期结束——挂起时不能把这个旗子丢在接缝上。
+
+    对照（同为观察期、`auto_rollback: true` ⇒ 会反向下发）由
+    `test_executor_canary_rolls_back_on_drift` 提供；两条合起来才构成"这个旗子真的被读了"
+    的判据，单看本条会在"resume 什么都不做"上假绿。
+    """
+    from autoforge import af_watch
+
+    graph = load_graph(
+        {
+            "ir_version": "0.2.1",
+            "id": "drive",
+            "name": "drive",
+            "version": 1,
+            "mode": "single",
+            "confidence": 0.9,  # auto 带
+            "nodes": [
+                {"id": "o", "kind": "on", "trigger": {"type": "state", "entity_id": "binary_sensor.m", "to": "on"}},
+                {
+                    "id": "d",
+                    "kind": "do",
+                    "adapter": "mock",  # 返回成功但不改状态 → 必漂移
+                    "action": "light.turn_on",
+                    "params": {"entity_id": "light.x"},
+                    # 操作员显式要求"只观察、不要自动反向下发，留给人判断"
+                    "canary": {"duration": "15m", "auto_rollback": False},
+                },
+                {"id": "e", "kind": "pass"},
+                {"id": "err", "kind": "pass"},
+            ],
+            "edges": [
+                {"from": "o", "to": "d", "kind": "then"},
+                {"from": "d", "to": "e", "kind": "then"},
+                {"from": "d", "to": "err", "kind": "on_error"},
+            ],
+        }
+    )
+    states = InMemoryStateProvider()
+    states.set_state("binary_sensor.m", "off")
+    states.set_state("light.x", "off")
+    runtime = build_runtime(graph, states=states)
+
+    feeds: list = []
+    monkeypatch.setattr(af_watch, "record_canary", lambda *a, **k: feeds.append((a, k)))
+
+    runtime.publish(BusEvent.of("binary_sensor.m", "on"))  # 挂起观察 15m
+    adapter = runtime.adapters.get("mock")
+    assert [c[0] for c in adapter.calls] == ["light.turn_on"]
+
+    runtime.advance(15 * 60 + 1)
+
+    # 漂移这件事照旧要留证据（不回滚 ≠ 没验出问题，铁律 #5）
+    assert any(ev.type == ENTITY_DRIFT for ev in runtime.audit)
+    assert [c[0] for c in adapter.calls] == ["light.turn_on"], (
+        "auto_rollback=false 时观察期结束不得反向下发：这个旗子在 suspend→resume 的接缝上被丢了"
+    )
+    assert feeds, "漂移证据一条都没喂 ⇒ 面板会把『验出问题』读成『没跑过』"
+    # record_canary(automation_id, status, at, detail)
+    _aid, status, _at, detail = feeds[-1][0]
+    assert status == "failed"
+    assert "未回滚" in str(detail), f"不回滚的原因要进证据 detail，否则与自动回滚混成同一条：{detail!r}"
