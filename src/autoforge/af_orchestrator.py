@@ -2315,9 +2315,6 @@ class Orchestrator:
     def report_outcome(self, automation_id: str, outcome: str, note: str = "") -> None:
         self._call_safe("af_experience", automation_id=automation_id, outcome=outcome, note=note)
 
-    def observe(self, automation_id: str, duration: int = 60) -> dict:
-        return self._call_safe("af_live", id=automation_id, duration=duration)
-
     # ---------- 内部流程 ----------
     def _drive(self, session: ComposeSession, intent: Mapping[str, Any]) -> ComposeResult:
         vague = (intent.get("intent_kind") == "recommend"

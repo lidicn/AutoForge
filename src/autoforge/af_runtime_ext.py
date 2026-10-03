@@ -29,7 +29,7 @@ from autoforge.af_shadow import ShadowBinding, ShadowPolicy, ShadowRunner
 from autoforge.af_pretrigger import PreTriggerService
 from autoforge.af_experience import ExperienceStore
 
-__all__ = ["ConfGrading", "install", "make_later", "api_handlers", "mcp_tools"]
+__all__ = ["ConfGrading", "install", "make_later", "api_handlers"]
 
 
 def make_later(scheduler: Any) -> LaterFn | None:
@@ -279,17 +279,4 @@ def api_handlers(grading: ConfGrading) -> dict[tuple[str, str], Callable[..., An
         ("GET", "/api/conf"): _conf,
         ("POST", "/api/conf/{id}/promote"): _promote,
         ("GET", "/api/pretrigger"): _pretrigger_status,
-    }
-
-
-def mcp_tools(grading: ConfGrading) -> dict[str, Callable[..., Any]]:
-    """af_* MCP 工具：Agent 层可直接绑定。"""
-    return {
-        "af_list_proposals": lambda status=None: [p.to_json() for p in grading.proposals.list(status)],
-        "af_approve_proposal": lambda proposal_id, by="agent": grading.proposals.approve(proposal_id, by=by).to_json(),
-        "af_reject_proposal": lambda proposal_id, reason=None, by="agent": grading.proposals.reject(proposal_id, by=by, reason=reason).to_json(),
-        "af_export_feedback": lambda **kw: grading.exporter.query(FeedbackFilter(**kw)),
-        "af_pretrigger_status": lambda: (
-            grading.pretrigger.stats() if grading.pretrigger else {"enabled": False}
-        ),
     }

@@ -107,6 +107,16 @@ echo "══ 参数注入门禁（带默认值的关键参数不许静默漏传�
 store_rc=$?
 
 echo
+echo "══ 工具名单门禁（MCP 工具名只有一个注册表）═══════════════════════"
+# `af_mcp.TOOLS` 是工具名的唯一真源。盘"TOOLS→caps 之外还有没有第二份名单"时抓到两处：
+# `af_orchestrator.observe()` 按名调 `af_live`（注册名其实是 `af_live_run`，`_call_safe` 把异常
+# 吞成 `{"ok": False}` ⇒ 这条路永远不响），`af_runtime_ext.mcp_tools()` 另抄一份五字典型名单且
+# 从未接线（其中 `af_approve_proposal` = Agent 自批提案，与裁定 20261002 §三 ④A 正面冲突）。
+# 两处都不报错、不崩，只会让该红的不红 ⇒ 判据静态判；读不到 TOOLS 时 exit 2，不做假绿。
+"$PYTHON" "$REPO/scripts/check_tool_names.py" "$REPO/src"
+tool_rc=$?
+
+echo
 echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）════════════════════"
 # 单跑冒烟：只走 `import` 子进程，慢但一次性看清。
 # 注意：这条在开发机上的红多半是「依赖没装齐 / 本地副本不完整」，
@@ -132,8 +142,16 @@ if [ $fanout_rc -ne 0 ]; then
   exit $fanout_rc
 fi
 if [ $store_rc -ne 0 ]; then
-  echo "结论：参数注入门禁红（exit=$store_rc）。签名里有 `store`/`readonly` 的函数，调用点必须把它递过去；确实不需要（如纯仿真面、默认值就是设计）就地写 `# param-injection: exempt(理由)`——漏传不报错，只会让那道闸门静默少装一面。"
+  echo "结论：参数注入门禁红（exit=$store_rc）。签名里有 \`store\`/\`readonly\` 的函数，调用点必须把它递过去；确实不需要（如纯仿真面、默认值就是设计）就地写 \`# param-injection: exempt(理由)\`——漏传不报错，只会让那道闸门静默少装一面。"
   exit $store_rc
+fi
+if [ $tool_rc -eq 2 ]; then
+  echo "结论：工具名单门禁读不到注册表（exit=2）。\`af_mcp.TOOLS\` 的锚点形状变了，本门此刻无从判定——报『干净』就是假绿，先把脚本里的解析口径对上真实注册表。"
+  exit $tool_rc
+fi
+if [ $tool_rc -ne 0 ]; then
+  echo "结论：工具名单门禁红（exit=$tool_rc）。按名调 MCP 工具只能用 \`af_mcp.TOOLS\` 里的名字；\`TOOLS\` 之外再抄一份字典名单（哪怕是仿真/未来的）就是第二真源。确实不是工具名就地写 \`# tool-name: exempt(理由)\`。"
+  exit $tool_rc
 fi
 
 if [ $ast_rc -ne 0 ]; then
