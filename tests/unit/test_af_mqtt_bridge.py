@@ -166,6 +166,27 @@ def test_event_envelope_matches_adm_contract_table():
     assert ts.utcoffset() == datetime.now(load_tz()).utcoffset()
 
 
+def test_observer_path_key_set_is_pinned_including_the_undeclared_one():
+    """生产唯一发事件的路径是 `observe_terminal()`，它比直接调用**多发一个契约未列的键**。
+
+    契约表 §1.2 只有 `{trace_id, ts, automation_id, ref}`（failed 多 `error`），裁定 20261002 ②A
+    登记过的差额是 `instance_id`（v2.6 删），而观察者路径还多带 `node_id`——它没进过契约行、
+    也没进过裁定。上面那条逐字段测试走的是 `publish_fired/publish_failed` 直接调用，
+    恰好看不见这个差额，所以这里按**真实例**把键集合钉死：多发的字段要显式记账，
+    不许留成"恰好发出去了"。进契约行还是删，交 DCD（执行记录 §五 第 12 件）。
+    """
+    client = FakeClient()
+    bridge = _bridge(client)
+    inst = _failed_inst("d2 失败且无 on_error/default 兜底")
+    bridge.observe_terminal(inst, "done")
+    bridge.observe_terminal(inst, "failed")
+    fired, failed = (_body(p) for p in client.published)
+
+    assert set(fired) == {"trace_id", "ts", "automation_id", "ref", "instance_id", "node_id"}
+    assert set(failed) == set(fired) | {"error"}
+    assert fired["node_id"] == inst.current_node_id, "多发的那个键得是它自己声称的东西"
+
+
 def test_observe_terminal_uses_instance_id_and_ignores_other_states():
     client = FakeClient()
     bridge = _bridge(client)
