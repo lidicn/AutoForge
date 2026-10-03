@@ -4,10 +4,18 @@
 `caps.version` 的默认值），但 `af_cli._start_linkage_bridge` 这根线此前一条判据都没有：
 把 `proposal_sink=` 摘掉、把 `version=` 传成空串、或把未开启时的 `return None` 改掉，
 全量 pytest 照样绿——而这三条恰好对应"洞察重启即清零""retained 空版本号""假桥"三个已知坑。
+
+最后两条判的是上游那一跳：`_make_runtime` 只在真机/dry-live 分支起桥，并把 runtime 自己的
+墙钟与 store_root 递进去。这两个参数是契约表"事件信封 `ts` = 家庭墙钟"的接线级落点，
+传错在桥侧测试里看不出来（桥侧只断言"拿到了 clock"，不追问是谁的 clock）。
 """
+
+import pathlib
 
 from autoforge import af_cli, af_mcp, af_mqtt_bridge
 from autoforge.af_insight_queue import PersistentInsightSink
+from autoforge.af_ir import load_graph
+from autoforge.af_time import SystemTimeSource
 
 
 class _FakeBridge:
@@ -66,3 +74,45 @@ def test_the_wired_sink_actually_lands_on_disk_under_the_store_root(tmp_path, mo
     assert len(pending) == 1
     assert "h-1" in pending[0].read_text(encoding="utf-8")
     assert not hasattr(captured["proposal_sink"], "approve"), "落盘队列不许带部署把手"
+
+
+# ── 第 1/2 步的另外两端：只有真机/dry-live 起桥，且桥拿的是 runtime 的墙钟 ──
+
+EXAMPLE_IR = (
+    pathlib.Path(__file__).resolve().parents[2] / "examples" / "ir" / "case01_day_light.json"
+)
+
+
+def _spy_bridge(monkeypatch):
+    calls: list = []
+    monkeypatch.setattr(af_cli, "_start_linkage_bridge", lambda **kw: calls.append(kw))
+    return calls
+
+
+def test_dry_live_runtime_hands_the_bridge_its_own_wall_clock(tmp_path, monkeypatch):
+    calls = _spy_bridge(monkeypatch)
+    graph = load_graph(EXAMPLE_IR)
+
+    runtime, _ = af_cli._make_runtime(
+        graph,
+        None,
+        "fake",
+        dry_live=True,
+        ha_url="http://ha.invalid:8123",
+        ha_token="t",
+        store_root=str(tmp_path),
+    )
+
+    assert len(calls) == 1, "真机/dry-live 却没起桥 ⇒ 自动化跑完 broker 一声不响"
+    assert calls[0]["clock"] is runtime.clock
+    assert isinstance(runtime.clock, SystemTimeSource), "事件 ts 必须是家庭墙钟，不是仿真虚拟钟"
+    assert pathlib.Path(str(calls[0]["store_root"])) == tmp_path
+
+
+def test_simulated_runtime_never_opens_the_bridge(tmp_path, monkeypatch):
+    calls = _spy_bridge(monkeypatch)
+    graph = load_graph(EXAMPLE_IR)
+
+    af_cli._make_runtime(graph, None, "fake", store_root=str(tmp_path))
+
+    assert calls == [], "仿真事件若经桥外发，broker 收到的就是没有发生过的自动化"
