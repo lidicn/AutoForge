@@ -136,6 +136,14 @@ echo "══ 出向 MQTT 写者门禁（事件只许一条生产者，载荷必�
 writers_rc=$?
 
 echo
+echo "══ 入向订阅门禁（只订 ma/insights，动态主题要先过禁订族）══"
+# 契约表 §1.3 护栏 + 计划 第 1 步 ④：收件箱是 DB 的，AF 不替 DB 说话。今天这条只有运行时判定 +
+# 行为测试，而行为测试只认识已知入口——新加一个不查 FORBIDDEN_SUBSCRIPTIONS 的 subscribe() 一条都不会红。
+# 本门钉"下一个订阅入口"：订阅口只在桥里、动态主题当场过守卫、收件箱族写死就红。
+"$PYTHON" "$REPO/scripts/check_mqtt_subscriptions.py" "$REPO/src"
+subs_rc=$?
+
+echo
 echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）════════════════════"
 # 单跑冒烟：只走 `import` 子进程，慢但一次性看清。
 # 注意：这条在开发机上的红多半是「依赖没装齐 / 本地副本不完整」，
@@ -189,6 +197,15 @@ fi
 if [ $writers_rc -ne 0 ]; then
   echo "结论：出向 MQTT 写者门禁红（exit=$writers_rc）。出向消息只允许 \`af_mqtt_bridge\` 一个写者、事件只在 \`observe_terminal()\` 里产生、载荷必须经 \`_envelope()\`：绕过任何一条，对端收到的就是没人验过的形态（\`ts\` 口径、\`ref\` 语义、QoS、发布失败留痕都在桥里）。破例要裁定，就地写 \`# mqtt-writers: exempt(理由)\`。"
   exit $writers_rc
+fi
+
+if [ $subs_rc -eq 2 ]; then
+  echo "结论：入向订阅门禁读不到锚点（exit=$subs_rc）。\`INSIGHTS_TOPIC\`/\`FORBIDDEN_SUBSCRIPTIONS\`/\`subscribe_topic()\`/\`handle_message()\` 是本门判据的地基——主题改名或禁订族挪走会让本门静默全绿，先把口径对上真实桥再说干净。"
+  exit $subs_rc
+fi
+if [ $subs_rc -ne 0 ]; then
+  echo "结论：入向订阅门禁红（exit=$subs_rc）。AF 的耳朵只该有一只：订阅口只在 \`af_mqtt_bridge\` 里、动态主题要在同一函数体内先过 \`FORBIDDEN_SUBSCRIPTIONS\` 判定、收件箱族不许写死成订阅实参（契约表 §1.3 护栏 / 计划 第 1 步 ④）。确实要开新入向主题先在 ADM 主题契约表登记，破例就地写 \`# mqtt-subscriptions: exempt(理由)\`。"
+  exit $subs_rc
 fi
 
 if [ $ast_rc -ne 0 ]; then
