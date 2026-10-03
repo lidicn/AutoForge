@@ -36,7 +36,7 @@ from .af_scanner import DeviceGuardRegistry, Diagnostic, ScanResult, StaticScann
 from .af_spec import SpecError, compile_spec, graph_to_raw, render_spec
 from .af_store import DEFAULT_STORE_ROOT, GraphStore, diff_graphs
 from .af_state import UnknownEntity
-from .af_time import SystemTimeSource
+from .af_time import SystemTimeSource, VirtualTimeSource
 from .af_undo import UndoStore, deploy_id as new_deploy_id
 from .af_vhass import FakeHAAdapter, seed_from_graph
 from .af_pending import PendingLimitExceeded, PendingStore
@@ -1635,6 +1635,7 @@ def live_run(
     confirm: bool = False,
     store: "GraphStore | None" = None,
     undo: bool = False,
+    clock: Any | None = None,
 ) -> dict[str, Any]:
     """受闸门的真机下发：三重闸全通过才执行。
 
@@ -1644,6 +1645,12 @@ def live_run(
     - `target/device_id/area_id` 形式的写目标必须被展开后再分级（P0-5）
     - `undo=true`（或 `AUTOFORGE_UNDO=1`）时记录动作前快照并返回 `undo_deploy_id`，
       WebUI / `forge undo` 才能在窗口内撤销本次部署（决策 E）
+
+    时间轴：真机路径默认锚在**家庭墙钟的"现在"**，不是 `build_runtime` 的仿真锚点
+    （2026-09-14 08:00）——否则一次真实下发的 `audit[].at` 与 canary 证据 `at` 都落在仿真时间里，
+    `at:19:30` 这类 time 触发也按锚点判定，与 `af_cli._make_runtime` 的 live/dry-live 分支口径相反。
+    这里仍是**可推进的虚拟钟**而非 `SystemTimeSource`：`_replay_live` 的 `advance_s` 要能前跳/回跳。
+    需要确定性的调用方显式传 `clock=`。
     """
     cfg = _live_config()
     if not cfg["enabled"]:
@@ -1689,7 +1696,9 @@ def live_run(
         transport = HATransport(base_url=ha_url, token=token)
         provider = HAStateProvider(transport=transport)
 
-    runtime = build_runtime(graph)
+    if clock is None:
+        clock = VirtualTimeSource(SystemTimeSource().now())
+    runtime = build_runtime(graph, clock=clock)
     runtime.states = provider
     runtime.instances.states = provider
     runtime.scheduler.states = provider
