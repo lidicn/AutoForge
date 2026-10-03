@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/ADM联动执行计划-AF.md`（DCD 出品，v2.5 联动落地版）
 > 记录人：AutoForge 开发
-> 核实基准：代码侧最新 commit = **`12cea64`**（`e6d442a`/`0722828`/`9c6deb9` **只加测试**，`fc2bba6` 加的是**一门新门禁** `scripts/check_states_fanout.py` + `gates.sh` 一节 + 它的反例测试，`12cea64` 是这批里**唯一动 `src/` 的提交**：`af_service.live_run` 的时钟口径 + 三条判据，+11/−2）。§二/二之二…二之十五 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
+> 核实基准：代码侧最新 commit = **`dc8ac0d`**（`e6d442a`/`0722828`/`9c6deb9` **只加测试**，`fc2bba6` 加的是**一门新门禁** `scripts/check_states_fanout.py` + `gates.sh` 一节 + 它的反例测试，`12cea64` 与 `dc8ac0d` 是动 `src/` 的两笔：前者 = `af_service.live_run` 的时钟口径 + 三条判据（+11/−2），后者 = 真机闸门在 MCP 面的两处 fail-open（Tier-0 设备保护的 `store` 注入 + events 上限上收到服务层，4 文件 +196/−24）。§二/二之二…二之十六 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
 > 契约真源：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
 > 交叉裁定：`20260929-ADM三仓联动七问`、`20261001-AF-homesdk接入四问`、`20260930-AutoForge后续优化三项`、`20261001-DB目标模式与AF三题` §H、**`20261002-homesdk记账与AF-DB-DPP六件-裁定`**（本轮落地依据，§一 末）
 
@@ -22,8 +22,9 @@
 | 第七轮审计 | **finding 属实，已修** | 详见 `docs/audit/审计报告_第七轮_核实与修复.md`；第八轮尚未落 `docs/audit`（本回合实测目录内最新即第七轮，mtime `10-02 11:46`） |
 | 门禁肥化防护（计划外补刀） | **已交付，本批又加一门** | `gates.sh` 计数棘轮 + `.gates-tally.txt`（上限 104），三条变异实测能红；AgentOps 模板同步去反引号缺陷。本批新增**状态源扇出门禁** `scripts/check_states_fanout.py`（换 `runtime.states` 必须四个消费方同步；HEAD 绿、两处变异红），并自带反例测试 `test_states_fanout_gate.py` 7 条——第一版实现自己是个假洞（对 HEAD 与对变异同时报绿），那一次形状也钉成用例（§二之十四） |
 | 真机路径口径对账（计划外补刀） | **已交付** | 接缝盘点的第二个产物：`live_run`（HTTP `/api/live/run` 与 MCP `af_live_run` 共用）此前用 `build_runtime(graph)` 的**仿真锚点**当墙钟用——同一次真机下发的 `trigger_time`/`audit.at`/canary `at` 与 `at:19:30` 判定全落在 2026-09-14 08:00，而 CLI 的 live/dry-live 分支早已取家庭墙钟。`12cea64` 统一为"锚在真实的现在、仍可推进"的虚拟钟并开 `clock=` 入参；`build_runtime(` 全部 8 个站点逐一点过，其余无 clock 的都在仿真面上（锚点是设计）。三次变异 `3 failed`/`1 failed`/`1 failed`（§二之十五） |
+| 真机入口面的闸门对账（计划外补刀） | **已交付两处 / 第三处待裁** | 接缝盘点的第三个产物：同一盘点前两条落在 `af_cli`/`af_service`，这条落在 **HTTP 与 MCP 两个入口面**。实测两处 fail-open——① `af_mcp._t_live` 没递 `store` ⇒ Tier-0 设备保护（`device_acl.json`）与实体健康在 Agent 路径上整个失效，人点被拦的设备 Agent 能写；② events 上限写在端点层 ⇒ MCP 三面（`af_live_run`/`af_simulate`/`af_sessions`）无上限。修法把判据上收到 `af_service`（两条入口共用的咽喉），`MAX_REPLAY_EVENTS` + 三个服务层调用点，`_t_live` 补 `store=store`（`dc8ac0d`）。反真空靠一条**正向对照**（无 ACL 时 MCP 路径真下发）。三次变异 `1 failed, 18 passed`/`2 failed, 17 passed`/`2 failed, 17 passed`（§二之十六）。**同批抓到的第三件（单写者租约只装 HTTP 面）不属 AF 可自决**：它要给 DB 新增一个可见的拒收模式 ⇒ 投裁定（§五 第 10 件），代码未动 |
 | F4 ③ / F7 前端残留 | **已收口** | `/evidence` 生产态证据视图上线；真机下发的事件回放与撤销按钮端到端真点通（读数见 §一末） |
-| GitHub CI | **首次可读，且从"永久红"修到连续绿；读数路已成脚本** | 实测 run 1–27 `conclusion` 全为 `failure`（建仓以来一条没绿过），三个红因全在版本/判据层而非产品逻辑：pydantic-v2-only 的 `Field(max_length=)` 让 CI（pydantic 1.10.12）**0 条测试跑过**、undefined-name 门禁自己用了 3.12+ 的 `ast.TypeAlias`（CI 是 3.11）、真 vhass 的 skip 判据问"包能否 import"而非"插件注册了没"。三条各钉能变红的反例后，run 28 五作业全 `success`，CI 与本机通过/跳过数逐字相同（2621/51）。**run 31（守卫那次提交）五作业再次全 `completed/success`**，且 runner 侧给出安装步的实测读数 `fetch 主机读数：npmmirror=0 npmjs=87`。读数路径固化为 `scripts/gh_ci_status.py`（`runs`/`jobs`/`annotate`/`log`，纯标准库、只 GET、不打印凭证；`log` 先停 302 再无凭证取正文，免得把 token 带给日志存储域）。读数与残留见 §二之五、§二之八。**run 36（commit `3144879`，含架构门禁口径修复那批）五作业再次全 `completed/success`，runner 侧读到 `Baseline lock: 96 modules, 0 violations` 与 `Contracts: 1 kept, 0 broken`** ⇒ CI 架构门的覆盖面与本机同口径已是实测，不再是"已修 + 待复测"（§二之十一）。**run 39（`daa3af7`）与 run 40（`cd5e1bc`）也已 `completed/success`**，本批新增门禁的 run 41（`1474a7f`）读数为 `in_progress`（记录写就时未定，稍后按 §二之五 的口径补读） |
+| GitHub CI | **首次可读，且从"永久红"修到连续绿；读数路已成脚本** | 实测 run 1–27 `conclusion` 全为 `failure`（建仓以来一条没绿过），三个红因全在版本/判据层而非产品逻辑：pydantic-v2-only 的 `Field(max_length=)` 让 CI（pydantic 1.10.12）**0 条测试跑过**、undefined-name 门禁自己用了 3.12+ 的 `ast.TypeAlias`（CI 是 3.11）、真 vhass 的 skip 判据问"包能否 import"而非"插件注册了没"。三条各钉能变红的反例后，run 28 五作业全 `success`，CI 与本机通过/跳过数逐字相同（2621/51）。**run 31（守卫那次提交）五作业再次全 `completed/success`**，且 runner 侧给出安装步的实测读数 `fetch 主机读数：npmmirror=0 npmjs=87`。读数路径固化为 `scripts/gh_ci_status.py`（`runs`/`jobs`/`annotate`/`log`，纯标准库、只 GET、不打印凭证；`log` 先停 302 再无凭证取正文，免得把 token 带给日志存储域）。读数与残留见 §二之五、§二之八。**run 36（commit `3144879`，含架构门禁口径修复那批）五作业再次全 `completed/success`，runner 侧读到 `Baseline lock: 96 modules, 0 violations` 与 `Contracts: 1 kept, 0 broken`** ⇒ CI 架构门的覆盖面与本机同口径已是实测，不再是"已修 + 待复测"（§二之十一）。**run 39（`daa3af7`）与 run 40（`cd5e1bc`）也已 `completed/success`**；**run 41（`1474a7f`）、run 42（`4a63b46`）、run 43（`3d25ed0`）三作业面全绿**，其中 run 43 五作业逐条 `completed/success`（`adm-linkage-contracts`/`ui-typecheck-build`/`quality-gates`/`pytest`/`layering-gates`，`failed_steps` 全空），runner 侧正文读数 `2652 passed, 51 skipped, 1 warning in 76.98s` 与本机 §二之十五 逐字相同，`quality-gates` 正文含新门禁那行 `✓ 状态源扇出门禁干净（扫描 96 个文件…）` ⇒ 连续绿已到 **10 条（run 34–43）**，且新门禁在 runner 上的口径与本机一致（不是只在本机生效的软门） |
 | DCD 20261002 §一（CI 锁文件源）| **裁定 (b) 已落地并已在 runner 上取到读数** | 只按原文写 `--registry=https://registry.npmjs.org` 经实测是**空操作**（fetch 87+87 行仍在 `registry.npmmirror.com`/`cdn.npmmirror.com`），必须配 `--replace-registry-host=always`；安装步另加"主机自证"守卫（CI 绿不能证明没吃镜像）。逐字节对账 137/137 `integrity` MATCH ⇒ 锁文件字节未动。§二之七 末尾"本机 npm 11.9.0 / runner 10.x，只有 push 之后才知道"的残留**已销账**（runner `npmmirror=0 npmjs=87`）。回执已投 DCD（含 §四 判例 2 的证据更正：`@types/node` tarball 两源逐字节相同、根目录差异不是重打包痕迹）。见 §二之七、§二之八 |
 | `ma/insights` **入向与契约表对账**（本批新抓） | **AF 侧已按契约收，跨仓三问已交 DCD** | 拿着裁定 Q3 之后的载荷行逐条对 AF 的 `ingest_insight()`：必填的 `hypothesis_id`/`natural_language`/`conf` **三项契约一个都不发** ⇒ 每一条按契约发来的洞察都被拒（判例 1 的静默归零，面换到 AF 入口）。改法：契约键优先 + 旧键别名、缺 `conf`（含 `{"conf": null}` 这种空占位）按 0.0 入 ask 档并记 `conf_reported=false`（坏报照旧拒、封顶 0.59 不动）、契约字段有界落 `transport` 并出 `/api/insights/pending`，面板对缺报显示「未上报」而不是 `0.00`。`conf`/稳定 id/`intent` 三处空缺 AF 不能自决 → §五 第 7 件。见 §二之八 |
 | UI 类型门禁（上一版登记的债） | **已收口（含下一批零 `any`）** | 15 条 `vue-tsc` 错误清零，`type-check` 改 `--force` 防缓存假绿，`ci.yml` 新增 `ui` 硬门 job；过程中抓到"两个按钮从未接线"与"mock 夹具少回两字段"两条真缺陷（§二之二）。同族第二批：API 层四处 `request<any>` 换成后端真形类型并逐键与在线响应对账，`grep request<any> ui/src` 已无匹配（§二之三） |
@@ -1177,6 +1178,96 @@ M-b/M-c 各只红自己那条，说明三条判据问的确实是三件事。`re
   `VirtualTimeSource` 导入、默认锚点与 docstring 口径），这是自 `64ca83c`/`c14503d` 之后第一次改 `src/`
 - `docs/audit` 无新报告（最新仍是第七轮，含 `审计报告_第七轮_核实与修复.md`），DCD 无新裁定到达
 
+## 二之十六、`af_service` 的 store 注入：真机闸门有两处只装了 HTTP 一面（`dc8ac0d`）
+
+§六 那条残留点名"未盘"的第二面（`live_run` 把 `store` 递进 `StaticScanner` 的 `device_guard`/
+`entity_health`，`store=None` 与递错目录之间有没有判据未核）盘完了，**盘出来两处真缺陷**，都在
+MCP 那一面：
+
+| # | 缺陷 | 触发条件 | 影响面 |
+|---|------|---------|--------|
+| 1 | `af_mcp._t_live`（`:254`）调 `svc.live_run` 时**没递 `store`** | Agent 走 `af_live_run`（DB 用的正是这条路径） | Tier-0 设备保护（`{store_root}/device_acl.json`）与实体健康视图全部退化成"没有 store"：`StaticScanner` 拿不到 guard ⇒ **不产 `ENTITY_GUARD_TIER0`**，于是同一个 `light.bedroom`，人点 WebUI 按钮被拦下（400 + 原话），Agent 说同一句话直接下发到真设备 |
+| 2 | events 条数上限只写在 HTTP 端点层（`a5c8aa9` 把三条端点补齐，但仍是端点层） | 任何不走 `af_api` 的调用方 | MCP 的 `af_live_run`/`af_simulate`/`af_sessions` 三面**无上限**：`_MAX_REPLAY_EVENTS` 挡的是"整场仿真在内存里跑"的 DoS 面，判据与入口绑在一起，就必然漏入口 |
+
+两处是同一族的第 4、第 5 次命中：**"闸门只装了一面"**。`8e8c725`→`a5c8aa9` 那一串是在 HTTP 内部补面
+（`/api/sim` 有、另两条没有），这一批是补到**另一类入口**（HTTP 有、MCP 没有）。
+
+### 修法：判据挪到两条入口共用的咽喉，不在每面重抄一遍
+
+- `af_service.MAX_REPLAY_EVENTS = 10000` + `_check_events_cap()`（`:130/:133`），三个服务层入口各调一次：
+  `simulate_track:884`、`create_session:1472`、`live_run:1676`；`af_api` 删掉自家常量与
+  `_check_event_cap`，只留一行指针注释（`:85`）。HTTP 侧靠 `_svc` 把 `ServiceError.status` 映射回
+  **422**，状态码一个没变。
+- `live_run` 的调用点放在**函数第一句**、`cfg = _live_config()` 之前。这条顺序是被测出来的：先判策略
+  再判形状，超上限的 `/api/live/run` 在"live 未启用"的环境里拿 403 而不是 422，
+  `test_event_cap_covers_every_events_endpoint[/api/live/run]` 当场红。**形状判据先于策略判据**——
+  同一个请求不能在两套环境里给两个理由。我没有改动那条既有断言。
+- `_t_live` 补 `store=store`（`:259`）。
+
+### 反真空：对照组不是可选项
+
+`tests/unit/test_af_live_entry_seams.py` 5 条。第一条是**正向对照**：
+`test_control_without_acl_the_mcp_path_really_dispatches` 在没有 ACL 时断言 `dispatch("af_live_run", …)`
+`is_error is False` 且 `FakeTransport` 真收到 `light.turn_off`。没有它，后两条守卫用例可能在
+"MCP 这条路径压根跑不通"上集体绿——它们断言的是"被拦下"，而拦下它的原因可能根本不是 ACL。
+这一点与 §二之十五 那次假绿（`all()` 跑在空审计表上）是同一个教训的两种形态。
+
+### 变异读数（本批当场重跑，HEAD `dc8ac0d`）
+
+```
+orig mcp sha256: 9bff5d94f2e4cdef
+orig svc sha256: b1834e88540247b1
+M-a `_t_live` 退回不递 store（锚点 1 处，换行口径 CRLF）
+    : RC=1  `1 failed, 18 passed, 1 warning in 5.75s`
+    FAILED tests/unit/test_af_live_entry_seams.py::test_mcp_live_run_honours_the_store_device_guard
+    restored identical: True
+M-b live_run 不再判 events 上限（锚点 1 处，LF）
+    : RC=1  `2 failed, 17 passed, 1 warning in 5.06s`
+    FAILED tests/unit/test_af_live_entry_seams.py::test_mcp_live_run_refuses_oversized_events
+    FAILED tests/unit/test_af_api.py::test_event_cap_covers_every_events_endpoint[/api/live/run]
+    restored identical: True
+M-c simulate_track 不再判 events 上限（锚点 1 处，LF）
+    : RC=1  `2 failed, 17 passed, 1 warning in 5.57s`
+    FAILED tests/unit/test_af_live_entry_seams.py::test_service_layer_itself_rejects_oversized_events
+    FAILED tests/unit/test_af_api.py::test_api_sim_rejects_oversized_event_list
+    restored identical: True
+DRIVER_RC=0
+```
+
+M-b/M-c 各红两条：一条是自己的新判据，一条是**同族的老判据**（HTTP 面）——上限上收到服务层之后，
+HTTP 那两条测试改判的是"服务层抛、HTTP 映射成 422"这条链，链条任一环断掉都红。这正是收口的目的：
+判据只有一份。
+
+顺带一条事实（驱动脚本第一版在这上面空转）：`af_mcp.py`/`af_api.py` 入库是 **CRLF**，
+`af_service.py` 是 **LF**，本仓没有 `.gitattributes` 且 `core.autocrlf=false`。变异驱动按锚点字符串
+替换时，跨文件用同一种换行就**匹配 0 处**——M-a 那一次"什么都没改、测试却绿"的假读数就是这么来的。
+改成按文件探测（CRLF 计数 > LF 计数则用 CRLF）后才是上表。我没有顺手统一全仓换行：那是会污染
+`git blame` 的大 diff，且与任何验收点无关。
+
+### 为什么这两件自己落了、租约那件去投申请
+
+同一条盘点里抓到第三件：`serve` 的单写者租约（`af_cli.py:1365` `FileLock(store_root/".serve.lock")`）
+与 `build_app(readonly=…)` 只装在 HTTP 面，`af_mcp.serve_mcp` 与 `dispatch` 里 `grep readonly|lease|acquire`
+**零命中**——MCP 进程可以在 serve 已经持有写权时同时开真机写面。三件事的差别不在"是不是缺口"，在
+**收口的代价由谁承担**：
+
+- 前两件是把 AF **已经对外承诺**的策略（Tier-0 必须人审、events 有上限）装到它漏掉的那个入口上，
+  行为只会更严、与既有裁定同向，且退路是一条 `git revert`；
+- 第三件要新增一个 DB 侧看得见的**拒收模式**（MCP 在锁被占用时返回什么码、`check` 还是 `acquire`、
+  是否只拦 live），那是跨仓可见的失败面，属 20261002 §一"契约面改动走裁定"的口径 ⇒
+  投 `关键决策部/inbox/20261003-AF-单写者租约只装了HTTP面MCP真机写未受约束-决策申请.md`（§五 第 10 件，
+  A/B/C，AF 建议 A=check-not-acquire 且只拦 live），**代码一个字节没动**。
+
+### 本批全链读数（HEAD `dc8ac0d`）
+
+- `python -m pytest -q` → **RC=0**，`2657 passed, 51 skipped, 1 warning, 7 subtests passed in 78.97s`
+  （2652 → +5 入口接缝判据）
+- `GATES_PYTHON=python bash gates.sh` → **RC=0**：AST 新增 0 / 存量 104、棘轮 104/104、
+  undefined-name src **96** + tests **156** 文件、主题白名单 7 处、包标记 5 包 / 索引 96 个 `.py`、
+  状态源扇出 96 文件干净、import 冒烟 0 违规
+- 生产代码：`dc8ac0d` 动 4 个文件（`af_service.py`、`af_mcp.py`、`af_api.py` + 新测试文件），+196/−24
+- `docs/audit` 仍是第七轮最新，无第八轮投递；`关键决策部/decisions` 最新仍是 20261002 三份，无新裁定
+
 ---
 
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
@@ -1216,6 +1307,8 @@ M-b/M-c 各只红自己那条，说明三条判据问的确实是三件事。`re
 | 本批之十八（同族第三条接缝：`_make_runtime` 的起桥条件与 clock 归属，`9c6deb9`） | `tests/unit/test_af_cli_linkage_wiring.py` 扩两条（桩 `_start_linkage_bridge` 只记 kwargs）：dry-live 分支 ⇒ 恰好起一次桥、`clock is runtime.clock` 且 `isinstance(runtime.clock, SystemTimeSource)`、`store_root` 原样递到；仿真分支 ⇒ **一次都不起**。两次变异各 `1 failed, 4 passed`（RC=1：`clock=runtime.clock`→`clock=None`；仿真分支 `typer.echo("· 仿真底座：FakeHA…")` 前插一次起桥调用），脚本自证 `restored identical: True` + `git diff -- src/autoforge/af_cli.py` 空。文件分跑 `5 passed` RC=0。全链：`pytest -q` **2642 passed / 51 skipped RC=0（80.01s）**、`gates.sh` RC=0（undefined-name src 96 + tests **153**，本批未加文件故计数不变；AST 0/104、棘轮 104/104、主题 7、包标记 96、冒烟 0）。文档侧：§二之十三 加"同族第三条接缝"与本批读数小节，§〇 第 1 步行、§一 窗后验收行补判据并写明"接线判据 ≠ 抓包已发生"（该项仍 EXEMPT） |
 | 本批之十九（接缝盘点的首个产物：状态源扇出门禁，`fc2bba6`） | 新门禁 `scripts/check_states_fanout.py`（按 (根名, 递出去的状态源) 分组，要求 `states`/`instances.states`/`scheduler.states`/`executor.states` 四条齐）接进 `gates.sh` 并加 RC 聚合分支（`pkg` 之后、`ast` 之前），CI 的 `quality-gates` 作业自动继承为硬门。红/绿实测：HEAD 绿（96 文件 RC=0），`af_cli.py:345` 删一行 ⇒ RC=1 指名缺 `executor.states`，`af_cli.py:301` 换成不同源 ⇒ RC=1 两条 finding。反例测试 `tests/unit/test_states_fanout_gate.py` 7 条（含"根名解析错=假洞"那一形状）；两次"让门自己变瞎"的变异各 `3 failed`（RC=1）。全链：`pytest -q` **2649 passed / 51 skipped RC=0（82.87s）**、`gates.sh` RC=0（undefined-name tests **154**）。§二之十四 新篇（含那次假绿的自证），§〇 门禁行与 CI 行、§六 残留随之改写 |
 | 本批之二十（`af_service` 那半张盘点：真机时间轴，`12cea64`） | `af_service.live_run` 由 `build_runtime(graph)`（仿真锚点 2026-09-14 08:00）改为 `build_runtime(graph, clock=VirtualTimeSource(SystemTimeSource().now()))`，并新增 `clock=` 入参给确定性调用方——HTTP `/api/live/run` 与 MCP `af_live_run` 两条真机路径此前与 CLI live/dry-live 分支（已取墙钟）对同一 IR 给出两套时间轴。范围把 `build_runtime(` 八个站点全数点过（§二之十五 表格），撤销链不建 runtime。新判据 `tests/unit/test_af_live_run_clock.py` 3 条分跑 `3 passed` RC=0，取 `instances[].context.trigger_time` 而非 `audit`（**一次顺利下发零条审计**，`all()` 在空表上恒真——我第一版就假绿在这里，M-a 一次红三条、M-b/M-c 各红自己那条，还原逐字节自证 `restored identical: True`）。全链：`pytest -q` **2652 passed / 51 skipped RC=0（80.50s）**、`gates.sh` RC=0（undefined-name src 96 + tests **155**、扇出门禁 96 文件仍绿）。文档侧：§二之十五 新篇、§〇 加"真机路径口径对账"行、核实基准改 `12cea64`、§六 残留收窄 |
+| 本批之二十一（真机入口面的两处 fail-open，`dc8ac0d`） | 接缝盘点第三条命中：`af_mcp._t_live`（`:254`）调 `svc.live_run` 时**漏递 `store`** ⇒ Tier-0 设备保护与实体健康视图在 Agent 路径上整个不生效（人点同一个设备被 400 拦下并给原话，Agent 说同一句话直接把 `light.turn_off` 打到真设备）；events 上限此前在**端点层**（`a5c8aa9` 只补齐了 HTTP 三条）⇒ MCP 三面（`af_live_run`/`af_simulate`/`af_sessions`）无上限。修法一律走咽喉、不按面重抄：`af_service.MAX_REPLAY_EVENTS` + `_check_events_cap()` 在 `simulate_track:884`/`create_session:1472`/`live_run:1676` 三处调用，`af_api` 删自家常量只留指针注释，HTTP 侧 `_svc` 把 `ServiceError.status` 映射回 422（状态码一个没变）。**上限调用点在 `live_run` 第一句**是被测出来的：先判策略后判形状时，超上限请求在"live 未启用"环境得 403 而非 422，`test_event_cap_covers_every_events_endpoint[/api/live/run]` 当场红 ⇒ 顺序改为"形状判据先于策略判据"，既有断言未动。新判据 `tests/unit/test_af_live_entry_seams.py` 5 条，首条为**正向对照**（无 ACL 时 MCP 真下发 `light.turn_off`），否则两条守卫用例会红在"MCP 路径压根跑不通"上；三次变异 `1 failed, 18 passed`/`2 failed, 17 passed`/`2 failed, 17 passed`（RC 均 1，`restored identical: True` 逐字节自证）。**顺带一条口径事实**：`af_mcp.py`/`af_api.py` 入库 CRLF、`af_service.py` LF，本仓无 `.gitattributes` 且 `core.autocrlf=false` ⇒ 跨文件同一种换行的锚点替换**匹配 0 处**，驱动第一版就假绿在这里（未统一全仓换行：大 diff 污染 blame 且与验收点无关）。全链：`pytest -q` **2657 passed / 51 skipped RC=0（78.97s）**、`gates.sh` RC=0（undefined-name src 96 + tests **156**）。§二之十六 新篇 |
+| 本批之二十二（同批第三件定性为跨仓失败面，投 DCD） | `serve` 的单写者租约（`af_cli.py:1365` `FileLock(store_root/".serve.lock")`）与 `build_app(readonly=…)` 只在 HTTP 面（`af_api.py:344` 及 8 个写端点 `Depends`），`af_mcp.py` 对 `readonly|lease|acquire` **零命中** ⇒ MCP 进程可在 serve 已持写权时同时开真机写面。**与前两件的差别不在是不是缺口，在代价由谁承担**：前两件是把 AF 已承诺的策略装到漏掉的入口（只会更严、退路一条 revert），这一件要给 DB 新增一个可见的拒收模式（返回什么码、`check` 还是 `acquire`、是否只拦 live）⇒ 属"契约面改动走裁定"。申请投 `关键决策部/inbox/20261003-AF-单写者租约只装了HTTP面MCP真机写未受约束-决策申请.md`（§五 第 10 件，A/B/C，AF 建议 A=check-not-acquire + 只拦 live + `READONLY_DEGRADED:` 前缀 + 登记进契约表），**代码一个字节未动**。同批文档侧：核实基准 → `dc8ac0d`、§〇 加"真机入口面的闸门对账"行、§六 那条"未盘"残留收窄为两处已修 + 一件待裁 |
 
 
 ## 四、审计侧
@@ -1239,8 +1332,8 @@ M-b/M-c 各只红自己那条，说明三条判据问的确实是三件事。`re
 | 6 | 上一条落地时抓到的两件事要回给 DCD：①裁定原文那条命令是空操作，落法已补一条 flag（问"算不算改判"）；②裁定 §四 判例 2 的证据不成立——`@types/node@22.20.2` 的 tarball 在**两个源逐字节相同**（`size=447116`、`sha256` 前缀同为 `64921eb9b6caae37`、解包根目录都是 `node v22.20`），"根目录不是 `package/`"是 DefinitelyTyped 自己的发布布局，不是镜像重打包的痕迹 | `inbox/20261002-AF-锁文件源裁定落法补正与判例2旁证更正-回执.md`（**已提交，待回话**）。同件另附一条小问：安装步那条"fetch 主机集合 ⊆ {批准的那一个域} 且该域命中数 > 0"的守卫形状要不要提升到 AgentOps 模板——按 20261002 §一"分发=各仓自写"的口径，AF 默认不动 |
 | 7 | `ma/insights` 载荷的三处契约空缺（AF 的入向此前按自家键必填，按契约发来的每条洞察都会被拒——判例 1 的静默归零换到了 AF 入口）：① `conf` 要不要正式进契约行（AF 已按"缺报按 0.0 入 ask 档 + `conf_reported=false`，面板显示「未上报」"落地，等追认）；② `trace_id` 是"一次联动的追踪号"还是"这条假设的稳定身份"——AF 现在拿它当 `hypothesis_id` 与回灌键 `hypothesis:{id}`，若每次播报都换，去重与回灌都会散；③ MA 会不会发结构化 `intent`（契约行没有这一项 ⇒ 生产里每条洞察都是「无 IR（不能批准）」，要改的是人的工作流还是契约，AF 不擅自扩面板） | `关键决策部/inbox/20261003-AF-ma-insights载荷conf与稳定id与intent-决策申请.md`（**已提交，待回话**）。AF 侧不等裁定：别名/缺报记账/有界 transport 已在同批进仓，判据见 §二之八 |
 | 8 | 两件合一份：①**第 5 步 ③ 第二档的时点**——裁定给的是"一个版本**或** 2 周"，`lint-imports` 进 CI 是 `20356dc`（10-01），AF 在 10-03（日历 2 天、无版本发完）就把 `continue-on-error` 去掉，判据是"runner 连续 7 条 run `KEPT` + 误伤 0 + 一次可红实测"；这是 AF 单方改窗口长度，故不求"裁定已满足"的认定，只求追认时点（A 追认 / B 判回退一行 YAML / C 把口径改成可判定的量）。②**`_*.py` 吞包标记的跨仓外溢**——`.gitignore` 的 `_*.py` 会连带吃掉 `__init__.py`，实测让 AF 两条架构门禁在 runner 上少分析 10 个模块（86 vs 96）；MA/DB/homesdk/AgentOps 模板是否有同款规则，AF 不擅动他仓，建议先做零改动探测（各仓一次 `git check-ignore -v` / `git status --ignored --short \| grep __init__`），是否把"包标记门禁"上收模板请一并裁定（注意 20261002 §三 对 fetch 守卫给过"先不落"） | `关键决策部/inbox/20261003-AF-import-linter升硬门时点与gitignore吞包标记-决策申请.md`（**已提交，待回话**）。AF 侧不等裁定：第 2 件已在本仓自闭合（负向规则 + `scripts/check_pkg_markers.py` 进 `gates.sh`，还原原状仍能取红），第 1 件若判 B 一条 `git revert` 即退，均不占停机窗。判据见 §二之十一 |
-
 | 9 | **第 5 步 ② 的「顺序追加」半边**：裁定 20260930 给 af_persist 的执行约束第 2 条要求"追加写 + 文件头部元信息"，而现实现是每实例一个快照文件、`save()` 整文件原子重写（`af_persist.py:171-187`）。三条张力不是 AF 能自决的：①它同同一份裁定的"不改存储格式头/不迁移"相抵（改成追加写**必然**动格式头）；②第五轮审计已把"每条全量重写 + 明细无上限"收成有界（`docs/audit/审计报告_第五轮_核实与修复.md:38-74`），再上追加写等于把那一轮的修法反向；③裁定本身把这一项降级为"不做全量 eventlog"。要么 A 判该子句对 `af_persist` **不适用**（AF 倾向：B 的形状要新增一类存储产物，已越出裁定自己给的"改动小、不迁移"档位）、要么 B 判必须做但给有界形状（每实例 `.jsonl` 只留最后 N=8 条、写侧纯追加 O(1)、读侧仍以 `.json` 快照为权威）、要么 C 判并入未来 `af_eventlog` 另立项 | `关键决策部/inbox/20261003-AF-af_persist追加写半边与裁定执行约束张力-决策申请.md`（**已提交，待回话**）。AF 侧不在裁定前擅自动存储面：本批只把 §〇/§一 的"全部落地"过度声明改成本节口径。判据见 §二之十二 |
+| 10 | **单写者租约只装了 HTTP 一面，MCP 真机写未受约束**：AF 自己定的"一个 store 只能有一个写者"这条纪律目前有三处落点却只在一面上生效——`af_cli.py:1365` 的 `FileLock(store_root/".serve.lock")`（抢不到即 `readonly=True`）、`af_api.py:344` 的 `_readonly_guard`（8 个写端点挂 `Depends`）、以及 `build_app(readonly=…)` 这个入参本身；而 `af_mcp.serve_mcp` 与 `dispatch` 对 `readonly|lease|acquire` 三个词 **grep 零命中**（实测），`af_live_run` 的 scope 又确实是 `"live"` ⇒ Agent 侧可以在 serve 已持写权时并行开真机写。这与 §五 第 1/7 件不同：**它不是补 AF 漏装的自家闸门**（那种我直接落地，见本批 §二之十六 的两处），而是要给 DB 新增一个它此前不会遇到的**拒收模式**——MCP 在锁被占用时返回什么码、用 `check` 还是 `acquire`（Agent 进程与 serve 同机/分机两种拓扑答案不同）、是否只拦 `live` 还是连 `apply`/`bind` 一起拦，三项都会改变 DB 看到的失败面 ⇒ 按 20261002 §一"契约面改动走裁定"的口径申请 | `关键决策部/inbox/20261003-AF-单写者租约只装了HTTP面MCP真机写未受约束-决策申请.md`（**已提交，待回话**）。AF 侧**代码一个字节未动**；同批已自主落地的是前两件（`dc8ac0d`：`_t_live` 补 `store`、events 上限上收到 `af_service`），判据与三次变异读数见 §二之十六 |
 
 ## 六、未在本版做（登记，不静默）
 
@@ -1252,7 +1345,7 @@ M-b/M-c 各只红自己那条，说明三条判据问的确实是三件事。`re
 - 洞察面板的**投递源仍是本机手投**：§二之四的两条提案是用 `PersistentInsightSink.submit()` 直接写进 dev store 的，走的是"落盘之后的那一段"。本批把**桥回调 → 落盘 → `/api/insights/pending`** 这一段用契约形状的假消息钉住了（`test_contract_shaped_insight_reaches_the_panel_with_its_accounting`，注入假 client、真桥、真队列、真 API），但**真 paho + 真 broker** 那一段仍未端到端（本机无 paho-mqtt 且禁 pip install），面板的空态文案因此把"桥未上线/没订到主题"列为四种成因之一，而不是当作已验证链路。
 - **契约表本身还欠三行改动，且都在 MA/DCD 手里**（§五 第 7 件）：`ma/insights` 的载荷行没有 `conf`、没有稳定的假设 id、也没有 IR 候选（AF 的 `intent`）。AF 已按可回退口径落地（别名 + 缺报记账），但只要契约行不改，MA 侧随时可能按自家形状发而 AF 无从判定"这条到底该不该有 conf"；面板上也因此会长期是「无 IR（不能批准）」。**这不是 AF 能单方面收口的残留**，登记以免被读成"入向已经全对齐"。
 - 第 5 步 ② 的「顺序追加」子句**未做**（不是漏，是不在裁定前擅自动存储格式）：af_persist 现为整文件原子重写，追加写会同时撞"不改格式头"与第五轮的有界化修法两面。校验和/坏文件跳过/原子替换三条已落，剩这一条等 DCD 定性（§五 第 9 件，判据与三条理由见 §二之十二）。
-- **接缝类判据：多路镜像这一族已结清，参数递错那一族扫过四条**：本批把"同一份值手抄进多条属性路径"这一族做成门禁（`scripts/check_states_fanout.py`，§二之十四 的 AST 盘点显示它覆盖的是 src 全集，不是抽样）。另补的四处判据属**参数递错**类（serve→`build_app` 的 `readonly`、CLI 起桥递出去的四样 kwargs、`_make_runtime` 的起桥条件与 clock 归属、`live_run` 的时钟锚点），靠的是顺着验收点手动追问"这根线谁在测"。第四条不只是"补一条测试"，它**实测出一个真缺陷**：两条真机路径对同一次下发给出两套时间轴（§二之十五，`12cea64` 已修）。同族里还剩 `af_watch` 的观察者装配、`af_service` 的 **store 注入**（`live_run` 把 `store` 递进 `StaticScanner` 的 `device_guard`/`entity_health`，`store=None` 与递错目录之间有没有判据未核）、TOOLS→caps 之外有没有第二次工具名单映射**未做清单化盘点**，也没有对应门禁能判红——这类缺口不会让任何东西变红，只会让该红的不红，与 §二之十一 同族。已扫的四条覆盖 `af_cli` 的 serve/起桥/runtime 装配三面 + `af_service` 的 clock 一面；`af_service` 的 store 面与 `af_watch` 侧仍未盘。登记在此，避免被读成"接缝已系统扫过"。
+- **接缝类判据：多路镜像这一族已结清，参数递错那一族扫过五条**：本批把"同一份值手抄进多条属性路径"这一族做成门禁（`scripts/check_states_fanout.py`，§二之十四 的 AST 盘点显示它覆盖的是 src 全集，不是抽样）。另补的四处判据属**参数递错**类（serve→`build_app` 的 `readonly`、CLI 起桥递出去的四样 kwargs、`_make_runtime` 的起桥条件与 clock 归属、`live_run` 的时钟锚点），靠的是顺着验收点手动追问"这根线谁在测"。第四条不只是"补一条测试"，它**实测出一个真缺陷**：两条真机路径对同一次下发给出两套时间轴（§二之十五，`12cea64` 已修）。同族里还剩 `af_watch` 的观察者装配、TOOLS→caps 之外有没有第二次工具名单映射**未做清单化盘点**，也没有对应门禁能判红——这类缺口不会让任何东西变红，只会让该红的不红，与 §二之十一 同族。**第五条已在本批扫掉并抓到两处真缺陷**（`af_service` 的 store 注入 + events 上限只装 HTTP 面，`dc8ac0d`，§二之十六）；同批扫到的第三处（单写者租约只在 HTTP 面）因涉及给 DB 新增可见拒收模式而投裁定（§五 第 10 件），代码未动。已扫的五条覆盖 `af_cli` 的 serve/起桥/runtime 装配三面 + `af_service` 的 clock 与 store/cap 两面；`af_watch` 侧仍未盘。登记在此，避免被读成"接缝已系统扫过"。
 - `BoundedCache` 基类收敛（第五轮遗留）与"实现间契约不一致"的**静态**门禁：本轮以契约测试覆盖，未做静态门禁。
 - 证据面板的 `evicted_automations` 只做"提示有自动化被挤出内存"，未做跨进程持久化——**注意这与 ④A 不是同一个问题**：④A 裁的是 MA 洞察提案队列（已持久化），证据档的进程内清零仍是遗留。
 - `SessionViewResponse` 的**应答成功分支**（本批已收口，见下方"已收口"与 §二之九）：原登记为 EXEMPT——`case04_ask_timeout` 带 seed + event 建会话后 `asks=0`（分支未走到挂起 ask），只实测到 404 失败面；顶层 9 键靠同族 `POST /sessions`/`GET /sessions/{sid}` 的同一 `_session_view` 坐实。
