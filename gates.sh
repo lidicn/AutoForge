@@ -117,6 +117,16 @@ echo "══ 工具名单门禁（MCP 工具名只有一个注册表）═══
 tool_rc=$?
 
 echo
+echo "══ 状态源 fail-closed 门禁（snapshot() 不许静默省略未知实体）══════"
+# 第七轮审计的 key_finding：`af_ir/expr.py` 的 `and`/`or` 走 all()/any() **短路**，没被求值的
+# 那一支永远不会去读快照 ⇒ "缺失留给运行时发现"在 fail-open 一侧根本不成立：仿真软失效不执行、
+# 生产照另一支执行，同一条 IR 两个相反结论。当时用四对多实现契约测试钉住口径，但契约测试各自
+# 只认自己那几个类——新增一个忘了 raise 的 provider，现有测试一条都不会红 ⇒ 射程内的实现静态判；
+# 读不到 `StateProvider.snapshot()` 锚点时 exit 2，不做假绿。
+"$PYTHON" "$REPO/scripts/check_snapshot_policy.py" "$REPO/src"
+snap_rc=$?
+
+echo
 echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）════════════════════"
 # 单跑冒烟：只走 `import` 子进程，慢但一次性看清。
 # 注意：这条在开发机上的红多半是「依赖没装齐 / 本地副本不完整」，
@@ -152,6 +162,15 @@ fi
 if [ $tool_rc -ne 0 ]; then
   echo "结论：工具名单门禁红（exit=$tool_rc）。按名调 MCP 工具只能用 \`af_mcp.TOOLS\` 里的名字；\`TOOLS\` 之外再抄一份字典名单（哪怕是仿真/未来的）就是第二真源。确实不是工具名就地写 \`# tool-name: exempt(理由)\`。"
   exit $tool_rc
+fi
+
+if [ $snap_rc -eq 2 ]; then
+  echo "结论：状态源 fail-closed 门禁读不到锚点（exit=2）。\`StateProvider.snapshot() -> Snapshot\` 的声明形状变了，本门此刻无从判定射程——报『干净』就是假绿，先把脚本里的锚点口径对上真实契约。"
+  exit $snap_rc
+fi
+if [ $snap_rc -ne 0 ]; then
+  echo "结论：状态源 fail-closed 门禁红（exit=$snap_rc）。返回 \`Snapshot\` 的状态源必须对未知实体 \`raise UnknownEntity(…)\`：\`and\`/\`or\` 短路 ⇒ fail-open 的实现永远读不到缺的那一支，仿真与生产会对同一条 IR 给出相反结论。故意 fail-open 且已裁定就地写 \`# fail-closed: exempt(理由)\`。"
+  exit $snap_rc
 fi
 
 if [ $ast_rc -ne 0 ]; then
