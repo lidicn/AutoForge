@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/ADM联动执行计划-AF.md`（DCD 出品，v2.5 联动落地版）
 > 记录人：AutoForge 开发
-> 核实基准：代码侧最新 commit = **`e674886`**（已推 origin/main；本记录与后续文档提交只改文档，不再改判据）。§二/二之二…二之五 五组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
+> 核实基准：代码侧最新 commit = **`3607832`**（已推 origin/main；本记录与后续文档提交只改文档，不再改判据）。§二/二之二…二之八 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
 > 契约真源：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
 > 交叉裁定：`20260929-ADM三仓联动七问`、`20261001-AF-homesdk接入四问`、`20260930-AutoForge后续优化三项`、`20261001-DB目标模式与AF三题` §H、**`20261002-homesdk记账与AF-DB-DPP六件-裁定`**（本轮落地依据，§一 末）
 
@@ -22,8 +22,9 @@
 | 第七轮审计 | **finding 属实，已修** | 详见 `docs/audit/审计报告_第七轮_核实与修复.md`；第八轮尚未落 `docs/audit`（本回合实测目录内最新即第七轮，mtime `10-02 11:46`） |
 | 门禁肥化防护（计划外补刀） | **已交付** | `gates.sh` 计数棘轮 + `.gates-tally.txt`（上限 104），三条变异实测能红；AgentOps 模板同步去反引号缺陷 |
 | F4 ③ / F7 前端残留 | **已收口** | `/evidence` 生产态证据视图上线；真机下发的事件回放与撤销按钮端到端真点通（读数见 §一末） |
-| GitHub CI | **首次可读，且从"永久红"修到第一条绿** | 实测 run 1–27 `conclusion` 全为 `failure`（建仓以来一条没绿过），三个红因全在版本/判据层而非产品逻辑：pydantic-v2-only 的 `Field(max_length=)` 让 CI（pydantic 1.10.12）**0 条测试跑过**、undefined-name 门禁自己用了 3.12+ 的 `ast.TypeAlias`（CI 是 3.11）、真 vhass 的 skip 判据问"包能否 import"而非"插件注册了没"。三条各钉能变红的反例后，run 28 五作业全 `success`，CI 与本机通过/跳过数逐字相同（2621/51）。读数与残留见 §二之五 |
-| DCD 20261002 §一（CI 锁文件源）| **裁定 (b) 已落地，但落法补了一条 flag** | 只按原文写 `--registry=https://registry.npmjs.org` 经实测是**空操作**（fetch 87+87 行仍在 `registry.npmmirror.com`/`cdn.npmmirror.com`），必须配 `--replace-registry-host=always`；安装步另加"主机自证"守卫（CI 绿不能证明没吃镜像）。逐字节对账 137/137 `integrity` MATCH ⇒ 锁文件字节未动。回执已投 DCD（含 §四 判例 2 的证据更正：`@types/node` tarball 两源逐字节相同、根目录差异不是重打包痕迹）。见 §二之七 |
+| GitHub CI | **首次可读，且从"永久红"修到连续绿；读数路已成脚本** | 实测 run 1–27 `conclusion` 全为 `failure`（建仓以来一条没绿过），三个红因全在版本/判据层而非产品逻辑：pydantic-v2-only 的 `Field(max_length=)` 让 CI（pydantic 1.10.12）**0 条测试跑过**、undefined-name 门禁自己用了 3.12+ 的 `ast.TypeAlias`（CI 是 3.11）、真 vhass 的 skip 判据问"包能否 import"而非"插件注册了没"。三条各钉能变红的反例后，run 28 五作业全 `success`，CI 与本机通过/跳过数逐字相同（2621/51）。**run 31（守卫那次提交）五作业再次全 `completed/success`**，且 runner 侧给出安装步的实测读数 `fetch 主机读数：npmmirror=0 npmjs=87`。读数路径固化为 `scripts/gh_ci_status.py`（`runs`/`jobs`/`annotate`/`log`，纯标准库、只 GET、不打印凭证；`log` 先停 302 再无凭证取正文，免得把 token 带给日志存储域）。读数与残留见 §二之五、§二之八 |
+| DCD 20261002 §一（CI 锁文件源）| **裁定 (b) 已落地并已在 runner 上取到读数** | 只按原文写 `--registry=https://registry.npmjs.org` 经实测是**空操作**（fetch 87+87 行仍在 `registry.npmmirror.com`/`cdn.npmmirror.com`），必须配 `--replace-registry-host=always`；安装步另加"主机自证"守卫（CI 绿不能证明没吃镜像）。逐字节对账 137/137 `integrity` MATCH ⇒ 锁文件字节未动。§二之七 末尾"本机 npm 11.9.0 / runner 10.x，只有 push 之后才知道"的残留**已销账**（runner `npmmirror=0 npmjs=87`）。回执已投 DCD（含 §四 判例 2 的证据更正：`@types/node` tarball 两源逐字节相同、根目录差异不是重打包痕迹）。见 §二之七、§二之八 |
+| `ma/insights` **入向与契约表对账**（本批新抓） | **AF 侧已按契约收，跨仓三问已交 DCD** | 拿着裁定 Q3 之后的载荷行逐条对 AF 的 `ingest_insight()`：必填的 `hypothesis_id`/`natural_language`/`conf` **三项契约一个都不发** ⇒ 每一条按契约发来的洞察都被拒（判例 1 的静默归零，面换到 AF 入口）。改法：契约键优先 + 旧键别名、缺 `conf` 按 0.0 入 ask 档并记 `conf_reported=false`（坏报照旧拒、封顶 0.59 不动）、契约字段有界落 `transport` 并出 `/api/insights/pending`，面板对缺报显示「未上报」而不是 `0.00`。`conf`/稳定 id/`intent` 三处空缺 AF 不能自决 → §五 第 7 件。见 §二之八 |
 | UI 类型门禁（上一版登记的债） | **已收口（含下一批零 `any`）** | 15 条 `vue-tsc` 错误清零，`type-check` 改 `--force` 防缓存假绿，`ci.yml` 新增 `ui` 硬门 job；过程中抓到"两个按钮从未接线"与"mock 夹具少回两字段"两条真缺陷（§二之二）。同族第二批：API 层四处 `request<any>` 换成后端真形类型并逐键与在线响应对账，`grep request<any> ui/src` 已无匹配（§二之三） |
 | 部署 | **未部署** | 铁律 #3：文档/本地阶段不部署，镜像重烤须进合并停机窗 |
 
@@ -494,6 +495,76 @@ CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip�
 
 ---
 
+## 二之八、本批读数：`ma/insights` 的**入向按契约表收**——AF 此前会把每一条合规洞察拒掉
+
+裁定 20261002 Q3 之后，契约表 §1.2 把 `ma/insights` 的载荷写成
+`{trace_id, ts, kind, persons[], room?, summary, evidence[], snapshot_url?}`。把 AF 的入向处理器
+`af_mqtt_bridge.ingest_insight()` 逐条对上去，三个必填项**契约一个都不发**：
+
+| AF 改前的校验 | 契约行里的对应物 | 按契约发一条的结局 |
+|---|---|---|
+| `hypothesis_id` 必填 | 只有 `trace_id` | 拒收 `missing_hypothesis_id` |
+| `natural_language`/`insight`/`intent` 至少一个 | 只有 `summary` | 拒收 `missing_natural_language_and_intent` |
+| `conf` 必填且 ∈[0,1] | **载荷里没有 conf 这一项** | 拒收 `conf_missing_or_out_of_range` |
+
+这就是裁定 §四 判例 1 那一类**静默归零**，只是面换到 AF 的入口：MA publish 成功、broker 投递成功、
+DB 归档成功，AF 队列永远空，`/#/insights` 显示"没有提案"——没有任何一侧报错。
+
+**改法（三条都是 AF 侧自决范围，不涉及他仓）**：
+1. 契约键优先、旧键当别名保留：`hypothesis_id` → 回退 `trace_id`；文本 `natural_language` → `insight` → `summary`。
+   用的是哪个键记进落盘记录的 `transport.id_key`（不靠事后考古）。
+2. **缺报 ≠ 坏报**：缺 `conf` 不再拒收，按 `0.0` 入队（必然落 ask 档 `< SHADOW_LOW=0.60`，不换取任何自动待遇），
+   同时记 `transport.conf_reported=false`；报了却越界/NaN/非数/布尔照旧拒（`conf_out_of_range`）。
+   封顶 `INSIGHT_CONF_CAP=0.59` 一条没改：**对端报 1.0 也进不了可自动部署的带**。
+3. AF 不消费但人要看、且必须看得准的字段，有界地留住（`kind` / `persons[]` / `room` / `evidence_count` + 前 3 条预览 /
+   `ts` / `has_snapshot`——URL 本身不留），随提案落盘并从 `/api/insights/pending` 出去。
+   上界：单值 120 字、当事人 12 个、证据预览 3 条——载荷来自对端，不封顶等于让 broker 决定我们的落盘体积。
+
+**面板上跟着改的一处**（同一条缺陷的另一半）：`/#/insights` 的「置信」列此前一律 `row.conf.toFixed(2)`，
+缺报就会被画成 `0.00`＝"MA 说这条不值"。现在缺报显示 **「未上报」**；`InsightRecord.transport` 从
+`Record<string, unknown>` 收成 `InsightTransport` 具名类型（键进类型门，写错键名会红），
+「洞察内容」格补一行依据（`kind · N 人 · 房间 · 证据 N 条`）——多人同框的当事人不总在 summary 文本里。
+
+**判据与红/绿双向读数**：新增 5 条（`tests/unit/test_af_mqtt_bridge.py` 四条 +
+`tests/contract/test_af_insight_queue_contract.py` 一条，后者从桥回调一路走到 `/api/insights/pending` 的 JSON）；
+拒收表按新口径改写（`missing_hypothesis_id`→`missing_insight_id`、`conf_missing_or_out_of_range`→`conf_out_of_range`，
+并补 `confidence` 别名越界、两侧都空白串两个反例）。
+**把别名与缺报两处临时改回旧行为**（`hypothesis_id` 不回退 `trace_id`、`summary` 不当文本、缺 conf 返 `None`）
+⇒ 同一批测试实测 **`4 failed, 27 passed`**，其中 `test_contract_shaped_insight_lands_instead_of_being_dropped`
+红在 `assert False is True`（日志原话 `[mqtt] 丢弃 ma/insights：missing_insight_id`）；改回后 **31 passed**。
+⇒ 这四条钉的是行为，不是形状（铁律 #8）。
+
+**本批全量读数（当场跑出，非引用）**：`python -m pytest tests/ -q` → **RC=0**，
+`2631 passed, 51 skipped, 1 warning, 7 subtests passed in 128.50s`；
+`GATES_PYTHON=python bash gates.sh` → **RC=0**（AST 基线 104/104、undefined-name 干净、主题白名单 7 处全在契约表内）；
+`ui`：`npm run type-check`（`vue-tsc -b --force`）**RC=0**、`npm run build` **RC=0**（`✓ built in 34.48s`，
+manifest `commit=3607832…`、`files=827`）。
+
+**同批把 §六「CI 读数这条路本身没有门禁」销账**：`scripts/gh_ci_status.py` 从"读 run/job 结论"扩到
+`log <job_id> <关键词>`（job 日志原文按关键词过滤）。这里有个必须写下来的安全点：
+GitHub 的日志端点是 **302 到签名 URL**，而 `urllib` 在重定向时**会继续带上自定义头**——照默认跟着跳等于
+把 `Authorization` 发给日志存储域名。脚本因此先用 `_NoRedirects` 停在 302 取 `Location`，再**无凭证**取正文，
+且强制关键词过滤（整份日志上万行，别的步骤 echo 过什么不在控制内）。首次实测读数（run 31 / `ui-typecheck-build`
+job `111072195342`，即守卫那次提交）：
+
+```
+匹配 2 行（关键词 '主机读数'）
+2026-10-02T23:32:20.9557680Z echo "fetch 主机读数：npmmirror=${mirror_hits} npmjs=${official_hits}"
+2026-10-02T23:32:26.4502910Z fetch 主机读数：npmmirror=0 npmjs=87
+```
+
+⇒ §二之七 那条"本机预跑是 Node 24 / npm 11.9.0，runner 是 npm 10.x，只有 push 之后才知道"的残留**当场销账**：
+runner 上 `npmmirror=0 npmjs=87`，交付面确实从官方源拉包，守卫在 npm 10.x 上给的是读数而不是红。
+同一次 run 五个作业全 `completed/success`（`pytest` / `adm-linkage-contracts` / `ui-typecheck-build` /
+`layering-gates` / `quality-gates`，`failed_steps=[]`）。
+
+**跨仓的三件交 DCD**（AF 不自决，因为答案在 MA 侧）：`conf` 要不要正式进契约行、
+`trace_id` 是追踪号还是稳定假设身份（关系到 AF 的去重与回灌键 `hypothesis:{id}`）、
+MA 到底会不会发结构化 `intent`（不发则生产里每条洞察都是「无 IR（不能批准）」，要改的是人的工作流而不是 AF 的面板）。
+申请：`关键决策部/inbox/20261003-AF-ma-insights载荷conf与稳定id与intent-决策申请.md`（见 §五 第 7 件）。
+
+---
+
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
 
 | commit | 内容 |
@@ -519,6 +590,7 @@ CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip�
 | `b31c2ad` | 文档：§二之五 CI 首读全篇 + §〇 CI 行 + §三 台账两行 + §五 第 4 件按 20261002 裁定改写 + §六 四条残留/一条销账；顺带修回被我上一次编辑吃掉的 `## 三` 标题，并把核实基准从"HEAD 自指"改成"代码侧最新 commit"（文档提交不再改判据） |
 | 本批之七（events 上限补齐） | `af_api.py`：`_MAX_SIM_EVENTS` → `_MAX_REPLAY_EVENTS` + `_check_event_cap()`，`/api/sim`/`/api/sessions`/`/api/live/run` 三条端点同形判据（8e8c725 只装了第一条）；`test_af_api.py` 参数化钉两条新端点（超上限 422 + 恰好上限非 422），摘掉判据实测 `2 failed`（400/403 而非 422）；本机全量 2623 passed / 51 skipped RC=0，门禁 RC=0。读数见 §二之六 |
 | 本批之八（裁定 (b) 落地 + 空操作证伪） | `ci.yml` 的 `ui` 安装步：`--registry=https://registry.npmjs.org` **配** `--replace-registry-host=always`（只写前者经实测是空操作——fetch 全在 `registry.npmmirror.com` 87 + `cdn.npmmirror.com` 87），并加主机自证（`npmmirror` 命中≠0 或 `npmjs` 命中=0 → `::error::` + `exit 1`，三份实测日志上红/红/绿）；逐字节对账 137/137 integrity MATCH，官方源 node_modules 上 type-check/build 均 RC=0。回执投 DCD：裁定落法补正 + §四 判例 2 证据更正。读数见 §二之七 |
+| 本批之九（`ma/insights` 入向按契约表收 + CI 日志可读） | `af_mqtt_bridge.ingest_insight()`：契约键优先、旧键别名（`trace_id`/`summary` 回退）、缺 `conf` 从"拒收"改为"按 0.0 入 ask 档 + `conf_reported=false`"（坏报照旧拒）、新增有界 `_transport_of()` 记账（kind/persons/room/证据计数与预览/ts/has_snapshot）；`PersistentInsightSink.submit` 与 `ProposalManager.submit` 同步加 `transport` 参数（两份签名保持对齐＝桥侧不分支），`Proposal` 补 `transport` 字段并进 `to_json`；UI：置信列对缺报显示「未上报」、`InsightRecord.transport` 收成具名 `InsightTransport`、「洞察内容」格补依据行；`scripts/gh_ci_status.py` 扩 `log <job_id> <关键词>`（停在 302 取 Location、无凭证取正文，不把 token 发给日志存储域）。测试新增 5 条 + 拒收表按新口径改写，临时改回旧行为实测 `4 failed` ⇒ 装回后 31 passed；全量 2631 passed / 51 skipped RC=0，门禁 RC=0，type-check/build RC=0。跨仓三件投 DCD（§五 第 7 件）。读数见 §二之八 |
 
 
 ## 四、审计侧
@@ -538,6 +610,7 @@ CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip�
 | 4 | 第 0 步 ④ 的记账载体：`E:/NAS/AgentOps` **不是 git 仓** ⇒ 已授权改的门禁模板无 commit、无 sha、不可回滚；三仓 CI 都依赖它，却没有任何版本账 | `inbox/20261002-AgentOps门禁模板无版本载体-决策申请.md` → **已裁定**（`decisions/20261002-AgentOps与MA交付面-裁定.md` §一）：**A 建仓为目标态**（NAS bare 加 `agentops.git`、模板首次 commit、此后走 PR），**建仓与推送授权"与合并停机窗同批"** ⇒ AF 侧本窗不动；**C 兜底本窗已落**（申请区贴了模板 sha256 `887c33dd…`）。裁定另点名两件事：模板分发=**各仓按模板重写自己的 CI**（重写即该仓一次 CI 变更，走各自 PR），`memory-agent/.github/workflows/gates.yml:56` 的 `continue-on-error` 由 **MA 侧修**，AF 不碰他仓 main |
 | 5 | 新 `ui` CI job 将**首次**让 GitHub runner 按 lockfile 去第三方镜像拉 137 个包（`ui/package-lock.json` 实测 137/137 指 `registry.npmmirror.com`、0 条 npmjs、0 条缺 `integrity`；根因是用户级 `~/.npmrc` 漏进共享产物）。这是 DPP 同题申请（R7）在 AF 的**前提修正**：那边选"只登记"的承重句是"CI 只在我这台机器跑"，AF 今天把这句话拿掉了 | `inbox/20261002-AF-CI首次消费镜像锁文件-DPP-R7同题补充-决策申请.md` → **已裁定 (b)**（`decisions/20261002-AF锁文件源与MA载荷键名-裁定.md` §一：只把 CI 侧改指官方源、**不动锁文件字节**、本机开发照旧）。**AF 已落地**，但落法比裁定原文多一条 flag：只写 `--registry=` 经实测是**空操作**（fetch 全在 `npmmirror` 的两个主机上），必须配 `--replace-registry-host=always`；同时给安装步加了主机自证守卫（CI 绿不能证明没吃镜像）。逐字节对账 137/137 MATCH ⇒ "不动锁文件"成立。读数见 §二之七 |
 | 6 | 上一条落地时抓到的两件事要回给 DCD：①裁定原文那条命令是空操作，落法已补一条 flag（问"算不算改判"）；②裁定 §四 判例 2 的证据不成立——`@types/node@22.20.2` 的 tarball 在**两个源逐字节相同**（`size=447116`、`sha256` 前缀同为 `64921eb9b6caae37`、解包根目录都是 `node v22.20`），"根目录不是 `package/`"是 DefinitelyTyped 自己的发布布局，不是镜像重打包的痕迹 | `inbox/20261002-AF-锁文件源裁定落法补正与判例2旁证更正-回执.md`（**已提交，待回话**）。同件另附一条小问：安装步那条"fetch 主机集合 ⊆ {批准的那一个域} 且该域命中数 > 0"的守卫形状要不要提升到 AgentOps 模板——按 20261002 §一"分发=各仓自写"的口径，AF 默认不动 |
+| 7 | `ma/insights` 载荷的三处契约空缺（AF 的入向此前按自家键必填，按契约发来的每条洞察都会被拒——判例 1 的静默归零换到了 AF 入口）：① `conf` 要不要正式进契约行（AF 已按"缺报按 0.0 入 ask 档 + `conf_reported=false`，面板显示「未上报」"落地，等追认）；② `trace_id` 是"一次联动的追踪号"还是"这条假设的稳定身份"——AF 现在拿它当 `hypothesis_id` 与回灌键 `hypothesis:{id}`，若每次播报都换，去重与回灌都会散；③ MA 会不会发结构化 `intent`（契约行没有这一项 ⇒ 生产里每条洞察都是「无 IR（不能批准）」，要改的是人的工作流还是契约，AF 不擅自扩面板） | `关键决策部/inbox/20261003-AF-ma-insights载荷conf与稳定id与intent-决策申请.md`（**已提交，待回话**）。AF 侧不等裁定：别名/缺报记账/有界 transport 已在同批进仓，判据见 §二之八 |
 
 ## 六、未在本版做（登记，不静默）
 
@@ -546,13 +619,14 @@ CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip�
 - 第 2 步 `kill -9` → broker 代发 offline 的真 broker 验收：同上，须进窗随镜像重烤一次跑。
 - ②A 的 `instance_id` 过渡字段**未删**（删除时点 = AF v2.6，属破坏性变更须与窗口同做）。
 - §四 的 B（逐实体可见漂移 + `entity_drift` 记账）**未做**，按裁定的启动条件排队：下一次真实改动 `af_instance._refresh_snapshot` 时顺手做，或 AF v2.6。
-- 洞察面板的**投递源仍是本机手投**：§二之四的两条提案是用 `PersistentInsightSink.submit()` 直接写进 dev store 的，走的是"落盘之后的那一段"。真 `ma/insights` MQTT 消息 → 桥回调 → 落盘 → 面板可见这**前半段仍未端到端**（同 §六 第 2 条：本机无 paho-mqtt 且禁 pip install），面板的空态文案因此把"桥未上线/没订到主题"列为四种成因之一，而不是当作已验证链路。
+- 洞察面板的**投递源仍是本机手投**：§二之四的两条提案是用 `PersistentInsightSink.submit()` 直接写进 dev store 的，走的是"落盘之后的那一段"。本批把**桥回调 → 落盘 → `/api/insights/pending`** 这一段用契约形状的假消息钉住了（`test_contract_shaped_insight_reaches_the_panel_with_its_accounting`，注入假 client、真桥、真队列、真 API），但**真 paho + 真 broker** 那一段仍未端到端（本机无 paho-mqtt 且禁 pip install），面板的空态文案因此把"桥未上线/没订到主题"列为四种成因之一，而不是当作已验证链路。
+- **契约表本身还欠三行改动，且都在 MA/DCD 手里**（§五 第 7 件）：`ma/insights` 的载荷行没有 `conf`、没有稳定的假设 id、也没有 IR 候选（AF 的 `intent`）。AF 已按可回退口径落地（别名 + 缺报记账），但只要契约行不改，MA 侧随时可能按自家形状发而 AF 无从判定"这条到底该不该有 conf"；面板上也因此会长期是「无 IR（不能批准）」。**这不是 AF 能单方面收口的残留**，登记以免被读成"入向已经全对齐"。
 - `BoundedCache` 基类收敛（第五轮遗留）与"实现间契约不一致"的**静态**门禁：本轮以契约测试覆盖，未做静态门禁。
 - 证据面板的 `evicted_automations` 只做"提示有自动化被挤出内存"，未做跨进程持久化——**注意这与 ④A 不是同一个问题**：④A 裁的是 MA 洞察提案队列（已持久化），证据档的进程内清零仍是遗留。
 - `SessionViewResponse` 的**应答成功分支 = EXEMPT**：`case04_ask_timeout` 带 seed + event 建会话后 `asks=0`（分支未走到挂起 ask），只实测到 404 失败面；顶层 9 键靠同族 `POST /sessions`/`GET /sessions/{sid}` 的同一 `_session_view` 坐实。下一次做洞察面板或真机 ask 流程时顺手补一条"应答成功 → 快照键"的实测。
 - `/api/metrics` 的 `runs/success/failed/audit_distribution` 仍是 0/空——`get_metrics` 的 docstring 写明这三项需**常驻进程**（`forge serve`/`watch`）才累计，原型期服务层无状态。本批只把"形状"钉成类型，没有把"数值来源"改成真累计；那是另一件事，不在类型面批里偷做。
 - 本机 `node_modules` 的完整性没有门禁：本批实测 `@types/node@22.20.2` 曾被装成 **37/74** 文件（见 §二之二）。我用 registry 同版本 tarball 增量补齐了缺的 37 个文件，但**成因未查**（不在本批范围），且这条只在开发机成立——CI 走 `npm ci` 从锁文件装，不复用本机 `node_modules`。若下次又冒出"某个 `node:*` 模块找不到"，先数 `node_modules/@types/node/*.d.ts` 再怀疑代码。
-- **CI 读数这条路本身没有门禁**：本批能读到 run 1–27 全红，靠的是"本机 `~/.git-credentials` 里存着可用的 github.com 凭证 + `api.github.com` 可达"（同一时刻 `github.com` 网页面 `curl` 超时、浏览器 `ERR_CONNECTION_TIMED_OUT`）。这是**一次性条件**，不是可复跑的命令；下一次两者都不可达时又变成 EXEMPT。要收口就得做成脚本（且不能把凭证写进仓）。
+- **CI 读数这条路本身没有门禁**（本批已收口，见下方"已收口"）：本批能读到 run 1–27 全红，靠的是"本机 `~/.git-credentials` 里存着可用的 github.com 凭证 + `api.github.com` 可达"（同一时刻 `github.com` 网页面 `curl` 超时、浏览器 `ERR_CONNECTION_TIMED_OUT`）。这是**一次性条件**，不是可复跑的命令；下一次两者都不可达时又变成 EXEMPT。要收口就得做成脚本（且不能把凭证写进仓）。
 - **真 vhass 在 CI 上现在是 skip**：10 条 `*_in_real_vhass` 判"插件未注册 → skip（带理由）"，权威场地是 `docker run autoforge-test`；本机无 docker（`docker: command not found`），该文件也自陈"未经实跑验证" ⇒ **F14 第二道闸至今没有任何真跑读数**，"CI 绿"不许被读成"仿真复核过"。
 - **CI 依赖未 pin**（`pip install -e ".[dev]"` 每次现解）：本批那条 pydantic v1/v2 红就是漂移付的账；改 lockfile/加 pin 等 §五 第 5 件裁定。
 - **本机开发面仍在吃镜像**：AF 本机 `~/.npmrc` 指 `registry.npmmirror.com`，裁定 (b) 只管 CI 侧，本机不变（这是裁定选的档位，不是遗漏）。CI 侧的守卫已把"交付面必须从官方源"变成会红的判据；开发面要收口得另裁。
@@ -568,6 +642,8 @@ CI 上"包在、插件被禁、夹具不存在" ⇒ 报**错误**而不是 skip�
 - ~~API 层四处 `request<any>`（`metrics`/`experience`/`telemetry`/`sessionAnswer`）让新类型门对这四条通道失明~~ → 全部换成后端真形类型，且逐键与在线响应对账（`success_rate` 按后端语义写成可空）；`grep request<any> ui/src` = **No matches found**；类型门能因这些字段变红由探针 TS2339 实测。见 §二之三。
 - ~~洞察队列只有 API、UI 没有"MA 洞察"这一屏~~ → `/#/insights` 上线：账目四计数 + 队列落点路径 + `unreadable` 记账可见 + 无 IR 行交接按钮 `disabled` + 二次确认写死"交接 ≠ 部署" + 空态四种成因。approve/reject 两条分支都在真后端上点通，把手 `a648a1aeb3c84751` 在 `af_pending` 与 decided 两侧对得上。见 §二之四。
 - ~~`/api/sessions` 与 `/api/live/run` 的 `events` 无上限~~ → `_MAX_REPLAY_EVENTS` + `_check_event_cap()` 覆盖三条 events 端点（`grep -c` = 3）；参数化测试在两处摘掉判据后**实测变红**（`assert 400 == 422` / `assert 403 == 422`，即 10001 条 events 修复前一路走进业务层），装回 11 passed、全量 2623 passed RC=0。见 §二之六。
+- ~~CI 读数靠"当场手搓 curl + `~/.git-credentials`"这条一次性条件~~ → `scripts/gh_ci_status.py`（纯标准库、只读 GET、不打印凭证）：`runs`/`jobs <run_id>`/`annotate <run_id>`/`log <job_id> <关键词>` 四个入口。`log` 那一步多一个安全点——日志端点是 **302 到签名 URL**，`urllib` 默认会在跳转时继续带自定义头，脚本因此先停在 302 取 `Location`、再**无凭证**取正文，避免把 token 发给日志存储域。首次 runner 侧读数（run 31 / job `111072195342`）：`fetch 主机读数：npmmirror=0 npmjs=87`，五个作业全 `completed/success`。见 §二之八。
+- ~~§二之七 登记的"本机预跑是 npm 11.9.0，runner 是 npm 10.x，改写是否在 CI 上真生效只有 push 之后才知道"~~ → 已由上一条取到实测：**守卫在 runner 上给的是读数而不是红**（`npmmirror=0 npmjs=87`），交付面确认走官方源。
 
 ---
 

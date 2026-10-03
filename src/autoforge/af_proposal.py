@@ -81,6 +81,8 @@ class Proposal:
     params: dict[str, Any] | None = None
     expected_state: dict[str, Any] | None = None
     prompt: str | None = None
+    # 对端元数据（MqttBridge 记账：kind/persons/room/conf_reported），不参与档位判定
+    transport: dict[str, Any] = field(default_factory=dict)
 
     @property
     def feedback_target(self) -> str:
@@ -102,6 +104,7 @@ class Proposal:
             "instance_id": self.instance_id, "node_id": self.node_id,
             "action": self.action, "params": self.params,
             "expected_state": self.expected_state, "prompt": self.prompt,
+            "transport": self.transport,
         }
 
 
@@ -225,8 +228,13 @@ class ProposalManager:
         self, *, hypothesis_id: str, natural_language: str, conf: float,
         suggested_ir: Mapping[str, Any] | None = None, source: str = "ma",
         proposal_id: str | None = None,
+        transport: Mapping[str, Any] | None = None,
     ) -> Proposal:
-        """接收 MA 提案并按 conf 分流（难点 4 的主入口）。"""
+        """接收 MA 提案并按 conf 分流（难点 4 的主入口）。
+
+        `transport` 是桥记下的对端元数据（签名与 `PersistentInsightSink.submit` 对齐，
+        桥侧不需要按落点分支）；只跟提案走，不参与 `band_for` 判定。
+        """
         now = clock_now(self.clock)
         proposal = Proposal(
             proposal_id=proposal_id or uuid4().hex[:12],
@@ -236,6 +244,7 @@ class ProposalManager:
             conf=float(conf),
             suggested_ir=dict(suggested_ir) if suggested_ir else None,
             created_at=now,
+            transport=dict(transport or {}),
         )
         self._register(proposal)
         audit_write(

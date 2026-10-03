@@ -86,6 +86,43 @@ def test_bridge_inbound_writes_the_durable_queue_with_capped_conf(tmp_path):
     assert rows[0].conf < 0.6, "封顶后仍须落在 ask 带（< SHADOW_LOW=0.60）"
 
 
+def test_contract_shaped_insight_reaches_the_panel_with_its_accounting(tmp_path, monkeypatch):
+    """契约表那一行的形状（无 `conf`、只有 `trace_id`/`summary`）要一路走到面板读的那个端点。
+
+    两个失败模式各自都要判据钉住：
+    1. 桥只认自家键 → 每条按契约发来的洞察被拒，队列永远是空的，面板显示"没有提案"（静默归零）；
+    2. 缺报的置信度落成 0.0 → 面板把"MA 没报"画成"MA 说这条不值"。所以 `conf_reported=False`
+       必须跟着记录一起落盘、一起出 `/api/insights/pending`。
+    """
+    sink = make_durable_ask_sink(store_root=tmp_path)
+    bridge = AfMqttBridge(FakeClient(), proposal_sink=sink)
+    result = bridge.handle_message(None, None, SimpleNamespace(topic=INSIGHTS_TOPIC, payload=json.dumps({
+        "trace_id": "t-20261002-0001",
+        "ts": "2026-10-02T17:36:27",
+        "kind": "behavior.insight",
+        "persons": ["爸爸", "妈妈"],
+        "room": "客厅",
+        "summary": "两人每晚 21:40 一起在客厅开大灯",
+        "evidence": [{"at": "21:40", "entity": "light.living_room"}],
+    }).encode()))
+    assert result["handled"] is True, result
+
+    rows = InsightQueue(tmp_path / "insight_proposals").list_pending()
+    assert len(rows) == 1
+    assert rows[0].hypothesis_id == "t-20261002-0001"
+    assert rows[0].conf == 0.0 and rows[0].conf < 0.6      # 缺报也仍落在 ask 带，不换取任何自动待遇
+
+    monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
+    client = _client(tmp_path)
+    body = client.get("/api/insights/pending").json()
+    assert [p["proposal_id"] for p in body["proposals"]] == [rows[0].proposal_id]
+    transport = body["proposals"][0]["transport"]
+    assert transport["conf_reported"] is False
+    assert transport["id_key"] == "trace_id"
+    assert transport["persons"] == ["爸爸", "妈妈"]
+    assert transport["kind"] == "behavior.insight"
+
+
 def test_full_queue_refuses_instead_of_dropping(tmp_path):
     queue = InsightQueue(tmp_path / "insight_proposals", limit=1)
     from autoforge.af_insight_queue import InsightRecord

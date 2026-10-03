@@ -673,7 +673,23 @@ export interface SessionViewResponse {
 }
 
 // ── ADM 第 1 步 ④A：MA 洞察提案队列（裁定 20261002 §三 ④A）──
-// 形状取自 `af_insight_queue.InsightRecord`（dataclass 字段 = to_dict 键）与
+// `transport` 的形状取自 `af_mqtt_bridge._transport_of`（对端元数据，有界）。
+export interface InsightTransport {
+  /** 用的是哪个键：契约的 `trace_id`，还是 AF 早年的 `hypothesis_id` 别名 */
+  id_key?: 'hypothesis_id' | 'trace_id'
+  /** MA 有没有真的报置信度。契约表 `ma/insights` 里没有 `conf` 这一项，缺报时后端按 0.0 落 ask 档 */
+  conf_reported?: boolean
+  kind?: string
+  persons?: string[]
+  room?: string
+  evidence_count?: number
+  evidence_preview?: string[]
+  ts?: string
+  has_snapshot?: boolean
+  [key: string]: unknown
+}
+
+// 记录本体的形状取自 `af_insight_queue.InsightRecord`（dataclass 字段 = to_dict 键）与
 // `af_service.approve_insight` / `reject_insight` 的返回语句。
 export interface InsightRecord {
   proposal_id: string
@@ -688,7 +704,8 @@ export interface InsightRecord {
   decided_at: number | null
   decided_by: string
   reason: string
-  transport: Record<string, unknown>
+  /** 桥记下的对端元数据（kind/persons/room/证据/缺报），不参与任何判定 */
+  transport: InsightTransport
 }
 
 export interface InsightQueueStats {

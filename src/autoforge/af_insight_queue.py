@@ -191,6 +191,7 @@ class PersistentInsightSink:
         suggested_ir: Mapping[str, Any] | None = None,
         source: str = "ma",
         proposal_id: str | None = None,
+        transport: Mapping[str, Any] | None = None,
     ) -> InsightRecord:
         pid = proposal_id or f"ins-{os.getpid():x}-{time.time_ns():x}"
         record = InsightRecord(
@@ -201,6 +202,7 @@ class PersistentInsightSink:
             source=str(source),
             received_at=clock_now(self.queue.clock),
             suggested_ir=dict(suggested_ir) if suggested_ir else None,
+            transport=dict(transport or {}),
         )
         self.queue.append(record)
         return record

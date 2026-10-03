@@ -76,11 +76,16 @@ const confCol: DataTableColumns<InsightRecord>[number] = {
   title: '置信',
   key: 'conf',
   width: 88,
-  render: (row) => h(
-    NTag,
-    { size: 'small', bordered: false, type: row.conf >= 0.7 ? 'warning' : 'default' },
-    { default: () => row.conf.toFixed(2) },
-  ),
+  render: (row) => {
+    // 契约表 `ma/insights` 里没有 `conf` 这一项。缺报时后端按 0.0 落 ask 档，但把"0.00"
+    // 直接画出来会被读成"MA 说这条不值"——那是把对端的沉默读成对端的否定。缺报就照实写。
+    const unreported = row.transport.conf_reported === false
+    return h(
+      NTag,
+      { size: 'small', bordered: false, type: unreported ? 'default' : row.conf >= 0.7 ? 'warning' : 'default' },
+      { default: () => (unreported ? '未上报' : row.conf.toFixed(2)) },
+    )
+  },
 }
 
 const irCol: DataTableColumns<InsightRecord>[number] = {
@@ -107,6 +112,18 @@ const timeCol = (title: string, key: 'received_at' | 'decided_at', width = 180) 
   ),
 } as DataTableColumns<InsightRecord>[number])
 
+/** 契约表里 AF 不消费、但批的人要看的依据：分类 / 当事人 / 房间 / 证据条数。 */
+function peerMeta(row: InsightRecord): string {
+  const t = row.transport
+  const parts: string[] = []
+  if (t.kind) parts.push(String(t.kind))
+  const persons = Array.isArray(t.persons) ? t.persons : []
+  if (persons.length) parts.push(`${persons.length} 人：${persons.slice(0, 3).join('、')}${persons.length > 3 ? '…' : ''}`)
+  if (t.room) parts.push(String(t.room))
+  if (typeof t.evidence_count === 'number') parts.push(`证据 ${t.evidence_count} 条`)
+  return parts.join(' · ')
+}
+
 const pendingColumns: DataTableColumns<InsightRecord> = [
   {
     title: '洞察内容',
@@ -115,6 +132,8 @@ const pendingColumns: DataTableColumns<InsightRecord> = [
     render: (row) => h('div', {}, [
       h('div', { style: 'font-weight:600' }, row.natural_language || '（空文本提案）'),
       h('code', { style: 'font-size:12px;color:#8b93a7' }, row.hypothesis_id),
+      // 多人同框是现实：当事人不在 summary 里时，这里就是唯一能看到"涉及谁"的地方
+      ...(peerMeta(row) ? [h('div', { style: 'font-size:12px;color:#8b93a7' }, peerMeta(row))] : []),
     ]),
   },
   {

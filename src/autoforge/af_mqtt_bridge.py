@@ -204,6 +204,62 @@ def _conf_of(payload: Mapping[str, Any]) -> float | None:
     return value
 
 
+#: 契约表 `ma/insights` 的载荷形状（裁定 20261002 Q3）：
+#: `{trace_id, ts, kind, persons[], room?, summary, evidence[], snapshot_url?}`——**没有 conf 这一项**。
+#: 所以"缺 conf"不能当拒收理由（否则 AF 会把每一条按契约发来的洞察丢掉，而注册表才是唯一真源）；
+#: 但"报了却报坏"（越界 / NaN / 非数）照旧拒收，且缺报必须记账成 `conf_reported=False`，
+#: 让批的人看见"MA 没给置信度"，而不是被一个凭空造的数安慰。
+def _conf_of_payload(payload: Mapping[str, Any]) -> tuple[float | None, bool]:
+    if "conf" not in payload and "confidence" not in payload:
+        return 0.0, False
+    return _conf_of(payload), True
+
+
+#: `transport` 记账的边界：载荷来自对端，不封顶就等于让 broker 决定我们的内存和面板宽度。
+TRANSPORT_TEXT_LIMIT = 120
+TRANSPORT_PERSON_LIMIT = 12
+TRANSPORT_EVIDENCE_PREVIEW = 3
+
+
+def _clip(value: Any, limit: int = TRANSPORT_TEXT_LIMIT) -> str:
+    return str(value)[:limit]
+
+
+def _transport_of(
+    payload: Mapping[str, Any],
+    *,
+    id_key: str,
+    conf_reported: bool,
+) -> dict[str, Any]:
+    """留住契约表 `ma/insights` 里 AF **不消费、但批的人要看**的那几项（有界）。
+
+    这些字段不进 IR、不参与任何部署判定，只随提案落盘：`kind` 是词表分类，`persons[]` 是
+    多人同框的当事人，`room`/`evidence` 是证据。`conf_reported` 记的是"MA 到底有没有报置信度"——
+    缺报时 AF 按 0.0 落 ask 档，但面板不许把"没报"显示成"报了 0.0"（那会把对端的沉默
+    读成对端的否定，也会让人以为这个数有来源）。
+    """
+    transport: dict[str, Any] = {"id_key": id_key, "conf_reported": conf_reported}
+    kind = payload.get("kind")
+    if kind is not None:
+        transport["kind"] = _clip(kind)
+    persons = payload.get("persons")
+    if isinstance(persons, (list, tuple)):
+        transport["persons"] = [_clip(p) for p in list(persons)[:TRANSPORT_PERSON_LIMIT]]
+    room = payload.get("room")
+    if room is not None:
+        transport["room"] = _clip(room)
+    evidence = payload.get("evidence")
+    if isinstance(evidence, (list, tuple)):
+        transport["evidence_count"] = len(evidence)
+        transport["evidence_preview"] = [_clip(e) for e in list(evidence)[:TRANSPORT_EVIDENCE_PREVIEW]]
+    ts = payload.get("ts")
+    if ts is not None:
+        transport["ts"] = _clip(ts)
+    if payload.get("snapshot_url") is not None:
+        transport["has_snapshot"] = True
+    return transport
+
+
 class AfMqttBridge:
     """把 AF 的终态事件发出去、把 MA 洞察收进来。client 由调用方注入（生产用 `make_client`）。"""
 
@@ -354,19 +410,33 @@ class AfMqttBridge:
         return {"handled": False, "reason": reason, "detail": detail}
 
     def ingest_insight(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        """洞察 → 候选 IR（有 intent 时经 `af_draft` 编译）→ 审批队列。永远只到 ask 档。"""
-        hypothesis_id = str(payload.get("hypothesis_id") or "").strip()
+        """洞察 → 候选 IR（有 intent 时经 `af_draft` 编译）→ 审批队列。永远只到 ask 档。
+
+        键名以**契约表**为准：`ma/insights` 发的是 `{trace_id, ts, kind, persons[], room?, summary,
+        evidence[], snapshot_url?}`。AF 早先自定的 `hypothesis_id` / `natural_language` 作为别名继续收
+        （MA 侧承诺"旧键保留到 DB/AF 迁完"），两个方向都能进来，用的是哪个键记在 `transport` 里。
+        """
+        hypothesis_id_raw = payload.get("hypothesis_id")
+        uses_legacy_id = hypothesis_id_raw is not None and str(hypothesis_id_raw).strip() != ""
+        hypothesis_id = str(hypothesis_id_raw or payload.get("trace_id") or "").strip()
         if not hypothesis_id:
-            return self._reject("missing_hypothesis_id")
-        natural_language = str(payload.get("natural_language") or payload.get("insight") or "").strip()
+            return self._reject("missing_insight_id")
+        natural_language = str(
+            payload.get("natural_language") or payload.get("insight") or payload.get("summary") or ""
+        ).strip()
         intent = payload.get("intent")
         if not natural_language and not isinstance(intent, Mapping):
             return self._reject("missing_natural_language_and_intent")
-        conf = _conf_of(payload)
+        conf, conf_reported = _conf_of_payload(payload)
         if conf is None:
-            return self._reject("conf_missing_or_out_of_range", str(payload.get("conf")))
+            return self._reject("conf_out_of_range", str(payload.get("conf") or payload.get("confidence")))
         if self.proposal_sink is None:
             return self._reject("no_proposal_sink_wired")
+        transport = _transport_of(
+            payload,
+            id_key="hypothesis_id" if uses_legacy_id else "trace_id",
+            conf_reported=conf_reported,
+        )
 
         capped = min(conf, INSIGHT_CONF_CAP)
         suggested_ir: dict[str, Any] | None = None
@@ -389,11 +459,13 @@ class AfMqttBridge:
             conf=capped,
             suggested_ir=suggested_ir,
             source="ma",
+            transport=transport,
         )
         return {
             "handled": True,
             "proposal_id": str(getattr(result, "proposal_id", "") or ""),
             "conf_submitted": capped,
+            "conf_reported": conf_reported,
             "had_ir": suggested_ir is not None,
         }
 

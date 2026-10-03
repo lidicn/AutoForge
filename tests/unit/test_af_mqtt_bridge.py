@@ -21,6 +21,9 @@ from autoforge.af_mqtt_bridge import (
     INSIGHTS_TOPIC,
     AfMqttBridge,
     BridgeUnavailable,
+    TRANSPORT_EVIDENCE_PREVIEW,
+    TRANSPORT_PERSON_LIMIT,
+    TRANSPORT_TEXT_LIMIT,
     attach,
     caps_payload,
     current_observers,
@@ -237,11 +240,14 @@ def test_insight_conf_is_capped_into_ask_band():
 
 
 @pytest.mark.parametrize("payload,reason", [
-    ({"natural_language": "缺了假设号", "conf": 0.9}, "missing_hypothesis_id"),
+    ({"natural_language": "缺了假设号", "conf": 0.9}, "missing_insight_id"),
+    ({"trace_id": "   ", "summary": "两边都是空串"}, "missing_insight_id"),
     ({"hypothesis_id": "h", "conf": 0.9}, "missing_natural_language_and_intent"),
-    ({"hypothesis_id": "h", "natural_language": "x"}, "conf_missing_or_out_of_range"),
-    ({"hypothesis_id": "h", "natural_language": "x", "conf": 1.7}, "conf_missing_or_out_of_range"),
-    ({"hypothesis_id": "h", "natural_language": "x", "conf": True}, "conf_missing_or_out_of_range"),
+    ({"hypothesis_id": "h", "natural_language": "x", "conf": 1.7}, "conf_out_of_range"),
+    ({"hypothesis_id": "h", "natural_language": "x", "conf": -0.1}, "conf_out_of_range"),
+    ({"hypothesis_id": "h", "natural_language": "x", "conf": True}, "conf_out_of_range"),
+    ({"hypothesis_id": "h", "natural_language": "x", "conf": "0.9"}, "conf_out_of_range"),
+    ({"trace_id": "t", "summary": "契约形状", "confidence": 2}, "conf_out_of_range"),
 ])
 def test_malformed_insight_is_rejected_not_invented(payload, reason):
     sink = RecordingSink()
@@ -250,6 +256,92 @@ def test_malformed_insight_is_rejected_not_invented(payload, reason):
     assert result["handled"] is False and result["reason"] == reason
     assert sink.calls == []
     assert bridge.counts["insights_rejected"] == 1
+
+
+#: 契约表 `ma/insights` 那一行的**逐字形状**（裁定 20261002 Q3）。AF 早年自造的键不在这里——
+#: 如果桥只认自家键，每一条按契约发来的洞察都会被丢掉，而且 broker 两侧都不报错（判例 1：静默归零）。
+CONTRACT_INSIGHT = {
+    "trace_id": "t-20261002-0001",
+    "ts": "2026-10-02T17:36:27",
+    "kind": "behavior.insight",
+    "persons": ["爸爸", "妈妈"],
+    "room": "客厅",
+    "summary": "两人每晚 21:40 一起在客厅开大灯",
+    "evidence": [{"at": "21:40", "entity": "light.living_room"}, {"at": "21:41", "entity": "media_player.tv"}],
+    "snapshot_url": "http://ma.internal/snap/1.jpg",
+}
+
+
+def _ingest(sink: RecordingSink, payload: dict) -> dict:
+    bridge = _bridge(proposal_sink=sink)
+    return bridge.handle_message(None, None, SimpleNamespace(
+        topic=INSIGHTS_TOPIC, payload=json.dumps(payload).encode()))
+
+
+def test_contract_shaped_insight_lands_instead_of_being_dropped():
+    """按契约表原样发来的洞察必须进审批队列，不是被"缺 hypothesis_id"拒掉。"""
+    sink = RecordingSink()
+    result = _ingest(sink, CONTRACT_INSIGHT)
+    assert result["handled"] is True, result
+    assert len(sink.calls) == 1
+    call = sink.calls[0]
+    assert call["hypothesis_id"] == "t-20261002-0001"      # 没给 hypothesis_id 时用 trace_id
+    assert call["natural_language"] == CONTRACT_INSIGHT["summary"]
+    assert call["source"] == "ma"
+    transport = call["transport"]
+    assert transport["id_key"] == "trace_id"
+    assert transport["kind"] == "behavior.insight"
+    assert transport["persons"] == ["爸爸", "妈妈"]         # 多人同框是现实，单数装不下
+    assert transport["room"] == "客厅"
+    assert transport["evidence_count"] == 2
+    assert transport["ts"] == "2026-10-02T17:36:27"        # 家庭墙钟 ISO，原样留住
+    assert transport["has_snapshot"] is True
+    assert "snapshot_url" not in transport                 # 留住"有截图"，不留住 URL
+
+
+def test_absent_conf_is_accounted_as_unreported_not_as_zero_confidence():
+    """契约里**没有 conf 这一项**。缺报要按 ask 档收（0.0），但必须记成"MA 没报"，
+    不能让批的人在面板上把对端的沉默读成对端的否定。"""
+    without = RecordingSink()
+    result = _ingest(without, CONTRACT_INSIGHT)
+    assert result["conf_reported"] is False
+    assert without.calls[0]["conf"] == 0.0
+    assert without.calls[0]["transport"]["conf_reported"] is False
+
+    with_conf = RecordingSink()
+    payload = {**CONTRACT_INSIGHT, "conf": 0.93}
+    result = _ingest(with_conf, payload)
+    assert result["conf_reported"] is True
+    assert with_conf.calls[0]["conf"] == INSIGHT_CONF_CAP  # 报了也照旧封顶
+    assert with_conf.calls[0]["transport"]["conf_reported"] is True
+
+
+def test_legacy_af_keys_remain_a_supported_alias():
+    """MA 承诺旧键保留到 DB/AF 迁完；两边都能进来，用的是哪个键记在 transport 里。"""
+    sink = RecordingSink()
+    result = _ingest(sink, {"hypothesis_id": "h-legacy", "natural_language": "天黑关廊灯", "conf": 0.4})
+    assert result["handled"] is True
+    assert sink.calls[0]["hypothesis_id"] == "h-legacy"
+    assert sink.calls[0]["transport"]["id_key"] == "hypothesis_id"
+
+
+def test_transport_accounting_is_bounded_against_a_loud_peer():
+    """载荷来自对端：persons/evidence/文本长度都有上界，不然一条消息就能撑爆落盘记录。"""
+    sink = RecordingSink()
+    payload = {
+        "trace_id": "t-fat",
+        "summary": "x",
+        "persons": [f"person-{i}" * 200 for i in range(500)],
+        "evidence": [{"n": i} for i in range(500)],
+        "room": "r" * 5000,
+    }
+    assert _ingest(sink, payload)["handled"] is True
+    transport = sink.calls[0]["transport"]
+    assert len(transport["persons"]) == TRANSPORT_PERSON_LIMIT
+    assert all(len(p) <= TRANSPORT_TEXT_LIMIT for p in transport["persons"])
+    assert transport["evidence_count"] == 500               # 计数不封顶，封顶的是预览
+    assert len(transport["evidence_preview"]) == TRANSPORT_EVIDENCE_PREVIEW
+    assert len(transport["room"]) <= TRANSPORT_TEXT_LIMIT
 
 
 def test_undecodable_payload_and_foreign_topics_are_dropped():
