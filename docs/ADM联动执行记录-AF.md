@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/ADM联动执行计划-AF.md`（DCD 出品，v2.5 联动落地版）
 > 记录人：AutoForge 开发
-> 核实基准：代码侧最新 commit = **`9c6deb9`**（最新三个代码侧提交都**只加测试**：`e6d442a` serve→build_app 的 readonly 接缝、`0722828` CLI 起桥的接线判据、`9c6deb9` `_make_runtime` 起桥的第三条接缝；生产代码一字未动，其前一个动生产面的提交是 `64ca83c`/`c14503d`）。§二/二之二…二之十三 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
+> 核实基准：代码侧最新 commit = **`fc2bba6`**（前三个提交里 `e6d442a`/`0722828`/`9c6deb9` **只加测试**，`fc2bba6` 加的是**一门新门禁** `scripts/check_states_fanout.py` + `gates.sh` 一节 + 它的反例测试；`src/` 生产代码一字未动，其前一个动生产面的提交是 `64ca83c`/`c14503d`）。§二/二之二…二之十四 各组读数各自当场跑出，非互相引用；跨批次重复的读数（全量 pytest、`gates.sh`）在对应小节里写明当次的解释器与通过/跳过数（铁律 #11）
 > 契约真源：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
 > 交叉裁定：`20260929-ADM三仓联动七问`、`20261001-AF-homesdk接入四问`、`20260930-AutoForge后续优化三项`、`20261001-DB目标模式与AF三题` §H、**`20261002-homesdk记账与AF-DB-DPP六件-裁定`**（本轮落地依据，§一 末）
 
@@ -20,9 +20,9 @@
 | 裁定 20261002 · AF 侧六件 | **①A ②A(部分) ③A ④A 已落地；StateProvider B 排队；合并窗后验收未做** | ②A 的 `instance_id` 删除时点 = AF v2.6，本轮不删；窗口后验收需真 broker，本机无 paho-mqtt 且禁 pip install |
 | 第 5 步 后续优化三项 | **①③④ 已交付；② 只落了半边** | ① 单写者租约降级只读、③ import-linter 分层两档、④ tick 线程自愈，逐条 file:line 见 §一；① 的**接缝判据**（serve 抢不到锁 ⇒ `build_app(readonly=True)`）本批补上，两次变异各取到红（§二之十三）；② af_persist 的「顺序追加」子句**未落**（裁定执行约束第 2 条要求「追加写 + 文件头部元信息」，现实现仍是整文件重写）⇒ 已提 DCD（§五 第 9 件），读数与不自主实现的三条理由见 §二之十二 |
 | 第七轮审计 | **finding 属实，已修** | 详见 `docs/audit/审计报告_第七轮_核实与修复.md`；第八轮尚未落 `docs/audit`（本回合实测目录内最新即第七轮，mtime `10-02 11:46`） |
-| 门禁肥化防护（计划外补刀） | **已交付** | `gates.sh` 计数棘轮 + `.gates-tally.txt`（上限 104），三条变异实测能红；AgentOps 模板同步去反引号缺陷 |
+| 门禁肥化防护（计划外补刀） | **已交付，本批又加一门** | `gates.sh` 计数棘轮 + `.gates-tally.txt`（上限 104），三条变异实测能红；AgentOps 模板同步去反引号缺陷。本批新增**状态源扇出门禁** `scripts/check_states_fanout.py`（换 `runtime.states` 必须四个消费方同步；HEAD 绿、两处变异红），并自带反例测试 `test_states_fanout_gate.py` 7 条——第一版实现自己是个假洞（对 HEAD 与对变异同时报绿），那一次形状也钉成用例（§二之十四） |
 | F4 ③ / F7 前端残留 | **已收口** | `/evidence` 生产态证据视图上线；真机下发的事件回放与撤销按钮端到端真点通（读数见 §一末） |
-| GitHub CI | **首次可读，且从"永久红"修到连续绿；读数路已成脚本** | 实测 run 1–27 `conclusion` 全为 `failure`（建仓以来一条没绿过），三个红因全在版本/判据层而非产品逻辑：pydantic-v2-only 的 `Field(max_length=)` 让 CI（pydantic 1.10.12）**0 条测试跑过**、undefined-name 门禁自己用了 3.12+ 的 `ast.TypeAlias`（CI 是 3.11）、真 vhass 的 skip 判据问"包能否 import"而非"插件注册了没"。三条各钉能变红的反例后，run 28 五作业全 `success`，CI 与本机通过/跳过数逐字相同（2621/51）。**run 31（守卫那次提交）五作业再次全 `completed/success`**，且 runner 侧给出安装步的实测读数 `fetch 主机读数：npmmirror=0 npmjs=87`。读数路径固化为 `scripts/gh_ci_status.py`（`runs`/`jobs`/`annotate`/`log`，纯标准库、只 GET、不打印凭证；`log` 先停 302 再无凭证取正文，免得把 token 带给日志存储域）。读数与残留见 §二之五、§二之八。**run 36（commit `3144879`，含架构门禁口径修复那批）五作业再次全 `completed/success`，runner 侧读到 `Baseline lock: 96 modules, 0 violations` 与 `Contracts: 1 kept, 0 broken`** ⇒ CI 架构门的覆盖面与本机同口径已是实测，不再是"已修 + 待复测"（§二之十一） |
+| GitHub CI | **首次可读，且从"永久红"修到连续绿；读数路已成脚本** | 实测 run 1–27 `conclusion` 全为 `failure`（建仓以来一条没绿过），三个红因全在版本/判据层而非产品逻辑：pydantic-v2-only 的 `Field(max_length=)` 让 CI（pydantic 1.10.12）**0 条测试跑过**、undefined-name 门禁自己用了 3.12+ 的 `ast.TypeAlias`（CI 是 3.11）、真 vhass 的 skip 判据问"包能否 import"而非"插件注册了没"。三条各钉能变红的反例后，run 28 五作业全 `success`，CI 与本机通过/跳过数逐字相同（2621/51）。**run 31（守卫那次提交）五作业再次全 `completed/success`**，且 runner 侧给出安装步的实测读数 `fetch 主机读数：npmmirror=0 npmjs=87`。读数路径固化为 `scripts/gh_ci_status.py`（`runs`/`jobs`/`annotate`/`log`，纯标准库、只 GET、不打印凭证；`log` 先停 302 再无凭证取正文，免得把 token 带给日志存储域）。读数与残留见 §二之五、§二之八。**run 36（commit `3144879`，含架构门禁口径修复那批）五作业再次全 `completed/success`，runner 侧读到 `Baseline lock: 96 modules, 0 violations` 与 `Contracts: 1 kept, 0 broken`** ⇒ CI 架构门的覆盖面与本机同口径已是实测，不再是"已修 + 待复测"（§二之十一）。**run 39（`daa3af7`）与 run 40（`cd5e1bc`）也已 `completed/success`**，本批新增门禁的 run 41（`1474a7f`）读数为 `in_progress`（记录写就时未定，稍后按 §二之五 的口径补读） |
 | DCD 20261002 §一（CI 锁文件源）| **裁定 (b) 已落地并已在 runner 上取到读数** | 只按原文写 `--registry=https://registry.npmjs.org` 经实测是**空操作**（fetch 87+87 行仍在 `registry.npmmirror.com`/`cdn.npmmirror.com`），必须配 `--replace-registry-host=always`；安装步另加"主机自证"守卫（CI 绿不能证明没吃镜像）。逐字节对账 137/137 `integrity` MATCH ⇒ 锁文件字节未动。§二之七 末尾"本机 npm 11.9.0 / runner 10.x，只有 push 之后才知道"的残留**已销账**（runner `npmmirror=0 npmjs=87`）。回执已投 DCD（含 §四 判例 2 的证据更正：`@types/node` tarball 两源逐字节相同、根目录差异不是重打包痕迹）。见 §二之七、§二之八 |
 | `ma/insights` **入向与契约表对账**（本批新抓） | **AF 侧已按契约收，跨仓三问已交 DCD** | 拿着裁定 Q3 之后的载荷行逐条对 AF 的 `ingest_insight()`：必填的 `hypothesis_id`/`natural_language`/`conf` **三项契约一个都不发** ⇒ 每一条按契约发来的洞察都被拒（判例 1 的静默归零，面换到 AF 入口）。改法：契约键优先 + 旧键别名、缺 `conf`（含 `{"conf": null}` 这种空占位）按 0.0 入 ask 档并记 `conf_reported=false`（坏报照旧拒、封顶 0.59 不动）、契约字段有界落 `transport` 并出 `/api/insights/pending`，面板对缺报显示「未上报」而不是 `0.00`。`conf`/稳定 id/`intent` 三处空缺 AF 不能自决 → §五 第 7 件。见 §二之八 |
 | UI 类型门禁（上一版登记的债） | **已收口（含下一批零 `any`）** | 15 条 `vue-tsc` 错误清零，`type-check` 改 `--force` 防缓存假绿，`ci.yml` 新增 `ui` 硬门 job；过程中抓到"两个按钮从未接线"与"mock 夹具少回两字段"两条真缺陷（§二之二）。同族第二批：API 层四处 `request<any>` 换成后端真形类型并逐键与在线响应对账，`grep request<any> ui/src` 已无匹配（§二之三） |
@@ -977,6 +977,82 @@ dry-live 那条顺带把 `store_root` 也钉住了（断言 `Path(calls[0]["stor
 
 ---
 
+## 二之十四、接缝盘点的首个产物：状态源扇出门禁（`fc2bba6`）
+
+§六 那条"接缝类判据没有系统性覆盖"里，最典型的一份不是某根线没测，而是**一段手抄的镜像**：
+`Runtime.__post_init__`（`af_runtime.py:55-74`）在构造期把 `states` 分别交给三个消费方——
+
+```
+self.instances = InstanceManager(self.states, …)     # :57
+self.executor  = NodeExecutor(…, states=self.states, …)  # :62-65
+self.scheduler = Scheduler(…, states=self.states, …)     # :66-74
+```
+
+但构造**之后**再换源是常态（真机要等 `HAStateProvider`、仿真要等 `seed_from_graph` 的钟），
+于是调用点必须手抄四行。现存六处：`af_cli.py:298-301 / 342-345 / 1036-1039`、
+`af_service.py:886-889 / 1348-1351 / 1693-1696`；构造期注入的两处（`af_service.py:881` hifi、
+`af_vhass/harness.py:165`）走 `states=` 形参，由 `__post_init__` 负责，不在此列。
+
+少抄哪一行都不报错、不崩，只让那一个消费方继续读旧状态源；`executor` 少抄就是 canary 漂移检测
+读一份空的 `InMemoryStateProvider`（第七轮审计那一族的静默版）。**六处调用点里删掉任意一行，全量 pytest 一条都不红**——
+这条判据放进 `gates.sh`，与主题白名单、包标记同族。
+
+### 实测：绿一次、红两次，外加"门自己坏了"也红一次
+
+```
+$ python scripts/check_states_fanout.py
+✓ 状态源扇出门禁干净（扫描 96 个文件，换状态源的 runtime 四个消费方都同步）   RC=0
+
+G1 af_cli.py:345 删掉 `runtime.executor.states = ha`   : RC=1
+   ✗ …:342：给 runtime `runtime` 换成 `ha` 只写了 ['instances.states','scheduler.states','states']，缺 ['executor.states']
+G2 af_cli.py:301 换成 `InMemoryStateProvider()`        : RC=1  两条 finding（provider 组缺 executor、另一组只剩一条）
+（两次变异都 `p.write_text(orig)` 还原，脚本自证 `restored identical: True`）
+```
+
+### 这一批最值得留下的不是判据，是那次假绿
+
+第一版实现把属性链的根名解析错了（`runtime.executor.states` 被解成 root=`executor`、path=`states`），
+后果不是报错而是**永远判绿**：对 HEAD 绿，对"删掉一行"的两次变异 `G1/G2` 也照样绿（RC=0）。
+是靠手敲变异脚本才发现的——`_attr_path` 少把根名放进 `parts`（`parts.append(cur.id)` 那行当时不存在）。
+修完后又发现按"根名"聚合会把 `_make_runtime` 里的两次独立换源（`provider` 与 `ha`）误报成"混用两份源"，
+判据因此改成按 **(根名, 递出去的那份状态源)** 分组。
+
+所以 `tests/unit/test_states_fanout_gate.py` 7 条里，`test_a_lone_top_level_states_assignment_is_flagged`
+钉的就是那次假绿的形状。它对 HEAD 绿，把 `parts.append(cur.id)` 删掉则 `3 failed`（RC=1）——
+门禁的反例测试必须先证明自己不会跟着一起瞎。两次"让门自己变瞎"的变异实测：
+
+```
+V1 删 parts.append(cur.id)（退回第一版缺陷）: RC=1  `3 failed, 4 passed`
+V2 missing 判据写死成 []                   : RC=1  `3 failed, 4 passed`
+（都还原并自证 `restored identical: True`）
+```
+
+### 顺手做的盘点：src 里"同一份值递进多条属性路径"的还有谁
+
+判据不该只钉自己踩到的那一处。用同一段 AST 扫 `src/autoforge/**/*.py`（按 (函数, 根名, 值的文本)
+聚合被赋过值的属性路径，列出命中 ≥3 条的组），全仓命中的**四路镜像只有状态源这一族**——
+其余命中都是 `self._attempt = 0` 这类构造期各自独立的字段初始化，不构成"少写一条会静默失真"的同族：
+
+```
+af_cli.py::_make_runtime   : runtime = ha / runtime = provider        （两组，四条齐）
+af_cli.py::_metrics_snapshot: runtime = states
+af_service.py::simulate_track / _build_sim_runtime / live_run         （各一组，四条齐）
+```
+
+⇒ 本门覆盖的是**全集**而非抽样；这一族的盘点到此结清。`af_watch` 的观察者装配、
+`af_service` 的 store/clock 注入仍属"参数递错"类（不是多路镜像类），见 §六。
+
+### 本批全链读数（HEAD `fc2bba6`，含扇出门禁）
+
+- `python -m pytest -q` → **RC=0**，`2649 passed, 51 skipped, 1 warning, 7 subtests passed in 82.87s`
+  （2642 → +7 扇出门禁反例测试；新文件 `tests/unit/test_states_fanout_gate.py` 分跑 `7 passed` RC=0）
+- `GATES_PYTHON=python bash gates.sh` → **RC=0**：AST 新增 0 / 存量 104、棘轮 104/104、
+  undefined-name src **96** + tests **154** 文件（本批新增 1 个测试文件）、主题白名单 7 处、
+  包标记 5 包 / 索引 96 个 `.py`、**状态源扇出 96 文件干净**、import 冒烟 0 违规
+- 生产代码：本批**只动 `gates.sh` 与新脚本**，`src/` 一个字节没改（六处手抄点原样保留，门只负责盯着它们）
+
+---
+
 ## 三、提交台账（HEAD 之前基线 `04e6c72`）
 
 | commit | 内容 |
@@ -1012,6 +1088,7 @@ dry-live 那条顺带把 `store_root` 也钉住了（断言 `Path(calls[0]["stor
 | 本批之十六（验收点按"点"复测 + ① 的接缝判据，`e6d442a`） | 新增 `tests/unit/test_af_cli_serve_lease.py` 两条：桩 `uvicorn`/`build_app`/联动桥，锁分别返回 `False`/`True` ⇒ `build_app` 收到的 `readonly` 为 `True`/`False`。两次变异各取到红（`readonly=False` ⇒ `:70 assert False is True` RC=1；`readonly=True` ⇒ `:81 assert True is False` RC=1），复原后 `2 passed` RC=0 且 `git diff -- src/autoforge/af_cli.py` 为空。文档侧：§一 第 5 步① 的行号按 HEAD 重取（`:1366/:1376/:357-362/:465/:473/:481/:545/:714/:735`，旧读数因 `a5c8aa9` 全部下移）；§一 第 0 步② 改记"9 例"实测量；§〇 第 3/4 步行补分跑读数（`31 passed`、`5 + 14 passed`）；新增 §二之十三。全链：`pytest -q` **2637 passed / 51 skipped RC=0**、`gates.sh` RC=0（AST 0 新增/存量 104、棘轮 104/104、undefined-name src 96 + tests **152**、主题 7、包标记 96、冒烟 0） |
 | 本批之十七（同族第二条接缝：CLI 起桥的接线判据，`0722828`） | 新增 `tests/unit/test_af_cli_linkage_wiring.py` 三条：桩 `start_from_env`/`attach` 判 kwargs 与落盘副作用 ⇒ `proposal_sink` 是 `PersistentInsightSink` 且**没有** `approve` 把手、一条 `submit()` 真落到 `{store_root}/insight_proposals/pending/*.json`、`version == PRESENCE_CAPS_VERSION`、`tools == [t[0] for t in af_mcp.TOOLS]`、`attach` 收到桥本体、env 未开启 ⇒ 返回 `None` 且**一次都不调** `start_from_env`。三次变异分别 `2 failed` / `1 failed` / `1 failed`（RC 均 1），脚本自证还原 `restored identical: True` + `git diff -- src/autoforge/af_cli.py` 空。全链：`pytest -q` **2640 passed / 51 skipped RC=0**、`gates.sh` RC=0（undefined-name tests **153** 文件）。§二之十三 加"同族第二条接缝"小节，§〇 第 1/2 步行补判据 |
 | 本批之十八（同族第三条接缝：`_make_runtime` 的起桥条件与 clock 归属，`9c6deb9`） | `tests/unit/test_af_cli_linkage_wiring.py` 扩两条（桩 `_start_linkage_bridge` 只记 kwargs）：dry-live 分支 ⇒ 恰好起一次桥、`clock is runtime.clock` 且 `isinstance(runtime.clock, SystemTimeSource)`、`store_root` 原样递到；仿真分支 ⇒ **一次都不起**。两次变异各 `1 failed, 4 passed`（RC=1：`clock=runtime.clock`→`clock=None`；仿真分支 `typer.echo("· 仿真底座：FakeHA…")` 前插一次起桥调用），脚本自证 `restored identical: True` + `git diff -- src/autoforge/af_cli.py` 空。文件分跑 `5 passed` RC=0。全链：`pytest -q` **2642 passed / 51 skipped RC=0（80.01s）**、`gates.sh` RC=0（undefined-name src 96 + tests **153**，本批未加文件故计数不变；AST 0/104、棘轮 104/104、主题 7、包标记 96、冒烟 0）。文档侧：§二之十三 加"同族第三条接缝"与本批读数小节，§〇 第 1 步行、§一 窗后验收行补判据并写明"接线判据 ≠ 抓包已发生"（该项仍 EXEMPT） |
+| 本批之十九（接缝盘点的首个产物：状态源扇出门禁，`fc2bba6`） | 新门禁 `scripts/check_states_fanout.py`（按 (根名, 递出去的状态源) 分组，要求 `states`/`instances.states`/`scheduler.states`/`executor.states` 四条齐）接进 `gates.sh` 并加 RC 聚合分支（`pkg` 之后、`ast` 之前），CI 的 `quality-gates` 作业自动继承为硬门。红/绿实测：HEAD 绿（96 文件 RC=0），`af_cli.py:345` 删一行 ⇒ RC=1 指名缺 `executor.states`，`af_cli.py:301` 换成不同源 ⇒ RC=1 两条 finding。反例测试 `tests/unit/test_states_fanout_gate.py` 7 条（含"根名解析错=假洞"那一形状）；两次"让门自己变瞎"的变异各 `3 failed`（RC=1）。全链：`pytest -q` **2649 passed / 51 skipped RC=0（82.87s）**、`gates.sh` RC=0（undefined-name tests **154**）。§二之十四 新篇（含那次假绿的自证），§〇 门禁行与 CI 行、§六 残留随之改写 |
 
 
 ## 四、审计侧
@@ -1048,7 +1125,7 @@ dry-live 那条顺带把 `store_root` 也钉住了（断言 `Path(calls[0]["stor
 - 洞察面板的**投递源仍是本机手投**：§二之四的两条提案是用 `PersistentInsightSink.submit()` 直接写进 dev store 的，走的是"落盘之后的那一段"。本批把**桥回调 → 落盘 → `/api/insights/pending`** 这一段用契约形状的假消息钉住了（`test_contract_shaped_insight_reaches_the_panel_with_its_accounting`，注入假 client、真桥、真队列、真 API），但**真 paho + 真 broker** 那一段仍未端到端（本机无 paho-mqtt 且禁 pip install），面板的空态文案因此把"桥未上线/没订到主题"列为四种成因之一，而不是当作已验证链路。
 - **契约表本身还欠三行改动，且都在 MA/DCD 手里**（§五 第 7 件）：`ma/insights` 的载荷行没有 `conf`、没有稳定的假设 id、也没有 IR 候选（AF 的 `intent`）。AF 已按可回退口径落地（别名 + 缺报记账），但只要契约行不改，MA 侧随时可能按自家形状发而 AF 无从判定"这条到底该不该有 conf"；面板上也因此会长期是「无 IR（不能批准）」。**这不是 AF 能单方面收口的残留**，登记以免被读成"入向已经全对齐"。
 - 第 5 步 ② 的「顺序追加」子句**未做**（不是漏，是不在裁定前擅自动存储格式）：af_persist 现为整文件原子重写，追加写会同时撞"不改格式头"与第五轮的有界化修法两面。校验和/坏文件跳过/原子替换三条已落，剩这一条等 DCD 定性（§五 第 9 件，判据与三条理由见 §二之十二）。
-- **接缝类判据只扫了三条，没有系统性覆盖**：补的三处（serve→`build_app` 的 `readonly`、CLI 起桥递出去的四样 kwargs、`_make_runtime` 的起桥条件与 clock 归属）同属"两端各自有测试、中间那根线没有"，靠的是顺着验收点手动追问"这根线谁在测"。L2↔L1 之间还有多少这种线（`af_watch` 的观察者装配、`af_service` 的 store/clock 注入、TOOLS→caps 之外有没有第二次工具名单映射）**未做清单化盘点**，也没有门禁能判红——这类缺口不会让任何东西变红，只会让该红的不红，与 §二之十一 同族。已扫的三条只覆盖 `af_cli` 的 serve/起桥/runtime 装配三面（`_make_runtime` 的 live/dry-live/sim 三分支现已有判据），其余分支与 `af_service`/`af_watch` 侧仍未盘。登记在此，避免被读成"接缝已系统扫过"。
+- **接缝类判据：多路镜像这一族已结清，参数递错那一族仍只扫了三条**：本批把"同一份值手抄进多条属性路径"这一族做成门禁（`scripts/check_states_fanout.py`，§二之十四 的 AST 盘点显示它覆盖的是 src 全集，不是抽样）。另补的三处判据属**参数递错**类（serve→`build_app` 的 `readonly`、CLI 起桥递出去的四样 kwargs、`_make_runtime` 的起桥条件与 clock 归属），靠的是顺着验收点手动追问"这根线谁在测"。同族里还剩 `af_watch` 的观察者装配、`af_service` 的 store/clock 注入、TOOLS→caps 之外有没有第二次工具名单映射**未做清单化盘点**，也没有对应门禁能判红——这类缺口不会让任何东西变红，只会让该红的不红，与 §二之十一 同族。已扫的三条只覆盖 `af_cli` 的 serve/起桥/runtime 装配三面（`_make_runtime` 的 live/dry-live/sim 三分支现已有判据），`af_service`/`af_watch` 侧仍未盘。登记在此，避免被读成"接缝已系统扫过"。
 - `BoundedCache` 基类收敛（第五轮遗留）与"实现间契约不一致"的**静态**门禁：本轮以契约测试覆盖，未做静态门禁。
 - 证据面板的 `evicted_automations` 只做"提示有自动化被挤出内存"，未做跨进程持久化——**注意这与 ④A 不是同一个问题**：④A 裁的是 MA 洞察提案队列（已持久化），证据档的进程内清零仍是遗留。
 - `SessionViewResponse` 的**应答成功分支**（本批已收口，见下方"已收口"与 §二之九）：原登记为 EXEMPT——`case04_ask_timeout` 带 seed + event 建会话后 `asks=0`（分支未走到挂起 ask），只实测到 404 失败面；顶层 9 键靠同族 `POST /sessions`/`GET /sessions/{sid}` 的同一 `_session_view` 坐实。
