@@ -338,6 +338,28 @@ def test_absent_conf_is_accounted_as_unreported_not_as_zero_confidence():
     assert with_conf.calls[0]["transport"]["conf_reported"] is True
 
 
+def test_explicit_null_conf_is_the_same_absence_as_a_missing_key():
+    """`{"conf": null}` 与根本不发 `conf` 是同一件事：MA 明说"没有这个数"。
+
+    把它当坏报拒收，等于让"用 null 占位"的实现把每一条洞察丢掉——还是判例 1 的静默归零，
+    只是这回动手的是 AF。同时 `conf` 为空时 `confidence` 别名要能顶上来（不是被 null 遮住）。
+    """
+    null_only = RecordingSink()
+    result = _ingest(null_only, {**CONTRACT_INSIGHT, "conf": None})
+    assert result["handled"] is True and result["conf_reported"] is False
+    assert null_only.calls[0]["conf"] == 0.0
+    assert null_only.calls[0]["transport"]["conf_reported"] is False
+
+    aliased = RecordingSink()
+    result = _ingest(aliased, {"trace_id": "t-alias", "summary": "x", "conf": None, "confidence": 0.8})
+    assert result["conf_reported"] is True
+    assert aliased.calls[0]["conf"] == INSIGHT_CONF_CAP      # 报了 0.8 就按 0.8 走，只是照样封顶
+
+    bad_type = RecordingSink()
+    assert _ingest(bad_type, {"trace_id": "t", "summary": "x", "conf": [0.5]})["reason"] == "conf_out_of_range"
+    assert bad_type.calls == []                               # 报了却不是数：坏报，不是缺报
+
+
 def test_legacy_af_keys_remain_a_supported_alias():
     """MA 承诺旧键保留到 DB/AF 迁完；两边都能进来，用的是哪个键记在 transport 里。"""
     sink = RecordingSink()

@@ -193,26 +193,32 @@ def _graph_doc(graph: Any) -> dict[str, Any] | None:
     return None
 
 
-def _conf_of(payload: Mapping[str, Any]) -> float | None:
-    """洞察置信度：必须是 [0,1] 实数。缺失/越界/NaN 都返回 None（= 拒收，不默认放行）。"""
-    raw = payload.get("conf", payload.get("confidence"))
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-        return None
-    value = float(raw)
-    if not 0.0 <= value <= 1.0:  # NaN 走不到这里：与自身比较为假
-        return None
-    return value
-
-
 #: 契约表 `ma/insights` 的载荷形状（裁定 20261002 Q3）：
 #: `{trace_id, ts, kind, persons[], room?, summary, evidence[], snapshot_url?}`——**没有 conf 这一项**。
 #: 所以"缺 conf"不能当拒收理由（否则 AF 会把每一条按契约发来的洞察丢掉，而注册表才是唯一真源）；
 #: 但"报了却报坏"（越界 / NaN / 非数）照旧拒收，且缺报必须记账成 `conf_reported=False`，
 #: 让批的人看见"MA 没给置信度"，而不是被一个凭空造的数安慰。
 def _conf_of_payload(payload: Mapping[str, Any]) -> tuple[float | None, bool]:
-    if "conf" not in payload and "confidence" not in payload:
+    """返回 `(置信度或 None, MA 有没有报这个数)`；None = 坏报，由调用方拒收。
+
+    两件事分开判：
+    - **缺报**：`conf`/`confidence` 两处都没有，或在场但是 `null`——MA 明确发 null 占位与根本不发
+      这个键是同一件事，把它当坏报拒收等于让一个占位符实现把每条洞察丢掉（还是判例 1 那个
+      静默归零，只是这回由 AF 自己动手）。按 `0.0` 收，必然落 ask 档。
+    - **坏报**：报了但不是 [0,1] 的实数（越界 / NaN / 字符串 / 布尔）——对端确实给了一个数却没给对，
+      照旧拒并留痕。`bool` 不算数：`True` 是 1 还是"是"，AF 不替对端解释。
+    """
+    raw = payload.get("conf")
+    if raw is None:
+        raw = payload.get("confidence")
+    if raw is None:
         return 0.0, False
-    return _conf_of(payload), True
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None, True
+    value = float(raw)
+    if not 0.0 <= value <= 1.0:  # NaN 与自身比较为假，走不到 return
+        return None, True
+    return value, True
 
 
 #: `transport` 记账的边界：载荷来自对端，不封顶就等于让 broker 决定我们的内存和面板宽度。
