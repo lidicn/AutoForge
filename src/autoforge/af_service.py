@@ -120,6 +120,23 @@ CONTRACT_VERSION = "1.0"
 API_VERSION = "0.1.0"
 MILESTONES = ("G1", "G2", "G3", "G4", "G5", "真机接线", "G6", "G7")
 
+#: 一次可回放的 events 条数上限（8e8c725 的 DoS 面收敛：整场仿真/回放在内存里跑）。
+#: 原先写成 pydantic v2 的 `Field(max_length=…)`——CI 解析到 pydantic **1.10**（被
+#: `pytest-homeassistant-custom-component` 拖下来）时，这个 kwarg 让 `import af_api`
+#: 当场 `ValueError: constraints set but not enforced`，9 个测试文件连收集都跑不起来。
+#: 判据后来挪到 HTTP 请求边界，但那**只装了 HTTP**：`af_sim`/`af_live_run` 这两个 MCP 工具
+#: 调的是同一批函数，上限装在入口上等于另一个入口没有。所以判据下移到本层，
+#: 三个回放入口（`simulate_track`/`create_session`/`live_run`）各自把一次关。
+MAX_REPLAY_EVENTS = 10000
+
+
+def _check_events_cap(events: Sequence[Mapping[str, Any]] | None) -> None:
+    if events is not None and len(events) > MAX_REPLAY_EVENTS:
+        raise ServiceError(
+            f"events 条数 {len(events)} 超过上限 {MAX_REPLAY_EVENTS}：整场回放/仿真在内存里跑",
+            status=422,
+        )
+
 
 # ─────────────────────────────────────────────────────────────────────
 # 工具
@@ -864,6 +881,7 @@ def simulate_track(
     """
     if track not in ("fake", "hifi"):
         raise ValueError(f"未知仿真轨：{track!r}（仅支持 'fake' / 'hifi'）")
+    _check_events_cap(events)
     graph = _load_ir(ir)
     if track == "hifi":
         from datetime import datetime, timezone
@@ -1451,6 +1469,7 @@ def create_session(
     events: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """创建会话：回放事件并停在挂起点/终态，返回含 `asks` 的状态视图。"""
+    _check_events_cap(events)
     # 第六轮审计 R6-F1：清理原本只挂在读路径上，纯"创建后不再读"的会话会一直常驻。
     # 创建前先清一次，硬上限才真的封得住峰值。
     _purge_sessions()
@@ -1652,6 +1671,10 @@ def live_run(
     这里仍是**可推进的虚拟钟**而非 `SystemTimeSource`：`_replay_live` 的 `advance_s` 要能前跳/回跳。
     需要确定性的调用方显式传 `clock=`。
     """
+    # 形状判据先于策略判据：超上限的请求在"live 未启用"的环境里也必须是 422，
+    # 否则同一个请求在两套环境里给出两个理由（HTTP 面此前就是靠先判拿到的 422）。
+    _check_events_cap(events)
+
     cfg = _live_config()
     if not cfg["enabled"]:
         raise ServiceError("真机下发未启用：服务端需设置 AUTOFORGE_LIVE_ENABLED=1", status=403)

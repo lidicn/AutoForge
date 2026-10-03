@@ -252,8 +252,11 @@ def _t_pair(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _t_live(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
+    # `store` 必须递进去：Tier-0 设备保护（`device_acl.json`）与实体健康视图都从 store 根目录读。
+    # 漏掉它，Agent 这条路径就能写入人类点同一个按钮会被拦下的设备——闸门只装了 HTTP 一面。
     return svc.live_run(
-        args["ir"], args["live_allow"], args.get("events"), bool(args.get("confirm", False))
+        args["ir"], args["live_allow"], args.get("events"), bool(args.get("confirm", False)),
+        store=store,
     )
 
 

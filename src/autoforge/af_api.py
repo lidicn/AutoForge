@@ -82,21 +82,8 @@ __all__ = ["build_app"]
 #: Bearer 令牌提取（auto_error=False：缺失时不报错，交由鉴权依赖决定）
 _bearer = HTTPBearer(auto_error=False)
 
-#: 一次可回放的 events 条数上限（8e8c725 的 DoS 面收敛：整场仿真/回放在内存里跑）。
-#: 原先写成 pydantic v2 的 `Field(max_length=…)`——CI 解析到 pydantic **1.10**（被
-#: `pytest-homeassistant-custom-component` 拖下来）时，这个 kwarg 让 `import af_api`
-#: 当场 `ValueError: constraints set but not enforced`，9 个测试文件连收集都跑不起来，
-#: pytest / contracts 两条作业自建仓以来一条没绿过。判据挪到请求边界上，两版 pydantic 行为一致。
-#: 同一判据覆盖 `/api/sim`、`/api/sessions`、`/api/live/run`——8e8c725 当年只装了 `/api/sim`。
-_MAX_REPLAY_EVENTS = 10000
-
-
-def _check_event_cap(events: list[dict[str, Any]] | None) -> None:
-    if events is not None and len(events) > _MAX_REPLAY_EVENTS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"events 条数 {len(events)} 超过上限 {_MAX_REPLAY_EVENTS}：整场回放/仿真在内存里跑",
-        )
+#: events 条数上限**不在本层定义**：判据在 `af_service.MAX_REPLAY_EVENTS`。
+#: 装在 HTTP 上等于 MCP 面（`af_live_run`/`af_sim`）没有——同一个内存回放风险，两个入口。
 
 
 
@@ -480,12 +467,9 @@ def build_app(
 
     @app.post("/api/sim", dependencies=[Depends(_readonly_guard)])
     def api_sim(body: SimBody) -> dict[str, Any]:
-        _check_event_cap(body.events)
-        try:
-            # v1.5.0：传 store → `_telemetry` 落遥测
-            return svc.simulate(body.ir, body.seed, body.events, store=store)
-        except IRValidationError as exc:
-            raise HTTPException(status_code=400, detail=f"IR 校验失败：{exc}") from exc
+        # v1.5.0：传 store → `_telemetry` 落遥测。events 上限由 `svc.simulate` 自己判，
+        # 经 `_svc` 映射成 422——判据与 MCP 面同源。
+        return _svc(svc.simulate, body.ir, body.seed, body.events, store=store)
 
     @app.get("/api/conf/{name}", dependencies=[Depends(_read)])
     def api_conf(name: str) -> dict[str, Any]:
@@ -679,7 +663,6 @@ def build_app(
 
     @app.post("/api/sessions", dependencies=[Depends(_write)])
     def api_session_create(body: SessionBody) -> dict[str, Any]:
-        _check_event_cap(body.events)
         return _svc(svc.create_session, body.ir, body.seed, body.events)
 
     @app.get("/api/sessions", dependencies=[Depends(_read)])
@@ -713,7 +696,8 @@ def build_app(
 
     @app.post("/api/live/run", dependencies=[Depends(_readonly_guard), Depends(_live)])
     def api_live_run(body: LiveRunBody) -> dict[str, Any]:
-        _check_event_cap(body.events)
+        # `clock` 刻意**不在** `LiveRunBody` 里：真机证据的时间轴由服务端决定，
+        # 请求体能递钟就等于让被审计的一方自己写审计时间。
         return _svc(
             svc.live_run, body.ir, body.live_allow, body.events, body.confirm, store, body.undo
         )
