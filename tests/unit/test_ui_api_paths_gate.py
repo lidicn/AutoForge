@@ -2,7 +2,10 @@
 
 背景：`ui/` 没有 vitest，UI 侧判据只有 `vue-tsc` + `vite build` + 真浏览器读数，前两条只证能编译。
 路径是手抄字符串，服务端改名/删路由/换方法，前端照编译照 build，只有真点一次才炸。本门钉三件事：
-A 路径在路由表里、B 方法一致、C **每个 `request(` 调用点都必须进射程**（解析不出就 exit 2）。
+A 路径在路由表里、B 方法一致、C **每个调用点都必须进射程**（解析不出就 exit 2）。
+另有射程面两件事（本批新增，因为它们最坏的表现恰恰是**绿行**）：调用点的**三张脸**
+（`request('GET', …)` / `req(…)` / `req(…, { method: 'X' })`）都要读得出，登记表上某棵树读不出
+任何调用点要红、盘上多出没登记的 UI 形状目录也要红。
 
 C 是这条门自己的前提：早期正则版把嵌套反引号
 `` `/graphs/${encodeURIComponent(name)}${version ? `?version=${version}` : ''}` `` 静默丢掉，
@@ -431,3 +434,165 @@ def test_green_line_prints_measured_numbers_not_adjectives(tmp_path, capsys):
     assert f"{totals['sites']} 处" in out and f"{totals['routes']} 条" in out
     for adjective in ("全部", "只在", "都在", "没有"):
         assert adjective not in out
+
+
+# ── 第二、三张调用脸：path-first 的 `req(path, init)`（两棵用户端树用的就是它）──
+
+USER_CLIENT_HEAD = '''
+async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await fetch(BASE + path, { ...init, headers })
+  return (await res.json()) as T
+}
+
+export const api = {
+  agents: () => req<{ ok: boolean }>('/user/agents'),
+  drop: (id: string) => req(`/user/agents/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  rename: (id: string, name: string) =>
+    req(`/user/agents/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+  bodyHasMethodWord: () => req('/user/agents', { body: JSON.stringify({ method: 'PUT' }) }),
+  writeFull: () => req<{ ok: boolean; user: User }>('/api/auth/login', { method: 'POST' }),
+}
+'''
+
+USER_API_HEAD = '''
+def build_app():
+    @app.get("/api/user/agents")
+    def agents():
+        return {}
+
+    @app.patch("/api/user/agents/{agent_id}")
+    def rename(agent_id):
+        return {}
+
+    @app.delete("/api/user/agents/{agent_id}")
+    def drop(agent_id):
+        return {}
+
+    @app.post("/api/auth/login")
+    def login():
+        return {}
+'''
+
+
+def _sites(tmp_path: pathlib.Path, client: str, api: str):
+    mod = _module()
+    ui, src = _roots(tmp_path, client, api)
+    sites, unparsed = mod.collect_ui_sites(ui)
+    return mod, sites, unparsed, src
+
+
+def test_path_first_shape_is_green(tmp_path):
+    """路径在前、动词在 `RequestInit` 里——只认 `request('GET', …)` 会把整棵树读成 0 个调用点。"""
+    assert _main(tmp_path, USER_CLIENT_HEAD, USER_API_HEAD) == 0
+
+
+def test_path_first_shape_actually_parses_all_five_sites(tmp_path):
+    mod, sites, unparsed, _ = _sites(tmp_path, USER_CLIENT_HEAD, USER_API_HEAD)
+    assert unparsed == []
+    assert len(sites) == 5
+
+
+def test_omitted_init_defaults_to_get_because_fetch_does(tmp_path):
+    mod, sites, _, _ = _sites(tmp_path, USER_CLIENT_HEAD, USER_API_HEAD)
+    assert [s["method"] for s in sites if s["paths"] == ["/user/agents"]] == ["GET", "GET"]
+
+
+def test_nested_method_key_in_body_is_not_the_verb(tmp_path):
+    """`{ body: JSON.stringify({ method: 'PUT' }) }` 里的 `method` 是载荷字段：认成动词就成 PUT，
+    而服务端只有 GET ⇒ 报 405 假红。只有**顶层**那个键算方法。"""
+    mod, sites, _, src = _sites(tmp_path, USER_CLIENT_HEAD, USER_API_HEAD)
+    routes, _exc, _me, _b = mod.collect_routes(src)
+    nested = [s for s in sites if s["line"] == USER_CLIENT_HEAD.splitlines().index(
+        "  bodyHasMethodWord: () => req('/user/agents', { body: JSON.stringify({ method: 'PUT' }) }),") + 1]
+    assert [(s["method"], s["paths"]) for s in nested] == [("GET", ["/user/agents"])]
+    assert mod.check(sites, routes) == []
+
+
+def test_path_already_carrying_api_prefix_is_not_prefixed_twice(tmp_path):
+    """`ui-user-mimo` 的 BASE 默认空串、路径写全 `/api/…`：再补一次前缀会变成 `/api/api/…` ⇒ 假红。"""
+    mod = _module()
+    assert mod._full("/api/auth/login") == "/api/auth/login"
+    assert mod._full("/user/agents") == "/api/user/agents"
+    assert mod._full("/api") == "/api"
+
+
+def test_generic_type_argument_with_semicolon_still_enters_scope(tmp_path):
+    """`req<{ ok: boolean; user: User }>(…)`：泛型里就有 `;`，见到 `;` 就退出会把整条调用
+    **静默丢掉**（连"解析不出"都不报）。这条只钉那一条：丢了的特征是它压根不在调用点清单里。"""
+    mod, sites, _, _ = _sites(tmp_path, USER_CLIENT_HEAD, USER_API_HEAD)
+    assert [s for s in sites if s["paths"] == ["/api/auth/login"]], \
+        "带 `;` 的泛型实参被静默跳过 ⇒ 射程漏了，而门会照印'干净'"
+
+
+def test_variable_init_is_a_scope_problem_not_a_get(tmp_path):
+    """`req(path, init)`：动词真读不出。当成 GET 过关＝把没验过的当已验证 ⇒ exit 2。"""
+    client = USER_CLIENT_HEAD.replace(
+        "  drop: (id: string) => req(`/user/agents/${encodeURIComponent(id)}`, { method: 'DELETE' }),",
+        "  drop: (id: string, init: RequestInit) => req(`/user/agents/${encodeURIComponent(id)}`, init),")
+    assert _main(tmp_path, client, USER_API_HEAD) == 2
+
+
+def test_conditional_method_value_is_a_scope_problem(tmp_path):
+    client = USER_CLIENT_HEAD.replace(
+        "{ method: 'PATCH', body: JSON.stringify({ name }) }",
+        "{ method: hard ? 'PATCH' : 'PUT', body: JSON.stringify({ name }) }")
+    assert _main(tmp_path, client, USER_API_HEAD) == 2
+
+
+# ── 射程面：树登记表 ─────────────────────────────────────────────
+
+
+def test_discover_names_unregistered_ui_shaped_dirs(tmp_path):
+    mod = _module()
+    for name, files in (("ui-x", {"package.json": "{}", "src/a.ts": ""}),
+                        ("ui-y", {"package.json": "{}"}),
+                        ("ui", {"package.json": "{}", "src/a.ts": ""}),
+                        ("docker", {"src/a.ts": ""})):
+        for rel, body in files.items():
+            p = tmp_path / name / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body, encoding="utf-8")
+    assert mod.discover_ui_trees(tmp_path) == ["ui-x"]   # 已登记的 ui 不算；缺 src/ 或缺 package.json 不算
+
+
+def test_registered_tree_yielding_no_site_is_scope_red(tmp_path):
+    """登记表里那棵树整个改名 ⇒ "0 个调用点"必须以红收场，不能算"这棵树没问题"。"""
+    mod = _module()
+    root = tmp_path / "ui-user" / "src"
+    (root / "api").mkdir(parents=True)
+    anchor = root / "api" / "client.ts"
+    anchor.write_text("export const api = 1\n", encoding="utf-8")
+    trees = [{"name": "ui-user", "face": "用户端 ForgeSight", "root": root, "anchor": anchor}]
+    errs = mod.anchor_errors(trees, [], [{"path": "/api/x"}], [])
+    assert any("ui-user" in e and "一个调用点" in e for e in errs), errs
+
+
+def test_moved_anchor_file_is_named_per_tree(tmp_path):
+    """两棵用户端树的 API 层文件名不同（`client.ts` / `http.ts`）⇒ 报错得说清是哪棵树塌了。"""
+    mod = _module()
+    root = tmp_path / "ui-user-mimo" / "src"
+    root.mkdir(parents=True)
+    trees = [{"name": "ui-user-mimo", "face": "用户端 ForgeSight 第二实现", "root": root,
+              "anchor": root / "api" / "http.ts"}]
+    errs = mod.anchor_errors(trees, [{"tree": "other"}], [{"path": "/api/x"}], [])
+    assert any("锚点文件不在盘上" in e and "第二实现" in e for e in errs), errs
+
+
+def test_unregistered_tree_goes_red_not_green(tmp_path):
+    mod = _module()
+    root = tmp_path / "ui" / "src"
+    (root / "api").mkdir(parents=True)
+    (root / "api" / "client.ts").write_text("export const api = 1\n", encoding="utf-8")
+    trees = [{"name": "ui", "face": "开发面板", "root": root, "anchor": root / "api" / "client.ts"}]
+    errs = mod.anchor_errors(trees, [{"tree": "ui"}], [{"path": "/api/x"}], [], ["ui-new"])
+    assert any("ui-new" in e and "UI_TREES" in e for e in errs), errs
+
+
+def test_all_trees_of_this_repo_are_in_scope_and_green(capsys):
+    """真仓 `--all` 的整条读数：三棵树各自的调用点数、跨树反向读数——这条就是本批的第一手读数。"""
+    mod = _module()
+    assert mod.main(["check_ui_api_paths.py", "--all"]) == 0
+    out = capsys.readouterr().out
+    for name in ("ui 50", "ui-user 16", "ui-user-mimo 19"):
+        assert name in out, out
+    assert "跨 3 棵树仍未被调用 16 条" in out, out

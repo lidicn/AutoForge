@@ -147,10 +147,14 @@ echo
 echo "══ UI↔路由契约门禁（前端调的路径+方法必须真在路由表里）══════"
 # §二之二十七 记账时盘出的形状：`ui/` 没有 vitest，UI 侧判据是 vue-tsc + vite build + 真浏览器读数，
 # 前两条只证"能编译"。路径是手抄字符串——服务端改名/删路由/GET 换 POST，前端照编译照 build，
-# 只有真点一次才 404/405。本门钉跨层契约：每个 `request(` 调用点的路径都要命中一条参与匹配的路由
+# 只有真点一次才 404/405。本门钉跨层契约：每个调用点的路径都要命中一条参与匹配的路由
 # （SPA 兜底 `GET /{full_path:path}` 与 `POST /mcp` 排除在外，否则任何错路径都被兜底接住＝假绿），
 # 且**每个**调用点都必须解析得出来——解析不出是 exit 2，不是"跳过这条"（早期正则版就是这样谎报 0）。
-"$PYTHON" "$REPO/scripts/check_ui_api_paths.py" "$REPO/ui/src" "$REPO/src"
+# `--all` 而不是只指 `ui/src`：本仓有三棵第一方 UI 树，另两棵（`ui-user`/`ui-user-mimo`，用户端
+# ForgeSight）调的正是 `/automations*`、`/user/agents*`、`/auth/*` 那一批。只扫开发面板那棵树时，
+# 反向读数把 33 条报成"UI 从未调"，其中 17 条其实是射程外的活接口（§二之三十一 盘点）。
+# 登记表外多出一棵形状像 UI 的树 ⇒ 同样 exit 2，不让"漏一棵树"以绿行过关。
+"$PYTHON" "$REPO/scripts/check_ui_api_paths.py" --all
 ui_api_rc=$?
 
 echo
