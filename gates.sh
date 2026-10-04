@@ -144,6 +144,16 @@ echo "══ 入向订阅门禁（只订 ma/insights，动态主题要先过禁�
 subs_rc=$?
 
 echo
+echo "══ UI↔路由契约门禁（前端调的路径+方法必须真在路由表里）══════"
+# §二之二十七 记账时盘出的形状：`ui/` 没有 vitest，UI 侧判据是 vue-tsc + vite build + 真浏览器读数，
+# 前两条只证"能编译"。路径是手抄字符串——服务端改名/删路由/GET 换 POST，前端照编译照 build，
+# 只有真点一次才 404/405。本门钉跨层契约：每个 `request(` 调用点的路径都要命中一条参与匹配的路由
+# （SPA 兜底 `GET /{full_path:path}` 与 `POST /mcp` 排除在外，否则任何错路径都被兜底接住＝假绿），
+# 且**每个**调用点都必须解析得出来——解析不出是 exit 2，不是"跳过这条"（早期正则版就是这样谎报 0）。
+"$PYTHON" "$REPO/scripts/check_ui_api_paths.py" "$REPO/ui/src" "$REPO/src"
+ui_api_rc=$?
+
+echo
 echo "══ 联动桥依赖门禁（paho：声明处 / 交付面 / CI 面 三面一致）══════"
 # §二之二十六 盘出：paho 在 AF 整条依赖链里**一处声明都没有**——homesdk 把它放在自家 `[mqtt]` extra
 # （"装它是对调用方的要求"），两个镜像装的又是裸 wheel，AF 的 `.[api,ha]`/`.[dev]` 也不含它。开发机
@@ -218,6 +228,15 @@ fi
 if [ $subs_rc -ne 0 ]; then
   echo "结论：入向订阅门禁红（exit=$subs_rc）。AF 的耳朵只该有一只：订阅口只在 \`af_mqtt_bridge\` 里、动态主题要在同一函数体内先过 \`FORBIDDEN_SUBSCRIPTIONS\` 判定、收件箱族不许写死成订阅实参（契约表 §1.3 护栏 / 计划 第 1 步 ④）。确实要开新入向主题先在 ADM 主题契约表登记，破例就地写 \`# mqtt-subscriptions: exempt(理由)\`。"
   exit $subs_rc
+fi
+
+if [ $ui_api_rc -eq 2 ]; then
+  echo "结论：UI↔路由契约门禁读不到锚点，或有调用点解析不出（exit=$ui_api_rc）。三种情形：\`ui/src/api/client.ts\` 不在预期位置、\`src/\` 下扫不到参与匹配的路由、某个 \`request(…)\` 的路径/方法静态读不出来（变量拼路径、引号不闭合、认不出的动词）。前两种是射程塌了，第三种是这条调用点**从没被看过**——都把门变成『没有发现』而不是『没有问题』。改成静态可读的写法，或就地写 \`# ui-api: exempt(理由)\`。"
+  exit $ui_api_rc
+fi
+if [ $ui_api_rc -ne 0 ]; then
+  echo "结论：UI↔路由契约门禁红（exit=$ui_api_rc）。前端每抄一条路径都得能在 \`af_api.py\` 的路由表里落到一条真路由上，方法也要对得上：服务端改名/删路由/换方法时，vue-tsc 与 vite build 都照样绿，只有用户点一次才 404/405。确实要调路由表外的口子（外链、代理）就地写 \`# ui-api: exempt(理由)\`。"
+  exit $ui_api_rc
 fi
 
 if [ $dep_rc -eq 2 ]; then
