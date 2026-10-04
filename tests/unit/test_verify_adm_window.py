@@ -313,9 +313,15 @@ def test_uses_the_mechanism_layer_for_broker_config():
 
 
 def test__collect_maps_missing_env_to_unavailable(monkeypatch):
-    """机制层的 `MissingEnv` 在脚本里必须转成 UNAVAILABLE 语义，而不是冒成 traceback。"""
+    """机制层的 `MissingEnv` 在脚本里必须转成 UNAVAILABLE 语义，而不是冒成 traceback。
+
+    `paho_available()` 一并钉成 `True`：不钉的话，这条断言的结论取决于跑它的那台机器
+    装没装 paho（本机装了 ⇒ 走到 MissingEnv 分支；没装 ⇒ 更早从 paho 分支抛出，
+    消息里既没有 `MQTT_HOST` 也没有 `MissingEnv`）＝同一条用例两种机器两种脸色。
+    """
     mod = _module()
     from homesdk.config import MissingEnv
+    monkeypatch.setattr("homesdk.mqtt.paho_available", lambda: True)
     monkeypatch.setattr("homesdk.mqtt.broker_settings",
                         lambda *a, **k: (_ for _ in ()).throw(MissingEnv("no host")))
     try:
@@ -324,3 +330,18 @@ def test__collect_maps_missing_env_to_unavailable(monkeypatch):
         assert "MQTT_HOST" in str(exc) or "MissingEnv" in str(exc)
     else:
         raise AssertionError("缺 MQTT_HOST 时应抛 MqttEnvMissing，而不是继续往下连")
+
+
+def test__collect_maps_absent_paho_to_unavailable(monkeypatch):
+    """没装 paho 也是 UNAVAILABLE（环境缺项），不能冒成 traceback、更不能判 FAIL。
+
+    反向钉成 `False`，与上一条合成一对：两条用例各自只钉一个缺项，结论与宿主无关。
+    """
+    mod = _module()
+    monkeypatch.setattr("homesdk.mqtt.paho_available", lambda: False)
+    try:
+        mod._collect("af/automation/fired", 1)
+    except mod.MqttEnvMissing as exc:
+        assert "paho" in str(exc)
+    else:
+        raise AssertionError("没有 paho 时应抛 MqttEnvMissing，而不是去连 broker")

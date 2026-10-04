@@ -10,7 +10,7 @@
 
 连接与凭据一律交给机制层 `homesdk.mqtt`：缺 `MQTT_HOST` 即抛、缺凭据即抛、不匿名回退。
 构造期不联网——`AfMqttBridge` 接受任何鸭子类型 client，所以门禁在没有 broker、
-甚至没有 paho 的机器上也能真跑（本机就没有 paho，见 §"paho 缺席是可观测的"）。
+甚至没有 paho 的机器上也能真跑（`homesdk.mqtt` 对 paho 是惰性探测，导入本模块不要求它）。
 """
 
 from __future__ import annotations

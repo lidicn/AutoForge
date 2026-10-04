@@ -19,13 +19,19 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY examples ./examples
-# WO-AF-004 打回 5：homesdk 0.1.1 烘进镜像，文件名钉死（不通配，避免多 wheel 静默装错）
+# 窗后验收与门禁脚本随镜像走：`docker compose exec autoforge python scripts/verify_adm_window.py`
+# 是停机窗当天的验收入口，它必须和被测服务在同一台机器上可执行。
+COPY scripts ./scripts
+# WO-AF-004 打回 5：homesdk 0.3.1 烘进镜像，文件名钉死（不通配，避免多 wheel 静默装错）
 COPY docker/homesdk/homesdk-0.3.1-py3-none-any.whl /tmp/homesdk/
 RUN pip install --no-cache-dir /tmp/homesdk/homesdk-0.3.1-py3-none-any.whl
 
 # v1.6.0-a：同时装 ha extra（websockets），启用 HA websocket 四注册表；
 # 未安装时目录会自动降级（device_id/integration/area 为空），核心能力不受损。
-RUN pip install --no-cache-dir -e ".[api,ha]"
+# mqtt extra（paho-mqtt）：homesdk 只把 paho 放在它自家的 [mqtt] extra 里，裸 wheel 不带它
+# ⇒ 不装则 `AUTOFORGE_MQTT=1` 时 serve 直接抛 `MqttUnavailable`，联动环在生产面根本起不来，
+# 而开发机因手动装过 paho 一切正常。三面一致由 scripts/check_mqtt_runtime_dep.py 钉住。
+RUN pip install --no-cache-dir -e ".[api,ha,mqtt]"
 
 # P1-21 修复：非 root 用户运行，防止容器内 RCE 持久化到宿主
 # uid=1000/gid=1001 匹配 NAS 宿主 lidicn:Users，确保挂载的 /data  store 目录可写

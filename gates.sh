@@ -144,6 +144,18 @@ echo "══ 入向订阅门禁（只订 ma/insights，动态主题要先过禁�
 subs_rc=$?
 
 echo
+echo "══ 联动桥依赖门禁（paho：声明处 / 交付面 / CI 面 三面一致）══════"
+# §二之二十六 盘出：paho 在 AF 整条依赖链里**一处声明都没有**——homesdk 把它放在自家 `[mqtt]` extra
+# （"装它是对调用方的要求"），两个镜像装的又是裸 wheel，AF 的 `.[api,ha]`/`.[dev]` 也不含它。开发机
+# 一切正常，只因那份解释器手动装过 paho。后果不是"少一个用例"而是镜像里桥原理上连不上：
+# `AUTOFORGE_MQTT=1` ⇒ serve 抛 `MqttUnavailable` 拒绝启动（还是发生在停机窗里）；不开 ⇒ 计划
+# 第 1/2 步的验收（`status=online`、抓到一条 fired）永远取不到数，而两千多条测试全绿
+# （桥的测试用 duck-typed client，压根不 import paho ⇒ §二之二十二 那一族的依赖版）。
+# 依赖声明的形状静态可判 ⇒ 进门禁，不靠"下次记得装"。
+"$PYTHON" "$REPO/scripts/check_mqtt_runtime_dep.py" "$REPO"
+dep_rc=$?
+
+echo
 echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）════════════════════"
 # 单跑冒烟：只走 `import` 子进程，慢但一次性看清。
 # 注意：这条在开发机上的红多半是「依赖没装齐 / 本地副本不完整」，
@@ -206,6 +218,15 @@ fi
 if [ $subs_rc -ne 0 ]; then
   echo "结论：入向订阅门禁红（exit=$subs_rc）。AF 的耳朵只该有一只：订阅口只在 \`af_mqtt_bridge\` 里、动态主题要在同一函数体内先过 \`FORBIDDEN_SUBSCRIPTIONS\` 判定、收件箱族不许写死成订阅实参（契约表 §1.3 护栏 / 计划 第 1 步 ④）。确实要开新入向主题先在 ADM 主题契约表登记，破例就地写 \`# mqtt-subscriptions: exempt(理由)\`。"
   exit $subs_rc
+fi
+
+if [ $dep_rc -eq 2 ]; then
+  echo "结论：联动桥依赖门禁读不到锚点（exit=$dep_rc）。pyproject、桥、两份 Dockerfile、工作流任一处不在预期位置，或桥里已经找不到 \`from homesdk import mqtt\`——射程前提变了，本门此刻无从判定，报『干净』就是假绿；桥若真被删/换机制层入口，要**当场决定本门去留**，不能让它静默全绿。"
+  exit $dep_rc
+fi
+if [ $dep_rc -ne 0 ]; then
+  echo "结论：联动桥依赖门禁红（exit=$dep_rc）。paho-mqtt 要**声明在一处、装到三个面**（交付面 \`docker/Dockerfile.api\`、CI 面 \`docker/Dockerfile.test\` 与 \`.github/workflows/ci.yml\`）：只在本机装过不算修。镜像里没它 ⇒ 窗内开 \`AUTOFORGE_MQTT=1\` 时 serve 抛 \`MqttUnavailable\` 拒绝启动，不开 ⇒ 桥永远不上线而两千多条测试照绿（它们用 duck-typed client，不碰真库）。"
+  exit $dep_rc
 fi
 
 if [ $ast_rc -ne 0 ]; then

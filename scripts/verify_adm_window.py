@@ -28,7 +28,9 @@
 早期草稿用过自造的 `AF_MQTT_*` 环境变量名（第二真源）和外部 `mosquitto_sub` 的 `-W`/`-c` 两个选项
 （本机没有该二进制 ⇒ 选项形状无从实测），两处都已纠正并记在 §二之二十五。
 
-纯标准库 + `docker` 命令 + 已在依赖里的 paho（经 `homesdk.mqtt` 取）。
+纯标准库 + `docker` 命令 + paho（经 `homesdk.mqtt` 取）。paho 声明在 `pyproject.toml` 的 `[mqtt]`
+extra 里，交付面/CI 面是否真装到由 `scripts/check_mqtt_runtime_dep.py` 静态钉住（§二之二十六）——
+本脚本跑在窗内那台机器上，缺了它这两项只能判 UNAVAILABLE。
 """
 from __future__ import annotations
 
