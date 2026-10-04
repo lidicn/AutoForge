@@ -20,6 +20,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import tempfile
 import threading
 import time
 import secrets
@@ -32,6 +33,82 @@ from .af_secrets import load_secret
 
 #: 端点 scope 三档
 SCOPES = ("read", "write", "live")
+
+
+def _longcode_ttl_days() -> float:
+    """长期码的绝对上限（天）。DCD 裁定 20261004 §一 Q1=A：默认 180，`0` = 显式关。
+
+    读在调用时刻而非 import 时刻，测试与部署都能改而不必重导模块。
+    解析不了的字符串回落默认值（配错键不该把上限悄悄关掉）；非正数按"关"处理，
+    因为 `0` 是裁定给的显式关，负数只是同一意思的另一种写法。
+    """
+    raw = (os.getenv("AUTOFORGE_AUTH_LONGCODE_TTL_DAYS") or "").strip()
+    if not raw:
+        return LONGCODE_TTL_DAYS_DEFAULT
+    try:
+        days = float(raw)
+    except ValueError:
+        return LONGCODE_TTL_DAYS_DEFAULT
+    return days if days > 0 else 0.0
+
+
+#: 长期码绝对上限的默认天数（`AUTOFORGE_AUTH_LONGCODE_TTL_DAYS` 未设时生效）。
+LONGCODE_TTL_DAYS_DEFAULT = 180.0
+
+
+def _longcode_expires_at(rec: dict[str, Any]) -> float | None:
+    """该码的到期时刻（epoch 秒），`None` = 不过期。
+
+    记 `expires_at` 的码按记录走；长期码若记的是 `None`（这条裁定之前落盘的老码），
+    按"生成时刻 + 上限"补出来——不迁移数据也能让老码有界，且 `list()` 与 `validate()`
+    读到的到期点是同一个，管理面不会显示"永不"而服务面却判它过期。
+    """
+    stored = rec.get("expires_at")
+    if stored is not None:
+        return float(stored)
+    if rec.get("kind") != "long":
+        return None
+    ttl_days = _longcode_ttl_days()
+    if ttl_days <= 0:
+        return None
+    return float(rec.get("created_at", 0.0)) + ttl_days * 86400
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """授权面的三个落盘文件都必须整份换：本模块在 L0，`af_store.atomic_write_text` 在 L1，
+    向上依赖会被分层门禁判红，所以按 `af_store._atomic_write` 的同一形状自带一份
+    （随机 tmp + fsync + replace + 尽力目录 fsync）。
+
+    为什么这一族非走不可：`_load_*` 把解析失败一律吞成"当没有这份文件"。半截 JSON 因此
+    不是"读回上一版"而是**读回空**——撤销黑名单读回空 = 已撤销的令牌重新有效（fail-open），
+    授权码读回空 = owner 的长期码整店消失。写侧不给原子性，崩溃一次就足以造成。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        try:
+            os.chmod(tmp_path, 0o600)
+        except OSError:
+            pass
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+    try:
+        dir_fd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError:
+        pass
 
 
 class RateLimitExceeded(Exception):
@@ -67,6 +144,8 @@ class TokenRegistry:
     ) -> None:
         self._tokens: dict[str, TokenInfo] = {}
         self._revoked: set[str] = set()
+        #: 撤销黑名单文件在但读不出来 ⇒ 置位并保持，直到进程重启（见 `authenticate`）。
+        self._revoked_poisoned = False
         self._revoked_path = Path(revoked_path) if revoked_path else None
         self._issued_path = Path(issued_path) if issued_path else None
         self._lock = threading.Lock()
@@ -148,11 +227,16 @@ class TokenRegistry:
 
     # ── 撤销（jti 黑名单）──
     def _load_revoked_file(self) -> None:
+        self._revoked_poisoned = False
         if not self._revoked_path or not self._revoked_path.is_file():
             return
         try:
             data = json.loads(self._revoked_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            # 撤销黑名单读不出来 ≠ 名单为空。此处若按"空名单"继续跑，被撤销过的令牌
+            # 会全部复活（fail-open）。置位后 `authenticate()` 对任何令牌都返回 None，
+            # 运维把文件修好（或删掉重建）即恢复。
+            self._revoked_poisoned = True
             return
         if isinstance(data, list):
             self._revoked.update(str(t) for t in data)
@@ -160,9 +244,9 @@ class TokenRegistry:
     def _persist_revoked(self) -> None:
         if not self._revoked_path:
             return
-        self._revoked_path.parent.mkdir(parents=True, exist_ok=True)
-        self._revoked_path.write_text(
-            json.dumps(sorted(self._revoked), ensure_ascii=False, indent=2), encoding="utf-8"
+        _atomic_write_text(
+            self._revoked_path,
+            json.dumps(sorted(self._revoked), ensure_ascii=False, indent=2),
         )
 
     @property
@@ -175,8 +259,13 @@ class TokenRegistry:
 
         v1.4.0 附（B §2.8）：令牌**已过期**抛 `TokenExpired`（由 af_api 转 403），
         与「未知令牌」（None）区分。
+
+        撤销黑名单文件存在却解析不出来时（`_revoked_poisoned`）**一律拒绝**：这时无法
+        证明 handed token 不在名单里，按"名单为空"放行等于把撤销当作没发生过。
         """
         if not raw_token:
+            return None
+        if self._revoked_poisoned:
             return None
         with self._lock:
             # P0-9 修复：恒定时间比较，防止时序攻击推断有效令牌
@@ -285,8 +374,7 @@ class TokenRegistry:
             except (OSError, ValueError):
                 data = {}
         data[token] = {"subject": subject, "scopes": scopes}
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2))
 
     def _rewrite_issued(self, subject: str, new_name: str | None = None, drop: bool = False) -> None:
         if not self._issued_path or not Path(self._issued_path).is_file():
@@ -305,8 +393,9 @@ class TokenRegistry:
                     meta["subject"] = new_name
                     changed = True
         if changed:
-            Path(self._issued_path).write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            _atomic_write_text(
+                Path(self._issued_path),
+                json.dumps(data, ensure_ascii=False, indent=2),
             )
 
 
@@ -362,10 +451,9 @@ class PairCodeStore:
                     self._codes[c["code"]] = c
 
     def _persist(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(
+        _atomic_write_text(
+            self._path,
             json.dumps(list(self._codes.values()), ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
 
     def create(self, agent_name_hint: str, ttl_s: int = 300) -> PairCode:
@@ -430,7 +518,7 @@ class AuthCode:
     code: str
     kind: str  # "long" | "short"
     created_at: float
-    expires_at: float | None  # None = 长期（可撤销）
+    expires_at: float | None  # None = 未记到期；长期码另按绝对上限补出（见 `list`/`validate`）
     revoked: bool = False
     consumed: bool = False
     failed_attempts: int = 0
@@ -440,7 +528,8 @@ class AuthCode:
 class AuthCodeStore:
     """部署授权码存储：落盘 `.auth/auth_codes.json`。
 
-    长期码（kind="long"，expires_at=None，可撤销）与短期码（kind="short"，ttl 5–30 分钟）。
+    长期码（kind="long"，可撤销，另有 `AUTOFORGE_AUTH_LONGCODE_TTL_DAYS` 的绝对上限，
+    默认 180 天、`0` 为显式关）与短期码（kind="short"，ttl 5–30 分钟）。
     agent 部署（af_save）持有效码走路径 A 直部署，否则路径 B 入待批队列。
     """
 
@@ -466,10 +555,9 @@ class AuthCodeStore:
                     self._codes[c["code"]] = c
 
     def _persist(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(
+        _atomic_write_text(
+            self._path,
             json.dumps(list(self._codes.values()), ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
 
     #: 失败计数阈值：超过后软锁定 LOCKOUT_S 秒
@@ -483,7 +571,14 @@ class AuthCodeStore:
 
     def create(self, kind: str, ttl_minutes: int | None = None) -> AuthCode:
         now = time.time()
-        expires_at = None if kind == "long" else now + (ttl_minutes or 5) * 60
+        if kind == "long":
+            # DCD 裁定 20261004 §一 Q1=A：长期码保留"长期"语义，但必须带可配绝对上限
+            # （默认 180 天，`AUTOFORGE_AUTH_LONGCODE_TTL_DAYS=0` 显式关）。
+            # 无限寿命把"枚举到一个还活着的码"的收益钉在未重启的窗口上；上限是给它的兜底。
+            ttl_days = _longcode_ttl_days()
+            expires_at = now + ttl_days * 86400 if ttl_days > 0 else None
+        else:
+            expires_at = now + (ttl_minutes or 5) * 60
         rec = {
             "code": _rand6(),
             "kind": kind,
@@ -500,21 +595,33 @@ class AuthCodeStore:
         return AuthCode(**rec)
 
     def list(self) -> list[dict[str, Any]]:
-        """返回全部授权码摘要（含明文 code，单 owner 下仅供 owner 查看管理）。"""
+        """返回全部授权码摘要（含明文 code，单 owner 下仅供 owner 查看管理）。
+
+        `age_s`（距生成多久）与按绝对上限补出的 `expires_at` 是 DCD 裁定 20261004 §一 Q1
+        要的两项：owner 面必须看得见"这枚长期码还活多久"，否则 180 天上限只是后台数字。
+        明文 code 的射程（F-3：收紧到 write 面 + owner/非 owner 拆分）另批处理。
+        """
+        now = time.time()
         with self._lock:
-            return [
-                {
-                    "code": c["code"],
-                    "kind": c["kind"],
-                    "created_at": c["created_at"],
-                    "expires_at": c.get("expires_at"),
-                    "revoked": c.get("revoked", False),
-                    "consumed": c.get("consumed", False),
-                    "failed_attempts": c.get("failed_attempts", 0),
-                    "locked_until": c.get("locked_until"),
-                }
-                for c in self._codes.values()
-            ]
+            out: list[dict[str, Any]] = []
+            for c in self._codes.values():
+                exp = _longcode_expires_at(c)
+                out.append(
+                    {
+                        "code": c["code"],
+                        "kind": c["kind"],
+                        "created_at": c["created_at"],
+                        "expires_at": c.get("expires_at"),
+                        "age_s": round(now - float(c.get("created_at", now)), 1),
+                        "expires_at_effective": exp,
+                        "expires_in_s": round(exp - now, 1) if exp is not None else None,
+                        "revoked": c.get("revoked", False),
+                        "consumed": c.get("consumed", False),
+                        "failed_attempts": c.get("failed_attempts", 0),
+                        "locked_until": c.get("locked_until"),
+                    }
+                )
+            return out
 
     def revoke(self, code: str) -> bool:
         with self._lock:
@@ -547,7 +654,7 @@ class AuthCodeStore:
             locked_until = rec.get("locked_until")
             if locked_until is not None and time.time() < locked_until:
                 return False
-            exp = rec.get("expires_at")
+            exp = _longcode_expires_at(rec)
             if exp is not None and time.time() > exp:
                 return False
             return True

@@ -5,7 +5,10 @@ AutoForge（AF）时所依赖的 ASK 通道 schema 冻结下来，进 CI 防漂�
 
 涉及的端点（代码事实见 `src/autoforge/af_api.py`）：
 - `GET  /api/asks/pending` ：watch 进程写出的 `pending_asks.json` sidecar，DB 每 5s 轮询发现
-  挂起 ask。**无 `_read` 依赖**（设计上可供 DB 免令牌发现）。证据 `af_api.api_asks_pending`。
+  挂起 ask。**挂 `Depends(_read)`**（DCD 裁定 20261004 §一 F-1：sidecar 里有 ask 的 `prompt`
+  与 `room`，免令牌可读等于把家人问过的话摊在 LAN 上）。证据 `af_api.api_asks_pending`。
+  裁定同一段的前提是"DB 侧持 write 域令牌（`autoforge_api_token`），write 域含 read——DB 侧零改动"，
+  所以本文件按 read / write-only 两种令牌都断言 200；蕴含表见 `af_api._SCOPE_SATISFIED_BY`。
 - `POST /api/asks/answer`  ：把人类答案写入 `answer_inbox/`，由 watch ticker 注回 runtime。
   **需 `_write` 依赖**（fail-closed：无令牌即 403）。证据 `af_api.api_asks_answer`。
 - `POST /api/sessions` + `POST /api/sessions/{sid}/answer`：进程内会话视图（`af_service._session_view`）
@@ -16,7 +19,10 @@ AutoForge（AF）时所依赖的 ASK 通道 schema 冻结下来，进 CI 防漂�
 AskSpec.control()`（控件元数据）。若任一生产者改了 schema 而忘了同步这里，CI 会红——
 这正是 DCD 要求的"接口契约测试"杠杆：把跨仓协议漂移拦在合并前，避免私改接口（路线图 §六 红线）。
 
-注：本测试**不改动**任何跨仓接口，仅断言既有契约，属低风险加固，无需 DCD 评审。
+注：本文件的 POST/sidecar/session 断言只冻结既有形状，不改动接口。**GET 半边的鉴权是例外**——
+裁定 20261004 F-1 把 `/api/asks/pending` 从公开收进 `_read` 门，这是对 DB 提出的**要求**
+（轮询要带 `Authorization: Bearer <write 或 read 域令牌>`），AF 已把这一条写进契约与本文件，
+DB 侧镜像测试须同步；未带令牌的轮询会稳定吃 403，不是偶发。
 
 **端到端送达前置（DCD 裁定 20260929-homesdk修正与inbox-key-裁定.md P3）**：
 `POST /api/asks/answer` 把答案写入 `answer_inbox/`，读侧 `af_live.read_answer_inbox` 验签后才注入 runtime。
@@ -74,12 +80,21 @@ PENDING_SIDECAR: dict = {
 INBOX_KEY = "contract-shared-inbox-key"
 
 
-def _build(root: str, *, noauth: bool = False, monkeypatch=None, inbox_key: str | None = None) -> TestClient:
+def _build(
+    root: str,
+    *,
+    noauth: bool = False,
+    monkeypatch=None,
+    inbox_key: str | None = None,
+    tokens: dict | None = None,
+) -> TestClient:
     if noauth and monkeypatch is not None:
         monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
     if inbox_key and monkeypatch is not None:
         # 写侧自签与读侧验签共用这把 key（裁定 Q5：通道生效前提）
         monkeypatch.setenv("AUTOFORGE_INBOX_KEY", inbox_key)
+    if tokens is not None and monkeypatch is not None:
+        monkeypatch.setenv("AUTOFORGE_TOKENS", json.dumps(tokens))
     return TestClient(build_app(store_root=root))
 
 
@@ -91,26 +106,66 @@ def _written(tmp_path: Path) -> dict:
 
 
 # =====================================================================
-# GET /api/asks/pending —— DB 发现挂起 ask（免令牌）
+# GET /api/asks/pending —— DB 发现挂起 ask（需 read 域，裁定 20261004 F-1）
 # =====================================================================
-def test_pending_discovery_requires_no_auth(tmp_path):
-    """发现端点设计上不挂 `_read`：即便不走本地逃生舱，DB 轮询也不该被 403。"""
-    client = _build(str(tmp_path))  # 无 AF_ALLOW_NOAUTH、无令牌 → 若误加鉴权会 403
+#: 三种令牌覆盖 DB 的三种可能配置：显式 read 域、裁定原话的 write 域（write 含 read）、
+#: 以及"只有 live"的越权对照。
+DB_TOKENS: dict = {
+    "tok-read": {"subject": "db-read", "scopes": ["read"]},
+    "tok-write-only": {"subject": "db", "scopes": ["write"]},
+    "tok-live-only": {"subject": "liver", "scopes": ["live"]},
+}
+
+
+def _hdr(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_pending_discovery_is_read_gated(tmp_path, monkeypatch):
+    """F-1 收口：sidecar 含家人原话（prompt/room），裸轮询必须 403，不是 200 空手而归。"""
+    client = _build(str(tmp_path), monkeypatch=monkeypatch, tokens=DB_TOKENS)
     r = client.get("/api/asks/pending")
-    assert r.status_code == 200, f"DB 发现端点必须免令牌可达，实际 {r.status_code}"
+    assert r.status_code == 403, f"读门面须 fail-closed，实际 {r.status_code}"
 
 
-def test_pending_route_not_shadowed_by_name(tmp_path):
-    """精确路径必须先于 `/api/asks/{name}` 通配，否则 pending 会被 {name} 吃掉成 404。"""
-    client = _build(str(tmp_path))
+def test_pending_discovery_still_refuses_when_no_token_configured(tmp_path):
+    """未配任何令牌时同样 fail-closed（P0-9 口径：逃生舱是唯一例外，不在这里默认开放）。"""
+    client = _build(str(tmp_path))  # 无 AF_ALLOW_NOAUTH、无令牌
+    assert client.get("/api/asks/pending").status_code == 403
+
+
+@pytest.mark.parametrize("token", ["tok-read", "tok-write-only"])
+def test_pending_serves_read_and_write_domain(tmp_path, monkeypatch, token):
+    """裁定前提"write 域含 read"的实测：只持 write 的令牌也要能轮询到 pending，DB 零改动。
+
+    去掉 `af_api._scope_ok` 的蕴含表，`tok-write-only` 这条会转 403——本条不是空判据。
+    """
+    client = _build(str(tmp_path), monkeypatch=monkeypatch, tokens=DB_TOKENS)
+    r = client.get("/api/asks/pending", headers=_hdr(token))
+    assert r.status_code == 200, f"{token}：{r.status_code} {r.text}"
+    assert r.json()["ok"] is True
+
+
+def test_pending_refuses_live_only_token(tmp_path, monkeypatch):
+    """蕴含只有一条方向：live 不满足 read，越权面照旧 403。"""
+    client = _build(str(tmp_path), monkeypatch=monkeypatch, tokens=DB_TOKENS)
+    assert client.get("/api/asks/pending", headers=_hdr("tok-live-only")).status_code == 403
+
+
+def test_pending_route_not_shadowed_by_name(tmp_path, monkeypatch):
+    """精确路径必须先于 `/api/asks/{name}` 通配，否则 pending 会被 {name} 吃掉成 404。
+
+    用本地逃生舱跑：本条判的是路由顺序，不是鉴权（鉴权在上面四条）。
+    """
+    client = _build(str(tmp_path), noauth=True, monkeypatch=monkeypatch)
     r = client.get("/api/asks/pending")
     assert r.status_code == 200
     assert r.json()["ok"] is True
 
 
-def test_pending_empty_shape(tmp_path):
+def test_pending_empty_shape(tmp_path, monkeypatch):
     """无 sidecar 文件时返回稳定的空契约：{ok:True, asks:[]}（ts 可选，不强制）。"""
-    client = _build(str(tmp_path))
+    client = _build(str(tmp_path), noauth=True, monkeypatch=monkeypatch)
     r = client.get("/api/asks/pending")
     body = r.json()
     assert body["ok"] is True
@@ -119,12 +174,12 @@ def test_pending_empty_shape(tmp_path):
     assert "ts" not in body or isinstance(body.get("ts"), (int, float))
 
 
-def test_pending_contract_fields(tmp_path):
+def test_pending_contract_fields(tmp_path, monkeypatch):
     """ask 项字段契约：DB 渲染问题所依赖的最小字段集与类型必须稳定。"""
     (tmp_path / "pending_asks.json").write_text(
         json.dumps(PENDING_SIDECAR, ensure_ascii=False), encoding="utf-8"
     )
-    client = _build(str(tmp_path))
+    client = _build(str(tmp_path), noauth=True, monkeypatch=monkeypatch)
     r = client.get("/api/asks/pending")
     body = r.json()
 

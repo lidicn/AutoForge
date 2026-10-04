@@ -213,6 +213,17 @@ class AliasBody(BaseModel):
     entity_id: str = ""
 
 
+#: scope 蕴含表（DCD 裁定 20261004 §一 F-1 的前提"DB 持 write 域令牌，write 域含 read"）。
+#: 本仓 `requires()` 早先是**逐名比对**——那句话在代码里并不成立，写侧只给 `write` 的令牌
+#: 会在 read 门上吃 403。蕴含只做这一条、且只往一个方向：read 令牌碰不了 write/live，
+#: `live` 也不蕴含 `write`。
+_SCOPE_SATISFIED_BY = {"read": ("read", "write")}
+
+
+def _scope_ok(scope: str, scopes) -> bool:
+    return any(candidate in scopes for candidate in _SCOPE_SATISFIED_BY.get(scope, (scope,)))
+
+
 def build_app(
     store_root: str = ".forge",
     examples_dir: str | None = None,
@@ -310,7 +321,7 @@ def build_app(
                 ) from None
             if info is None:
                 raise HTTPException(status_code=403, detail="无效或已撤销的 API 令牌")
-            if scope not in info.scopes:
+            if not _scope_ok(scope, info.scopes):
                 raise HTTPException(
                     status_code=403,
                     detail=f"令牌缺少 '{scope}' 权限（当前 scopes：{sorted(info.scopes)}）",
@@ -543,9 +554,14 @@ def build_app(
         """
         return svc.asks_pending()
 
-    @app.get("/api/asks/pending")
+    @app.get("/api/asks/pending", dependencies=[Depends(_read)])
     def api_asks_pending() -> dict[str, Any]:
-        """读 watch 进程写出的 pending_asks sidecar（供 DB 轮询发现挂起 ask）。"""
+        """读 watch 进程写出的 pending_asks sidecar（供 DB 轮询发现挂起 ask）。
+
+        DCD 裁定 20261004 §一 F-1：这一行补 `Depends(_read)`。sidecar 里是待答 ask 的
+        `prompt`/`room` 原文（与 `/api/asks` 同级内容），此前只有那半边挂了门禁；DB 侧持
+        write 域令牌（write 含 read），对端零改动。契约表由 DCD 登记"GET pending 需 read 令牌"。
+        """
         root = store.root if store else None
         if not root:
             return {"ok": True, "asks": []}
@@ -854,7 +870,7 @@ def build_app(
     # ── v1.9.0 用户 WebUI：轻量单 owner 登录（无用户表、无隔离）──
     @app.post("/api/auth/login")
     def api_auth_login(body: LoginBody) -> dict[str, Any]:
-        """轻量登录：任意非空凭据签发单 owner JWT；前端登录页用 demo/forge2026。"""
+        """轻量登录：任意非空凭据签发单 owner JWT（裁定 20261004 §一 F-2：凭据样例不写在码里）。"""
         if not (body.username and body.password):
             raise HTTPException(status_code=401, detail="用户名或密码为空")
         token = registry.issue_for_agent("owner", ("read", "write", "live"))
