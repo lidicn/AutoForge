@@ -210,9 +210,14 @@ class Runtime:
         return self.tick()
 
     def tick(self) -> list[Instance]:
-        """时间推进后的统一处理：实例超时 / `for` 到期 / 定时触发 / 队列出队。"""
+        """时间推进后的统一处理：实例超时 / `for` 到期 / 定时触发 / 队列出队 / 记账清理。"""
         fired = self.scheduler.tick()
         self.instances.expire_stale()
+        # 跨日清理原先**没有任何生产调用方**（`sweep()` 写好了却没人按）⇒ `fire_log.json` 按天只增不减。
+        # `sweep()` 自带 3600s 单调节流，逐 tick 调用不会重复扫盘。
+        recorder = self.scheduler.fire_recorder
+        if recorder is not None:
+            recorder.sweep()
         return fired
 
     # ── 交互 ──────────────────────────────────────────────────────────

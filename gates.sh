@@ -166,6 +166,17 @@ echo "══ 联动桥依赖门禁（paho：声明处 / 交付面 / CI 面 三�
 dep_rc=$?
 
 echo
+echo "══ 有界缓存注册表门禁（TTL 与硬上限成对，且回收要有测试钉住）══════"
+# 第六轮审计 §三 把"新增有界缓存必须同时给 TTL 与硬上限，并在测试里断言纯写不读也被回收"记成
+# "约定 + 门禁可见"，但约定的两半里当时没有任何能判红的东西（只活在审计正文里）。裁定 20261004 §一 3
+# 选 B（注册表式）而不是 C（统一基类）：Python 里"有界"往往长在键空间或调用方，不在容器自身，
+# 天真静态口径首跑命中 76 个增长容器、真两条腿齐全的只有 2 个 ⇒ 硬扫只会得到两条永久红 + 一张豁免表。
+# 所以本门不猜"有没有界"，只核对 `af_bounded_caches.py` 说没说实话：两条腿的名字要在模块里、
+# 测试 id 要真被 pytest 收集、新增容器要登记或就地带理由豁免、基线只减不增。
+"$PYTHON" "$REPO/scripts/check_bounded_caches.py" "$REPO/src/autoforge"
+cache_rc=$?
+
+echo
 echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）════════════════════"
 # 单跑冒烟：只走 `import` 子进程，慢但一次性看清。
 # 注意：这条在开发机上的红多半是「依赖没装齐 / 本地副本不完整」，
@@ -246,6 +257,15 @@ fi
 if [ $dep_rc -ne 0 ]; then
   echo "结论：联动桥依赖门禁红（exit=$dep_rc）。paho-mqtt 要**声明在一处、装到三个面**（交付面 \`docker/Dockerfile.api\`、CI 面 \`docker/Dockerfile.test\` 与 \`.github/workflows/ci.yml\`）：只在本机装过不算修。镜像里没它 ⇒ 窗内开 \`AUTOFORGE_MQTT=1\` 时 serve 抛 \`MqttUnavailable\` 拒绝启动，不开 ⇒ 桥永远不上线而两千多条测试照绿（它们用 duck-typed client，不碰真库）。"
   exit $dep_rc
+fi
+
+if [ $cache_rc -eq 2 ]; then
+  echo "结论：有界缓存注册表门禁读不出（exit=$cache_rc）。三种情形：\`src/autoforge/af_bounded_caches.py\` 不在预期位置或两张表不再是纯字面量字典、注册指向的测试文件 pytest 收集失败、扫描器在 \`src/autoforge\` 下读到 0 个增长容器。三者都是射程塌了——此刻本门无从判定，报『干净』就是假绿。"
+  exit $cache_rc
+fi
+if [ $cache_rc -ne 0 ]; then
+  echo "结论：有界缓存注册表门禁红（exit=$cache_rc）。注册表说的那条腿必须真在模块里（\`cap\`/\`ttl\`/\`trim\` 逐个核对）、指向的测试必须真被收集、新增增长容器必须进 \`BOUNDED_CACHES\`（两条腿 + 一条『纯写不读也被回收』的测试）或在那一行写 \`# bounded-cache: exempt(理由)\`；基线名单只减不增。约定来自第六轮审计 §三，落法来自裁定 20261004 §一 3 B。"
+  exit $cache_rc
 fi
 
 if [ $ast_rc -ne 0 ]; then

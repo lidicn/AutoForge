@@ -345,7 +345,11 @@ class InstanceManager:
         return dead
 
     def expire_stale(self) -> list[Instance]:
-        """超过 TTL（默认 24h）或超配额的实例强制销毁。"""
+        """超过 TTL（默认 24h）的非终态实例强制销毁，并顺带摘除终态实例（`reap_terminal`）。
+
+        这里**没有**"超配额"分支：配额（`af_scheduler.Quota`）管的是"还能不能再触发新实例"，
+        不是"字典里最多留多少条"。原先正文写着"或超配额"，读的人会以为内存上限由配额兜底。
+        """
         now = self.clock.monotonic()
         stale = [
             i

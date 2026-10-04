@@ -215,7 +215,7 @@ class PreTriggerService:
             clock=getattr(runtime, "clock", None),
             tz_name=tz_name,
         )
-        self._stats = {
+        self._stats = {  # bounded-cache: exempt(固定键计数器：所有写入点用的都是字面键，键空间编译期封闭)
             "scans": 0, "automations": 0, "fired": 0,
             "skipped_band": 0, "below_threshold": 0, "cold_start": 0,
             "last_scan": None,

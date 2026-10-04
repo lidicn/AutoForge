@@ -65,7 +65,7 @@ class DeviceSM(ABC):
         self.bus = bus
         self.clock = clock
         self.state: str = str(initial_state) if initial_state is not None else default_state_for(entity_id)
-        self.attributes: dict[str, Any] = dict(initial_attributes or {})
+        self.attributes: dict[str, Any] = dict(initial_attributes or {})  # bounded-cache: exempt(键集由 domain 属性词表决定，reset() 整体替换字典)
         self.followups: list[FollowUp] = []
 
     @abstractmethod

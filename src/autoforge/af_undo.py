@@ -52,6 +52,10 @@ logger = logging.getLogger("autoforge.undo")
 DEFAULT_WINDOW_S = float(os.getenv("AUTOFORGE_UNDO_WINDOW_S", "60"))
 MAX_WINDOW_S = 300.0
 
+#: 快照条数硬上限。时间窗只管"一份快照活了多久"，这一条管"窗口内同时堆了多少份"：
+#: 一次部署一份，批量下发下 `undo_log.json` 仍会随部署数涨。与 `af_service._SESSIONS` 同口径。
+MAX_DEPLOYS = int(os.getenv("AUTOFORGE_UNDO_MAX_DEPLOYS", "200"))
+
 #: 风险域：撤销需调用方显式 confirm（与下发同级审批带）
 RISK_DOMAINS = frozenset({"climate", "cover", "lock", "fan", "vacuum"})
 
@@ -254,11 +258,18 @@ class UndoStore:
     默认落盘 `{store_root}/undo_log.json`；`window_s` 控制可撤销时间窗。
     """
 
-    def __init__(self, store_root: str = ".forge", window_s: float | None = None, clock: TimeSource | None = None):
+    def __init__(
+        self,
+        store_root: str = ".forge",
+        window_s: float | None = None,
+        clock: TimeSource | None = None,
+        max_deploys: int = MAX_DEPLOYS,
+    ):
         self.root = Path(store_root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "undo_log.json"
         self.window_s = min(MAX_WINDOW_S, float(window_s if window_s is not None else DEFAULT_WINDOW_S))
+        self.max_deploys = max(1, int(max_deploys))
         self._clock = clock or SystemTimeSource()  # B 增强：注入 TimeSource，生产缺省时用 SystemTimeSource
         self._records: dict[str, dict[str, Any]] = {}
         self._load()
@@ -285,7 +296,24 @@ class UndoStore:
                 for e, s in entities.items()
             },
         }
+        # 回收挂在**写路径**而不是"打开即清"：`purge_expired()` 原先零调用方，超窗快照只被读侧
+        # 判 expired、从不摘除 ⇒ `undo_log.json` 随部署数单调增长。放在 `__init__` 里实测会让
+        # `/api/undo/{deploy_id}` 对超窗记录回 404（"这条不存在"），把"过期撤不了"和"没这条"
+        # 混成一个答复——那是既有 HTTP 判据（`test_af_undo_http.py`）当场拦住的红。
+        self.purge_expired()
+        self._trim()
         self._save()
+
+    def _trim(self) -> None:
+        """超硬上限时按时间戳丢最旧：窗口内的最新部署才是在操作员手里可能要撤的那一份。"""
+        overflow = len(self._records) - self.max_deploys
+        if overflow <= 0:
+            return
+        oldest = sorted(
+            self._records.items(), key=lambda kv: float(kv[1].get("ts", 0.0))
+        )[:overflow]
+        for deploy_id, _rec in oldest:
+            self._records.pop(deploy_id, None)
 
     def record_merge(self, deploy_id: str, entities: Mapping[str, Mapping[str, Any]]) -> None:
         """累积同一次部署的多个动作前快照（F7 CLI 逐动作落盘用）。
