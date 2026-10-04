@@ -20,7 +20,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-__all__ = ["owner_id", "FileLock"]
+__all__ = ["owner_id", "FileLock", "SERVE_LOCK_NAME", "serve_lock_path"]
+
+# 单写者租约的文件名只有一个真源：serve 用它抢锁，`live_run` 用它判"别人在写"。
+# 抄第二份就是本仓那族"名单手抄"接缝（工具名单 / extras 名 / HTTP 路径）的又一个实例。
+SERVE_LOCK_NAME = ".serve.lock"
+
+
+def serve_lock_path(store_root: str | Path) -> Path:
+    return Path(store_root) / SERVE_LOCK_NAME
 
 try:  # POSIX
     import fcntl as _fcntl
@@ -33,6 +41,17 @@ except ImportError:  # Windows
     _POSIX = False
 
 _OWNER: str | None = None
+
+# 本进程已持有的锁（按解析后的路径记）。锁挂在"打开文件描述"上，同进程另开一个句柄去探
+# 会被**自己**挡下；不记这张表，serve 自己会把"生产写者在线"读成"别人在写"，把 503 打给自己。
+_LOCAL_HELD: "set[str]" = set()
+
+
+def _key(path: Path) -> str:
+    try:
+        return str(path.resolve())
+    except OSError:
+        return str(path)
 
 
 def owner_id() -> str:
@@ -71,6 +90,7 @@ class FileLock:
         cur = threading.get_ident()
         # 同线程内重入语义：宽松处理（同线程重入不重新 flock）
         if self._fd is not None and self._owner_thread == cur:
+            _LOCAL_HELD.add(_key(self.path))
             return True
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT)
@@ -85,8 +105,38 @@ class FileLock:
             return False
         self._fd = fd
         self._owner_thread = cur
+        _LOCAL_HELD.add(_key(self.path))
         self._stamp()
         return True
+
+    def held_by_other(self) -> bool:
+        """锁是否被**别的过程**拿着：本进程持有 ⇒ False；能拿到并立刻放开 ⇒ False；拿不到 ⇒ True。
+
+        裁定 20261004 §一 1 A："只 check 不 acquire"——MCP 面不抢租约、只读它，所以这里
+        探到就放，且**不写 sidecar**（探测者若盖章，会把生产 serve 的持有者诊断覆盖成自己）。
+        判据只认内核锁：进程崩溃时内核自动释放，陈旧 sidecar 不参与判定。
+        """
+        if _key(self.path) in _LOCAL_HELD:
+            return False
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT)
+        try:
+            if _POSIX:
+                _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            else:
+                os.lseek(fd, 0, os.SEEK_SET)
+                _msvcrt.locking(fd, _msvcrt.LK_NBLCK, 1)
+        except (BlockingIOError, OSError):
+            return True
+        finally:
+            if not _POSIX:
+                try:
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    _msvcrt.locking(fd, _msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            os.close(fd)
+        return False
 
     # ── 阻塞（带超时）──
     def acquire(self) -> None:
@@ -105,6 +155,7 @@ class FileLock:
             return
         fd, self._fd = self._fd, None
         self._owner_thread = None
+        _LOCAL_HELD.discard(_key(self.path))
         try:
             if _POSIX:
                 _fcntl.flock(fd, _fcntl.LOCK_UN)

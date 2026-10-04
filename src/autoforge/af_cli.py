@@ -1359,10 +1359,10 @@ def serve(
         raise typer.Exit(code=EXIT_IR_ERROR)
 
     from .af_api import build_app
-    from .af_flock import FileLock, owner_id
+    from .af_flock import FileLock, owner_id, serve_lock_path
 
     # 单写者租约（DCD 裁定一 A）：抢不到锁 → 降级只读，写操作由 API 层拒绝。
-    _lock = FileLock(Path(store_root) / ".serve.lock")
+    _lock = FileLock(serve_lock_path(store_root))
     readonly = not _lock.try_acquire()
     if readonly:
         typer.echo(

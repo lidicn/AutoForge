@@ -28,6 +28,7 @@ from .af_expect import (
     is_side_effect_unobservable,
 )
 from .af_executor import classify_answer
+from .af_flock import FileLock, serve_lock_path
 from .af_fault import FAULT_META, FOUR_FAILURES, FaultKind
 from .af_ir import Graph, IRValidationError, load_graph
 from .af_nl import render_graph
@@ -1647,6 +1648,25 @@ def _live_final_states(
     return final, sorted(missing)
 
 
+READONLY_DEGRADED_PREFIX = "READONLY_DEGRADED:"
+
+
+def _single_writer_check(store: "GraphStore | None") -> None:
+    """生产 serve 持租约时，**进程外**的写入口必须先拒（裁定 20261004 §一 1 A）。
+
+    只 check 不 acquire：MCP 面不抢锁、不改归属，探测也不写 sidecar（盖了章就会把 serve
+    的持有者诊断覆盖成自己）。判据只认内核锁；serve 自己那份由 `af_flock._LOCAL_HELD`
+    认出"是本进程"，于是 503 不会打回给正在正常服务的写者本身。
+    """
+    root = Path(store.root) if store is not None else DEFAULT_STORE_ROOT
+    if FileLock(serve_lock_path(root)).held_by_other():
+        raise ServiceError(
+            f"{READONLY_DEGRADED_PREFIX} 生产 serve 正持有单写者租约（{root}）：本次真机下发拒收。"
+            "同一个 store 根目录上 HTTP 面已降级只读，MCP 面不抢锁、只读它（裁定 20261004 §一 1 A）",
+            status=503,
+        )
+
+
 def live_run(
     ir: Mapping[str, Any],
     live_allow: Sequence[str],
@@ -1686,6 +1706,10 @@ def live_run(
     allow = {str(x) for x in (live_allow or []) if str(x)}
     if not allow:
         raise ServiceError("真机下发必须提供可写白名单（live_allow），先不开放全量", status=400)
+
+    # ★ 单写者租约：生产 serve 在线时，进程外的真机写一律拒收（裁定 20261004 §一 1 A）。
+    # 放在构造传输层之前——拒收的那条路径必须**根本不碰设备**。
+    _single_writer_check(store)
 
     graph = _load_ir(ir)
 

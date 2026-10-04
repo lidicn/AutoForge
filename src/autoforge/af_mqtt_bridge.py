@@ -339,6 +339,11 @@ class AfMqttBridge:
     def _envelope(self, *, automation_id: str, instance_id: str, extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
         """载荷形态对齐 ADM 主题契约表 §1.2：`{trace_id, ts, automation_id, ref}`。
 
+        `trace_id` 是**事件级**（裁定 20261004 §一 2 C）：每次发布现场生成，只做单事件关联，
+        同一次部署的 `fired` 与 `failed` 也不必同一枚号。因果链靠 `ref`（实例级）与发布者
+        自己的存储元数据（`ingest_insight()` 把上游 trace_id 收进 `hypothesis_id` 落盘），
+        不承担跨仓串联——把它当链路号会让下游"按 trace_id 拉一屏日志"的语义从 1:1 变 1:N。
+
         `ref` 按裁定 20261002 §三 ②A 定义为**实例 id**（保持本实现，一次部署会 fire 多次，
         所以 deploy ref 语义更错）。`instance_id` 是同值过渡字段，**删除时点 = AF v2.6**
         （改名/删除属破坏性变更，须与停机窗同做），在此之前两边同写、下游任选其一。
@@ -367,19 +372,20 @@ class AfMqttBridge:
         """`Runtime.add_terminal_observer` 的适配器：done→fired，failed→failed，其余不发。
 
         标识只取 `instance.instance_id`——审计第一轮那条 P0 就是把 `instance.id` 当标识用。
+        载荷字段就是契约表 §1.2 那一行，不多带：`current_node_id` 一度被当 `node_id` 多发，
+        但它是"失败时刻实例停在哪"而不是"哪个节点失败"（两条路径不必相等），也没进过契约行
+        （裁定 20261004 §一 2：删）。
         """
         automation_id = str(instance.automation.id)
         instance_id = str(instance.instance_id)
-        node_id = str(getattr(instance, "current_node_id", "") or "")
         if state == "done":
             self.counts["fired"] += 1
-            return self.publish_fired(automation_id=automation_id, instance_id=instance_id, node_id=node_id)
+            return self.publish_fired(automation_id=automation_id, instance_id=instance_id)
         if state == "failed":
             self.counts["failed"] += 1
             return self.publish_failed(
                 automation_id=automation_id,
                 instance_id=instance_id,
-                node_id=node_id,
                 error=_failure_reason(instance),
             )
         return None

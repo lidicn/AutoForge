@@ -821,6 +821,11 @@ def dispatch(
         ], False
     except ServiceError as exc:
         return [_text(_annotate_failure(store, name, str(exc)))], True
+    except svc.ServiceError as exc:
+        # 服务层的拒绝**原样**回传：`_single_writer_check` 那条靠固定前缀
+        # `READONLY_DEGRADED:` 让 DB 判别（裁定 20261004 §一 1 A），套上"工具执行出错："
+        # 那层壳，前缀就不在文本开头了。
+        return [_text(_annotate_failure(store, name, str(exc)))], True
     except Exception as exc:  # 业务异常（ServiceError/IRValidationError/KeyError 等）转 isError
         # R-57：完整 traceback 只落服务端日志，不回传 MCP 客户端（防文件路径/行号/堆栈外泄）
         logger.exception("MCP tool %s failed", name)
