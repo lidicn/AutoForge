@@ -416,6 +416,35 @@ def test_contract_shaped_insight_lands_instead_of_being_dropped():
     assert "snapshot_url" not in transport                 # 留住"有截图"，不留住 URL
 
 
+def test_insight_id_is_the_stable_identity_when_present():
+    """裁定 20261004 §五 Q2：`insight_id` 才是稳定身份，`trace_id` 只做追踪号。
+
+    MA 一旦补发 `insight_id`，去重与回灌键必须切过去；而代位（只有 trace_id 时）这件事
+    要留在 `transport.id_key` 上——否则"用追踪号去重"这条临时口径会看不见了。
+    """
+    sink = RecordingSink()
+    result = _ingest(sink, {**CONTRACT_INSIGHT, "insight_id": "ins-0001"})
+    assert result["handled"] is True, result
+    call = sink.calls[0]
+    assert call["hypothesis_id"] == "ins-0001"
+    assert call["transport"]["id_key"] == "insight_id"
+
+
+def test_insight_id_beats_the_legacy_alias():
+    sink = RecordingSink()
+    _ingest(sink, {**CONTRACT_INSIGHT, "insight_id": "ins-0002", "hypothesis_id": "hyp-old"})
+    assert sink.calls[0]["hypothesis_id"] == "ins-0002"
+    assert sink.calls[0]["transport"]["id_key"] == "insight_id"
+
+
+def test_trace_id_only_still_enters_but_is_marked_as_proxy():
+    """对照组：代位这条路不能因为新键上线就被关掉（MA 补发之前它是唯一入口）。"""
+    sink = RecordingSink()
+    result = _ingest(sink, CONTRACT_INSIGHT)
+    assert result["handled"] is True
+    assert sink.calls[0]["transport"]["id_key"] == "trace_id"
+
+
 def test_absent_conf_is_accounted_as_unreported_not_as_zero_confidence():
     """契约里**没有 conf 这一项**。缺报要按 ask 档收（0.0），但必须记成"MA 没报"，
     不能让批的人在面板上把对端的沉默读成对端的否定。"""

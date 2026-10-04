@@ -39,7 +39,7 @@ dev = [
     "websockets>=12.0",
     "grimp>=2.1",
     "import-linter>=1.10",
-    "paho-mqtt>=1.6",
+    "paho-mqtt>=1.6,<2.1",
 ]
 # ADM 联动第 1/2 步（af_mqtt_bridge）的运行时依赖。homesdk 把 paho 放在它自家的
 # `[mqtt]` extra 里（"装它是对调用方的要求"），而镜像装的是裸 wheel ⇒ paho 不在盘上时
@@ -49,7 +49,9 @@ dev = [
 # 一条断言在装了 paho 的机器上绿、在没装的机器上红。三面一致由
 # scripts/check_mqtt_runtime_dep.py 钉（声明处 / 交付面 / CI 面；只在本机装过不算修）。
 mqtt = [
-    "paho-mqtt>=1.6",
+    # DCD 裁定 20261004 §二 Q2=B：官方 PyPI + 上界钉死。paho 2.x 改了回调签名（`on_message`
+    # 之外的 API 面有 breaking change），无上界时镜像某次重建可能拿到不兼容的大版本。
+    "paho-mqtt>=1.6,<2.1",
 ]
 # 同意/否决分类（G4 canary auto-rollback 的伦理闸门）依赖 homesdk。
 # 它是私有 wheel，未上 PyPI；仓库内随附于 docker/homesdk/，CI 与部署时通过

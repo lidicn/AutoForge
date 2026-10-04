@@ -341,7 +341,8 @@ class AfMqttBridge:
 
         `trace_id` 是**事件级**（裁定 20261004 §一 2 C）：每次发布现场生成，只做单事件关联，
         同一次部署的 `fired` 与 `failed` 也不必同一枚号。因果链靠 `ref`（实例级）与发布者
-        自己的存储元数据（`ingest_insight()` 把上游 trace_id 收进 `hypothesis_id` 落盘），
+        自己的存储元数据（`ingest_insight()` 的稳定身份优先取契约新增的 `insight_id`，
+        上游 `trace_id` 只在 MA 补发之前代位，代位事实记在 `transport.id_key`），
         不承担跨仓串联——把它当链路号会让下游"按 trace_id 拉一屏日志"的语义从 1:1 变 1:N。
 
         `ref` 按裁定 20261002 §三 ②A 定义为**实例 id**（保持本实现，一次部署会 fire 多次，
@@ -449,10 +450,17 @@ class AfMqttBridge:
         键名以**契约表**为准：`ma/insights` 发的是 `{trace_id, ts, kind, persons[], room?, summary,
         evidence[], snapshot_url?}`。AF 早先自定的 `hypothesis_id` / `natural_language` 作为别名继续收
         （MA 侧承诺"旧键保留到 DB/AF 迁完"），两个方向都能进来，用的是哪个键记在 `transport` 里。
+
+        稳定身份（去重与回灌用的那个键）按裁定 20261004 §五 Q2 的次序是
+        `insight_id` → 旧键 `hypothesis_id` → `trace_id`（代位，见上）。
         """
         hypothesis_id_raw = payload.get("hypothesis_id")
         uses_legacy_id = hypothesis_id_raw is not None and str(hypothesis_id_raw).strip() != ""
-        hypothesis_id = str(hypothesis_id_raw or payload.get("trace_id") or "").strip()
+        insight_id = str(payload.get("insight_id") or "").strip()
+        # 稳定身份按裁定 20261004 §五 Q2 优先 `insight_id`；`trace_id` 是追踪号（每次现场生成），
+        # 只在 MA 还没补发 `insight_id` 时代位，且代位这件事必须落在 `transport.id_key` 上可查——
+        # 否则"用追踪号去重"这条临时口径会悄悄变成永久口径。
+        hypothesis_id = insight_id or str(hypothesis_id_raw or payload.get("trace_id") or "").strip()
         if not hypothesis_id:
             return self._reject("missing_insight_id")
         natural_language = str(
@@ -468,7 +476,11 @@ class AfMqttBridge:
             return self._reject("no_proposal_sink_wired")
         transport = _transport_of(
             payload,
-            id_key="hypothesis_id" if uses_legacy_id else "trace_id",
+            id_key=(
+                "insight_id"
+                if insight_id
+                else "hypothesis_id" if uses_legacy_id else "trace_id"
+            ),
             conf_reported=conf_reported,
         )
 
