@@ -243,3 +243,50 @@ def test_undo_refuses_expired_window_via_http(tmp_path, noauth, monkeypatch):
     r = client.post("/api/undo/dep-old", json={"confirm": True})
     assert r.status_code == 200
     assert r.json()["ok"] is False and r.json()["reason"] == "expired"
+
+
+# ── 撤销清单的服务面口径（前端 10s 定时刷新依赖这两条，改一条页面就读到假数）──
+
+#: `ui/src/types/api.ts:UndoAvailableResponse` + `LiveView.vue` 逐键渲染的集合
+UNDO_AVAILABLE_KEYS = {"window_s", "items"}
+UNDO_ITEM_KEYS = {"deploy_id", "age_s", "entities"}
+
+
+def test_expired_deploy_leaves_the_available_list(tmp_path, noauth, monkeypatch):
+    """过期项**不在清单里**——不是"列出来但标过期"。
+
+    `LiveView.vue` 每 10s 重拉一次清单，靠这条口径让过窗的行自己消失。若哪天改成
+    含过期项返回，页面会一直挂着"窗口内可撤销 N 条"的读数，而点下去必被 `expired` 拒。
+    """
+    monkeypatch.setattr(af_undo, "DEFAULT_WINDOW_S", 0.001)
+    store = UndoStore(str(tmp_path))
+    store.record("dep-gone", {"light.study": {"state": "on", "attributes": {}}})
+    client = TestClient(build_app(store_root=str(tmp_path)))
+
+    body = client.get("/api/undo/available").json()
+    assert set(body) == UNDO_AVAILABLE_KEYS
+    time.sleep(0.02)
+    assert client.get("/api/undo/available").json()["items"] == []
+
+
+def test_available_items_carry_the_keys_the_ui_renders(tmp_path, noauth, monkeypatch):
+    """窗口内的行必须给全 `deploy_id`/`age_s`/`entities`：页面用 `age_s.toFixed(1)` 渲染年龄、
+    用 `entities.join('、')` 渲染回滚目标，少一个键就是浏览器里当场炸。"""
+    monkeypatch.setattr(af_undo, "DEFAULT_WINDOW_S", 60.0)
+    store = UndoStore(str(tmp_path))
+    store.record(
+        "dep-live",
+        {
+            "switch.fan": {"state": "on", "attributes": {}},
+            "light.study": {"state": "on", "attributes": {"brightness": 10}},
+        },
+    )
+    client = TestClient(build_app(store_root=str(tmp_path)))
+
+    items = client.get("/api/undo/available").json()["items"]
+    assert len(items) == 1
+    assert set(items[0]) == UNDO_ITEM_KEYS
+    assert items[0]["deploy_id"] == "dep-live"
+    assert items[0]["entities"] == ["light.study", "switch.fan"]
+    age = items[0]["age_s"]
+    assert isinstance(age, (int, float)) and not isinstance(age, bool)

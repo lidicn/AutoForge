@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   NAlert, NButton, NCard, NEmpty, NInput, NSpace, NSwitch, NTag, NText, NPopconfirm, useMessage,
 } from 'naive-ui'
@@ -30,6 +30,15 @@ const undoWindowS = ref(0)
 const undoBusy = ref(false)
 const undoResult = ref<UndoRunResponse | null>(null)
 const undoError = ref('')
+const undoListError = ref('')
+const undoRefreshedAt = ref('')
+
+// 可撤销项是**会过期**的读数：`af_undo.UndoStore.available()` 把超窗的记录直接滤掉，
+// 而 `age_s` 只是服务端取数那一刻的快照。不定时刷新，页面会一直挂着一条"看起来还能撤销"
+// 的行，直到用户点下去才被后端以 `expired` 拒掉。
+const UNDO_POLL_MS = 10000
+let undoTimer: number | undefined
+let undoListInFlight = false
 
 async function loadStatus() {
   error.value = ''
@@ -42,16 +51,42 @@ async function loadStatus() {
 }
 
 async function loadUndoList() {
+  undoListInFlight = true
   try {
     const res = await facade.undoAvailable()
     undoItems.value = res.data.items
     undoWindowS.value = res.data.window_s
-  } catch {
-    // 清单读不到不阻断主流程，但不能假装"没有可撤销项"是设备侧结论
-    undoItems.value = []
-    undoWindowS.value = 0
+    undoRefreshedAt.value = new Date().toLocaleTimeString()
+    undoListError.value = ''
+  } catch (e) {
+    // 读失败时**留着上一次的成功读数**并如实标注：把清单清空等于把"查询失败"
+    // 显示成"窗口内没有可撤销的部署"，而后者是设备侧结论。
+    undoListError.value = String(e)
+  } finally {
+    undoListInFlight = false
   }
 }
+
+// 定时档只做"没人正在动它"时的补数：下发/撤销末尾那两次显式刷新不能被跳过，
+// 否则刚产生的撤销凭据要等一个周期才出现在清单上。
+function tickUndoList() {
+  if (undoListInFlight || undoBusy.value || running.value) return
+  void loadUndoList()
+}
+
+const undoEmptyText = computed(() =>
+  undoRefreshedAt.value
+    ? `上次读数（${undoRefreshedAt.value}）窗口内没有可撤销的部署`
+    : '撤销清单一次都没取到读数（接口不通或缺权限），不能断定"没有可撤销项"',
+)
+
+// 窗口长度由服务端给（`AUTOFORGE_UNDO_WINDOW_S`，默认 60s、可设 0=不过期）；
+// 读成功之前不猜一个数印上去。
+const undoWindowLabel = computed(() => {
+  if (!undoRefreshedAt.value) return ' · 服务端窗口未读到'
+  if (undoWindowS.value <= 0) return ' · 服务端窗口 0s（不过期）'
+  return ` · 服务端窗口 ${undoWindowS.value}s`
+})
 
 async function revert(id: string) {
   undoBusy.value = true
@@ -128,6 +163,10 @@ async function run() {
 onMounted(() => {
   loadStatus()
   loadUndoList()
+  undoTimer = window.setInterval(tickUndoList, UNDO_POLL_MS)
+})
+onUnmounted(() => {
+  if (undoTimer) clearInterval(undoTimer)
 })
 </script>
 
@@ -201,7 +240,7 @@ onMounted(() => {
         </div>
         <div style="display: flex; align-items: center; gap: 10px">
           <n-switch v-model:value="undo" />
-          <n-text depth="3">记录动作前快照，{{ undoWindowS || 60 }}s 窗口内可撤销本次部署（F7 / 决策 E）</n-text>
+          <n-text depth="3">记录动作前快照，窗口内可撤销本次部署（F7 / 决策 E）{{ undoWindowLabel }}</n-text>
         </div>
         <div>
           <n-button type="error" :loading="running" :disabled="!confirm" @click="run">下发真机</n-button>
@@ -241,11 +280,27 @@ onMounted(() => {
       <n-alert v-if="undoError" type="error" title="撤销请求失败" style="margin-bottom: 12px">
         {{ undoError }}
       </n-alert>
+      <n-alert
+        v-if="undoListError"
+        type="warning"
+        :title="undoRefreshedAt
+          ? '自动刷新失败：下面是上次成功读数，可能已过期'
+          : '撤销清单读取失败：目前一条读数都没有，不能据此判断窗口内无可撤销项'"
+        style="margin-bottom: 12px"
+      >
+        {{ undoListError }}
+      </n-alert>
       <n-space align="center" :size="10" style="margin-bottom: 8px">
-        <n-text depth="3">窗口 {{ undoWindowS }}s · {{ undoItems.length }} 条可撤销</n-text>
+        <n-text depth="3">
+          <template v-if="undoRefreshedAt">
+            窗口 {{ undoWindowS }}s · {{ undoItems.length }} 条可撤销 · 每 {{ UNDO_POLL_MS / 1000 }}s 自动刷新
+            · 上次成功 {{ undoRefreshedAt }}
+          </template>
+          <template v-else>窗口长度与可撤销清单均未读到 · 每 {{ UNDO_POLL_MS / 1000 }}s 自动重试</template>
+        </n-text>
         <n-button text size="small" @click="loadUndoList">刷新清单</n-button>
       </n-space>
-      <n-empty v-if="!undoItems.length" description="窗口内没有可撤销的部署" size="small" />
+      <n-empty v-if="!undoItems.length" :description="undoEmptyText" size="small" />
       <div v-for="item in undoItems" :key="item.deploy_id" class="undo-row">
         <div>
           <code>{{ item.deploy_id }}</code>
