@@ -117,6 +117,18 @@ echo "══ 工具名单门禁（MCP 工具名只有一个注册表）═══
 tool_rc=$?
 
 echo
+echo "══ MCP 参数↔schema 门禁（消费的参数必须已声明，声明的必须被消费）════"
+# 安全审计包（fp-authcode-bruteforce 加重情节 3）盘出的形状：`dispatch()` 早先从不把
+# `arguments` 与 `inputSchema` 对账 ⇒ "schema 未声明却可用"。首跑实测：31 个工具里 6 个键
+# 被 handler 消费却没声明，其中 `allow_bulk` 是**爆炸半径护栏的绕过位**，同时挂在
+# `af_save`/`af_enable_by_tag`/`af_import_store` 三个写面上——`tools/list` 看不见它，调用却生效。
+# 现在 `dispatch()` 拒未声明顶层键（声明即契约），本门钉这条新契约会烂掉的两向：
+# 消费未声明（拒绝后变成**静默失效**，比原来更隐蔽）、声明未消费（对调用方撒谎）、
+# schema 缺 `properties`（那道拒绝在该工具上静默关闭）。参数读取判不出 = exit 2，不跳这条。
+"$PYTHON" "$REPO/scripts/check_mcp_arg_schemas.py"
+mcp_args_rc=$?
+
+echo
 echo "══ 状态源 fail-closed 门禁（snapshot() 不许静默省略未知实体）══════"
 # 第七轮审计的 key_finding：`af_ir/expr.py` 的 `and`/`or` 走 all()/any() **短路**，没被求值的
 # 那一支永远不会去读快照 ⇒ "缺失留给运行时发现"在 fail-open 一侧根本不成立：仿真软失效不执行、
@@ -216,6 +228,15 @@ fi
 if [ $tool_rc -ne 0 ]; then
   echo "结论：工具名单门禁红（exit=$tool_rc）。按名调 MCP 工具只能用 \`af_mcp.TOOLS\` 里的名字；\`TOOLS\` 之外再抄一份字典名单（哪怕是仿真/未来的）就是第二真源。确实不是工具名就地写 \`# tool-name: exempt(理由)\`。"
   exit $tool_rc
+fi
+
+if [ $mcp_args_rc -eq 2 ]; then
+  echo "结论：MCP 参数↔schema 门禁读不出参数形状（exit=$mcp_args_rc）。TOOLS 五元组、handler 具名函数、inputSchema 字典字面量是判据的地基；handler 把 \`args\` 整包转发给 helper 也在这一档——本门此刻无从核对，报『干净』就是假绿。"
+  exit $mcp_args_rc
+fi
+if [ $mcp_args_rc -ne 0 ]; then
+  echo "结论：MCP 参数↔schema 门禁红（exit=$mcp_args_rc）。\`dispatch()\` 现在按声明拒未声明的顶层键：消费未声明＝参数被拒后**静默失效**，声明未消费＝\`tools/list\` 对调用方撒谎，缺 \`properties\`＝那道拒绝在这个工具上根本没装。故意留一侧就地写 \`# mcp-args: exempt(理由)\`。"
+  exit $mcp_args_rc
 fi
 
 if [ $snap_rc -eq 2 ]; then

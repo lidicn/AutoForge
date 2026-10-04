@@ -395,7 +395,11 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
                 "intent": {
                     "type": "object",
                     "description": "意图 JSON，如 {name, mode, when, if, do}",
-                }
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "同一用户 compose 请求内多次调用传相同 id（v2.3 决策门多意图占比统计）",
+                },
             },
             "required": ["intent"],
         },
@@ -600,12 +604,20 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
     ),
     (
         "af_compile_spec",
-        "把 AutoForge 文本语法（AF-Spec）编译成 IR（等价 JSON，同一份真相）。参数：text(str 必填)。"
+        "把 AutoForge 文本语法（AF-Spec）编译成 IR（等价 JSON，同一份真相）。参数：text(str，"
+        "别名 spec/prompt，三者其一必填)。"
         "返回 ok/ir/nl/diagnostics；失败返回 ok=false + error。",
         {
             "type": "object",
-            "properties": {"text": {"type": "string", "description": "AF-Spec 文本"}},
-            "required": ["text"],
+            "properties": {
+                "text": {"type": "string", "description": "AF-Spec 文本"},
+                # 后两条是 `text` 的历史别名（`_t_compile` 按 text→spec→prompt 取第一个非空）。
+                # 未声明却可读＝"看起来不可用、实际可用"，安全审计 fp-authcode-bruteforce 加重情节 3
+                # 点名的正是这一族：既然实现吃它，就在 schema 里写清它是别名，而不是让调用方猜。
+                "spec": {"type": "string", "description": "text 的别名"},
+                "prompt": {"type": "string", "description": "text 的别名"},
+            },
+            "anyOf": [{"required": ["text"]}, {"required": ["spec"]}, {"required": ["prompt"]}],
         },
         _t_compile,
         None,
@@ -681,10 +693,18 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
     ),
     (
         "af_enable_by_tag",
-        "【写】批量启停某标签下所有自动化（翻转 enabled 并保存新版本）。参数：tag(str 必填)，enabled(bool 必填)。需 write 权限。",
+        "【写】批量启停某标签下所有自动化（翻转 enabled 并保存新版本）。参数：tag(str 必填)，enabled(bool 必填)，"
+        "allow_bulk(bool 可选，确认批量、绕过爆炸半径护栏)。需 write 权限。",
         {
             "type": "object",
-            "properties": {"tag": {"type": "string"}, "enabled": {"type": "boolean"}},
+            "properties": {
+                "tag": {"type": "string"},
+                "enabled": {"type": "boolean"},
+                "allow_bulk": {
+                    "type": "boolean",
+                    "description": "true=确认这是一次批量操作，绕过爆炸半径护栏（默认 false）",
+                },
+            },
             "required": ["tag", "enabled"],
         },
         _t_enable,
@@ -699,13 +719,18 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
     ),
     (
         "af_import_store",
-        "【写】导入 bundle。参数：bundle(dict 必填)，strategy(str 可选 skip|overwrite|rename)。需 write 权限。"
+        "【写】导入 bundle。参数：bundle(dict 必填)，strategy(str 可选 skip|overwrite|rename)，"
+        "allow_bulk(bool 可选，确认批量、绕过爆炸半径护栏)。需 write 权限。"
         "返回 {imported,skipped,renamed,errors}。",
         {
             "type": "object",
             "properties": {
                 "bundle": {"type": "object", "description": "af_export_store 返回的 bundle"},
                 "strategy": {"type": "string", "enum": ["skip", "overwrite", "rename"]},
+                "allow_bulk": {
+                    "type": "boolean",
+                    "description": "true=确认这是一次批量导入，绕过爆炸半径护栏（默认 false）",
+                },
             },
             "required": ["bundle"],
         },
@@ -717,7 +742,8 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
         "【写】把 IR 归档为新版本（**先过第一道闸**：未通过静态扫描则拒绝）。参数：name(str 必填)、"
         "ir(dict 必填)、note(str 可选，版本备注)、tags(list[str] 可选，覆盖式标签)、"
         "expect_version(int 可选，乐观锁，不匹配报冲突)、auth_code(str 可选，部署授权码——8 位纯数字，"
-        "一次性消耗，连续 10 次错误该码锁定 5 分钟)。需 write 权限。返回 {ok,name,version,tags,warnings}。",
+        "一次性消耗，连续 10 次错误该码锁定 5 分钟)、allow_bulk(bool 可选，确认批量、绕过爆炸半径护栏)。"
+        "需 write 权限。返回 {ok,name,version,tags,warnings}。",
         {
             "type": "object",
             "properties": {
@@ -729,6 +755,10 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
                 "auth_code": {"type": "string", "pattern": "^[0-9]{8}$",
                               "description": "部署授权码（用户在 WebUI 生成）；8 位纯数字；一次性消耗，"
                                              "连续 10 次错误该码锁定 5 分钟"},
+                "allow_bulk": {
+                    "type": "boolean",
+                    "description": "true=确认这是一次批量归档，绕过爆炸半径护栏（默认 false）",
+                },
             },
             "required": ["name", "ir"],
         },
@@ -799,6 +829,14 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _undeclared_args(schema: dict[str, Any], args: Any) -> list[str]:
+    """返回 `args` 里**没有**出现在 `schema.properties` 的顶层键（已排序）。"""
+    props = schema.get("properties")
+    if not isinstance(props, dict) or not isinstance(args, dict):
+        return []
+    return sorted(str(k) for k in args if k not in props)
+
+
 def dispatch(
     name: str,
     args: dict[str, Any],
@@ -812,6 +850,19 @@ def dispatch(
     _name, _desc, _schema, fn, scope = tool
     try:
         _guard(scope, current)
+        unexpected = _undeclared_args(_schema, args)
+        if unexpected:
+            # 安全审计 fp-authcode-bruteforce 的**加重情节 3**（"schema 未声明却可用"）在 HEAD 上
+            # 原样成立：`dispatch()` 只查工具名 + scope，arguments 从不与 inputSchema 对账，
+            # 于是 `allow_bulk`（爆炸半径护栏绕过位）这类键在 `tools/list` 里看不见却能被调用。
+            # 现在声明即契约：未声明的顶层键一律拒——`tools/list` 展示的参数集 = 实际接受参数集。
+            declared = ", ".join(sorted((_schema.get("properties") or {}).keys())) or "（该工具无参数）"
+            return [
+                _text(
+                    f"参数未声明，已拒绝：{', '.join(unexpected)}｜"
+                    f"{_name} 声明的参数：{declared}"
+                )
+            ], True
         if fn in _TOOLS_WITH_CONTEXT:
             result = fn(store, args, current)
         else:

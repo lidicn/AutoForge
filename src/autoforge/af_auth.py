@@ -448,6 +448,9 @@ class AuthCodeStore:
         self._path = Path(path)
         self._lock = threading.Lock()
         self._codes: dict[str, dict[str, Any]] = {}
+        # 存储级失败尝试窗口（进程内存量，不落盘）：单码计数挡不住"试不存在的码"这一族。
+        self._window_start = 0.0
+        self._window_hits = 0
         self._load()
 
     def _load(self) -> None:
@@ -473,6 +476,10 @@ class AuthCodeStore:
     FAILURE_THRESHOLD = 10
     #: 锁定时长（秒）
     LOCKOUT_S = 300
+    #: 存储级失败尝试窗口（秒）——单位是"整个码库", 不是单枚码
+    ATTEMPT_WINDOW_S = 60.0
+    #: 窗口内允许的失败尝试次数；超限后 `validate()` 对任何码都返回 False
+    ATTEMPT_LIMIT = 10
 
     def create(self, kind: str, ttl_minutes: int | None = None) -> AuthCode:
         now = time.time()
@@ -522,8 +529,17 @@ class AuthCodeStore:
         """有效（存在、未撤销、未过期、未锁定、未消耗）返回 True。
 
         N-P0-sec 修复：validate 现在**仅查询**，不修改状态（消耗/失败计数由调用方显式调 consume/record_failure）。
+        "仅查询"不含窗口阈值读数：超限后一律 False（含真实有效码），失败方向是回落人审队列，
+        不是放开快速通道。调用方须在同一条失败分支上 `record_failure`，否则该面不受窗口保护
+        ——两面（MCP / HTTP）的接线由 `tests/unit/test_v0_8_auth.py` 钉住。
         """
         with self._lock:
+            now = time.time()
+            if (
+                now - self._window_start < self.ATTEMPT_WINDOW_S
+                and self._window_hits >= self.ATTEMPT_LIMIT
+            ):
+                return False
             rec = self._codes.get(code)
             if rec is None or rec.get("revoked") or rec.get("consumed"):
                 return False
@@ -554,12 +570,23 @@ class AuthCodeStore:
     def record_failure(self, code: str) -> bool:
         """记录一次错误授权码尝试。
 
-        仅对**已存在**但验证失败的码有效（未知码不落盘，避免服务端暴露有效码集合）。
+        单码计数仅对**已存在**的码有效（未知码不落盘，避免服务端暴露有效码集合）。
         超过 FAILURE_THRESHOLD 次后进入 LOCKOUT_S 秒软锁定。
 
-        返回：True = 本次失败使码进入锁定（调用方应提示用户稍后再试）。
+        **未知码走存储级窗口**（`ATTEMPT_LIMIT` 次/`ATTEMPT_WINDOW_S` 秒）：单码那层挡的是
+        "反复试同一枚真实码"，而 10^8 码空间的实际枚举路径是"试不存在的码"——它在单码层
+        根本落不到任何记录上，审计侧实测吞吐 195 万次/秒（fp-authcode-bruteforce 证据 [5]），
+        8 位熵只把穷举从 0.51 秒推到约 51 秒，量级不够。窗口计数在进程内存，重启即清零，
+        这是登记在册的边界（主防线仍是高熵 + 一次性消耗）。
+
+        返回：True = 本次失败使**该码**进入锁定（调用方应提示用户稍后再试）。
         """
+        now = time.time()
         with self._lock:
+            if now - self._window_start >= self.ATTEMPT_WINDOW_S:
+                self._window_start = now
+                self._window_hits = 0
+            self._window_hits += 1
             rec = self._codes.get(code)
             if rec is None:
                 return False  # 未知码不落盘，无侧信道
