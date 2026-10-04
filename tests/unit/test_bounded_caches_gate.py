@@ -158,6 +158,49 @@ def test_b_collect_failure_reads_as_scope_not_as_red(tmp_path):
     assert gate.main([str(src)]) == 2
 
 
+def test_b_scope_message_names_the_missing_precondition(monkeypatch):
+    """射程消息要自己说出原因。run 68 在 CI 的 `quality-gates` 作业撞的是"那个作业没装 pytest"，
+    原因写在 stderr、stdout 全空，而第一版只截 `stdout[-300:]` ⇒ 红消息停在冒号后面什么都没有。
+    本机不制造"没装 pytest"的环境（也不许 pip install），这里替换的只是子进程返回值——要判红的
+    是消息组装那一半。
+    """
+    gate = _gate()
+
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "/usr/bin/python3: No module named pytest\n"
+
+    monkeypatch.setattr(gate.subprocess, "run", lambda *a, **k: _Proc())
+    findings, errs = gate.check_tests(
+        [{"module": "af_demo", "attr": "x", "cap": "c", "ttl": "t", "trim": "r",
+          "test": REAL_TEST_ID}]
+    )
+    assert findings == []
+    assert any("没有 pytest" in e for e in errs), errs
+
+
+def test_b_scope_message_carries_whichever_stream_has_the_text(monkeypatch):
+    """非"缺 pytest"那一半也不能丢：rc≠0 时贴出有字的那一路，两路都空要说"均为空"，
+    否则下一个人读到的还是一条没有内容的冒号。"""
+    gate = _gate()
+
+    class _Proc:
+        def __init__(self, out, err):
+            self.returncode, self.stdout, self.stderr = 2, out, err
+
+    monkeypatch.setattr(gate.subprocess, "run",
+                        lambda *a, **k: _Proc("", "ImportError: cannot import name 'zzz'"))
+    _f, errs = gate.check_tests([{"module": "m", "attr": "x", "cap": "c", "ttl": "t",
+                                  "trim": "r", "test": REAL_TEST_ID}])
+    assert any("ImportError" in e for e in errs), errs
+
+    monkeypatch.setattr(gate.subprocess, "run", lambda *a, **k: _Proc("", ""))
+    _f, errs = gate.check_tests([{"module": "m", "attr": "x", "cap": "c", "ttl": "t",
+                                  "trim": "r", "test": REAL_TEST_ID}])
+    assert any("均为空" in e for e in errs), errs
+
+
 # ── 判据 C：新增增长容器必须登记 / 就地豁免 / 不在基线之外 ────────────
 def test_c_new_container_without_registration_goes_red(tmp_path):
     gate = _gate()

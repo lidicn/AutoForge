@@ -283,7 +283,7 @@ def check_tests(entries: Iterable[dict[str, str]]) -> tuple[list[str], list[str]
         )
         if proc.returncode != 0:
             scope_errs.append(
-                f"{file} 收集未成功（rc={proc.returncode}）⇒ 无法核对测试 id：{proc.stdout[-300:]}"
+                f"{file} 收集未成功（rc={proc.returncode}）⇒ 无法核对测试 id：{_collect_reason(proc)}"
             )
             continue
         collected = proc.stdout
@@ -291,6 +291,19 @@ def check_tests(entries: Iterable[dict[str, str]]) -> tuple[list[str], list[str]
             if name not in collected:
                 findings.append(f"注册表指向的用例没被收集：{file}::{name}")
     return findings, scope_errs
+
+
+def _collect_reason(proc: subprocess.CompletedProcess[str]) -> str:
+    """rc≠0 时把**为什么**贴出来，而不是只贴一个码。
+
+    run 68 在 CI 的 `quality-gates` 作业撞到的就是"那个作业没装 pytest"：`python -m pytest`
+    把 `No module named pytest` 写在 stderr、stdout 全空，而第一版只截 `stdout[-300:]` ⇒ 红消息
+    停在冒号后面什么都没有。射程自证要能自证到自己那一半，否则下一个人只能去重跑作业猜。
+    """
+    if "No module named pytest" in proc.stderr:
+        return "解释器里没有 pytest——本作业未装 dev 依赖；判据 B 需要能跑 `python -m pytest --collect-only`"
+    tail = (proc.stdout.strip() or proc.stderr.strip())[-400:]
+    return tail or "（stdout 与 stderr 均为空）"
 
 
 def _exempt_markers(src_root: Path) -> dict[str, str]:

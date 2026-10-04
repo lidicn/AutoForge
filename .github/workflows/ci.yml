@@ -61,9 +61,12 @@ jobs:
         # **永远不可能红**——这正是 MA 同批自查披露的假绿同型（见 DCD 20261001 回填）。
         # 文件名钉死、不通配；装不上即整条 job 失败。
         run: pip install docker/homesdk/homesdk-0.3.1-py3-none-any.whl
-      - name: Install package (门禁冒烟需要可导入的 autoforge)
+      - name: Install package + dev deps (门禁冒烟要能 import autoforge，判据 B 要能跑 pytest)
         # 冒烟门跑的是 `import autoforge`，本仓不装就等于门没门。
-        run: pip install -e .
+        # dev 不是可选项：有界缓存门的判据 B 起 `python -m pytest --collect-only` 核对注册表里
+        # 那条测试 id 真被收集。run 68 撞到的就是这里只装裸包——`No module named pytest` ⇒ rc=1
+        # ⇒ 本门按设计退 2（读不成不许报干净），整条作业红。装声明过的 extra，不在此手搓包名。
+        run: pip install -e ".[dev]"
       - name: 门禁导入检查（P0-1）
         # 干净环境必须能成功 import af_runtime（缺 homesdk 会直接失败）。
         run: python -c "import autoforge.af_runtime"
