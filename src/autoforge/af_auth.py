@@ -525,6 +525,13 @@ class AuthCode:
     locked_until: float | None = None
 
 
+#: 非 owner 面看到的定形掩码（裁定 20261004 §一 F-3："非 owner 面只给掩码 + 状态"）。
+#: 一个真实字符都不给，长度也不跟着码长变——授权码是纯数字（新码 10^8、兼容的老码 10^6），
+#: "泄漏长度"就等于把攻击面从 10^8 指到 10^6。同理不给截断哈希指纹：这点熵离线穷举
+#: 一遍就能反查，指纹在低熵值上不是单向的。
+CODE_MASK = "*" * 8
+
+
 class AuthCodeStore:
     """部署授权码存储：落盘 `.auth/auth_codes.json`。
 
@@ -594,12 +601,15 @@ class AuthCodeStore:
             self._persist()
         return AuthCode(**rec)
 
-    def list(self) -> list[dict[str, Any]]:
-        """返回全部授权码摘要（含明文 code，单 owner 下仅供 owner 查看管理）。
+    def list(self, *, reveal: bool = True) -> list[dict[str, Any]]:
+        """返回全部授权码摘要；`reveal=False` 时明文换成定形掩码（`CODE_MASK`）。
 
         `age_s`（距生成多久）与按绝对上限补出的 `expires_at` 是 DCD 裁定 20261004 §一 Q1
         要的两项：owner 面必须看得见"这枚长期码还活多久"，否则 180 天上限只是后台数字。
-        明文 code 的射程（F-3：收紧到 write 面 + owner/非 owner 拆分）另批处理。
+
+        掩码只挡"看得见"，不挡"改得动"：状态字段（kind/created/expires/revoked/consumed/
+        failed_attempts）两档都给，撤销一枚码仍然要求手里真有那枚码。谁可以 `reveal=True`
+        由 API 面判（`/api/user/auth-codes` 的 owner 面），存储层不自备身份概念。
         """
         now = time.time()
         with self._lock:
@@ -608,7 +618,7 @@ class AuthCodeStore:
                 exp = _longcode_expires_at(c)
                 out.append(
                     {
-                        "code": c["code"],
+                        "code": c["code"] if reveal else CODE_MASK,
                         "kind": c["kind"],
                         "created_at": c["created_at"],
                         "expires_at": c.get("expires_at"),

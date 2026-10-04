@@ -224,6 +224,13 @@ def _scope_ok(scope: str, scopes) -> bool:
     return any(candidate in scopes for candidate in _SCOPE_SATISFIED_BY.get(scope, (scope,)))
 
 
+#: "owner 面"= 这台部署自己的手：登录签发的 JWT 主体（`issue_for_agent("owner", …)`）与
+#: legacy 单管理员令牌（`AUTOFORGE_API_TOKEN` ⇒ subject `shared`）。二者已在
+#: `/api/user/agents` 那处被当成"不是第三方 agent"的同一族排除掉，此处沿用同一口径。
+#: 带 write 的第三方服务令牌（`AUTOFORGE_TOKENS` 里自定 subject）不是 owner ⇒ 只给掩码。
+_OWNER_SUBJECTS = frozenset({"owner", "shared"})
+
+
 def build_app(
     store_root: str = ".forge",
     examples_dir: str | None = None,
@@ -349,6 +356,12 @@ def build_app(
     _write = requires("write")
     _live = requires("live")
     _read = requires("read")
+
+    #: 授权码列表用的依赖：**write 域，但不吃只读降级**。
+    #: 必须在下面 `readonly` 把 `_write` 换成 503 阻塞器之前捕获——那条 GET 本身不写任何东西，
+    #: 跟着写端点一起 503 就把铁律 #6（降级实例照常供读）破了；而它又必须看得到 write 域，
+    #: 因为裁定 §一 F-3 要的是"明文只在 write 面"。
+    _write_scope = requires("write")
 
     # 单写者租约（DCD 裁定一 A）：只读降级时写端点统一拒绝。
     # `readonly=True` 由 serve 抢不到 af_flock 单写者锁时传入。
@@ -984,9 +997,20 @@ def build_app(
         ac = auth_store.create(body.kind, body.ttl_minutes)
         return {"ok": True, "code": ac.code, "kind": ac.kind, "expires_at": ac.expires_at}
 
-    @app.get("/api/user/auth-codes", dependencies=[Depends(_read)])
-    def api_auth_code_list() -> dict[str, Any]:
-        return {"ok": True, "codes": auth_store.list()}
+    @app.get("/api/user/auth-codes")
+    def api_auth_code_list(
+        info: TokenInfo | None = Depends(_write_scope),
+    ) -> dict[str, Any]:
+        """授权码列表：write 域 + owner 面明文／非 owner 面定形掩码（裁定 20261004 §一 F-3）。
+
+        此前挂 `_read` 却把**全部明文码**发给任何带 read 的第三方令牌——一枚用于播报的
+        只读令牌就拿到了创建部署的凭证，这是 §一 F-3 点名的形状。
+
+        `info is None` 只可能来自 `AF_ALLOW_NOAUTH=1` 的本地逃生舱（无令牌⇒无身份概念），
+        按 owner 面处理，与其余端点在逃生舱下的行为一致。
+        """
+        reveal = info is None or info.subject in _OWNER_SUBJECTS
+        return {"ok": True, "codes": auth_store.list(reveal=reveal)}
 
     @app.delete("/api/user/auth-code/{code}", dependencies=[Depends(_write)])
     def api_auth_code_revoke(code: str) -> dict[str, Any]:

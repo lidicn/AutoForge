@@ -4,7 +4,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { NButton, NInput } from 'naive-ui'
 import UiIcon from '../components/UiIcon.vue'
 import { useMainStore } from '../stores/main.ts'
-import { MOCK_CREDENTIALS } from '../api/mock.ts'
 import { errorMessage } from '../logic/format.ts'
 
 const store = useMainStore()
@@ -69,7 +68,7 @@ async function submit () {
 
       <footer class="foot">
         <span class="wordmark">ForgeSight</span>
-        <span class="hint">演示账号 <code class="num">{{ MOCK_CREDENTIALS.username }} / {{ MOCK_CREDENTIALS.password }}</code>（mock）</span>
+        <span class="hint">mock 模式：任意非空用户名与密码即可进入（与后端轻量登录同语义，无用户表）</span>
       </footer>
     </section>
   </main>

@@ -3043,7 +3043,63 @@ run 73（`8689b39`）五作业当场重取仍是 `completed/success`、`failed_s
 - **import-linter 的 C 口径**：裁定判"A（追认）+ C"，口径 = 同一契约连续 ≥5 条 run KEPT 且有可红实测 ⇒ 本仓那条契约目前 KEPT 计数继续按 run 累加，升硬门要等够 5 条并配变异，AF 不预签。
 - 基线那 9 站的 `fsync` 缺失仍按 §二之三十四 的收口顺序走（先 `af_premiere` 两站）。
 
+## 二之三十六、裁定 20261004 §二 那句"升成门"的启动条件由本批自己触发；D 腿上线时变异驱动当场盘出它自己骗得过自己的一档；F-3 的浏览器半边在真 dist 同源部署上取到读数，顺带盘出 `ui-user` 这棵树在 HEAD 就不可用
+
+### 一、先到的是哪一半条件，以及为什么不是"等基线收完"
+
+裁定 §二 的原文启动条件是"等基线 9 站按已钉顺序收完，**或**下一次 `af_auth`/`af_premiere` 被真实改动时——以先到者为准"。本批 F-3 真实改动了 `af_auth.py`（新增 `CODE_MASK` 常量、`AuthCodeStore.list()` 加 `reveal` 形参），**后一半先到**，所以这一腿今天就地上线；那 9 站基线本批一格未收（收它们是下一批的账，顺序不变）。若把"等基线收完"读成唯一条件，这条门就会永久排队——裁定自己写的就是"防永久排队"。
+
+做法上刻意**不开第二份真源**：扩展既有 `scripts/check_atomic_write_sites.py` 成第四条判据（D 腿），而不是新建一个 `check_auth_face_writes.py`。同一族纪律拆成两个脚本，将来只会有一条被人记得跑。
+
+### 二、D 腿的判据、收紧与读数
+
+- **射程** = `af_auth.py` 的全部函数 ∪ 别的文件里"这一条写的作用路径看得出指向 `.auth`"的函数。第二个信号必须按**那条写**收（接收者或 `open()` 的路径参数，或它最近一次赋值的来源里含 `.auth`），不能按"函数体含 `.auth` 字面量"收：`build_app` 那种几百行装配函数里既有 `Path(root)/".auth"/…` 的构造也有与鉴权无关的 `write_text`，按粗信号写第一版实测把它打红（假红）。射程边界在 import 时钉成 `AUTH_LEG_ROOT`，与 A 腿用来读基线的 `SRC` 分开——共用一个开关时，挪 `SRC` 测基线的三条既有测试会被 D 腿的 `exit 2` 一起带崩（临时树里没有本体文件），这个耦合本身就是被测试钉住的。
+- **红** = 授权面上的裸 `write_text` / `write_bytes` / **常量可写模式的 builtin `open()`**（`os.open()` 排除，它是 `O_RDONLY` 目录 fsync 那条正路；模式是变量时不硬套，宁缺勿假红）。这一腿**不接受基线也不接受就地豁免**——A 腿允许"有理由的固定名"，D 腿不给这个出口，因为半截的撤销名单被 `_load_*` 读成"没有这份文件"，等于把已撤销的令牌复活（fail-open），这不是能靠一句理由接受的代价。
+- **exit 2 四档**：`af_auth.py` 不在射程（改名/挪包）、一个函数都没扫到、一个落盘函数都没扫到、**叫得出名字的助手一处都没扫到**。
+- 绿行读数（`gates.sh` 第 142 行跑的那一条，本批原文取自 `gates_batch48.out:33`）：
+  `✓ 原子写站点门禁干净（扫描 97 个文件、os.replace 站点 14 处：走 mkstemp/公共助手 3 处、固定名形状 9 处（其中基线冻结 9 站、就地豁免 2 站）；授权面腿射程函数 46 个、其中落盘 6 个（必经助手 5 个、自带 mkstemp 1 个、裸写 0 个——这一腿不接受基线与豁免））`，`GATES_RC=0`。
+  落盘 6 = 助手本体自己（`mkstemp` 那份）+ 5 个调用它的落盘函数，与 `grep -c "_atomic_write_text("` 在 `af_auth.py` 上数到的 6（1 处 `def` + 5 处调用）对得上。
+- 判据文件从 13 条 collected 涨到 **24 条**（+11），两文件单跑 `57 passed`。
+
+### 三、"什么都不改"的对照档 + 可红实测：M4 是这个驱动抓出来的、这条腿自己的洞
+
+按裁定 §二 要求配齐：真树一个字节不碰（`shutil.copytree` 到临时目录，变形只打在副本上，每档都从内存里的原始字节重摆），先跑对照档再逐档变形。驱动 `mut48_af_dleg.py`，`MUT_RC=0`：
+
+| 档 | 变形 | 取到 |
+|---|---|---|
+| CONTROL | 什么都不改 | `RC=0`，绿行含"裸写 0 个" |
+| M1 | 助手本体换回裸 `path.write_text(...)` | `RC=1`，红行点名 `_atomic_write_text` |
+| M2 | 助手本体换回 `open(str(path), "w", ...)` | `RC=1`，红行含 `open(...,'w')` |
+| M3 | `af_auth.py` 改名成 `af_authorization.py` | `RC=2`，"射程里没有 `af_auth.py` 本体" |
+| M4 | 助手改名 `_atomic_write_text`→`_write_auth_blob`（各处仍旧自己 `mkstemp`） | 第一版 **`RC=0`（假绿）**；收口后 `RC=2` |
+| M5 | 在 `af_api.py` 里新开一个授权面落盘点且自己裸写 | `RC=1`，红行点名 `leak_codes_into_auth_face` |
+
+M4 值得单独写：把 `mkstemp` 和"叫得出名字的助手"记成同一种读数时，**助手被整体改名后这条腿仍旧报绿**，而它那句绿行声称的是"必经那个被评审过的助手"。形状上各处自己 `mkstemp` 也许真的还是原子的，但锚点没了——门在说一件它已经看不见的事。收法是拆成两个读数（`必经助手 N 个 / 自带 mkstemp M 个`）并把"named==0"列进 `exit 2`。这条判据落成 `test_renamed_helper_is_range_failure_not_green`，即"下一个把助手改名掉的人"会在 CI 上撞到，而不是靠人记得。
+
+### 四、F-3 的浏览器半边：同源部署上后端面读数全对，视图面根本不接
+
+起法不碰 NAS、不碰仓库 `.forge`（铁律 #3）：`npm run build` 出 `ui-user/dist`，再用 `af_cli serve --ui-dir ui-user/dist --port 8791 --store-root <临时目录>` 单进程同源托管；令牌两份（legacy 单管理员令牌 = owner 面、`AUTOFORGE_TOKENS` 里一颗 subject 非 owner 的 `write` 令牌 = 掩码面）。
+
+- HTTP 面（`httpface48.py`，只打印形状不打印码值）：`POST /api/user/auth-code` 200、新码 8 位纯数字；owner 面 `GET /api/user/auth-codes` 200 且**看得见明文**（掩码行数 0）；第三方 write 令牌 200、`全掩码=True`、`明文码泄漏=False`、`掩码长度=8 且与真码长度相同=True`（这一条是 `CODE_MASK` 的全部意义：不给出长度就不把 10^8 的攻击面指回 10^6）、状态 11 键齐全（`age_s/code/consumed/created_at/expires_at/expires_at_effective/expires_in_s/failed_attempts/kind/locked_until/revoked`）。
+- 浏览器面（DOM/页内 fetch 驱动）：SPA 起来、`#/auth-codes` 路由渲染出面板骨架与说明文案；同一页面里 `fetch('/api/user/auth-codes')` 带 owner 令牌 **200、1 行、`long:plain`**。⇒ 后端与鉴权分层这一半在"真构建产物 + 同源服务"的形状上确认成立。
+- **结论等级写清楚**：本机浏览器有（browser-use 可导航、可 eval、可读 console）但**无可视视口**，截图不可用，本次走的是 DOM 事件 + 页内 fetch + console 取错，不是像素级确认。
+- 面板上那 1 行明文码在界面上显示成"暂无"——这不是本批改动造成的，见下一节。
+
+### 五、浏览器验证顺手盘出的真缺陷：`ui-user` 这棵树在 HEAD 就不可用（本批一个字节没动它）
+
+三条独立证据，不靠推断：
+
+1. **运行时**：console 首条错 `TypeError: Se.openPairStream is not a function`（`App.vue:32` 调它）。根因在门面：`api/index.ts:8` 是 `export const api: Api = (USE_MOCK ? mockApi : realApi) as Api`，而 `mock.ts:83` / `client.ts:35` 各自把方法装在**一个对象字面量里**（`export const api = {...}`），namespace 上并没有 `openPairStream`/`getAgents` 这些键 ⇒ 整个 `api.*` 调用面在运行时都是 undefined。`vue-tsc` 里对应的那条就是 `index.ts(8,25) error TS2352`。
+2. **名字层**：`stores/main.ts:49` 调 `api.getAuthCodes()`，客户端里那条叫 `listAuthCodes`（:41）；:53 `generateAuthCode` vs `createAuthCode`；:59 `deleteAuthCode` vs `revokeAuthCode`。⇒ 就算门面修好，这三处仍旧各撞一次 undefined。视图侧还有第二层：`AuthCodesView.vue` 过滤 `c.type === 'long'` 而后端字段是 `kind`，`formatDate()` 期待 ISO 串而后端给 epoch 秒。同一棵树里并存 `views/AuthCodeView.vue`（单数）与 `views/AuthCodesView.vue`（复数）两代面板，`App.vue:8` 引的是 `stores/authCodes` 而面板引的是 `stores/main`。
+3. **静态**：`npx vue-tsc --noEmit` 在 `ui-user` 上 `TSC_RC=2`、**51 条 error TS**（28×TS2307 / 16×TS7006 / 4×TS2339 / TS7053、TS2352、TS2322 各 1）。诚实拆账：28 条 TS2307 里含 `naive-ui`、`@vicons/ionicons5` 这类**本机 node_modules 装不全**的模块解析错（本机没跑 `npm ci`，AF 也不在这台机器上装包），这部分**不能算代码缺陷**；TS2352/TS2339/TS7006 那 21 条是代码层，且与 ①② 的运行时证据互相独立地对上。
+
+为什么所有既有门都没拦：`ui-user` 不在 CI 的 vue-tsc 作业射程（那条只跑 `ui/`，已登记在未做清单），`ui-user-mimo` 也不在（它的 node 套件 60 条判据在 HEAD 红 7 条，同样登记）；UI↔路由契约门判的是"路径存在/方法一致"，**不判客户端对象上的方法名**。⇒ 这是"该红的不红"那一族的又一处，且这次红在真机上，不在静态盘点里。
+
+处置：**不在本批修**。收它的正确形状是先定"两棵用户树哪棵是交付面"——`ui-user` 与 `ui-user-mimo` 都在仓、都在写、都进过 handover，把 `ui-user` 的数据层适配补齐（门面 + 三个方法名 + `kind`/epoch 两处值语义 + 两代面板去重）是一次独立的批，补错了树等于白做。已投 DCD（`inbox/20261004-用户WebUI交付面与数据层断链-决策申请.md`），§六 同步登记。本批 F-3 的验收口径因此收在这里：**后端分层 + 同源部署形状 = 实测通过；面板像素级可用性 = 未通过，且未通过的原因不是本批改动**。
+
 ## 四、审计侧
+
+
 
 
 第七轮唯一 finding 在 HEAD 上**属实**（不是已修项的重报）：`HAStateProvider` / `HassStateProvider` 对未知实体静默跳过，而仿真侧 `InMemoryStateProvider` 抛 `UnknownEntity`，同一 IR 两判相反。短路口是 `af_ir/expr.py:514-517`（`and`→`all()`、`or`→`any()` 生成器表达式，未求值分支根本不碰 `Snapshot.get`），所以生产把条件判真、仿真把条件判假。
@@ -3092,6 +3148,7 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
 | 15 | **裁定 20261004 §一 四件的落地回执，其中第 3 件的存量口径与本仓实测不符，请追认更正后的落法**：裁定写"5 处一次登记 + 2 处误报进基线"，那两个数来自 AF 那份申请里**收窄过的判据**（只看"类里 `self.X = {}` 且同类内 `X[k]=`"，且预先只点了审计 §三 提到的那几个模块）。按完整口径（含子包、模块级容器、`deque/set/list` 与九种增长方法）跑在 `src/autoforge` 全集上：扫到 **76** 个增长容器，TTL 与硬上限**同时**具备且有"纯写不读也被回收"测试的只有 **2** 个；申请里点名的 2 处误报确认是误报，但在完整口径下**根本不进这 76**（扫描要求"空初始化 + 同类内增长"）。因此本批落法是"**注册表 2 + 固定键表 2（各带理由，且理由必须同时写在被豁免那一行）+ 基线冻结 74（由 `--print-baseline` 从扫描生成、只减不增）**"，而**不是**照"5 处"逐个盖章——那 3 处不齐的站点进表只能填出不存在的名字（门当场判红），或反过来给它们新增 TTL 与裁剪逻辑，而那正是裁定 §一 3 驳回 C 时拒绝的那种改动。请 DCD 追认这一档；若要求那 3 处 cap-only 站点也逐个补腿，AF 需要**排期授权**而不是顺手做。回执另列**必须回到契约表的四行**（① `READONLY_DEGRADED:` 前缀登记；② §1.2 的 `trace_id` 事件级口径句；③ §1.2 若列过 `node_id` 则删行；④ `instance_id` 过渡字段删除时点仍是 AF v2.6，登记以免与③混读），AF 不编辑他仓文档 | `关键决策部/inbox/20261004-AF-裁定四件落地回执与有界缓存存量口径更正.md`（**已提交，待回话**）。四件的代码已在 `7dbd640`+`c0476e2`；本回执不改变任何已裁语义，只报读数、更正前提、列那四行 |
 | 16 | **安全审计（scoped run）遗留的三问，三问都会改变部署前提或现网可见行为**（本批对 HEAD 复测后剩下的、AF 不自裁的那部分）。① **长期码的绝对 TTL 归谁定**：`AuthCode` 有 `expires_at`，但签发长期码的路径写的是 `expires_at=None` ⇒ 一旦泄露即**永久有效**，加"可配置绝对 TTL（默认 180 天）"会改变**已签发码**的命运，那是运维契约不是 AF 的内部实现。② **MCP 面到底按什么拓扑部署**：`serve` 实测 `--host 0.0.0.0` 且 compose 里 `AUTOFORGE_API_TOKENS` 被注释掉；`AUTOFORGE_MCP_TOKEN` 未设 ⇒ `af_mcp._guard()` 今天**放行一切 scope**（默认拒绝会当场改变可达面，HTTP 只读面与 Agent 面同时受影响）。AF 倾向"读端点保持开放 + 写面明确写进部署前提『只在可信 LAN』，MCP 改默认拒绝"，但这两半都得 DCD 点名，注释里写不算。③ **homesdk wheel 的来源与完整性**：`af_executor.py` 顶层硬依赖 `homesdk`，而 `pyproject` 未声明它，交付物是躺在 `docker/` 下、文件名钉死的一枚 wheel——AF 侧能核"extras 三面一致"（`check_mqtt_runtime_dep.py`），**核不了这枚 wheel 是不是官方构建**（要 Pypi 侧发布账或 DCD 建 hash 台账，同 20261002 §〇 那批 homesdk 记账缺口同族） | `关键决策部/inbox/20261004-AF-安全审计遗留三问-决策申请.md`（**已提交，待回话**）。AF 侧本批**未改**：compose、`--host`、read 端点的鉴权依赖、MCP 默认放行、长期码 TTL 一处没有；同批**已自决**的只有能静态判红的那两族（授权码全店窗口 + MCP 参数↔schema 双向门），判据与八腿变异见 §二之三十三 |
 | 17 | **第 16 件的回执半边 + 一条 AF 读不出对端的前提差**：裁定 §一 F-1 原话"DB 侧持 write 域令牌（`autoforge_api_token`），write 域含 read——DB 侧零改动"，而 AF 的 `requires()` 一直是**逐名比对**、从没有过蕴含关系，homesdk 码里 `grep AUTOFORGE_API_TOKEN\|autoforge_api_token` **0 命中** ⇒ DB 令牌到底含不含 `read` 在 AF 侧不可证。AF 没有照字面只加门（那会把 DB 每 5s 的 ask 轮询整条打断，且只有对端能发现），落了一条**单向**蕴含 `read←{read,write}`（read 不满足 write、live 不满足 read），两向各一条判据。要 DCD 定的三件事：① 契约表那一行现在只给 POST 标了鉴权，GET 半边的要求要不要登记；② DB 令牌的 scope 集合给一句实话（含 `read` ⇒ 蕴含表可删；不含 ⇒ 它是必要修复）；③ "高权域天然含低权域"要不要变成全站口径（AF 不敢单方面扩到 `write←live`）。**同件附三份实测读数**：§六 要求的四仓 gitignore 探测（限定 `src/` 包树：AutoForge 5/0/5、homesdk 2/0/2、memory-agent 5/0/5、**AgentOps 仍 `NOT_A_REPO`**（`rev-parse` rc=128），并写明整仓扫会读出 2010 条 `.venv314` 假吞——射程必须声明）；授权面那条 fail-open 要不要升静态门（AF 建议等基线 9 站收完再谈，否则第一天就挂豁免表）；MCP 默认拒绝与 F-3 的排期请求 | `关键决策部/inbox/20261004-AF-裁定落地回执与write域含read前提差-决策申请.md`（**已提交，待回话**）。今日已落地部分见同一份回执第一节，读数见 §二之三十五 |
+| 18 | **两棵用户 WebUI 哪棵是交付面，以及 `ui-user` 的数据层断链要不要本批就补**（F-3 浏览器验证撞出来的，HEAD 即存在、非本批引入）。实测三件：① console 首条错 `TypeError: Se.openPairStream is not a function`，根因 `ui-user/src/api/index.ts:8` 把**模块 namespace** 当对象用（方法装在 `client.ts:35` / `mock.ts:83` 的 `export const api = {...}` 里）⇒ 整个 `api.*` 调用面运行时都是 undefined，面板显示"暂无"而**同页 `fetch` 同一端点 200、1 行明文**；② 名字层三处（`stores/main.ts:49/53/59` 的 `getAuthCodes`/`generateAuthCode`/`deleteAuthCode` vs 客户端的 `listAuthCodes`/`createAuthCode`/`revokeAuthCode`）+ 值语义两处（视图过滤 `c.type` 而后端字段 `kind`；`formatDate()` 期待 ISO 而拿到 epoch 秒）；③ `vue-tsc --noEmit` 在 `ui-user` 上 `TSC_RC=2`、**51 条**（其中 28 条 TS2307 含本机 `node_modules` 装不全的部分，AF 不把它算成代码缺陷）。同族另一棵：`ui-user-mimo` 的 node 判据 **60 条 / 7 条红**，`store.test.mjs` 在裸 node 下 import 就失败（`import.meta.env` 未定义），已用逐字节 HEAD 对照档确认非本批。三问：Q1 交付面 A=`ui-user` / B=`ui-user-mimo` / C=两棵都要（AF 判最贵）；Q2 CI 射程扩到用户树是"先修后加"还是"先加红着当账"（现在加当天就红）；Q3 两棵树 `VITE_USE_MOCK` 缺省档相反（`=== 'true'` vs `!== 'false'`）要不要统一成"缺省=真后端" | `关键决策部/inbox/20261004-AF-用户WebUI交付面与数据层断链-决策申请.md`（**已提交，待回话**）。AF 侧本批**两棵用户树的数据层一个字节未改**、未自决扩 CI 射程、未加第 12 个响应键（`masked` 属裁定未批的形状改动）；已落地部分（D 腿门、F-3 后端半边、同源部署读数）见同一份申请第五节与 §二之三十六 |
 
 ## 六、未在本版做（登记，不静默）
 
@@ -3156,6 +3213,11 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
 - ~~§五 第 11 件：有界缓存约定只活在审计正文里（`grep 有界|TTL gates.sh scripts/*.py` 零命中）~~ → **裁定 §一 3 判 B（注册表式门禁）并上线为 CI 硬门（`c0476e2`）**：注册表 `af_bounded_caches.py` 给名字、`check_bounded_caches.py` 核对名字（四判据 + 四种射程 `exit 2`），`gates.sh` 新节。绿行 `[有界缓存] 注册表 2 项双腿齐全且测试 id 被收集；固定键 2 项带理由；扫到增长容器 76 个，其中基线冻结 74 个、就地豁免标记 2 处` RC=0，反例 **21 passed**，三档真实仓变异各 `RC=1` 且**各只 1 处判红**。**存量口径按 HEAD 更正并回投追认**（76/2 而非裁定的 5/2，§五 第 15 件）。见 §二之三十。
 - ~~两条"回收写好了没人按"：`FireRecorder.sweep()` 全仓唯一调用方是测试里那句 `sweep(force=True)`；`UndoStore.purge_expired()` `grep -rn purge_expired src` 只命中定义~~ → `Runtime.tick()` 按已装 recorder 的 `sweep()`（**不带 force**，否则 3600s 节流被旁路、逐 tick 变逐 tick 扫盘重写）；超窗快照在**写路径** `record()` 摘除。中间有一次设计被既有判据当场驳回：先版"打开即清"让全量跑红在 `test_af_undo_http.py::test_undo_refuses_expired_window_via_http`（`KeyError: 'expired'`）——那会把"过期撤不了"和"没这条"混成同一个答复。`tests/unit/test_reclaim_callers_wired.py` **6 passed**，两腿各摘一次各取到 `1 failed`。见 §二之三十 第四节。
 
+- **F-3 的"面板可用"这半没拿到**：后端分层与同源部署形状实测通过（§二之三十六 第四节），但 `ui-user` 的授权码面板在 HEAD 就不接后端——门面 `api/index.ts:8` 把 namespace 当对象用、`stores/main.ts` 三处方法名对不上客户端、视图过滤 `type` 而后端给 `kind`、`formatDate` 期待 ISO 而拿到 epoch 秒。AF 不自决修哪棵树（两棵用户树并存、都在写），**交付面认定 + 数据层适配的优先级**已投 DCD（`inbox/20261004-用户WebUI交付面与数据层断链-决策申请.md`）。同族里还有一格留给裁定 §一(a)：契约表此刻仍没有 `/api/user/auth-codes` 那一行（`grep -c "/api/"` 在 `homesdk/doc/ADM联动主题注册表与消息契约.md` 上 = 1，且不是这一条）⇒ GET 半边由 DCD 落笔，AF 不改他人文档，本仓只记录"该行未到"。
+- **`ui-user-mimo` 的 node 判据不在任何门的射程里**：`npm test` 的写法（`node --test tests/`）在本机 node v24 上 `MODULE_NOT_FOUND`，展开成 `tests/*.test.mjs` 后实测 **60 条判据、7 条红**，其中 `store.test.mjs` 在裸 node 下 import 阶段就失败（`import.meta.env` 未定义）——这条红经字节对死的 HEAD 对照档确认**HEAD 即存在、非本批引入**（同名同集合，`RESTORE_IDENTICAL=True`）。CI 的 typecheck/build 作业只覆盖 `ui/`，既不看 `ui-user` 也不看 `ui-user-mimo`。另记一条默认值风险：两棵树的开关写法**相反**——`ui-user/src/api/index.ts:5` 是 `VITE_USE_MOCK === 'true'`（缺省走真实后端），`ui-user-mimo/src/api/index.ts:8` 是 `VITE_USE_MOCK !== 'false'`（缺省走 mock）⇒ 交付构建漏写这一个 env，`ui-user` 会连真后端、`ui-user-mimo` 会静默上线一份 mock，两边都不会有任何读数告诉你走错了哪条。
+- **掩码面上的"删除"会把掩码当码提交**（`ui-user` 的 `handleDelete(code.code)` 在 `reveal=false` 时拿到 `********`）：今天这棵树取不到非 owner 面（面板整体不接，见上两条），而后端撤销一个不存在的码不生效 ⇒ **不是安全洞，是 UX**，等交付面定了随数据层一起收，不在本批自决加第 12 个响应键（`masked` 这类字段属裁定未批的形状改动）。
+- 原子写基线那 **9 站一格未收**（`af_premiere` ×2 → `af_version` → `af_scene` → `af_fire_recorder` → `af_predict`/`af_pretrigger`/`af_shadow`/`af_flock`，顺序是裁定 §二 钉的）；D 腿已上线不等于 A 腿收口，两腿各是各的账。§一 Q2 的 **MCP 默认拒绝**同批未做（裁定 §五 写明下一批单独做，动的是 `_guard` + 49 处 `dispatch(` 测试调用点）。
+
 ---
 
-—— AutoForge 开发 · 2026-10-03
+—— AutoForge 开发 · 2026-10-04

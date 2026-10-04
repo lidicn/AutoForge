@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import { createPinia, setActivePinia } from 'pinia'
 import { useMainStore } from '../src/stores/main.ts'
 import {
-  MOCK_CREDENTIALS,
   __advanceClock,
   __break,
   __reset,
@@ -11,6 +10,10 @@ import {
 } from '../src/api/mock.ts'
 import { __setBackend } from '../src/logic/storage.ts'
 import { formatCountdown } from '../src/logic/format.ts'
+
+//: mock 登录 accepting 任意非空凭据（与后端 `/api/auth/login` 同语义）⇒ 这两个值不是"口令"，
+//: 只是"非空"的两个样本；仓里不再有一对通用演示凭据。
+const CREDS = { username: 'owner', password: 'non-empty-session' }
 
 beforeEach(() => {
   __reset()
@@ -24,13 +27,13 @@ const isErr = (code) => (e) => { assert.equal(e.code, code); return true }
 test('登录成功写会话且可被 bootstrap 恢复；登出清空', async () => {
   const store = useMainStore()
   assert.equal(store.user, null)
-  await store.login(MOCK_CREDENTIALS.username, MOCK_CREDENTIALS.password)
-  assert.deepEqual({ ...store.user }, { username: 'demo', role: 'admin' })
+  await store.login(CREDS.username, CREDS.password)
+  assert.deepEqual({ ...store.user }, { username: 'owner', role: 'admin' })
 
   setActivePinia(createPinia())
   const again = useMainStore()
   again.bootstrap()
-  assert.equal(again.user?.username, 'demo')          // 会话恢复
+  assert.equal(again.user?.username, 'owner')          // 会话恢复
 
   await again.logout()
   setActivePinia(createPinia())
@@ -39,16 +42,17 @@ test('登录成功写会话且可被 bootstrap 恢复；登出清空', async () 
   assert.equal(third.user, null)                      // 登出后不再恢复
 })
 
-test('登录 fail-closed：口令错误不写会话', async () => {
+test('登录 fail-closed：入参不合格 ⇒ 不写会话、不拉数据', async () => {
+  // 判据要的是"失败方向不写会话"这一条，不是"某对口令错"——后者跟着通用凭据一起删掉了。
   const store = useMainStore()
-  await assert.rejects(store.login('demo', 'nope'), isErr('AUTH_FAILED'))
+  await assert.rejects(store.login('owner', '   '), isErr('AUTH_INVALID_INPUT'))
   assert.equal(store.user, null)
   assert.equal(store.agents.length, 0)
 })
 
 test('refresh 拉齐四类数据并算出待批角标 / 短期码倒计时', async () => {
   const store = useMainStore()
-  await store.login(MOCK_CREDENTIALS.username, MOCK_CREDENTIALS.password)
+  await store.login(CREDS.username, CREDS.password)
   assert.equal(store.agents.length, 2)
   assert.equal(store.automations.length, 7)
   assert.equal(store.pendingCount, 2)                  // 待批块 → 红色角标
@@ -59,7 +63,7 @@ test('refresh 拉齐四类数据并算出待批角标 / 短期码倒计时', asy
 
 test('倒计时随 tick 推进，格式为 MM:SS', async () => {
   const store = useMainStore()
-  await store.login(MOCK_CREDENTIALS.username, MOCK_CREDENTIALS.password)
+  await store.login(CREDS.username, CREDS.password)
   const before = store.shortRemain
   const label = formatCountdown(before)
   __advanceClock(60_000)
@@ -71,7 +75,7 @@ test('倒计时随 tick 推进，格式为 MM:SS', async () => {
 
 test('读取 fail-open：单个列表失败保留旧数据并提示', async () => {
   const store = useMainStore()
-  await store.login(MOCK_CREDENTIALS.username, MOCK_CREDENTIALS.password)
+  await store.login(CREDS.username, CREDS.password)
   const before = store.agents.length
   __break('listAgents', 1)
   const ok = await store.refresh()
@@ -84,7 +88,7 @@ test('读取 fail-open：单个列表失败保留旧数据并提示', async () =
 
 test('写操作 fail-closed：改名失败回滚（含自动化名同步回滚）', async () => {
   const store = useMainStore()
-  await store.login(MOCK_CREDENTIALS.username, MOCK_CREDENTIALS.password)
+  await store.login(CREDS.username, CREDS.password)
   __break('renameAgent', 1)
   await assert.rejects(store.renameAgent('agt_living', '客厅中枢'), isErr('NETWORK_ERROR'))
   assert.equal(store.agents.find(a => a.agent_id === 'agt_living').name, '客厅主控')
@@ -96,7 +100,7 @@ test('写操作 fail-closed：改名失败回滚（含自动化名同步回滚�
 
 test('删除 Agent → 列表减一，其自动化全部归档', async () => {
   const store = useMainStore()
-  await store.login(MOCK_CREDENTIALS.username, MOCK_CREDENTIALS.password)
+  await store.login(CREDS.username, CREDS.password)
   await store.deleteAgent('agt_living')
   assert.equal(store.agents.length, 1)
   const owned = store.automations.filter(m => m.agent_id === 'agt_living')
@@ -106,7 +110,7 @@ test('删除 Agent → 列表减一，其自动化全部归档', async () => {
 
 test('启用/归档分组：待批草稿不进启用列表，归档项进归档列表', async () => {
   const store = useMainStore()
-  await store.login(MOCK_CREDENTIALS.username, MOCK_CREDENTIALS.password)
+  await store.login(CREDS.username, CREDS.password)
   const activeIds = store.enabledGroups.flatMap(g => g.items.map(i => i.id))
   const archivedIds = store.archivedGroups.flatMap(g => g.items.map(i => i.id))
   assert.ok(activeIds.includes('auto_01'))
@@ -118,7 +122,7 @@ test('启用/归档分组：待批草稿不进启用列表，归档项进归档�
 
 test('批准待批项 → 角标减一且草稿转正；未知 op_id 不改状态', async () => {
   const store = useMainStore()
-  await store.login(MOCK_CREDENTIALS.username, MOCK_CREDENTIALS.password)
+  await store.login(CREDS.username, CREDS.password)
   await store.approvePending('auto_07')
   assert.equal(store.pendingCount, 1)
   assert.equal(store.automations.find(m => m.id === 'auto_07').status, 'enabled')
@@ -130,7 +134,7 @@ test('批准待批项 → 角标减一且草稿转正；未知 op_id 不改状�
 
 test('驳回待批项 → 草稿归档留痕', async () => {
   const store = useMainStore()
-  await store.login(MOCK_CREDENTIALS.username, MOCK_CREDENTIALS.password)
+  await store.login(CREDS.username, CREDS.password)
   await store.rejectPending('auto_07')
   assert.equal(store.pendingCount, 1)
   assert.equal(store.automations.find(m => m.id === 'auto_07').archived, true)
@@ -138,7 +142,7 @@ test('驳回待批项 → 草稿归档留痕', async () => {
 
 test('短期码同时只一个：创建被拒且状态不变', async () => {
   const store = useMainStore()
-  await store.login(MOCK_CREDENTIALS.username, MOCK_CREDENTIALS.password)
+  await store.login(CREDS.username, CREDS.password)
   const codesBefore = store.authCodes.length
   await assert.rejects(store.createShortCode(10), isErr('SHORT_CODE_EXISTS'))
   await assert.rejects(store.createShortCode(4), isErr('INVALID_MINUTES'))
@@ -152,7 +156,7 @@ test('短期码同时只一个：创建被拒且状态不变', async () => {
 
 test('作废长期码 fail-closed：失败回滚', async () => {
   const store = useMainStore()
-  await store.login(MOCK_CREDENTIALS.username, MOCK_CREDENTIALS.password)
+  await store.login(CREDS.username, CREDS.password)
   const target = store.longCodes[0].code
   __break('revokeAuthCode', 1)
   await assert.rejects(store.revokeCode(target), isErr('NETWORK_ERROR'))

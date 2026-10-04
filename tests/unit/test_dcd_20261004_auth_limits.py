@@ -147,10 +147,10 @@ def test_short_code_ttl_semantics_unchanged(tmp_path, monkeypatch):
 # ── 2. `/api/asks/pending` 的 read 门禁 ─────────────────────────────
 
 
-def _client(tmp_path, monkeypatch, env: dict[str, str]) -> TestClient:
+def _client(tmp_path, monkeypatch, env: dict[str, str], readonly: bool = False) -> TestClient:
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    return TestClient(build_app(str(tmp_path / "store")))
+    return TestClient(build_app(str(tmp_path / "store"), readonly=readonly))
 
 
 TOKENS = {
@@ -365,18 +365,180 @@ def test_paho_is_pinned_with_an_upper_bound_everywhere_it_is_declared():
 
 # ── 5. 明文样例凭据不许进产品码（§一 F-2）─────────────────────────────
 
-#: 射程是 **产品码**：`ui-user-mimo/src/api/mock.ts` 里那对 `MOCK_CREDENTIALS` 是前端 mock 夹具、
-#: 名字自己声明了是 mock，不在这一条的判据里（要收它得连着登录页 prefill 一起收，另批）。
+#: 射程 = 产品码 + 三棵第一方 UI 树的源码面（裁定 20261004 §一 F-2 的 UI 半边同批收口：
+#: `ui-user-mimo/src/api/mock.ts` 那对 `MOCK_CREDENTIALS` 已删，登录页 footer 也不再印口令）。
+#: 判据不写成"扫那一个文件"：它一旦被抄进别的注释、夹具或前端文案，本条照红。
 SAMPLE_CREDENTIAL = "forge2026"
+
+#: 扫描时跳过的目录（构建产物与依赖树：里面的命中不是本仓的字）
+_SCAN_SKIP = frozenset({"node_modules", "dist", ".vite", "__pycache__"})
+
+
+def _product_source_files(root: Path) -> list[Path]:
+    """`os.walk` 就地剪枝：依赖树（node_modules）里有几十万条路径，走进去再过滤会把这条判据
+    变成套件里最慢的一条（本仓实测：全仓 ripgrep 20s 不返回）。"""
+    out: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SCAN_SKIP]
+        for name in filenames:
+            if Path(name).suffix in {".py", ".ts", ".tsx", ".vue", ".mjs", ".js"}:
+                out.append(Path(dirpath) / name)
+    return out
 
 
 def test_plaintext_sample_credential_is_not_carried_in_product_source():
-    """凭据写在 docstring 里 = 把"这套系统有一对通用口令"印进每一个克隆，且永远不会被轮换。
-
-    扫 `src/autoforge/*.py` 全集而不是只扫上一批那一个文件：它一旦被抄进别的注释或夹具，本条照红。
-    """
-    src = Path(__file__).resolve().parents[2] / "src" / "autoforge"
-    files = sorted(src.glob("*.py"))
-    assert len(files) > 20, f"射程读不成（src 目录形状变了）：{len(files)} 个文件"
-    hits = [p.name for p in files if SAMPLE_CREDENTIAL in p.read_text(encoding="utf-8")]
+    """凭据写在 docstring / mock 夹具里 = 把"这套系统有一对通用口令"印进每一个克隆，且永远不会被轮换。"""
+    repo = Path(__file__).resolve().parents[2]
+    roots = [repo / "src" / "autoforge", repo / "ui", repo / "ui-user", repo / "ui-user-mimo"]
+    files: list[Path] = []
+    for root in roots:
+        files.extend(_product_source_files(root))
+    assert len(files) > 100, f"射程读不成（源码面形状变了）：{len(files)} 个文件"
+    hits = [
+        str(p.relative_to(repo)) for p in files if SAMPLE_CREDENTIAL in p.read_text(encoding="utf-8")
+    ]
     assert hits == [], f"明文样例凭据回到了产品码：{hits}"
+
+
+# ── 6. `/api/user/auth-codes` 的 write 门 + owner/非 owner 分层（§一 F-3）──
+
+
+#: 两档面必须同形：面板切档不靠字段增减，只靠 `code` 换形状。
+ROW_KEYS = {
+    "code",
+    "kind",
+    "created_at",
+    "expires_at",
+    "age_s",
+    "expires_at_effective",
+    "expires_in_s",
+    "revoked",
+    "consumed",
+    "failed_attempts",
+    "locked_until",
+}
+
+
+def _login_token(client: TestClient) -> str:
+    """走真实登录面拿 owner JWT——"owner 面给明文"这条判据的主体由端点自己签，不在测试里伪造。"""
+    r = client.post("/api/auth/login", json={"username": "sp", "password": "x"})
+    assert r.status_code == 200, r.text
+    return r.json()["token"]
+
+
+def _seed(client: TestClient, token: str, kind: str = "long", ttl_minutes: int | None = None) -> str:
+    body: dict[str, object] = {"kind": kind}
+    if ttl_minutes is not None:
+        body["ttl_minutes"] = ttl_minutes
+    r = client.post(
+        "/api/user/auth-code",
+        json=body,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["code"]
+
+
+def _rows(client: TestClient, token: str | None) -> list[dict]:
+    headers = {} if token is None else {"Authorization": f"Bearer {token}"}
+    r = client.get("/api/user/auth-codes", headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()["codes"]
+
+
+def test_auth_code_list_refuses_a_read_only_token(tmp_path, monkeypatch):
+    """裁定验收原文那条："read 令牌取 auth-codes 列表 403"。"""
+    client = _client(tmp_path, monkeypatch, {"AUTOFORGE_TOKENS": json.dumps(TOKENS)})
+    r = client.get(
+        "/api/user/auth-codes", headers={"Authorization": "Bearer tok-reporter"}
+    )
+    assert r.status_code == 403
+
+
+def test_owner_face_still_sees_plaintext(tmp_path, monkeypatch):
+    """对照档：如果实现退化成"无脑全掩码"，本条先红——否则掩码判据可以靠关掉整个端点变绿。"""
+    client = _client(tmp_path, monkeypatch, {"AUTOFORGE_TOKENS": json.dumps(TOKENS)})
+    owner = _login_token(client)
+    code = _seed(client, owner)
+    assert code in {row["code"] for row in _rows(client, owner)}
+
+
+def test_legacy_shared_token_counts_as_the_owner_face(tmp_path, monkeypatch):
+    """`AUTOFORGE_API_TOKEN` 的主体是 `shared`（这台部署自己的手），与登录 JWT 同档。
+
+    这一条把"owner 面到底是谁"的口径钉住：本仓 `/api/user/agents` 早就把 shared/owner
+    当同一族排除在"第三方 agent"之外，此处沿用；换成第三方 subject 即红。
+    """
+    client = _client(
+        tmp_path, monkeypatch, {"AUTOFORGE_API_TOKEN": "legacy-admin-token"}
+    )
+    code = _seed(client, "legacy-admin-token")
+    assert code in {row["code"] for row in _rows(client, "legacy-admin-token")}
+
+
+def test_third_party_write_token_gets_the_mask_not_the_code(tmp_path, monkeypatch):
+    """同一枚码、同一次进程：owner 面看得见明文，第三方 write 面只看到掩码。"""
+    client = _client(tmp_path, monkeypatch, {"AUTOFORGE_TOKENS": json.dumps(TOKENS)})
+    owner = _login_token(client)
+    code = _seed(client, owner)
+    assert code in {row["code"] for row in _rows(client, owner)}
+
+    rows = _rows(client, "tok-bot")
+    assert rows, "列表读不成（判据会自证为空）"
+    assert {row["code"] for row in rows} == {af_auth.CODE_MASK}
+    assert all(set(row) == ROW_KEYS for row in rows), "掩码面靠加减字段过关"
+
+
+def test_masked_face_keeps_the_status_fields(tmp_path, monkeypatch):
+    """"只给掩码 + 状态"里的状态不许顺手删掉：owner 看得到哪枚码已消耗/已撤销，非 owner 同样看得到。"""
+    client = _client(tmp_path, monkeypatch, {"AUTOFORGE_TOKENS": json.dumps(TOKENS)})
+    owner = _login_token(client)
+    _seed(client, owner, "short", ttl_minutes=10)
+    short = [r for r in _rows(client, "tok-bot") if r["kind"] == "short"]
+    assert len(short) == 1
+    row = short[0]
+    assert row["kind"] == "short"
+    assert row["revoked"] is False and row["consumed"] is False
+    assert row["expires_in_s"] is not None and row["expires_in_s"] > 0
+
+
+def test_the_mask_does_not_leak_how_long_the_code_is(tmp_path, monkeypatch):
+    """6 位老码仍在validate 面兼容 ⇒ 掩码若跟着码长变化，等于指出"这枚只要穷举 10^6"。"""
+    store_dir = tmp_path / "store" / ".auth"
+    store_dir.mkdir(parents=True)
+    legacy = _write_legacy_store(store_dir / "auth_codes.json", age_days=1)
+    client = _client(tmp_path, monkeypatch, {"AUTOFORGE_TOKENS": json.dumps(TOKENS)})
+    newest = _seed(client, _login_token(client))
+    assert len(legacy) != len(newest), f"两枚码等长，本条判据失效：{legacy}/{newest}"
+
+    rows = _rows(client, "tok-bot")
+    assert len({row["code"] for row in rows}) == 1, "掩码形状随码长变了"
+    assert all(row["code"] == af_auth.CODE_MASK for row in rows)
+    assert all(set(row) == ROW_KEYS for row in rows)
+
+
+def test_readonly_degraded_instance_still_lists_codes(tmp_path, monkeypatch):
+    """铁律 #6：只读降级实例照常供读。这条 GET 要 write **域**但不要写端点的 503 阻塞器。
+
+    写成 `Depends(_write)` 会被 `readonly` 那次的重赋值吃掉 ⇒ 降级实例上整个授权码面板 503。
+    同批对照：真正的写面（创建码）在降级实例上仍然 503，防止"为了过这条把门整个拆掉"。
+    """
+    client = _client(
+        tmp_path,
+        monkeypatch,
+        {"AUTOFORGE_TOKENS": json.dumps(TOKENS)},
+        readonly=True,
+    )
+    owner = _login_token(client)
+    assert _rows(client, owner) == []
+    r = client.post(
+        "/api/user/auth-code", json={"kind": "long"}, headers={"Authorization": f"Bearer {owner}"}
+    )
+    assert r.status_code == 503
+
+
+def test_noauth_escape_hatch_treats_the_caller_as_owner(tmp_path, monkeypatch):
+    """`AF_ALLOW_NOAUTH=1` 下没有身份概念可言：按 owner 面放行，与其余端点在逃生舱下一致。"""
+    client = _client(tmp_path, monkeypatch, {"AF_ALLOW_NOAUTH": "1"})
+    code = _seed(client, "")
+    assert code in {row["code"] for row in _rows(client, None)}

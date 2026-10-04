@@ -9,7 +9,6 @@ import { PAIR_CODE_LENGTH, PAIR_TTL_MS, isPairCode, randomDigits } from '../logi
 import { SHORT_CODE_LENGTH, shortRemainMs, validateShortMinutes } from '../logic/authcodes.ts'
 
 export const MCP_URL = 'http://192.168.2.200:8787/mcp'
-export const MOCK_CREDENTIALS = { username: 'demo', password: 'forge2026' }
 
 export type ApiErrorCode =
   | 'AUTH_FAILED' | 'AUTH_INVALID_INPUT'
@@ -195,11 +194,11 @@ export const mockApi: ApiClient = {
   login (username, password) {
     return call('login', () => {
       const u = (username ?? '').trim()
-      const p = password ?? ''
+      const p = (password ?? '').trim()
       if (!u || !p) throw apiError('AUTH_INVALID_INPUT', '用户名和密码不能为空')
-      if (u !== MOCK_CREDENTIALS.username || p !== MOCK_CREDENTIALS.password) {
-        throw apiError('AUTH_FAILED', '用户名或密码错误')
-      }
+      // 与后端 `/api/auth/login` 同语义：任意非空凭据签发单 owner 会话（轻量登录，无用户表）。
+      // 原先这里比对一对写死的演示凭据并抛 AUTH_FAILED——那既不是后端的行为，又把
+      // "这套系统有一对通用口令"印进了每一个克隆（裁定 20261004 §一 F-2 的 UI 半边）。
       const user: User = { username: u, role: 'admin' }
       return user
     })

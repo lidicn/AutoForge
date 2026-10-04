@@ -9,5 +9,5 @@ const USE_MOCK = (import.meta.env.VITE_USE_MOCK as string | undefined) !== 'fals
 
 export const api = USE_MOCK ? mockApi : httpApi
 
-export { MCP_URL, MOCK_CREDENTIALS, apiError } from './mock.ts'
+export { MCP_URL, apiError } from './mock.ts'
 export type { ApiClient, ApiErrorCode } from './mock.ts'

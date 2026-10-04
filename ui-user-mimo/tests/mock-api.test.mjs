@@ -2,7 +2,6 @@ import { beforeEach, test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   MCP_URL,
-  MOCK_CREDENTIALS,
   __advanceClock,
   __break,
   __reset,
@@ -21,17 +20,17 @@ test('MCP 端点常量固定（顶栏卡片展示用）', () => {
   assert.equal(MCP_URL, 'http://192.168.2.200:8000/mcp')
 })
 
-test('登录成功返回 User；错误口令 fail-closed', async () => {
-  const user = await mockApi.login(MOCK_CREDENTIALS.username, MOCK_CREDENTIALS.password)
-  assert.deepEqual(user, { username: 'demo', role: 'admin' })
-
-  await assert.rejects(mockApi.login('demo', 'wrong'), isErr('AUTH_FAILED'))
-  await assert.rejects(mockApi.login('ghost', 'forge2026'), isErr('AUTH_FAILED'))
+test('登录语义与后端对齐：任意非空凭据 ⇒ 单 owner 会话，用户名原样回显', async () => {
+  // 这一条钉的是"mock 不再自备一对通用口令"：以前错口令抛 AUTH_FAILED，后端从来没有那条分支。
+  const user = await mockApi.login('whoever', 'any-non-empty')
+  assert.deepEqual(user, { username: 'whoever', role: 'admin' })
 })
 
-test('登录异常路径：空入参', async () => {
+test('登录异常路径：空入参（含只有空格）', async () => {
   await assert.rejects(mockApi.login('', ''), isErr('AUTH_INVALID_INPUT'))
-  await assert.rejects(mockApi.login('   ', 'forge2026'), isErr('AUTH_INVALID_INPUT'))
+  await assert.rejects(mockApi.login('   ', 'non-empty'), isErr('AUTH_INVALID_INPUT'))
+  await assert.rejects(mockApi.login('whoever', '   '), isErr('AUTH_INVALID_INPUT'))
+  await assert.rejects(mockApi.login('', 'non-empty'), isErr('AUTH_INVALID_INPUT'))
 })
 
 test('listAgents 按最后活跃倒序', async () => {
