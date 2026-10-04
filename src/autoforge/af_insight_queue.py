@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .af_feedback import clock_now
+from .af_store import atomic_write_text
 from .af_time import SystemTimeSource
 
 __all__ = ["InsightRecord", "InsightQueue", "PersistentInsightSink", "InsightQueueFull"]
@@ -60,9 +61,15 @@ class InsightRecord:
 
 
 def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(dict(payload), ensure_ascii=False, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, path)
+    """落盘一条记录：随机 tmp 名 + fsync（`af_store.atomic_write_text`）。
+
+    原来是固定名 `path.with_suffix(".tmp")` + 裸 `write_text`：同一个 proposal_id
+    被并发复写（pending 与 decided 同名、或同一记录二次提交）时两边写同一个 tmp，
+    交错内容被最后一次 `os.replace` 装上，读侧按坏 JSON 跳过 ⇒ 这条提案静默消失。
+    """
+    atomic_write_text(
+        path, json.dumps(dict(payload), ensure_ascii=False, sort_keys=True)
+    )
 
 
 class InsightQueue:

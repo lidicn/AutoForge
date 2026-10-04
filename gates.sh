@@ -129,6 +129,20 @@ echo "══ MCP 参数↔schema 门禁（消费的参数必须已声明，声�
 mcp_args_rc=$?
 
 echo
+echo "══ 原子写站点门禁（固定名 .tmp 不许是新增形状）════════════════════"
+# 安全审计那份 zip 的 out_of_scope 14 个单元里盘出的另一族：`af_store._atomic_write` 的
+# docstring 把 P1-18 的修法写得明白（随机 tmp 名 + fsync + 目录 fsync），可这条纪律只落在了
+# af_store 自己头上。AST 盘 src 全集实测 16 站：一半以上仍是"固定名 tmp + 裸 write_text +
+# os.replace"，而 `af_persist.save` 的 docstring 还写着"原子替换：崩溃时不会留半截文件"。
+# 坏的形状不是慢一点而是**静默丢数据**：`PersistStore.claims()` 明确允许两个进程在租约到期后
+# 驱动同一条实例 ⇒ 两边写同一个 {id}.json.tmp ⇒ 交错内容被最后一次 replace 装上 ⇒ 读侧对校验和
+# 失败的记录是跳过，那条活着的实例记录就此消失、不报错也不告警。本批修 4 站（af_persist 的实例
+# 记录、af_api 的启停写→store.resave_raw、af_store 的标签删除、af_catalog 三站+洞察队列助手），
+# 其余 9 站进 .atomic-write-baseline.txt 逐条写理由（只减不增）。扫不到站点 = exit 2，不跳这条。
+"$PYTHON" "$REPO/scripts/check_atomic_write_sites.py"
+atomic_rc=$?
+
+echo
 echo "══ 状态源 fail-closed 门禁（snapshot() 不许静默省略未知实体）══════"
 # 第七轮审计的 key_finding：`af_ir/expr.py` 的 `and`/`or` 走 all()/any() **短路**，没被求值的
 # 那一支永远不会去读快照 ⇒ "缺失留给运行时发现"在 fail-open 一侧根本不成立：仿真软失效不执行、
@@ -237,6 +251,15 @@ fi
 if [ $mcp_args_rc -ne 0 ]; then
   echo "结论：MCP 参数↔schema 门禁红（exit=$mcp_args_rc）。\`dispatch()\` 现在按声明拒未声明的顶层键：消费未声明＝参数被拒后**静默失效**，声明未消费＝\`tools/list\` 对调用方撒谎，缺 \`properties\`＝那道拒绝在这个工具上根本没装。故意留一侧就地写 \`# mcp-args: exempt(理由)\`。"
   exit $mcp_args_rc
+fi
+
+if [ $atomic_rc -eq 2 ]; then
+  echo "结论：原子写站点门禁读不出射程（exit=$atomic_rc）。三种情形：扫描目录不存在、某个 .py 解析失败、\`src/\` 下一个 \`os.replace\` 站点都没扫到。三者都让本门从『判定形状』退化成『没有发现』——报『干净』就是假绿，先把锚点口径对上真实代码。"
+  exit $atomic_rc
+fi
+if [ $atomic_rc -ne 0 ]; then
+  echo "结论：原子写站点门禁红（exit=$atomic_rc）。新增的 \`os.replace\` 站点要么走 \`af_store.atomic_write_text\`（随机 tmp 名 + fsync，P1-18 那条已经修过的路），要么进 \`.atomic-write-baseline.txt\` 并逐条写理由：固定名 \`x.tmp\` 遇上第二个写者就是互相截断，而 \`PersistStore\` 的租约设计**明确允许**两个进程先后驱动同一条实例——截断后的记录校验和不过，读侧直接跳过，等于那条实例静默消失。基线只减不增；确实要留这一站就地写 \`# fixed-tmp: exempt(理由)\`（理由为空也判红）。"
+  exit $atomic_rc
 fi
 
 if [ $snap_rc -eq 2 ]; then

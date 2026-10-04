@@ -907,7 +907,7 @@ class Predictor:
     def _quarantine(self, path: str) -> None:
         """把坏文件挪走（保留现场），下一次保存重建。"""
         try:
-            os.replace(path, path + ".corrupt")
+            os.replace(path, path + ".corrupt")  # fixed-tmp: exempt(语义是把坏文件挪走保留现场，不是临时文件写；目标名 .corrupt 唯一)
         except OSError as exc:  # pragma: no cover - 只读目录等
             logger.warning("无法隔离损坏的预测模型文件：%s", exc)
 

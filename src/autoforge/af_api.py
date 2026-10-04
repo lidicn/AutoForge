@@ -1074,18 +1074,14 @@ def build_app(
         }
 
     def _resave_graph_raw(name, mutate):
-        """加载最新记录、修改 graph 子字典、以新版本原子落盘（用于启停）。"""
-        rec = store.load_record(name)
-        rec.setdefault("graph", {})
-        mutate(rec["graph"])
-        version = (store.latest(name) or 0) + 1
-        rec["version"] = version
-        rec["saved_at"] = datetime.now(timezone.utc).isoformat()
-        target = store._dir(name) / f"v{version}.json"
-        tmp = target.with_suffix(".tmp")
-        tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, target)
-        return version
+        """启停这类"只翻一个旗子"的写：整段交给 `GraphStore.resave_raw`。
+
+        原来这段写在端点闭包里：`store._dir()`（伸进 store 的私有面）+ 固定名
+        `v{N}.tmp` + 裸 `write_text` + `os.replace`，**既不拿 `.lock` 也不 fsync**——
+        两条并发 `/enable|/disable` 会算出同一个 `v{N}`、写同一个 tmp 文件，
+        被交错过的半截 JSON 再以"最新记录"的名字落进目录。
+        """
+        return store.resave_raw(name, mutate)
 
     @app.get("/api/automations", dependencies=[Depends(_read)])
     def api_automations(group_by: str = Query(default="agent")) -> dict[str, Any]:

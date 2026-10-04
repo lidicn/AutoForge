@@ -289,12 +289,15 @@ class DeviceCatalog:
         return parsed
 
     def _save(self, payload: dict[str, Any]) -> None:
-        """原子落盘（`.tmp` + `os.replace`），失败不静默。"""
+        """原子落盘（随机 tmp 名 + fsync），失败不静默。
+
+        这一站原来既没有锁也没有随机 tmp 名：两个进程同时刷新目录会写同一个
+        `catalog.json.tmp`，交错内容被最后一次 `os.replace` 装上，下次 `_load()`
+        把整份设备目录按损坏读空。走 `af_store.atomic_write_text`（本文件已 import）。
+        """
         path = self.catalog_path
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
     def area_of(self, entity_id: str) -> str:
         """P0-7：查询实体所属区域（房间名）。供 DeviceGuardRegistry 的 area 规则匹配使用。
@@ -568,9 +571,9 @@ class DeviceCatalog:
             aliases = self._load_aliases()
             aliases[q] = eid
             self.alias_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.alias_path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(aliases, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp, self.alias_path)
+            atomic_write_text(
+                self.alias_path, json.dumps(aliases, ensure_ascii=False, indent=2)
+            )
         return {"ok": True, "alias": q, "entity_id": eid, "total": len(aliases)}
 
     def remove_alias(self, name: str) -> dict[str, Any]:
@@ -580,9 +583,9 @@ class DeviceCatalog:
                 return {"ok": False, "error": f"未找到别名 {name!r}"}
             aliases.pop(name)
             self.alias_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.alias_path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(aliases, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp, self.alias_path)
+            atomic_write_text(
+                self.alias_path, json.dumps(aliases, ensure_ascii=False, indent=2)
+            )
         return {"ok": True, "removed": name, "total": len(aliases)}
 
     # ── v1.6.0 P0：device 归并（同物理设备多 entity_id → 一条设备卡）──

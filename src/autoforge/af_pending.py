@@ -207,4 +207,5 @@ def os_replace(src: Path, dst: Path) -> None:
     """跨平台原子替换（延迟导入，避免与 store 的 `_atomic_write` 命名冲突）。"""
     import os
 
+    # fixed-tmp: exempt(这一站只是 os.replace 的跨平台包装，tmp 名由调用方给，本函数无临时文件构造)
     os.replace(src, dst)

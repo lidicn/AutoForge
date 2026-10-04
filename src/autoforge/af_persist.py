@@ -19,7 +19,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -27,7 +26,7 @@ from typing import Any, Mapping
 from .af_flock import owner_id
 from .af_instance import Instance, InstanceContext, InstanceTimer
 from .af_ir import Automation
-from .af_store import restore_context
+from .af_store import atomic_write_text, restore_context
 from .af_time import TimeSource
 
 __all__ = ["PersistStore", "record_instance", "restore_instance", "INSTANCES_SUBDIR"]
@@ -177,13 +176,12 @@ class PersistStore:
         # B 增强：SHA256 校验和（对齐 af_store），读时校验 + 损坏段跳过
         record[_SHA256_KEY] = _record_checksum(record)
         path = self._path(instance.instance_id)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-        try:
-            tmp.chmod(0o600)  # ADM B-14：敏感实例文件限权
-        except OSError:
-            pass
-        os.replace(tmp, path)
+        # 随机 tmp 名 + fsync（`af_store._atomic_write` 那条 P1-18 的修法）。旧形状是
+        # `path.name + ".tmp"` 固定名 + 裸 `write_text`：租约到期后两个进程都会驱动同一条
+        # 实例（`claims()` 明确允许），两边写同一个 tmp、交错内容被最后一次 replace 装上，
+        # 而读侧对校验和失败的记录是**跳过** ⇒ 这条活着的实例记录静默消失，不报错也不告警。
+        # mkstemp 建的临时文件本身就是 0600，也就没有"先 0644 落盘再补 chmod"那个可读窗口。
+        atomic_write_text(path, json.dumps(record, ensure_ascii=False, indent=2))
         return path
 
     def claims(self, record: Mapping[str, Any], clock: TimeSource) -> bool:

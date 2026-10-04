@@ -1,0 +1,18 @@
+# 原子写站点基线（`scripts/check_atomic_write_sites.py`）：只准减少，不准新增。
+# 键 = 相对 src/ 路径::类.方法（刻意不含行号——挪行不该让基线失效）。
+# 由 `python scripts/check_atomic_write_sites.py --print-baseline` 生成，每条后面补一句理由。
+#
+# 理由写的是"这一站为什么可以暂时留固定名 tmp"，不是"这一站没问题"。
+# 全部 9 站的共同残留风险：缺 fsync ⇒ 掉电/容器强杀后可能留下"名字合法、内容半截"的文件；
+# 固定名 ⇒ 只有"同一文件存在第二个写者"时才会真的互相截断。
+# 下一批收口顺序（先敏感、再 fail-open 的旁路）：af_premiere 两站 → af_version → af_scene →
+# af_fire_recorder → af_predict/af_pretrigger/af_shadow/af_flock。
+autoforge/af_fire_recorder.py::JsonFireStore._save  # 进程内由 threading.RLock 串行；现网单写者。丢的代价是当日触发计数归零，不参与安全判定
+autoforge/af_flock.py::FileLock._stamp  # 写锁信息文件时已持有内核 flock（跨进程天然串行），整段再包 try/except OSError；最坏是锁信息不准，不影响互斥本身
+autoforge/af_predict.py::Predictor._save  # 写失败 fail-open 且只告警：坏文件的代价是重启后预测模型从空开始，不打断运行时
+autoforge/af_premiere.py::PremiereStore.save  # 各自持 threading.Lock、进程内串行；跨进程双写要两个 AF 实例共享 persist 目录（现网不存在）。敏感面：首演码丢要重发 ⇒ 下一批第一个修
+autoforge/af_premiere.py::TrialStore.save  # 同上（试演期仓库），与 PremiereStore.save 一批收
+autoforge/af_pretrigger.py::TriggerHistory._save  # 与 af_predict._save 同族：单进程、写失败 fail-open 只告警
+autoforge/af_scene.py::SceneManager._save_state  # 公开方法全在 RLock 内串行；写失败记 last_persist_error 并告警（不静默），代价是场景快照回退到上次落盘
+autoforge/af_shadow.py::ShadowLogStore.save  # F14 验证器单写者，跑批时才调用；docstring 自陈"抄 af_version._save 模式"⇒ 与那族一起收
+autoforge/af_version.py::VersionManager._save  # 本模块 docstring 明确"不 import af_store 内部"（分层自律）；失败 raise VersionError 而非静默。要修得先定用什么助手，不是顺手替换

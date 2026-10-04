@@ -242,6 +242,28 @@ class GraphStore:
             self.set_tags(name, tags)
         return version
 
+    def resave_raw(self, name: str, mutate: Any) -> int:
+        """加载最新记录、就地改 `graph` 子字典、以新版本落盘（"只翻一个旗子"的写）。
+
+        为什么在 store 层而不是调用方：`.lock` 的纪律、版本号与原子写必须和写盘在同一处。
+        调用方手抄这一段（旧形状在 `af_api._resave_graph_raw`）会同时丢掉锁与随机 tmp 名——
+        两条并发启停算出同一个 `v{N}`、写同一个固定名 `v{N}.tmp`，最后一次 `os.replace`
+        装上的就是被交错过的半截 JSON，而它带着合法的名字躺在目录里等着当最新记录读。
+        """
+        directory = self._dir(name)
+        directory.mkdir(parents=True, exist_ok=True)
+        with FileLock(directory / ".lock", timeout=self.lock_timeout):
+            rec = self.load_record(name)
+            mutate(rec.setdefault("graph", {}))
+            version = (self.latest(name) or 0) + 1
+            rec["version"] = version
+            rec["saved_at"] = _utc_now_iso()
+            _atomic_write(
+                directory / f"v{version}.json",
+                json.dumps(rec, ensure_ascii=False, indent=2),
+            )
+        return version
+
     def load_record(self, name: str, version: int | None = None) -> dict[str, Any]:
         """读取某版本记录（缺省取最新）；不存在抛 FileNotFoundError。"""
         target = version if version is not None else self.latest(name)
@@ -406,7 +428,13 @@ class GraphStore:
         return path
 
     def _delete_archive(self, name: str) -> None:
-        """彻底删除某归档名（版本目录 + 置信度文件 + 标签侧车），供 overwrite 导入。"""
+        """彻底删除某归档名（版本目录 + 置信度文件 + 标签侧车），供 overwrite 导入。
+
+        标签那半必须**整段在 `tags.lock` 内**读-改-写：读在锁外等于用一份可能过期的
+        全量字典覆盖别人刚写进去的标签（`set_tags` 已经这样收口，见它的 docstring）。
+        这里不套 `self._write_tags()`——它自己会再拿一次同一把锁，而 `FileLock` 不做
+        重入引用计数，嵌套会由内层 `release()` 把外层的锁放开。
+        """
         directory = self._dir(name)
         if directory.is_dir():
             for p in directory.glob("v*.json"):
@@ -418,10 +446,13 @@ class GraphStore:
         conf_path = self.root / f"{directory.name}.conf.json"
         if conf_path.exists():
             conf_path.unlink()
-        data = self._read_tags()
-        if name in data:
-            data.pop(name, None)
-            self._write_tags(data)
+        with FileLock(self.root / "tags.lock", timeout=self.lock_timeout):
+            data = self._read_tags()
+            if name in data:
+                data.pop(name, None)
+                _atomic_write(
+                    self._tags_path(), json.dumps(data, ensure_ascii=False, indent=2)
+                )
 
     def _unique_name(self, base: str) -> str:
         """为 rename 策略找一个未占用名字：`base_import` / `base_import2` …"""

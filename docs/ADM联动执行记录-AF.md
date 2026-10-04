@@ -2202,6 +2202,7 @@ C:\Users\lidicn\AppData\Local\Programs\Python\Python313\Lib\site-packages\paho\m
 | 本批之四十二（run 69 复查闭合 + §六 那条反向读数开局，纯文档） | 上一行留下的半格"作业级待 run 复测"由 **run 69（`d4994a8`）落回实测**：整条 `completed/success`、五作业逐条 `failed_steps=[]`，runner 上本门那行绿读数与本机同脚本重跑**逐字相同**（`EQUAL True`）⇒ 34 条连续绿断在 run 68 之后，新账从 run 69 重新计、当前 **1 条**。§六 那条"33 条 UI 从未调的路由要先分类"的开局读数出来了，第一条结论却是**这个反向数现在不能当"没人用"读**：门只扫 `ui/src`（开发面板），而 `ui-user/src/api/client.ts`（用户端 ForgeSight）逐条真调 `automations` 一族 7 条 + `user/agents` 3 条 + `mcp/pair-request` ⇒ 33 条里**至少 11 条是门射程外的第一方消费者**，先分树再分类否则会把活接口判成冗余。同批盘出两棵树 `USE_MOCK` 默认档相反（`ui/src/api/index.ts:4` 的 `!== 'false'` 默认走 mock，靠 `.env.production` 关；`ui-user/src/api/index.ts:5` 的 `=== 'true'` 默认走真后端）：构建期内联 ⇒ 非运行期缺陷，但"改档必须重新 build"只写在 `ui/README.md`。收尾另自证一次**接近事故**：一次 `Edit` 把 `old_string` 选成相邻 bullet 的开头 ⇒ 覆盖掉那条的开头，而**numstat 对这件事是哑的**（受损当时 `12 1`，唯一那处"删"属于另一行被改写；被并行的文字不减行），靠 `git show HEAD` 逐行比对才捞回（做法与口径见 §四 末条）。见 §二之三十一 |
 | 本批之四十三（那道门只看了三棵第一方 UI 树里的一棵：`UI↔路由` 扩到全部前端 + 泛型 `;` 那条静默漏，`9c32ea0`） | 起因是本批 §六 盘点里逼出的问题："33 条 UI 从未调"那个"UI"指谁——答案只指 `ui/src`（开发面板），而产品前端是 `ui-user/` 与 `ui-user-mimo/` 那两棵。纳入后反向读数 **33 ⇒ 16**，出去那 17 条是 `automations`/`user/agents`/`auth`/`pending` 四族的**活接口**（不是可删的死面）。为读得动它们先修三处：第二/三张调用脸 `req(path[, {method:'X'}])`（省略即 GET）、`/api` 前缀按路径自己带不带归一（mimo 的 `API_BASE` 默认空串）、以及**泛型实参里的 `;`**——旧跳过循环 `elif text[i] in "(;"` 遇 `req<{ ok: boolean; user: User }>(…)` 直接退出 ⇒ **整条调用静默丢掉、连"解析不出"都不报**，修前那两棵树的读数是 11/16 与 7/19 ⇒ 85 个调用点里 17 个（两成）以"没看过"混在"干净"里；这正是本门 C 判据的反身版。另加两条射程判据：`UI_TREES` 登记树读不出调用点 ⇒ `exit 2`、盘上多出未登记的 UI 形状顶层目录（`package.json` + `src/`）⇒ `exit 2`（"漏一棵树"最坏的表现恰恰是绿行）；`gates.sh` 改走 `--all`。13 条反例（该文件 24 ⇒ 37）+ 六档变异（`8/3/3/1/1/4 failed`，红的不是同一批测试 ⇒ 拦六件不同的事；未变异对照 `37 passed`、`RESTORE_OK True`）。全链 `GATES_RC=0`、`2894 passed / 51 skipped / 7 subtests RC=0`（上批 2881 + 本批 13）。边界照登记不静默：mimo 的配对流走 `EventSource` 不进门；剩下 16 条的**逐条定性仍未做**。见 §二之三十二 |
 | 本批之四十四（安全审计那份从未进处置链；对 HEAD 复测后真洞是"枚举不存在的码不计数"＋MCP 六键"没声明却能传"） | `AutoForge安全审计报告.zip` 在仓里被跟踪，但 `docs/` 检索"安全审计"只命中 zip 自己、§〇/§五 从无对应行 ⇒ **先补记账再处置**。它的 `source_ref` 是 `zip-snapshot-of-default-branch-2026-09-29T22:43`（**无 sha**，与第六/七轮"按快照读码把已修的当未修重报"同一族失败方式），按铁律 #11 对 `927b044` 逐条重跑：**已修被重报 5 条 / 成立 2 条**（七行钉源表在处置记录 §〇）。成立那两条比报告写的更深：① 报告要"给 MCP 加 RateLimiter"，实测 `record_failure()` 在 `rec is None` 时直接 `return False` ⇒ **试一个不存在的码任何计数器都不加**，协议层 limiter 只按住症状；防线因此做进 `AuthCodeStore`（`ATTEMPT_WINDOW_S=60.0`/`ATTEMPT_LIMIT=10` 全店窗口，在早退**之前**计数，`validate()` 窗口内打满一律 False，失败方向仍是回落人审队列），并明写边界"**进程内、重启清零**"，不写成"暴力破解已根治"。② `dispatch()` 从不把 `arguments` 与 `inputSchema` 对账 ⇒ 报告的一句"未声明的键可传入"被**量成集合**：31 工具双向对账 **6 个键没声明却能传**，其中 `allow_bulk` 是 `af_service` 的爆炸半径护栏旁路、**旁路开关在对外契约里不存在**。两处各自修：运行期 `_undeclared_args()` 在 `_guard(scope)` **之后**拒收并回显声明表（顺序本身是判据），静态新门 `scripts/check_mcp_arg_schemas.py`（消费未声明/声明未消费/缺 `properties` 三条，handler 整包转发或锚点改名 ⇒ **`exit 2` 不报干净**）+ `gates.sh` 新节两条红分支；`allow_bulk` **补声明而非删参数**（删了等于把显式动作改回隐式）。附带把 `load_graph` 的规模上限从"有代码无读数"变成有读数（此前 `tests/` **0 命中**，5 条）。读数：全链 **2921 passed / 51 skipped / 7 subtests RC=0（356.73s）**＝基线 2894 **+27**（11+11+5 逐文件归位）、`gates.sh RC=0` 新门绿行 `31 个工具：声明参数 61 个、handler 消费 61 个，双向差额 0；现场豁免 0 处`、变异八腿 `1f/2f/门 2 条/门 6 条/RC=2/RC=2` 且 CONTROL 与 RESTORE 均 `RC=0`、numstat `gates.sh 21 0`+`af_auth.py 29 2`+`af_mcp.py 59 8`。**三问不自裁**（长期码 `expires_at=None` 的绝对 TTL / `--host 0.0.0.0` 且 `AUTOFORGE_MCP_TOKEN` 未设 ⇒ `_guard()` 放行一切 / homesdk wheel 来源与完整性）⇒ §五 第 16 件；本批**未改** compose、`--host`、read 端点鉴权依赖、MCP 默认放行、长期码 TTL。见 §二之三十三 |
+| 本批之四十五（`out_of_scope` 第二件落地：`固定名 .tmp` 那一族——静态门 + 7 处收口 + 9 站冻结） | §二之三十三 台账里"14 个面不许读成无问题"的**第一件真正落地**：新门 `scripts/check_atomic_write_sites.py`（三判据 + `exit 2` 档 + 键含类名），基线 `.atomic-write-baseline.txt` 9 站逐条理由、只减不增，另 2 站就地豁免；收口 7 处（`af_persist.save`、启停写下沉成 `GraphStore.resave_raw`、`_delete_archive` 标签 RMW 进 `tags.lock`、`af_catalog` 三站、`af_insight_queue._atomic_write`）。新增 26 条测试（门 13 + 值语义 13，其中 1 条 POSIX-only 在本机 skip 并带理由），控制组 `25 passed, 1 skipped`、七档变异 M1…M7 全红（M2 第一遍没红——断言吃了 `save()` 留下的旧账，已改成调用前清零），全量 `2946 passed, 52 skipped, 7 subtests in 125.88s`（较上批 +25/+1，与本批新增数严格对齐），`gates.sh` 全链 `GATES_RC=0`。三条实测出的对端可见形状（`asks/pending` 无鉴权 / `login` 任意凭据发永久全权令牌 / `auth-codes` read 面给明文码全量）AF 未动，写入 DCD 那件 §五 续查。run 73 待复查，不预签连续绿。 |
 
 ## 二之二十六、联动桥的运行时依赖此前**一处声明都没有**：paho 补齐并做成"三面一致"静态门禁（`739a328`）
 
@@ -2828,6 +2829,96 @@ wheel 躺在 `docker/` 下）。三条都会改变**部署前提**或**现网可
 处置记录 §四 把"AF 现在能说什么／不能说什么"分列，没自签任何一份"已审"。
 
 ---
+
+## 二之三十四、审计 zip 的 `out_of_scope` 第二件落地：`固定名 .tmp` 那一族——一条静态门、7 处收口、9 站冻结
+
+### 一、这一族从哪来（不是"顺手重构"）
+
+§二之三十三 §四 记的那 14 个 `out_of_scope` 单元里，"高优先三件"第二件就是
+`af_store`/`af_persist` 的路径写入。本批不等第二轮审计，直接把这一族的**形状**用 AST 盘出来：
+`af_store._atomic_write` 的 docstring 把 P1-18 的修法写得很清楚（随机 tmp 名 + 写后 fsync +
+replace 后 fsync 目录），可这条纪律只落在了 `af_store` 自己头上——同一个仓里另有一批落盘点仍是
+"固定名 `x.tmp` + 裸 `write_text` + `os.replace`"，而 `af_persist.save` 的 docstring 还写着
+"原子替换：崩溃时不会留半截文件"。
+
+坏的形状不是"慢一点"而是**静默丢数据**，两处各自成立：
+
+- `af_persist.save`：`PersistStore.claims()` 的租约设计**明确允许**两个进程在租约到期后驱动同一条实例
+  ⇒ 两边写同一个 `{id}.json.tmp` ⇒ 交错内容被最后一次 `os.replace` 装上 ⇒ 读侧 `records()` 对校验和
+  失败的记录是**跳过** ⇒ 那条活着的实例记录就此消失，不报错也不告警。
+- `af_catalog._save`：整站**没有任何锁**，坏一次的代价是下一次 `_load()` 把整份设备目录按损坏读空。
+- `af_api._resave_graph_raw`（启停写）：这段在端点闭包里手抄 store 的落盘纪律，伸进 `store._dir()` 私有面，
+  两条并发 `/enable|/disable` 会算出同一个 `v{N}`、写同一个 `v{N}.tmp`，丢一次更新。
+
+### 二、本批收口 7 处（6 处 tmp 形状 + 1 处锁范围）
+
+| 站点 | 改法 | 为什么是这一处 |
+|---|---|---|
+| `af_persist.save` | 走 `af_store.atomic_write_text`（删掉本地固定名 tmp + `chmod` 那三行） | 租约双写是**设计允许**的，不是极端场景；`mkstemp` 建的临时文件本身就是 0600，也就没有"先 0644 落盘再补 chmod"那个可读窗口（ADM B-14 那一半顺带闭合） |
+| `af_api._resave_graph_raw` | 整段下沉为 `GraphStore.resave_raw(name, mutate)`，端点只剩一行转调 | 锁的纪律、版本号与原子写必须和写盘在同一处；留在调用方就等于下一次再漏一把锁 |
+| `GraphStore.resave_raw`（新） | `directory/.lock` 内读-改-写 + `_atomic_write` 落 `v{N}.json` | 同上 |
+| `GraphStore._delete_archive` 标签半 | 读-改-写整段挪进 `tags.lock`，且**不**套 `self._write_tags()` | `FileLock` 不做重入引用计数，嵌套会由内层 `release()` 把外层的锁放开——这是 §二之三十 那条"A4  hazards"的同型坑，注释里写明 |
+| `af_catalog._save` / `set_alias` / `remove_alias` | 三站统一走 `atomic_write_text`（该文件早已 import 了这个助手，只有这三站在用旧形状） | 同一文件内两种口径 = 纪律没扩散 |
+| `af_insight_queue._atomic_write` | 助手本体改走 `atomic_write_text`，一处收口覆盖它全部调用点 | 队列的 pending/decided 两类记录都经它 |
+
+### 三、新门 `scripts/check_atomic_write_sites.py`（283 行）+ 基线 9 站
+
+三判据：A 函数体内有 `os.replace` 而该函数没有 `mkstemp`/`atomic_write_text`/`_atomic_write` ⇒ 必须
+登记基线或就地豁免；B `# fixed-tmp: exempt(理由)` 理由为空判红；C 扫不到任何站点／解析失败／目录不存在
+⇒ **`exit 2`**（射程读不成时不许报"干净"）。键是 `相对路径::类.方法`（**不含行号**，且必须含类名——
+`af_premiere.py` 里 `PremiereStore.save` 与 `TrialStore.save` 同名，方法名单独当键会让"修好一处"连带
+冻结另一处）。基线 `.atomic-write-baseline.txt` 18 行由 `--print-baseline` 生成、**只减不增**，每条一句
+"为什么这一站可以暂时留"。
+
+HEAD 实测绿行（`GATES_PYTHON=python bash ./gates.sh` 全链 `GATES_RC=0`）：
+
+```
+✓ 原子写站点门禁干净（扫描 97 个文件、`os.replace` 站点 13 处：走 mkstemp/公共助手 2 处、
+  固定名形状 9 处（其中基线冻结 9 站、就地豁免 2 站））
+```
+
+其中"公共助手 2 处"＝ `af_config.Config._atomic_write` 与 `af_store._atomic_write`（P1-18 那条修法本身）；
+"就地豁免 2 站"不是风险形状（`af_predict.Predictor._quarantine` 是"把坏文件挪走保留现场"、
+`af_pending.os_replace` 只是跨平台包装）。本批移出的 6 站改完后再也不出现 `os.replace`，故反推开工前
+为 13 + 6 = **19 站**；开工前那次 grep 的"16"是**行级粗盘**，与门的函数级 + 只认 `os.` 限定两个口径
+都对不上，因此本批以门读数为唯一口径。
+
+### 四、读数（新增 26 条：门 13 + 值语义 13）
+
+- 控制组（未变异）：`25 passed, 1 skipped, 1 warning in 8.39s`，门 `RC=0`。那 1 条 skip 是 POSIX-only 的
+  实例记录位模式判据（`mode & 0o077 == 0`，即 ADM B-14 那半），本机 Windows 判不了，带理由跳过——
+  **不是**"这条已过"。
+- 七档变异（`M1…M7`，逐档从内存里的原始字节还原并自证还原后字节相同）全部按预期变红：
+  M1 固定名 tmp 回退 / M2 不拿 `.lock` / M3 标签读回到锁外 / M4 新增一站固定名 / M5 基线键抄错 /
+  M6 豁免空理由 / M7 端点重新伸进 `store._dir`。完整表在
+  `docs/audit/审计报告_安全审计_核实与修复.md` §九。
+- **M2 第一遍没红**，这条要记进教训：那版断言在调用前没清锁记录，`GraphStore.save()` 早就拿过同一把
+  `g1/.lock`，于是"拿到过锁"吃的是**别的调用留下的旧账**。改成调用前清零才判得住。断言吃旧账＝没有断言，
+  与 §二之三十三 那条"无判据本身是缺陷"同族。
+- 全量套件（HEAD 工作区，实测 `PYTEST_RC=0`）：
+
+```
+2946 passed, 52 skipped, 1 warning, 7 subtests passed in 125.88s (0:02:05)
+```
+
+  归因：上一批基线 `2921 passed, 51 skipped` ⇒ 本批 **+25 passed / +1 skipped**，正好等于新增 26 条
+  （25 跑绿 + 1 条 POSIX-only 跳过）。差额不多不少，因此这 26 条之外没有别的测试被本批动过。
+- diff 口径（`git diff --numstat`，不含新增文件）：`gates.sh 23/0`、`af_store.py 36/5`、`af_catalog.py 13/10`、
+  `af_insight_queue.py 10/3`、`af_persist.py 7/9`、`af_api.py 8/12`、`af_predict.py 1/1`、`af_pending.py 1/0`；
+  新增四件 283 / 225 / 289 / 18 行。
+
+### 五、不自签与未做
+
+- 基线那 9 站的**共同残留风险**不许被"门绿了"盖过去：全部缺 `fsync` ⇒ 掉电/容器强杀后仍可能留下
+  "名字合法、内容半截"的文件；固定名只有在"同一文件存在第二个写者"时才真的互相截断，而这 9 站
+  的"有没有第二个写者"是值语义，静态判不了——所以每条理由写的是"为什么这一站可以暂时留"。
+  收口顺序已钉在基线头部：先敏感的 `af_premiere` 两站，再 `af_version`。
+- 本批顺手实测出三条**对端可见**的形状（`GET /api/asks/pending` 无鉴权而契约表 §该行只给 POST 标了
+  write 令牌；`POST /api/auth/login` 任意非空凭据即签发 `read+write+live` 永久令牌；
+  `GET /api/user/auth-codes` 挂 `_read` 却返回**明文 code 全量列表**），三条都改的是别人看得见的口子，
+  AF 一律没动，已作为 **§五 续查**写入 `关键决策部/inbox/20261004-AF-安全审计遗留三问-决策申请.md`。
+- 部署声明（铁律 #3）：本批全部读数来自开发机 + 门禁/测试链，NAS 镜像未重烤、`docker/` 一个字节未动；
+  新门 `check_atomic_write_sites.py` 要等**下一条 run** 才在 runner 上可比，AF 不预签连续绿。
 
 ## 四、审计侧
 
