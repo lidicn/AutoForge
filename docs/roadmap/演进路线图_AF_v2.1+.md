@@ -90,7 +90,7 @@
 - **F4 运行时监护聚合（af_watch 雏形）** `[新建/强化]`
   - 现状：shadow compare + canary 观察期 + conflict_audit 分散，无统一聚合层。
   - 涉及：`af_shadow.py:353` `af_canary_supervisor.py:133` `af_conflict_audit.py:161` `af_live.py:256` `af_expect.py`。
-  - 细分：① 新建 `af_watch.py` 聚合层，按 IR 维度统计 real-verified/real-failed/unmodeled-in-prod；② 回灌 M4 诚实报告（新增 `verified_in_prod` 分区/脚注）；③ WebUI 监护视图。
+  - 细分：① 新建 `af_watch.py` 聚合层，按 IR 维度统计 real-verified/real-failed/unmodeled-in-prod；② 回灌 M4 诚实报告（新增 `verified_in_prod` 分区/脚注）；③ WebUI 监护视图（`ui/src/views/EvidenceView.vue` `/evidence`，三档并列三栏 + `evicted_automations` 常驻指示 + EXEMPT≠VERIFIED 铁律 #5 脚注）— ✅ 已交付 `177aa1c` + 2026-10-05 收口。
   - 验收：上线自动化真实 HA 跑 24h 后，诚实报告能显示"仿真 non_simulable 项 X，其中 Y 真实验证通过、Z 真实失败"。
   - 设计困难（非决策项）：运行态/仿真态标识符对齐；真实状态采集隐私边界。
 

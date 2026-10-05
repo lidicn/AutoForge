@@ -101,22 +101,50 @@ onMounted(load)
     </n-alert>
 
     <n-card v-if="summary" title="全局汇总" :bordered="false" class="block">
+      <!-- 生产态三档并列：verified / failed / unmodeled 同栏出现，不合并成"看起来没问题" -->
+      <div class="trio">
+        <div class="tier tier-ok">
+          <div class="tier-label">验过 · verified</div>
+          <div class="tier-num">{{ summary.total_verified_in_prod }}</div>
+          <div class="tier-sub">真实 HA 回放 / 金丝雀观察结论命中</div>
+        </div>
+        <div class="tier tier-bad">
+          <div class="tier-label">验出问题 · failed</div>
+          <div class="tier-num">{{ summary.total_failed_in_prod }}</div>
+          <div class="tier-sub">真实环境与期望态不一致</div>
+        </div>
+        <div class="tier tier-warn">
+          <div class="tier-label">无从验证 · unmodeled</div>
+          <div class="tier-num">{{ summary.total_unmodeled_in_prod }}</div>
+          <div class="tier-sub">带 canary 的真机下发里没建出可对照模型</div>
+        </div>
+      </div>
+
       <div class="stat-grid">
-        <n-statistic label="验过（verified）" :value="summary.total_verified_in_prod" />
-        <n-statistic label="验出问题（failed）" :value="summary.total_failed_in_prod" />
-        <n-statistic label="无从验证（unmodeled）" :value="summary.total_unmodeled_in_prod" />
         <n-statistic label="冲突仲裁事件" :value="summary.total_conflict" />
         <n-statistic label="有证据的自动化" :value="summary.tracked_automations" />
         <n-statistic label="其中验出过问题" :value="summary.automations_with_failed" />
       </div>
+
       <n-alert
-        v-if="summary.evicted_automations"
-        type="info"
-        :title="`${summary.evicted_automations} 个自动化的证据桶已被上限淘汰`"
+        :type="summary.evicted_automations ? 'warning' : 'success'"
+        :title="summary.evicted_automations ? `证据桶淘汰 ${summary.evicted_automations} 个` : '证据桶淘汰 0 个'"
         class="hint"
       >
-        聚合器对每个自动化的事件条数与跟踪总数都有上限（只拦长跑与改名残留的空桶）。淘汰只会让本视图<b>少报</b>证据，不会凭空造出证据。
+        <span v-if="summary.evicted_automations">
+          聚合器对跟踪总数有上限（只拦长跑与改名残留的空桶）。淘汰只会让本视图<b>少报</b>证据，
+          <b>不得声称"证据完整"</b>——被淘汰的自动化可能仍有生产态事件未被计入。
+        </span>
+        <span v-else>跟踪上限内暂无淘汰，证据未因容量被丢弃。</span>
       </n-alert>
+
+      <n-alert type="warning" class="hint">
+        <b>诚实铁律 #5：EXEMPT ≠ VERIFIED。</b>
+        本视图的"验过"只来自真实 HA 回放 + 金丝雀观察结论 + 写冲突仲裁；
+        shadow 的 <b>EXEMPT（人工豁免）</b>走人审通道、<b>不计入</b>此处 verified。
+        没证据 ≠ 验证过，豁免 ≠ 通过。
+      </n-alert>
+
       <n-button size="small" :disabled="loading" @click="load">{{ loading ? '读取中…' : '刷新' }}</n-button>
     </n-card>
 
@@ -148,6 +176,53 @@ onMounted(load)
 .block {
   margin-bottom: 16px;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+.trio {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.tier {
+  border-radius: 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+.tier-ok {
+  background: rgba(63, 185, 80, 0.08);
+  border-color: rgba(63, 185, 80, 0.35);
+}
+.tier-bad {
+  background: rgba(224, 62, 62, 0.08);
+  border-color: rgba(224, 62, 62, 0.35);
+}
+.tier-warn {
+  background: rgba(240, 173, 78, 0.1);
+  border-color: rgba(240, 173, 78, 0.4);
+}
+.tier-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #4b5563;
+}
+.tier-num {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 4px 0;
+}
+.tier-ok .tier-num {
+  color: #2f9e44;
+}
+.tier-bad .tier-num {
+  color: #e03131;
+}
+.tier-warn .tier-num {
+  color: #d9480f;
+}
+.tier-sub {
+  font-size: 12px;
+  color: #8b93a7;
 }
 .stat-grid {
   display: grid;
