@@ -4164,6 +4164,51 @@ uvicorn 访问日志把整条查询串原样记下（`GET /api/mcp/pair-request?
   逐作业读数六条全 `completed/success`、`failed_steps` 全空（`adm-linkage-contracts` / `layering-gates` / `pytest` /
   `quality-gates` / `ui-typecheck-build` / `ui-user-mimo-judgments`）⇒ **连续三枚绿（93、94、95）**。
   本批 push 产生的那一枚，按同一口径当场取数再记账，不凭"上一枚是绿"外推。
+- **run 96 = 本批代码提交 `bedc29e`（判据⑤ 那一批）的远端读数，闭合**：`status=completed conclusion=success`，
+  逐作业六条全 `completed/success`、`failed_steps` 全空（`ui-user-mimo-judgments` / `adm-linkage-contracts` /
+  `quality-gates` / `ui-typecheck-build` / `pytest` / `layering-gates`）⇒ **连续四枚绿（93、94、95、96）**。
+  这一枚跑的是含判据⑤ 的树，`quality-gates` 作业里 `bash gates.sh` 会真跑到那条门 ⇒ 判据⑤ 在远端 clean checkout 上同为绿。
+
+
+## 二之五十一、§5.3 第 10 件的**仓侧半边**：compose 补齐 `MQTT_*` 引用一律留空，键名与烘进镜像的那枚 wheel 当场同源
+
+- **来源**：计划 §5.3 第 10 件（裁定 20261004 18:35 §二）的两半里，AF 现在能动的那一半。
+  `paho-mqtt>=1.6,<2.1` 早已钉死（`pyproject.toml:42` 与 `:54`，裁定 Q2=B 口径），本轮量到"compose 里
+  **一个 `MQTT_*` 引用都没有**"（`grep -n "^      - [A-Z]" docker/docker-compose.api.yml` 只有四条 `AUTOFORGE_*`），
+  所以这一件不是"等窗"，是**窗到了也没东西可推**——开关要用的那五个键得先存在于它们真正被读的地方。
+- **这一格有两种都会静默的失败形状**（本批的立论所在，不是"加六行 YAML"）：
+  ① **键名手抄错**（`MQTT_HOTS`）：compose 照样起、桥静默连不上——空串与未设置同视是 fail-closed 的沉默，
+  没有任何东西会因此变红；② **留空把默认值顶掉**：`os.getenv(K, "1883")` 这类写法在 compose 写 `K=` 时
+  拿到的是空串而不是默认值，端口/心跳被配成不可解析，要等到真打开开关那天才炸。
+- **键名的唯一真源不是这份计划文案**：计划里写的是 `MQTT_USER_*` 这种带通配的说法，真源取 `Dockerfile.api:26`
+  按文件名钉死的那枚 wheel（`docker/homesdk/homesdk-0.3.1-py3-none-any.whl`）里的 `homesdk/mqtt.py`——
+  wheel 读出 8 个键 `{MQTT_HOST, MQTT_PORT, MQTT_KEEPALIVE, MQTT_USER, MQTT_USERNAME, MQTT_PASSWORD, MQTT_PASS, MQTT_PASSWD}`
+  （作用域形式 `MQTT_USER_{scoped}` 剥掉尾下划线后与规范键同形 ⇒ **不需要人工别名表**）。
+  compose 只写规范那五条 + `AUTOFORGE_MQTT`，别名与带 scope 那套在注释里点名但**不在本仓用**，免得同一台机器长第二种习惯。
+- **留空是真 no-op，当场跑出来的而不是注释里写的**：`MQTT_HOST=""` ⇒ `MissingEnv`（`homesdk/config.py` 的
+  `MissingEnv` docstring 原话"必需的环境变量缺失**或为空串**"，`_lookup` 里 `raw is not None and raw.strip()`）；
+  `MQTT_PORT=""`、`MQTT_KEEPALIVE=""` ⇒ 落回 `DEFAULT_PORT`（从模块取，不写死 1883）与 60；
+  `MQTT_USER=""` + `MQTT_PASSWORD=""` ⇒ `MqttCredentialsMissing`，**不退化成匿名连**。
+  开关那一格把 compose 写的缺省值 `${AUTOFORGE_MQTT:-0}` 解析出来喂给桥自己的 `env_enabled()` 判"关"，
+  名字则取自 `af_mqtt_bridge.ENV_ENABLED`——compose 里没有第二个手抄的开关字符串。
+- **反例 6 条**（`tests/unit/test_mqtt_compose_env.py`，**6 passed**）：键名子集 / 开关名即桥常量 / 缺省值真判关 /
+  空串三档语义 / wheel 的 `_lookup` 明写空串同视（活体判据的前提） / 本机 `homesdk.__version__` == wheel 文件名钉的那枚
+  （不同版本 ⇒ "真模块跑出来的语义"不代表部署面）。
+- **变异四档**（未变异对照 **`rc=0` 6 passed**）：M1 `MQTT_HOST`→`MQTT_HOTS` ⇒ **1 failed**；M2 缺省 `:-0`→`:-1` ⇒ **1 failed**；
+  M3 五条 `MQTT_*` 全删（只剩注释）⇒ **1 failed**（那条反空洞判据先咬，正是"注释不算引用"的形状）；
+  M4 `Dockerfile` 的 COPY 指到盘上没有的那枚 wheel ⇒ **3 failed**（射程塌，判据不是变松而是作废）。
+  四档全咬、`DRIVER_RC=0`、`finally` 里字节还原 `RESTORE OK byte-identical`。
+- **卫生**：`docker-compose.api.yml` 是 **CRLF 文件**（改后 83 CRLF / 83 LF，裸 LF 0），按"锚点匹配该文件真实换行"的
+  既有规矩用 `newline=""` 读写插入，`git show --numstat` = `23 0`（不是整份重写的假 diff）；新测试文件 LF、CRLF 0。
+  `yaml.safe_load` 复 parse 通过，`environment` 10 条、其中本批 6 条逐字回读。
+- **全链权威读数（干净副本树 @ `729343b`，`git worktree add --detach`，起树时 `git status --porcelain` 为空）**：
+  `GATES_PYTHON=<有 pytest 的解释器> bash gates.sh` ⇒ **`GATES_RC=0`**；同树 `python -m pytest -q` ⇒
+  **3141 passed / 53 skipped / 1 warning / 7 subtests，232.33s，`PYTEST_RC=0`**。
+  与上一枚 HEAD 的自洽核对：`3135 + 6（本批新增反例） = 3141` ⇒ 增量恰为本批那 6 条，无静默增减。
+  主树仍因并发会话未提交的 `af_nl_parse.py` 会在有界缓存那一节判红，故本批不引主树读数（口径见 §二之四十九）。
+- **不在本批代领的验收**：本件前置＝第 1 件（NAS 镜像重烤），"重烤后服务照常起、桥 no-op"那半句要窗；
+  真打开开关另走**非停机窗**的配置推送，推送前先 `compose exec` 预检 `paho_available()` 与 `broker_settings()`
+  （§二之二十六：起桥排在 `uvicorn.run` 之前且不吞异常，值没配好就是整个 AF 起不来，含只读面）。
 
 
 ## 四、审计侧
