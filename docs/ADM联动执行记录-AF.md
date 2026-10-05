@@ -4017,6 +4017,70 @@ uvicorn 访问日志把整条查询串原样记下（`GET /api/mcp/pair-request?
   （⇒ 新脚本与新测试文件没有往棘轮里加一条，也没有触发过期清理）。读数 `/tmp/gates-p3.out`。
 
 
+## 二之四十九、run 91 兑现 §二之四十七 的承诺：队列那一半散了，代码这一半**真红一条**——红是注册表 docstring 里写了被哨兵禁掉的原名
+
+- **出处**：§二之四十七 末格写下过口径——本批**不**把 run 90 的"集体 +902 秒 / 零 runner"写成"环境抖动"，
+  而是随 push 产生 run 91、以它的逐作业读数作为本批 HEAD 的权威口径。现在读数到手，两半都要兑现：
+  容量那一半**散了**（作业拿到 runner 了），代码那一半**不是散了的**——`pytest` 作业 `completed/failure`。
+  逐作业原样（`python scripts/gh_ci_status.py jobs 37373011874`，run 91 = `7e48e68`）：
+
+  ```
+  ui-typecheck-build: completed/success job_id=111974583422 failed_steps=[]
+  pytest: completed/failure job_id=111974583599 failed_steps=['Run tests']
+  layering-gates: in_progress/None job_id=111974583606 failed_steps=[]
+  ui-user-mimo-judgments: completed/cancelled job_id=111974583609 failed_steps=[]
+  quality-gates: completed/success job_id=111974583641 failed_steps=[]
+  adm-linkage-contracts: completed/success job_id=111974584191 failed_steps=[]
+  ```
+
+  run 92（`b5057d8`，即 §二之四十八 那一批）同形：`ui-user-mimo-judgments`/`ui-typecheck-build` 已 `completed/success`，
+  `pytest`/`layering-gates`/`quality-gates`/`adm-linkage-contracts` 四条 `in_progress`——**拿到 runner 了**，
+  所以 run 90 那种"六条同一秒集体 +902 秒取消"的形态这两枚 run 没有复现。AF 侧据此**不改 CI YAML**：
+  容量问题是瞬时供给，已被后续两枚 run 自己证伪；而 run 91 的红与容量无关，是代码。
+- **红的内容（`log 111974583599 FAILED`，全库只匹配 1 行）**：
+
+  ```
+  匹配 1 行（关键词 'FAILED'）
+  2026-10-05T21:09:21.4590417Z FAILED tests/unit/test_audit_stability_defects.py::test_node_visits_is_gone_from_the_entire_source_tree - AssertionError: 节点访问累积容器回来了：['af_bounded_caches.py']
+  ```
+
+- **根因是我自己埋的，且是"散文踩名字哨兵"这一族**：§二之四十一 写下的哨兵 `test_node_visits_is_gone_from_the_entire_source_tree`
+  射程是 `src/autoforge` 整棵树的**文件文本**（`_py_files()` 做 `SRC.rglob("*.py")` 后按子串匹配），它不区分代码与注释；
+  §二之四十七 给注册表补的那段 docstring 里为了讲清"进基线≠有存在理由"，原样引用了 `node_visits`。
+  `git log -S "node_visits" -- src/autoforge/af_bounded_caches.py` ⇒ 唯一命中 `7e48e68`，即同一批自己写红又自己踩红。
+  本机当时为什么没响：那轮全量 `pytest` 跑在 docstring 定稿**之前**，而且跑在主树——主树后来被并发会话的
+  `af_nl_parse.py` 污染，两条按仓库整体计数的判据（`test_real_repo_is_green`、`test_real_repo_measurements_are_pinned`：81 vs 75）
+  先替我挡住了视线。**"本机绿"在这批里不是 HEAD 绿**，这是 §二之四十七 那条串行口径的延伸：读数要在**没有别人 WIP 的树**上取。
+- **修法取"改散文"，不取"放宽扫描"**，理由写进两处文本而不是只写在日志里：
+  1. `src/autoforge/af_bounded_caches.py` 的 docstring 把原名换成**审计编号**（"稳定性审计 BUG-01 第一半删掉的那个
+     『节点访问累积列表』"）并就地说明为什么这里不写原名——引用历史记录用编号，不用被哨兵射程罩住的名字；
+  2. `tests/unit/test_audit_stability_defects.py` 给那条哨兵补 docstring，钉住三件事：宽口径是**刻意**的（代价已付过一次，
+     run 91 真实报红而那时没有任何回归）；修法是把散文改编号而**不是**窄化扫描（窄化到"只扫 AST 节点"要么漏掉
+     `getattr`/字符串形态的复活，要么得给哨兵加一层能自证的解析）；形状那一半本来就由同文件第二条
+     `test_executor_hot_path_has_no_self_level_appending_container` 钉住（正则扫 `self.<容器>.append(`，改名也红）。
+  ⇒ 两条哨兵一条按名字、一条按形状，这批只动了名字的射程内文案，判据强度**没有下调一格**。
+- **本机读数（干净工作树副本 `E:/NAS/AF-p3-head`，detached HEAD `b5057d8`，无并发 WIP）**：
+  先证明"CI 那条红在 HEAD 上自证可复现"——原始树原样跑 `tests/unit/test_audit_stability_defects.py` ⇒
+  `1 failed, 9 passed`，失败行与 CI 逐字一致（`节点访问累积容器回来了：['af_bounded_caches.py']`），`RC=1`；
+  再把修好的两个文件拷进副本重跑四文件（同上加 `test_bounded_caches_gate.py`、`test_diagnostic_ring_bounds.py`、
+  `test_pkg_markers_gate.py`）⇒ **60 passed in 111.74s**，`RC_FIXED_SUBSET=0`。
+  副本里 `test_real_repo_measurements_are_pinned` 一并转绿，反证主树那两条红确实来自未入库的 `af_nl_parse.py`（不替并发会话登记、不扩基线、不改钉数）。
+  全量对照（同一副本、含修法）：`3128 passed, 53 skipped, 7 subtests passed in 263.78s`，`FULL_PYTEST_RC=0`。
+  自洽核对：§二之四十七 那批的权威读数是 `3121 passed`，本批没有新增判据，差额 7 恰等于 §二之四十八 新增的
+  `tests/unit/test_pkg_markers_gate.py`（7 条）⇒ `3121 + 7 = 3128`，没有"少跑了一批"的缺口。
+- **run 92 是同一根因，逐字同形**（`log 111977690059 FAILED`，全库仍只匹配 1 行）：
+
+  ```
+  匹配 1 行（关键词 'FAILED'）
+  2026-10-05T21:20:51.5848484Z FAILED tests/unit/test_audit_stability_defects.py::test_node_visits_is_gone_from_the_entire_source_tree - AssertionError: 节点访问累积容器回来了：['af_bounded_caches.py']
+  ```
+
+  ⇒ 两枚 run 的红都是**一条**、都是**同一行**、都不是容量问题；run 92 其余作业已拿到 runner
+  （`ui-user-mimo-judgments`/`ui-typecheck-build`/`adm-linkage-contracts` 三条 `completed/success`）。
+  本批修法 push 后产生 run 93，以它的逐作业读数作为"这条红修掉了"的权威口径；若 run 93 仍红，AF 继续逐行对账而不是再等一枚。
+- **不在本批**：`af_nl_parse.py` 那 6 处新增增长容器的登记归属（谁写谁登记，见 §二之四十七 末格口径）。
+
+
 ## 四、审计侧
 
 

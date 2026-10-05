@@ -74,6 +74,14 @@ def _literal_frozenset(name: str) -> set[str]:
 
 
 def test_node_visits_is_gone_from_the_entire_source_tree():
+    """按名字的哨兵：射程是 `src/autoforge` 整棵树，**含 docstring 与注释**。
+
+    这是刻意的宽口径：它不区分"代码里长回这个容器"和"散文里把它当例子复述"。代价已经付过一次——
+    注册表 docstring 引用原名，CI 上真实报红（run 91，pytest 作业 `Run tests` 步），而那时没有任何回归。
+    修法是把散文改成审计编号（BUG-01 第一半），**不是**放宽这条扫描：窄化到"只扫 AST 节点"就要么漏掉
+    `getattr`/字符串形态的复活，要么给哨兵加一个能自证的解析层，收益不及成本。形状那一半由
+    `test_executor_hot_path_has_no_self_level_appending_container` 钉住（改名也红）。
+    """
     hits = [p.name for p in _py_files() if "node_visits" in p.read_text(encoding="utf-8")]
     assert hits == [], f"节点访问累积容器回来了：{hits}"
 
