@@ -15,6 +15,11 @@ import pytest
 
 from autoforge.af_ir import Graph, load_graph
 from autoforge.af_mcp import dispatch
+from autoforge.af_auth import SCOPES as _ALL_SCOPES
+
+# 裁定 20261004 §一 Q2=B：MCP 面「无身份」改成默认拒绝，本文件的调用点因此逐条显式给身份；
+# 「不给身份」那一档只由 test_dcd_20261004_mcp_default_deny.py 钉成"拒绝"。
+_ALL = {"subject": "test-all", "scopes": sorted(_ALL_SCOPES)}
 from autoforge.af_store import GraphStore
 
 _DEMO_IR = {
@@ -63,7 +68,7 @@ def _load(content: str) -> dict:
 
 def test_dispatch_health_no_auth(tmp_path):
     store = GraphStore(tmp_path)
-    ok, err = dispatch("af_health", {}, store, None)
+    ok, err = dispatch("af_health", {}, store, _ALL)
     assert err is False
     assert _load(ok[0]["text"])["ok"] is True
 
@@ -76,21 +81,21 @@ def test_dispatch_health_probes_the_store_it_serves(tmp_path):
     HTTP 面（`af_api`）早就递了 store，两面对不上是本缺陷的形状；`scripts/check_store_injection.py` 常驻判这一族。
     """
     store = GraphStore(tmp_path)
-    ok, err = dispatch("af_health", {}, store, None)
+    ok, err = dispatch("af_health", {}, store, _ALL)
     assert err is False
     assert _load(ok[0]["text"])["store_ok"] is True
 
 
 def test_dispatch_build_accepts_valid_ir(tmp_path):
     store = GraphStore(tmp_path)
-    content, is_error = dispatch("af_build", {"ir": _DEMO_IR}, store, None)
+    content, is_error = dispatch("af_build", {"ir": _DEMO_IR}, store, _ALL)
     assert is_error is False
     assert _load(content[0]["text"])["ok"] is True
 
 
 def test_dispatch_build_rejects_l3(tmp_path):
     store = GraphStore(tmp_path)
-    content, is_error = dispatch("af_build", {"ir": _L3_IR}, store, None)
+    content, is_error = dispatch("af_build", {"ir": _L3_IR}, store, _ALL)
     assert is_error is False  # 业务结果，非协议错误
     body = _load(content[0]["text"])
     assert body["ok"] is False
@@ -100,29 +105,29 @@ def test_dispatch_build_rejects_l3(tmp_path):
 def test_dispatch_read_tools_touch_store(tmp_path):
     store = GraphStore(tmp_path)
     _seed(store)
-    content, _ = dispatch("af_list_graphs", {}, store, None)
+    content, _ = dispatch("af_list_graphs", {}, store, _ALL)
     assert _load(content[0]["text"])["items"][0]["name"] == "demo"
 
-    content, _ = dispatch("af_get_graph", {"name": "demo", "version": 2}, store, None)
+    content, _ = dispatch("af_get_graph", {"name": "demo", "version": 2}, store, _ALL)
     assert _load(content[0]["text"])["version"] == 2
 
-    content, _ = dispatch("af_graphs_by_tag", {"tag": "lighting"}, store, None)
+    content, _ = dispatch("af_graphs_by_tag", {"tag": "lighting"}, store, _ALL)
     assert _load(content[0]["text"])["items"][0]["name"] == "demo"
 
-    content, _ = dispatch("af_diff", {"name": "demo", "old": 1, "new": 2}, store, None)
+    content, _ = dispatch("af_diff", {"name": "demo", "old": 1, "new": 2}, store, _ALL)
     assert "render" in _load(content[0]["text"])
 
 
 def test_dispatch_export_import_roundtrip(tmp_path):
     store = GraphStore(tmp_path)
     _seed(store)
-    exported, _ = dispatch("af_export_store", {}, store, None)
+    exported, _ = dispatch("af_export_store", {}, store, _ALL)
     body = _load(exported[0]["text"])
     assert body["names"] == ["demo"]
     bundle = body["bundle"]
     # 导入到新 store（rename 避免碰撞）
     other = GraphStore(tmp_path / "other")
-    imported, _ = dispatch("af_import_store", {"bundle": bundle, "strategy": "rename"}, other, None)
+    imported, _ = dispatch("af_import_store", {"bundle": bundle, "strategy": "rename"}, other, _ALL)
     report = _load(imported[0]["text"])
     assert report["imported"] and len(report["imported"]) >= 1
 
@@ -131,7 +136,7 @@ def test_dispatch_whoami_reflects_auth_state(tmp_path):
     store = GraphStore(tmp_path)
     content, _ = dispatch("af_whoami", {}, store, _READ_ONLY)
     assert _load(content[0]["text"])["scopes"] == ["read"]
-    content, _ = dispatch("af_whoami", {}, store, None)
+    content, _ = dispatch("af_whoami", {}, store, None)      # 谁的身份由调用方给，这一档就是"无身份"
     assert _load(content[0]["text"])["auth_enabled"] is False
 
 
@@ -145,24 +150,24 @@ def test_dispatch_save_queues_valid_ir_to_pending(tmp_path):
         "af_save",
         {"name": "living_light", "ir": _DEMO_IR, "note": "首个版本", "tags": ["lighting"]},
         store,
-        None,
+        _ALL,
     )
     assert is_error is False
     body = _load(content[0]["text"])
     assert body["ok"] is True and body["pending"]  # 入队成功，返回 op_id
     assert "待人工审批" in body["note"]
     # 尚未落盘（要人审 approve 后才落盘）
-    listed, _ = dispatch("af_list_graphs", {}, store, None)
+    listed, _ = dispatch("af_list_graphs", {}, store, _ALL)
     assert "living_light" not in {it["name"] for it in _load(listed[0]["text"])["items"]}
 
 
 def test_dispatch_save_rejects_invalid_ir(tmp_path):
     store = GraphStore(tmp_path)
-    content, is_error = dispatch("af_save", {"name": "bad", "ir": _L3_IR}, store, None)
+    content, is_error = dispatch("af_save", {"name": "bad", "ir": _L3_IR}, store, _ALL)
     assert is_error is True  # 拒绝归档 → ServiceError → MCP isError
     assert "拒绝归档" in content[0]["text"]
     # 未落盘
-    listed, _ = dispatch("af_list_graphs", {}, store, None)
+    listed, _ = dispatch("af_list_graphs", {}, store, _ALL)
     assert "bad" not in {it["name"] for it in _load(listed[0]["text"])["items"]}
 
 
@@ -193,13 +198,13 @@ def test_scope_guard_write_allowed_with_write_token(tmp_path):
 
 def test_scope_guard_no_auth_allows_write(tmp_path):
     store = GraphStore(tmp_path)
-    content, is_error = dispatch("af_export_store", {}, store, None)
+    content, is_error = dispatch("af_export_store", {}, store, _ALL)
     assert is_error is False
 
 
 def test_dispatch_unknown_tool(tmp_path):
     store = GraphStore(tmp_path)
-    content, is_error = dispatch("af_nope", {}, store, None)
+    content, is_error = dispatch("af_nope", {}, store, _ALL)
     assert is_error is True and "未知工具" in content[0]["text"]
 
 

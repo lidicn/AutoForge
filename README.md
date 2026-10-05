@@ -221,6 +221,10 @@ forge sim examples/ir/case01_day_light.json
   `scope=None` 的门）按裁定维持公开，判据是铁律 #6——只读面不能反过来依赖令牌系统。
   它们的"公开"边界靠的是这条网络前提，而不是鉴权。把它挪出可信 LAN 之前，先回来读这一段。
 - 写面 / live 面仍然 fail-closed：无令牌即 403，本地放行只有 `AF_ALLOW_NOAUTH=1` 一个逃生舱。
+- **MCP 面同样默认拒绝（裁定 20261004 §一 Q2=B）**：`forge mcp` 未配 `AUTOFORGE_TOKENS` 时，需鉴权工具
+  （write / live 域，注册表里 11 条）一律拒；公开工具（20 条，含 `af_health`/`af_draft`/`af_whoami`）照常可用。
+  本地或原型确需全放行，只有 `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1` 一个显式开关——**只认 `1`**，写 `true` 不算。
+  HTTP 侧 `POST /mcp` 复用同一道 `_guard`：`AF_ALLOW_NOAUTH=1` 只放行 HTTP 层，不越权放行工具层。
 - compose 侧的同一条注释由部署方在 NAS 上落（本仓不改 compose，见交接记录铁律 #3）；
   本文件这句是仓库内唯一真源，容器那侧的注释与它冲突时以裁定为准并回来更正这里。
 

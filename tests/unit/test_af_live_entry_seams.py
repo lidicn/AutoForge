@@ -25,6 +25,11 @@ import pytest
 
 from autoforge import af_service as svc
 from autoforge.af_adapters import CallResult
+from autoforge.af_auth import SCOPES as _ALL_SCOPES
+
+# 裁定 20261004 §一 Q2=B：MCP 面「无身份」改成默认拒绝，本文件的调用点因此逐条显式给身份；
+# 「不给身份」那一档只由 test_dcd_20261004_mcp_default_deny.py 钉成"拒绝"。
+_ALL = {"subject": "test-all", "scopes": sorted(_ALL_SCOPES)}
 from autoforge.af_api import build_app
 from autoforge.af_mcp import dispatch
 from autoforge.af_store import GraphStore
@@ -113,7 +118,7 @@ def _protect(root: Path, entity_id: str) -> None:
 def test_control_without_acl_the_mcp_path_really_dispatches(tmp_path, gate):
     """对照组：不设 ACL 时 MCP 这条路确实会下发，否则下面的"被拦住"可以是 harness 坏了。"""
     store = GraphStore(tmp_path)
-    content, is_error = dispatch("af_live_run", ARGS, store, None)
+    content, is_error = dispatch("af_live_run", ARGS, store, _ALL)
     assert is_error is False, content[0]["text"]
     assert [a for t in gate for a, _ in t.dispatched] == ["light.turn_off"]
 
@@ -123,7 +128,7 @@ def test_mcp_live_run_honours_the_store_device_guard(tmp_path, gate):
     store = GraphStore(tmp_path)
     _protect(tmp_path, "light.study")
 
-    content, is_error = dispatch("af_live_run", ARGS, store, None)
+    content, is_error = dispatch("af_live_run", ARGS, store, _ALL)
 
     assert is_error is True, "受保护设备被 Agent 面放行 ⇒ 闸门只装了 HTTP 一面"
     assert "ENTITY_GUARD_TIER0" in content[0]["text"]
@@ -147,7 +152,7 @@ def test_mcp_live_run_refuses_oversized_events(tmp_path, gate):
     store = GraphStore(tmp_path)
     args = {**ARGS, "events": [{"advance_s": 1}] * (svc.MAX_REPLAY_EVENTS + 1)}
 
-    content, is_error = dispatch("af_live_run", args, store, None)
+    content, is_error = dispatch("af_live_run", args, store, _ALL)
 
     assert is_error is True
     assert "超过上限" in content[0]["text"]

@@ -30,6 +30,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from autoforge.af_auth import SCOPES as _ALL_SCOPES
+
+# 裁定 20261004 §一 Q2=B：MCP 面「无身份」改成默认拒绝，本文件的调用点因此逐条显式给身份；
+# 「不给身份」那一档只由 test_dcd_20261004_mcp_default_deny.py 钉成"拒绝"。
+_ALL = {"subject": "test-all", "scopes": sorted(_ALL_SCOPES)}
 from fastapi.testclient import TestClient
 
 from autoforge import af_service as svc
@@ -231,7 +236,7 @@ def test_mcp_face_text_starts_with_the_prefix(tmp_path, gate):
     """MCP 面：前缀必须在文本**开头**——DB 侧按 `startswith` 判别，中间出现等于判别不上。"""
     store = GraphStore(tmp_path)
     with _other_process_holding(tmp_path):
-        content, is_error = dispatch("af_live_run", ARGS, store, None)
+        content, is_error = dispatch("af_live_run", ARGS, store, _ALL)
 
     assert is_error is True
     assert content[0]["text"].startswith(PREFIX), content[0]["text"]

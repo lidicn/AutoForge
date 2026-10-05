@@ -58,7 +58,8 @@ MCP_NOACCESS: dict[str, Any] = {"subject": "<no-access>", "scopes": []}
 def _build_current(registry: TokenRegistry) -> dict[str, Any] | None:
     """当前启动主体：鉴权已配时必须由显式启动令牌 AUTOFORGE_MCP_TOKEN 确定。
 
-    - 未配任何令牌（registry.enabled=False）→ None（原型模式全放行，向后兼容）。
+    - 未配任何令牌（registry.enabled=False）→ None，即"无身份"。`_guard` 对无身份的
+      需鉴权工具**默认拒绝**，只有 `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1` 才放行（裁定 20261004 §一 Q2=B）。
     - 已配令牌 → 不再盲目取 subs[0]（两条令牌时第一条能用就放行整体 = fail-open）。
       启动令牌缺失 / 未知 / 已撤销 / 已过期 → 返回空 scope 的拒绝身份（A7）。
     """
@@ -76,10 +77,30 @@ def _build_current(registry: TokenRegistry) -> dict[str, Any] | None:
     return {"subject": info.subject, "scopes": sorted(info.scopes)}
 
 
+def allow_no_token() -> bool:
+    """原型放行的**唯一**入口：显式 `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1`。"""
+    return (os.environ.get("AUTOFORGE_MCP_ALLOW_NO_TOKEN") or "").strip() == "1"
+
+
 def _guard(scope: str | None, current: dict[str, Any] | None) -> None:
-    """scope 门：None 表示公开；current 为 None 表示未启用鉴权（原型全放行）。"""
-    if scope is None or current is None:
+    """scope 门（裁定 20261004 §一 Q2=B：MCP 面默认拒绝）。
+
+    - `scope is None` → 公开工具，不鉴权（只读/无副作用那一族照常可用）。
+    - `current is None` → 没有任何令牌身份，**默认拒绝**；只有显式
+      `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1` 才退回原型全放行。此前这里是
+      `current is None` 直接 return，等于"没配令牌 = 一切 scope 放行"，
+      与 `/api/*` 的 fail-closed 是两面对不上。
+    """
+    if scope is None:
         return
+    if current is None:
+        if allow_no_token():
+            return
+        raise ServiceError(
+            f"拒绝：MCP 面没有令牌身份 ⇒ 工具 '{scope}' 域默认拒绝（裁定 20261004 §一 Q2=B）。"
+            "请配 `AUTOFORGE_TOKENS` 并用含该 scope 的 `AUTOFORGE_MCP_TOKEN` 启动；"
+            "确需原型全放行请显式设 `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1`。"
+        )
     if scope not in current.get("scopes", []):
         raise ServiceError(
             f"拒绝：当前令牌缺少 '{scope}' 权限（当前 scopes：{current.get('scopes')}）。"
@@ -362,7 +383,13 @@ def _t_whoami(store: GraphStore, args: dict[str, Any], current: dict[str, Any] |
         "auth_enabled": current is not None,
         "subject": (current or {}).get("subject"),
         "scopes": (current or {}).get("scopes"),
-        "note": "未启用鉴权（全放行）" if current is None else "已按令牌 scope 限制写/live 工具",
+        "note": (
+            "无令牌身份 ⇒ 需鉴权工具默认拒绝"
+            if current is None and not allow_no_token()
+            else "无令牌身份，但 AUTOFORGE_MCP_ALLOW_NO_TOKEN=1 ⇒ 原型全放行"
+            if current is None
+            else "已按令牌 scope 限制写/live 工具"
+        ),
     }
 
 
@@ -931,8 +958,13 @@ def serve_mcp(root: str = DEFAULT_STORE_ROOT) -> None:
     globals()["_MCP_AUTH_STORE"] = AuthCodeStore(Path(root) / ".auth" / "auth_codes.json")
     if current:
         sys.stderr.write(f"[af_mcp] 鉴权启用：subject={current.get('subject')} scopes={current.get('scopes')}\n")
+    elif allow_no_token():
+        sys.stderr.write("[af_mcp] 未配令牌，且 AUTOFORGE_MCP_ALLOW_NO_TOKEN=1 ⇒ 需鉴权工具全放行（原型档，显式选择）\n")
     else:
-        sys.stderr.write("[af_mcp] 未启用鉴权（全放行，原型模式）\n")
+        sys.stderr.write(
+            "[af_mcp] 未配令牌 ⇒ 需鉴权工具（write/live 域）默认拒绝；"
+            "公开工具照常。要原型全放行请显式设 AUTOFORGE_MCP_ALLOW_NO_TOKEN=1\n"
+        )
     sys.stderr.flush()
 
     for raw in sys.stdin:

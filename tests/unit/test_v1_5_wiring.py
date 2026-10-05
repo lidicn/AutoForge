@@ -7,6 +7,11 @@ import json
 import pytest
 
 from autoforge.af_mcp import TOOLS, dispatch
+from autoforge.af_auth import SCOPES as _ALL_SCOPES
+
+# 裁定 20261004 §一 Q2=B：MCP 面「无身份」改成默认拒绝，本文件的调用点因此逐条显式给身份；
+# 「不给身份」那一档只由 test_dcd_20261004_mcp_default_deny.py 钉成"拒绝"。
+_ALL = {"subject": "test-all", "scopes": sorted(_ALL_SCOPES)}
 from autoforge.af_store import GraphStore
 
 #: http 出站 → L3（首错 L3_ACTION）
@@ -32,7 +37,7 @@ def test_new_tools_registered():
 def test_dispatch_failure_carries_attribution(tmp_path):
     """MCP 异常回执附归因 + 建议（v1.5.0 写→读闭环）。"""
     store = GraphStore(str(tmp_path))
-    content, is_error = dispatch("af_save", {"name": "x", "ir": BAD_IR}, store, None)
+    content, is_error = dispatch("af_save", {"name": "x", "ir": BAD_IR}, store, _ALL)
     assert is_error is True
     text = content[0]["text"]
     assert "拒绝归档" in text          # 原错误保留
@@ -42,11 +47,11 @@ def test_dispatch_failure_carries_attribution(tmp_path):
 
 def test_dispatch_experience_and_telemetry(tmp_path):
     store = GraphStore(str(tmp_path))
-    content, is_error = dispatch("af_experience", {}, store, None)
+    content, is_error = dispatch("af_experience", {}, store, _ALL)
     assert is_error is False
     assert json.loads(content[0]["text"])["ok"] is True
 
-    content, is_error = dispatch("af_telemetry", {}, store, None)
+    content, is_error = dispatch("af_telemetry", {}, store, _ALL)
     assert is_error is False
     assert json.loads(content[0]["text"])["ok"] is True
 
