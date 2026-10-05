@@ -287,7 +287,7 @@ def test_http_delete_of_aliased_name_returns_409_and_archive_survives(tmp_path, 
     store.save(_graph("light.a"), ALIAS_A)
     client = _client(tmp_path, monkeypatch)
 
-    r = client.delete(f"/api/automations/{Path(ALIAS_B).as_posix()}")
+    r = client.delete(f"/api/automations/{ALIAS_B}")
     assert r.status_code == 409, r.text
     assert "里混有" in r.json()["error"]
     assert _dir_files(store, ALIAS_B) == ["v1.json"], "409 之后对方整条归档必须还在"

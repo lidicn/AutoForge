@@ -108,7 +108,6 @@ class NodeExecutor:
 
     def __post_init__(self) -> None:
         self.pending_asks: dict[str, AskSession] = {}
-        self.node_visits: list[str] = []
 
     # ─────────────────────────────────────────────────────────────────
     # 主循环
@@ -130,7 +129,6 @@ class NodeExecutor:
 
             node = auto.node(node_id)
             instance.trace(node_id, note="enter")
-            self.node_visits.append(f"{auto.id}:{node_id}")
 
             # v0.3.0 发布侧：`emit` 是节点字段，进入节点时先广播（"发出事件后继续"）
             if node.emit is not None and not self._emit(instance, node):

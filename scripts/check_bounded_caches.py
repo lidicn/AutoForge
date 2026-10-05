@@ -414,7 +414,6 @@ BASELINE = frozenset(
         "af_conflict_runtime.py::ConflictService._waiters",
         "af_draft.py::ComposeMetrics._per_session",
         "af_draft.py::StagingStore._items",
-        "af_executor.py::NodeExecutor.node_visits",
         "af_executor.py::NodeExecutor.pending_asks",
         "af_fire_recorder.py::JsonFireStore._records",
         "af_flock.py::_LOCAL_HELD",

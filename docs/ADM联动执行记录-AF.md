@@ -3366,6 +3366,138 @@ CI（GitHub 侧，`git ls-remote --heads origin` 自证远端 `main` == 本地 H
 - 上面那 7 个 importer 只是换了取助手的模块名（HEAD 上它们的落盘本来就走 `af_store` 的 `mkstemp` 路径），不属于那 9 站；
   `af_insight_queue._atomic_write` 这个**本地同名包装**也仍在那里（它转调助手，不是第二份实现）。
 
+## 二之四十、归档名别名折叠的收口：把防线做在「这个目录归谁」而不是「这个名字合不合法」；七档变异里被杀得最狠的一档是删除侧
+
+**起因**：§二之三十九 ④ 登记的那条"下一批要落"。本批把审计 §四 第二条从"盘过了"推进到"堵上了"。
+
+### 一、前提更正先落账（否则本批会被读成照旧结论施工）
+
+上一条那行 ③ 里"HTTP 路径参数 / MCP 工具入参传进 `a/b` 会读到 `a_b` 的历史"经 HEAD 复测**不成立**，
+`_file_for` 与 `_safe` 都不在对外面的射程内（`VersionManager` 除自身文件零消费者；`instance_id` 是 `uuid4().hex[:12]`）。
+真可达的只有 `GraphStore._dir(name)` 一处：HTTP 侧 `{name}` 路径参数 **11 条**、MCP 侧声明 `name` 字符串参数的工具 **7 个**、CLI 同走一份 store。
+那两个数是本批当场 `grep -c` 量的，不是沿用 §③ 那句估算。**危害也跟着改口**：不是"身份混读"，而是
+**两个不同归档名会指向同一目录，其中一个去写或去删**——而删除不可逆（生产代码里 `shutil.rmtree` 只有 `af_api.py:1202` 一处站点）。
+
+### 二、落法与为什么不按原计划做边界校验
+
+| 决定 | 理由 |
+|---|---|
+| 不在 `af_api`/`af_mcp` 按 `^[a-z][a-z0-9_]*$` 拦 `name` | 那条模式管的是 IR 里的自动化 **id**，归档**名**从来不受它管辖；中文归档名在当前口径下合法（`isalnum()` 对汉字为真）。拿它去拦面上 = 单方面收紧产品对外行为，且拦不到真正的坏时刻（两个名字已经指向同一目录之后） |
+| 改在 store 层问「这个目录归谁」 | 判据落在唯一持有目录身份的那一层：`_dir_owner(name)` 读**最新版本记录**里的 `name` 字段，与请求名不等 ⇒ `ArchiveNameConflict`。写侧四站（`save` / `save_version_raw` / `save_conf_raw` / `save_conf`）+ `resave_raw` 内联（复用已加载的那条记录，不额外读盘，且在锁内）+ 删侧 `assert_deletable`（**扫全部版本记录**：删除不可逆，判据必须比写侧严）+ 导入 `overwrite` 半边 + HTTP `DELETE` 前置 |
+| 不改 `_dir` 的清洗方案 | 那会让存量 `_.json`、`a_b.json` 变成读不到的孤儿 ⇒ 数据可见性变更。本批保持"清洗形状逐字节不变"，并把它做成一条判据（见下） |
+| `_dir_owner` 读不出就返回 `None`，不回退到更早的记录 | 最新文件坏了就**不知道主人是谁**，编造一个主人会让写检查假红（假阻塞）。诚实分两面：写侧对"读不出"放行，删侧因为会扫全部记录，只要目录里还有**可读**且属于别人的版本就必红 |
+
+### 三、判据：`tests/unit/test_dcd_archive_name_alias.py` 20 条
+
+覆盖 `_dir` 多对一的形状钉死、清洗形状不变（存量目录仍可读）、CONTROL（`kitchen`/`bedroom` 各自独立写删）、空目录不误拦、
+别名写被拒且 v1 字节不变、回退桶（`###`/`@@@`/`""`/`"  "`）互相撞车、`resave_raw` 不涨版本、两处 conf 站点写不出文件、
+删侧比写侧严（v1 属 A、v2 属 B 的反例）、别名删除被拒且目录存活、坏记录不误报成冲突、导入 `overwrite` 拒 / `skip` 放行、
+HTTP 409（删除与 enable 两条路径）与正常删除 200、未知名 404。
+**另两条是"明写没覆盖"**：`test_read_side_alias_is_still_a_read_of_the_owners_archive`、
+`test_conf_without_any_archive_is_still_keyed_by_the_folded_name`——读侧别名与"无归档的 conf 仍按折叠名键控"这两面
+**修法要动名字→目录的身份关系，属数据可见性变更**，AF 不自签，判据在这里的作用是**别让下一批把没修读成已修**。
+
+### 四、变异自证（驱动脚本用完即删，文件从内存字节还原）
+
+```
+CONTROL（什么都不改）: rc=0 20 passed
+M1 摘掉 save 的归属检查        : rc=1 2 failed
+M2 摘掉 save_version_raw       : rc=1 1 failed
+M3 摘掉两处 conf 站点          : rc=1 1 failed
+M4 摘掉 resave_raw 内联检查     : rc=1 2 failed
+M5 把 assert_deletable 变成空操作: rc=1 5 failed
+M6 摘掉 HTTP DELETE 前置        : rc=1 1 failed
+M7 注销 409 异常处理器          : rc=1 2 failed
+restore af_store.py / af_api.py : byte-identical=True
+MUT_RC=0
+```
+
+M5 杀掉 5 条是这批里最响的一档，它正对着本批认定的真危害（不可逆删除）；M6/M7 合起来证明
+"store 层抛得出、HTTP 面接得住"这两半都各有人守——只测其中一侧的话，另一侧删掉照样绿。
+
+### 五、读数与账
+
+判据 20 条绿（`20 passed ... in 14.48s`）；对外形状：新异常 `ArchiveNameConflict` 进 `af_store.__all__`，
+HTTP 侧统一 `{"ok": false, "error": …}` + **409**；MCP 面走 `dispatch()` 既有的 `isError` 包装，不另写第二份处理。
+**代码已随 `6fdc206` 在远端**（该 commit 由同一工作树的并发会话提交并推送，本批记账在后，§三 台账以远端读数为准）。
+
+## 二之四十一、稳定性审计两份新报告落地：BUG-01 的死代码半边 AF 自决并删干净，段间封顶那一半量出实测后投 DCD；BUG-02 的 `or` 陷阱顺手补三条判据
+
+**起因**：`docs/audit/审计报告-稳定性与功能性缺陷.md`（新到的一份，审计对象 commit `f0184de`，日期 2026-10-06）。
+按铁律 #11 逐条对 HEAD 复测，不是照抄报告结论。
+
+### 一、核实结果
+
+| 报告条目 | 复测结论 | 证据（当场读码） |
+|---|---|---|
+| BUG-01 前半：`NodeExecutor.node_visits` 无界增长且无人读 | **成立** | `af_executor.py` 全文只有定义与 `append` 两处，零读取；且它躺在 `check_bounded_caches.BASELINE` 里被"已登记未加固"盖着 |
+| BUG-01 后半：`resume()` 无步数防护 ⇒ 段间循环无界 | **成立，且比报告写的更宽** | `MAX_STEPS_PER_SEGMENT = 1000`（`af_executor.py:52`）用的 `steps` 是 `run()` 的**局部变量**（`:118`），超限即 `_fail`（`:121-123`）；而 `resume`（`:164`）、`resume_then`（`:418`）、`timeout`（`:394`）、`on_cancel`（`:435`）、调度器 tick 分派（`af_scheduler.py:111-117`）**每次都重启这个计数器** ⇒ 段间累计无上限 |
+| 报告没写的一半：**轮询是合法 IR** | 成立 | `is_suspending = kind in ("ask","wait")`（`af_ir/models.py:373-376`），`_check_static_loop` 对"环上有挂起点"只给 **WARNING**（`af_scanner.py:876-895`）⇒ 这类图能过扫描、能进待批、能被批准上线 |
+| 报告没量的一半：`ctx.trace` 才是留下来的那条增长线 | 成立且要过存储 | `Ctx.trace: list[dict]` 无上限（`af_instance.py:105`）、`Instance.trace()` 追加（`:153-154`）、`to_dict()` 整份带出（`:122`）、载入时原样恢复（`af_store.py:655`） |
+| BUG-02：`budget = max_attempts or self.max_fix_attempts` 使显式 `0` 失效 | **成立**（报告判"当前未触发"也对） | `af_orchestrator.py:2450` |
+| §三 那张"已核验良性"表 | 采纳为**降噪记录**，不重复排查 | — |
+
+### 二、AF 自决的部分（本批已落）
+
+| 动作 | 位置 |
+|---|---|
+| 删掉 `node_visits` 的定义与 `append`（不留占位注释，判断写在判据的 docstring 里） | `af_executor.py` `__post_init__` 与 `run()` 循环 |
+| 从门禁基线摘除那条登记 | `scripts/check_bounded_caches.py` 的 `BASELINE`（`pending_asks` **保留**：它是 ask 会话表，不是本条靶子） |
+| `budget` 改为按 `None` 判缺省（语义钉成"运行次数 == 预算，`0` = 恰好跑一次不重试"） | `af_orchestrator.py:2450` |
+
+判据 `tests/unit/test_audit_stability_defects.py` **10 条绿**：源码树全量搜 `node_visits` 为零、
+执行器热路径上 `self.<x>.append(` 为零、基线不再携带那条、**200 段连跑后执行器上任何容器长度不变且不存在 list 属性**
+（这条一度是空的：初版驱动 200 次 `runtime.emit`，被 EventBus 节流打成"只执行 1 次"，改成 `spawn + run` 并加硬断言
+Mock 下发增量 `== 200` 才真咬住）、BUG-02 那组 `0→1 次` / CONTROL `None→3 次` / 参数化 (1,1)(2,2)(5,5) / 首轮成功即返回不重试。
+
+变异自证（驱动用完即删，三文件内存字节还原）：
+
+```
+CONTROL（什么都不改）: rc=0 10 passed
+M1 把 node_visits 无界容器装回执行器 : rc=1 3 failed
+M2 把已删容器重新登记进门禁基线      : rc=1 1 failed
+M3 budget 退回 or 默认值陷阱        : rc=1 1 failed
+restore executor / gate / orch      : byte-identical=True
+MUT_RC=0
+```
+
+### 三、不自裁的那一半：先把它从"静态推演"量成实测，再投 DCD
+
+复现脚本形态：单实例，IR 为 `触发(on) → w1(wait 5s) → d(do mock) → 回 w1`，合成时钟推进，Mock 适配器计下发。
+脚本按"用完即删"清理，读数原样如下。
+
+```
+tick=200  累计被唤醒段=200  活跃实例=1  trace最长=403   mock下发累计=200  审计条数=0  失败段=0
+tick=1000 累计被唤醒段=1000 活跃实例=1  trace最长=2003  mock下发累计=1000 审计条数=0  失败段=0
+tick=2000 累计被唤醒段=2000 活跃实例=1  trace最长=4003  mock下发累计=2000 审计条数=0  失败段=0
+终局：活跃(未终止)实例= 1  全部实例= 1
+
+段数=  100 墙钟=   0.12s trace条数=   203 单实例序列化=   19502 B
+段数=  600 墙钟=   3.65s trace条数=  1203 单实例序列化=  113002 B
+段数= 1200 墙钟=  15.23s trace条数=  2403 单实例序列化=  225202 B
+```
+
+三句话读数：**2000 段、0 失败、0 条审计事件**（没有任何运行期记录会告诉运维"这实例已经转了 2000 段"）；
+trace 与序列化体积随段**线性**增长；墙钟在 300→600→1200 段上呈 **≈平方**（每段重写整份实例状态）。
+另有一句不夸大：那次规模档脚本收尾统计落盘目录字节时因目录未创建而抛 `FileNotFoundError`，
+**所以"落盘总字节"这个数本批没有**，AF 不补一个没测到的数。
+
+⇒ 封顶阈值 + 超限动作（fail / 只告警 / 按节点重复访问判）与 `trace` 留存口径（定长环 / 截断+`trace_dropped` 摘要 / 交给封顶）
+都会改变现网长命实例的**存活判定**与可读历史，属产品裁定 ⇒ 投
+`关键决策部/inbox/20261006-AF-段间累计步数封顶与trace留存-决策申请.md`（§五 第 19 件）。
+**AF 在裁定前不动 `run()` 的计数器作用域，也不动 `Ctx.trace`**，也不自签一个魔法数。
+
+### 四、门禁与解释器读数
+
+- `gates.sh`：本轮除有界缓存一条外全绿；`check_imports.py`「新增/未获批 0 条（error 0 / warn 0），基线内存量 0 条 ⇒ 无违规」。
+- 有界缓存那条红**不是本批引入**，且本批不替它盖章：红名单 6 条全部指向 `af_nl_parse.py`（同一工作树里并发会话的未提交 WIP，
+  既未登记也未豁免）。本批按 §二之三十 的口径只做了一件与该门相关的事——把删掉的容器从 `BASELINE` 摘掉，
+  于是**已提交树**的读数从"扫到 76 / 基线 74"变成"**扫到 75 / 基线 73**"（当场量：本树 81，其中 `af_nl_parse.py` 独占 6，`81 − 6 = 75`）。
+  `tests/unit/test_bounded_caches_gate.py` 的钉数与那句"74 条"的旧文案同步改到 75/73，并在 docstring 里写明
+  **工作树躺着未登记 WIP 时这一条会红，那是"新容器没登记"，不许靠挪这两个数抹平**。
+- 全量 `pytest` 在本树仍带并发 WIP 的噪声（未登记容器 + 其自身未过的用例），AF 不为了凑绿去动别人的文件，
+  也不把 BASELINE 扩到替他们登记——那正是 §二之三十九 立过的"名单手抄第二真源"的另一种形态。
+
 ## 四、审计侧
 
 
@@ -3395,6 +3527,19 @@ mtime `Oct 4 18:02` 只说明 AF 写过它，**不是新审计输入**）。那�
 fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"），按形状它是 zip 快照读不出来的一类，
 登记在此免得下一轮把"AF 自审产出的洞"读成"审计没提所以不存在"。见 §二之三十五 第五节。
 
+**本批收到并处置了一份新报告**：`docs/audit/审计报告-稳定性与功能性缺陷.md`（对象 commit `f0184de`，审计日期 2026-10-06）。
+这条登记本身要记一笔——前面四批都在写"第八轮仍未投递"，而这一份是**换了视角进来的**（稳定性/功能性，不是安全），
+它带来的两条都有源码级证据：BUG-01（`node_visits` 无界死代码 + `resume()` 段间无防护）与 BUG-02（`or` 默认值陷阱）。
+按铁律 #11 对 HEAD 复测：**两条都成立**，且 BUG-01 的第二半比报告写得更宽（报告说"`resume()` 没有步数计数"，实测是
+**六个唤醒入口每次都重启那个局部计数器**，含调度器 tick 的三条分派），报告还没量的两件事本批补了读数
+（轮询经 `is_suspending` 判为**合法 IR**、静态扫描只给 WARNING；真正留下来的是 `ctx.trace` 且它**整份过存储**）。
+处置分档：前半（死代码容器 + `or` 陷阱）AF 自决并落 10 条判据 + 三腿变异，后半（封顶阈值与超限动作、`trace` 留存口径）
+量成实测后投 DCD（§五 第 19 件）。报告 §三 那张"已核验良性"表采纳为**降噪记录**（下一批不必重复排查那 107 条命中），
+但它否的是"静态规则集的精度"，不否 §二之四十/四十一 这两批的真修——两件事别混读。
+另：报告 §四 那张门禁表里 `check_pkg_markers.py ⚠️ rc=2「沙箱无 git，非代码缺陷」`与本仓口径一致
+（该门依赖 git 索引，外部沙箱取不到 ⇒ 是**射程限制**而不是红），它的 P3 建议"给该门做一条不依赖 git 的降级路径"
+**未做**，登记在 §六。
+
 ## 五、已提 / 待提 DCD
 
 | # | 事项 | 状态 |
@@ -3418,6 +3563,8 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
 | 16 | **安全审计（scoped run）遗留的三问，三问都会改变部署前提或现网可见行为**（本批对 HEAD 复测后剩下的、AF 不自裁的那部分）。① **长期码的绝对 TTL 归谁定**：`AuthCode` 有 `expires_at`，但签发长期码的路径写的是 `expires_at=None` ⇒ 一旦泄露即**永久有效**，加"可配置绝对 TTL（默认 180 天）"会改变**已签发码**的命运，那是运维契约不是 AF 的内部实现。② **MCP 面到底按什么拓扑部署**：`serve` 实测 `--host 0.0.0.0` 且 compose 里 `AUTOFORGE_API_TOKENS` 被注释掉；`AUTOFORGE_MCP_TOKEN` 未设 ⇒ `af_mcp._guard()` 今天**放行一切 scope**（默认拒绝会当场改变可达面，HTTP 只读面与 Agent 面同时受影响）。AF 倾向"读端点保持开放 + 写面明确写进部署前提『只在可信 LAN』，MCP 改默认拒绝"，但这两半都得 DCD 点名，注释里写不算。③ **homesdk wheel 的来源与完整性**：`af_executor.py` 顶层硬依赖 `homesdk`，而 `pyproject` 未声明它，交付物是躺在 `docker/` 下、文件名钉死的一枚 wheel——AF 侧能核"extras 三面一致"（`check_mqtt_runtime_dep.py`），**核不了这枚 wheel 是不是官方构建**（要 Pypi 侧发布账或 DCD 建 hash 台账，同 20261002 §〇 那批 homesdk 记账缺口同族） | `关键决策部/inbox/20261004-AF-安全审计遗留三问-决策申请.md`（**裁定 20261004《AF 安全审计与 MA 回执与遗留两批》§一 已回**）。AF 侧本批**未改**：compose、`--host`、read 端点的鉴权依赖、MCP 默认放行、长期码 TTL 一处没有；同批**已自决**的只有能静态判红的那两族（授权码全店窗口 + MCP 参数↔schema 双向门），判据与八腿变异见 §二之三十三。**→ 裁定 20261004 §一 三问全回（Q1=A / Q2 三项分别裁 / Q3=B）**：① **Q1=A**——长期码保留"长期"语义但**必须带可配绝对上限**（默认 180 天、`AUTOFORGE_AUTH_LONGCODE_TTL_DAYS`、`0`=显式关），且 `af_auth.list()` 要输出"距生成多久"给 WebUI；裁定给的理由是"窗口计数在进程内存、重启清零那条敞口仍在，180 天是上限兜住它"⇒ 本仓落法与 §一 3 的有界化同族（`2a8d940`，回执裁定 §三 那格读数判 ✅，含"空值或解析失败回落默认而不是关"这个细节）。② **Q2 三项分别裁**：部署拓扑=**`--host 0.0.0.0` 保留**（绑 loopback 会打断 DB 跨机访问）但"只在可信 LAN"要**写成显式部署前提**进 README + compose 注释——README 那半 AF 已落（`2a8d940` 的 14 行），**compose 那半按铁律 #3 归 NAS 部署者/SP**（裁定 §五 同一条）；read 端点=**A 维持公开**（只读面依铁律 #6 不该反过来依赖令牌系统）；MCP=**B 默认拒绝**——`serve_mcp` 未设令牌必须拒、显式 `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1` 才放行，并要求 AF 补判据"未授权默认结论必须能被测试判红"⇒ 排 **下一批单独做**（`_guard` + 测试调用点逐条显式化，§六 已登记）**→ 该批已落地，见 §二之三十八**：`current is None` 收窄为"无身份 ⇒ 需鉴权工具默认拒绝"，`AUTOFORGE_MCP_ALLOW_NO_TOKEN` 只认 `1`，`serve_mcp` 横幅与 `whoami` 的 `note` 同步改三态，测试侧 23 处调用点显式化（`_ALL` 的 scope 名单取自 `af_auth.SCOPES` 唯一真源），HTTP `POST /mcp` 复用同一道 `_guard` 不另写第二份检查；CONTROL + 六档变异全咬住。。③ **Q3=B**——14 个未覆盖面先补高优先三件（homesdk 供应链、`af_store`/`af_persist` 路径写入、SSRF 白名单），其余按里程碑排；裁定明写"**AF 自审不算独立覆盖（铁律 #5）**，这三件建议排外部 scoped run 或 DCD 复核"⇒ wheel 是否官方构建这一格**仍不在 AF 手里**，AF 侧只能核 extras 三面一致。同裁定 §一 三条对端可见形状（F-1 加 `Depends(_read)`／F-2 只把 `demo/forge2026` 明文默认凭据从页面移除、不改校验逻辑／F-3 收紧到 `_write` + owner 面明文与非 owner 面摘要分离、并要三条判据）已随 `2a8d940`+`ccf2fde` 全部落地，读数见 §二之三十六 |
 | 17 | **第 16 件的回执半边 + 一条 AF 读不出对端的前提差**：裁定 §一 F-1 原话"DB 侧持 write 域令牌（`autoforge_api_token`），write 域含 read——DB 侧零改动"，而 AF 的 `requires()` 一直是**逐名比对**、从没有过蕴含关系，homesdk 码里 `grep AUTOFORGE_API_TOKEN\|autoforge_api_token` **0 命中** ⇒ DB 令牌到底含不含 `read` 在 AF 侧不可证。AF 没有照字面只加门（那会把 DB 每 5s 的 ask 轮询整条打断，且只有对端能发现），落了一条**单向**蕴含 `read←{read,write}`（read 不满足 write、live 不满足 read），两向各一条判据。要 DCD 定的三件事：① 契约表那一行现在只给 POST 标了鉴权，GET 半边的要求要不要登记；② DB 令牌的 scope 集合给一句实话（含 `read` ⇒ 蕴含表可删；不含 ⇒ 它是必要修复）；③ "高权域天然含低权域"要不要变成全站口径（AF 不敢单方面扩到 `write←live`）。**同件附三份实测读数**：§六 要求的四仓 gitignore 探测（限定 `src/` 包树：AutoForge 5/0/5、homesdk 2/0/2、memory-agent 5/0/5、**AgentOps 仍 `NOT_A_REPO`**（`rev-parse` rc=128），并写明整仓扫会读出 2010 条 `.venv314` 假吞——射程必须声明）；授权面那条 fail-open 要不要升静态门（AF 建议等基线 9 站收完再谈，否则第一天就挂豁免表）；MCP 默认拒绝与 F-3 的排期请求 | `关键决策部/inbox/20261004-AF-裁定落地回执与write域含read前提差-决策申请.md`（**裁定 20261004 已回，三问全裁**）。今日已落地部分见同一份回执第一节，读数见 §二之三十五。**→ 裁定 20261004《AF 落地回执与 write 域含 read 前提差》三问全裁**：① 契约行**要**登记 GET 半边的鉴权要求，且由 **DCD 落笔**（AF 不改他仓文档）——本批按 HEAD 复测 `homesdk/doc/ADM联动主题注册表与消息契约.md` 的 `DB→AF` `asks` 那一行仍只给 POST 标了 `write 域令牌 + INBOX_KEY`，**该行未到**；② DB 那颗令牌**含 read**（实话：它要轮询 GET pending，只给 write 不含 read 就整条吃 403）⇒ AF 落的单向蕴含 `_SCOPE_SATISFIED_BY={"read":("read","write")}` 判为**必要修复、不是可选**，裁定原文"DB 侧零改动"成立的根据正是这条蕴含，落法评价"**最小、单向、正确**"；③ **不扩成全站口径**——只在 `read` 这一门做 write ⊇ read，明确**不扩 `write←live`**（"那把 `live` 变成万能钥匙"），要扩须 homesdk/DB 令牌签发面共同定义。**§二 授权面升硬门=本窗不升 + 给启动条件**（基线 9 站收完 **或** `af_auth`/`af_premiere` 下一次真改动，先到者为准）：本批 F-3 后端半边真改了 `af_auth.py` ⇒ **条件以"真改动"这一支先到**，D 腿按"不另开第二道门、不接基线也不收豁免、只收 `.auth` 可见写入目标"落地（`ccf2fde`，§二之三十六），9 站 A 腿的账**已于次日按钉定顺序收完（§二之三十九：基线清空 0 站、落点统一走 `af_atomic.atomic_write_text`、「登记进基线」这条出口关闭）**。**§三 五格读数全 ✅**（含"空值或解析失败回落默认而不是关"与 paho 上界逐条核字符串），§四 确认三仓 `src/` 面 0 吞、AgentOps 仍非 git 仓，顺带那条 fail-open（半截撤销名单=已撤销令牌下次启动复活）裁定判"AF 修对了"。**§五 排期确认**：MCP 默认拒绝=下一批单独做（裁定原文写"49 处 `dispatch(` 逐条显式化"；AF 现读 `grep -rn --include=*.py "dispatch(" tests/` = 52 行 / 剔除本批新测试文件 46 行，AST 分档后真需要显式身份的是 **23 处** → **§二之三十八 已落地**）、F-3 收紧+owner 拆分=下一批且含浏览器验证（视口取不到就按"DOM 事件驱动走通"写结论等级）、F-2 UI 半边=与 F-3 同批、Q3 真机演练+窗后四项验收+NAS 镜像重烤=合并窗由 DCD 排期 SP 执行、compose 侧 `MQTT_*` 与"可信 LAN"注释=NAS 部署者/SP（铁律 #3）。判例侧 AF 自报的"整仓扫读出 `ignored=2010`"裁定收为"**射程必须写明**" |
 | 18 | **两棵用户 WebUI 哪棵是交付面，以及 `ui-user` 的数据层断链要不要本批就补**（F-3 浏览器验证撞出来的，HEAD 即存在、非本批引入）。实测三件：① console 首条错 `TypeError: Se.openPairStream is not a function`，根因 `ui-user/src/api/index.ts:8` 把**模块 namespace** 当对象用（方法装在 `client.ts:35` / `mock.ts:83` 的 `export const api = {...}` 里）⇒ 整个 `api.*` 调用面运行时都是 undefined，面板显示"暂无"而**同页 `fetch` 同一端点 200、1 行明文**；② 名字层三处（`stores/main.ts:49/53/59` 的 `getAuthCodes`/`generateAuthCode`/`deleteAuthCode` vs 客户端的 `listAuthCodes`/`createAuthCode`/`revokeAuthCode`）+ 值语义两处（视图过滤 `c.type` 而后端字段 `kind`；`formatDate()` 期待 ISO 而拿到 epoch 秒）；③ `vue-tsc --noEmit` 在 `ui-user` 上 `TSC_RC=2`、**51 条**（其中 28 条 TS2307 含本机 `node_modules` 装不全的部分，AF 不把它算成代码缺陷）。同族另一棵：`ui-user-mimo` 的 node 判据 **60 条 / 7 条红**，`store.test.mjs` 在裸 node 下 import 就失败（`import.meta.env` 未定义），已用逐字节 HEAD 对照档确认非本批。三问：Q1 交付面 A=`ui-user` / B=`ui-user-mimo` / C=两棵都要（AF 判最贵）；Q2 CI 射程扩到用户树是"先修后加"还是"先加红着当账"（现在加当天就红）；Q3 两棵树 `VITE_USE_MOCK` 缺省档相反（`=== 'true'` vs `!== 'false'`）要不要统一成"缺省=真后端" | `关键决策部/inbox/20261004-AF-用户WebUI交付面与数据层断链-决策申请.md`（**裁定 20261005 §一 已回，三问全裁 B/先修后加/批准**）。AF 侧本批**两棵用户树的数据层一个字节未改**、未自决扩 CI 射程、未加第 12 个响应键（`masked` 属裁定未批的形状改动）；已落地部分（D 腿门、F-3 后端半边、同源部署读数）见同一份申请第五节与 §二之三十六。**→ 裁定 20261005 §一 三问全裁（B / 先修后加 / 批准），本批已按三条落地**：**Q1=B**——`ui-user-mimo` 是交付面，且该题**早在 `20260928-AutoForge-v2.1设计难题A-F-决策.md` §G 已裁过**（"以 `ui-user-mimo` 为主线，`ui-user/` 冻结归档"），裁定明确认定本次撞出的数据层断链**正是该裁定的又一证据**、`ui-user` 不该再投人力；F-3/F-2 的浏览器验证改挂主线树，`ui-user/` 就地冻结（保留可读，不再开发）。**Q2=先修后加**——先修主线树那 7 条红（HEAD 即存在、非本批引入），再把它的 node 判据加进 CI 硬门；`ui-user`（冻结树）**不进 CI**，裁定给的理由与本仓既有口径同一条："先加红着当账 = 造一条会假红的门"。**Q3=批准收敛为"缺省=真后端，mock 必须显式开"**，改动只落主线树。**AF 侧本批的实际落法**：7 红逐条分档为 **2 条产品缺陷**（`compareAutomation` 把"从未触发"与"日期串解析不成"都折成 `-Infinity`，同键退化到名称序；`applyTheme()` 住在 store 里让判据在裸 node 上 import 即炸）+ **5 条量具缺陷**（MCP_URL 值抄成 8000、flipIn 三段只钉一段、375px 宽度正则漏钉响应式媒体查询、store 判据跑法没钉"不碰 DOM"、主题开关落点钉的是字样而非活代码）——分档理由与七档变异 + 对照档见 §二之三十七，其中 M3 当场自捕一次**假绿**（字面存在性判据在把代码注释掉之后照旧绿），据此新立口径"**钉『某段代码存在』的判据，必须同时钉『它活着』**"。env 读数收进唯一接缝 `ui-user-mimo/src/api/env.ts`（`VITE_USE_MOCK === 'true'`，缺省即真后端；判据跑法用 `package.json` 的 `--env-file=tests/mock.env` 显式声明 mock，不让量具依赖不安全的那一档）；`ui-user-mimo` 判据 **60 条 / 7 红 → 74 条 / 0 红**、`npm run build` `RC=0`、`GATES_RC=0`；CI 新增 `ui-user-mimo-judgments` 作业（node 22 + `--replace-registry-host=always` 的源自证 + `npm test` + `npm run build`）。**盘出来没做、已登记的三件**（§六）：mock 常量仍进生产产物、`vue-tsc` 不进 CI、F-3 面板的浏览器验收仍未完成 |
+| 19 | **稳定性审计 BUG-01 的第二半：跨段累计步数要不要封顶、封在哪、超限动作是什么，以及 `ctx.trace` 的留存口径**。报告（§二 BUG-01）写的是"`resume()` 没有步数计数"，本批按 HEAD 复测把它扩成一个更大的面：`MAX_STEPS_PER_SEGMENT=1000` 用的 `steps` 是 `run()` 局部变量（`af_executor.py:118`），而 `resume`（`:164`）/`resume_then`（`:418`）/`timeout`（`:394`）/`on_cancel`（`:435`）/调度器 tick 三条分派（`af_scheduler.py:111-117`）**每次都把它归零** ⇒ 段间累计无上限。报告没量的两半本批补了读数：① 经挂起点的环是**合法 IR**（`af_ir/models.py:373-376` 判 `ask/wait` 为挂起点 ⇒ `af_scanner.py:876-895` 对同一形状只给 **WARNING**，能过扫描、能进待批、能被批准）；② 真正留下来的增长是 `Ctx.trace`（`af_instance.py:105` 无上限、`:153-154` 追加、`:122` 整份序列化、`af_store.py:655` 原样恢复 ⇒ **过存储**，不是内存尾巴）。实测复现（合成时钟 + Mock 适配器，单实例自循环）：`tick=2000 ⇒ 累计被唤醒段=2000 / trace最长=4003 / mock下发累计=2000 / 审计条数=0 / 失败段=0`，规模档墙钟 `100⇒0.12s / 600⇒3.65s / 1200⇒15.23s`、单实例序列化 `19502 B⇒225202 B`（**≈平方**在耗时上、**线性**在体积上；该脚本收尾统计落盘字节时抛 `FileNotFoundError`，故"落盘总字节"本批**没有读数**，不补）。三档：问题一 A（实例级双计数 + 超限 `_fail`，建议档 S=1000 段 / T=20000 步）/ B（只告警 + 监护视图常驻，零误杀但泄漏照旧）/ C（按同一节点访问次数判）；AF 倾向 **A+B 组合但阈值由 DCD 定**——把合法轮询形态判死是产品裁定，不是工程修 bug。问题二（`trace`）A（定长环）/ B（截断 + `trace_dropped` 摘要，AF 倾向，因"丢了什么必须自己声明"合铁律 #5）/ C（不动，交给问题一封顶），并附一问：新增持久化键 `trace_dropped` 是否要走铁律 #1 的 schema 登记 | `关键决策部/inbox/20261006-AF-段间累计步数封顶与trace留存-决策申请.md`（**已提交，待回话**）。裁定前 AF **不动 `run()` 的计数器作用域、不动 `Ctx.trace`**，也不自签一个魔法阈值；同批已自决的是 BUG-01 前半（`node_visits` 死代码容器删除 + 门禁基线摘除）与 BUG-02（`or` ⇒ `is None`），10 条判据 + 三腿变异读数见 §二之四十一 |
+| 20 | **（待提，本批未投）**归档别名的**读侧**那一面与"无归档 conf 仍按折叠名键控"：修法要动「名字 → 目录」的身份关系（给 `_dir` 加名字账本，或改清洗方案），属**数据可见性变更** ⇒ 不是 AF 自决项。本批把它钉在判据里而不是偷偷修：`tests/unit/test_dcd_archive_name_alias.py::test_read_side_alias_is_still_a_read_of_the_owners_archive` 与 `::test_conf_without_any_archive_is_still_keyed_by_the_folded_name` 两条**明写"当前未覆盖"**，作用是不让下一批把没修读成已修。是否值得动身份关系请 DCD 定向（若第 19 件给 `trace` 的口径也要碰存储面，AF 建议并件再投，免得两份裁定各说各话） | 尚未成文；触发条件 = 第 19 件裁定回来、或下一次真实触碰 `af_store._dir` 的命名面 |
 
 ## 六、未在本版做（登记，不静默）
 
@@ -3437,8 +3584,8 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
 - **审计 §四 那条「高」优先的第二项（`af_store.py`/`af_persist.py` 路径处理，原文写「未做独立安全审计、不自签已审」）本批改成「盘过了，读数如下」**（铁律 #5：「未审」不是豁免，「已审」也不能空口签）。四条，全部真跑过：
   ① **穿越不成立**：三份 sanitizer 的保留集里既没有正斜杠也没有反斜杠（`af_persist._safe` 的保留集是 `-_ .`+`isalnum`，`af_version._SAFE_NAME` 是 `A-Za-z0-9._-`，`af_store._dir` 是 `-_`+`isalnum`）。`PersistStore._path("../outside/secret")` → `.._outside_secret.json`（仍在 `instances/` 目录内，`resolve()` 不等于外面那份目标）；`VersionManager._file_for("../../outside/secret")` → `.._.._outside_secret.json`；`GraphStore._dir("../../outside")` → `<root>/outside`（root 之内）；`ps.remove("../outside/secret")` 返回 `False`，外面的文件 `exists()` 仍为 True。
   ② **但「别名（aliasing）」成立**——映射是多对一：`_file_for("a/b")` 与 `_file_for("a_b")` 同为 `a_b.json`；`_safe("  sp  ")` 与 `_safe("sp")` 同为 `sp`（`strip("_")` 把替换出来的下划线又吃掉了）；`_file_for("日本")`/`("語")`/`("門")` 三者同为 `_.json`（`_SAFE_NAME = [^A-Za-z0-9._-]+` 是 ASCII 白名单，CJK 整段塌成 `_`）。
-  ③ **射程核实（这是关键的一步，别停在 ②）**：写侧拿不到别名——IR schema 对 automation `id` 的要求是 `^[a-z][a-z0-9_]*$`（读数取自 `af_ir.models.SCHEMA_PATH` 那份 schema 的 `/properties/id`，**不是手抄**），这段字符集里 sanitizer 是恒等映射 ⇒ 两条不同自动化不会在版本文件上互相覆盖。成立的是**读侧**：面上（HTTP 路径参数 / MCP 工具入参）传进 `a/b` 这类越界 id 时，会读到 `a_b` 的历史——身份混读，不是写入损坏。`af_persist` 那侧同理（`instance_id` 不经 IR schema，`x/y` 与 `x_y` 落在同一个 `{...}.json`）。
-  ④ **下一批要落的形状（AF 可自决、零迁移）**：把「必经 schema 那份 id 模式」做成**边界**校验（`af_api` 的路径参数 + `af_mcp` 的工具入参各一处，配反例判据），而不是去改 `_file_for`/`_safe` 的命名方案——后者会让存量 `_.json`、`a_b.json` 变成读不到的孤儿，属数据可见性变更，真要动必须先投 DCD。登记为待落，不静默。
+  ③ **射程核实（这是关键的一步，别停在 ②）——本批按 HEAD 复测后，旧结论里"面上会读到 `a_b` 的历史"这半句不成立，更正如下**：IR schema 对 automation `id` 的要求是 `^[a-z][a-z0-9_]*$`（读数取自 `af_ir.models.SCHEMA_PATH` 那份 schema 的 `/properties/id`，**不是手抄**），这段字符集里两份 sanitizer 都是**恒等映射**，所以经 IR 走的那条路不会产生别名。而 `_file_for`/`_safe` 这两处**根本不在对外面的射程里**：`_file_for(automation_id)` 的两个调用点（`af_version.py:724/748`）拿的都是图里的 id，且 `grep -rn "VersionManager" src/autoforge/*.py` 除 `af_version.py` 自己**零消费者**（既没有 `/api/versions/{name}` 那样的路由，MCP 也没有）；`af_persist._safe(instance_id)` 的喂入是 `uuid.uuid4().hex[:12]`（`af_instance.py:220`）与从盘上读回的记录（`af_runtime.py:157/161/173`），请求面递不进带 `/` 的串。**真可达的别名面只有一处**：`GraphStore._dir(name)` 吃的是归档**名**（CJK 归档名合法，因为 `isalnum()` 对汉字为真），HTTP 侧按路径参数 `{name}` 实测 **11 条路由**、MCP 侧 **7 个工具**声明了 `name` 字符串参数，CLI 也走同一份 store。⇒ 别名不是"读到别人的历史"这一条，而是**写与删两个动作会落到同一个目录**，其中删除不可逆（`shutil.rmtree` 在生产代码里只有一处站点：`af_api.py:1202`）。落法与判据见 §二之四十。
+  ④ ~~下一批要落的形状（把 schema 那份 id 模式做成 `af_api`/`af_mcp` 的边界校验）~~ **本批已落，但落法与这句预设不同，且不同是有理由的**：把校验放在**面上认 id**那一层拦不住本仓的真风险——归档名字符集与自动化 id 字符集不是一个口径（按 `^[a-z][a-z0-9_]*$` 拦会把合法中文归档名判红，那是改产品行为）；而别名坏事的时刻是"两个名字指向同一目录后，其中一个去写/删"。所以本批把防线做在 **store 层"这个目录归谁"**（写侧四站 + `resave_raw` 内联 + 删侧扫全部版本记录 + 导入覆盖 + HTTP `DELETE` 前置），改 sanitizer 命名方案那一档（会让存量 `_.json`/`a_b.json` 变孤儿）仍属数据可见性变更，**未做、未投**，因为按上面的更正它已不是可达面。
 - **接缝类判据：多路镜像这一族已结清，参数递错/名单手抄那一族扫过七条且已全部有门**：本批把"同一份值手抄进多条属性路径"这一族做成门禁（`scripts/check_states_fanout.py`，§二之十四 的 AST 盘点显示它覆盖的是 src 全集，不是抽样）。另补的四处判据属**参数递错**类（serve→`build_app` 的 `readonly`、CLI 起桥递出去的四样 kwargs、`_make_runtime` 的起桥条件与 clock 归属、`live_run` 的时钟锚点），靠的是顺着验收点手动追问"这根线谁在测"。第四条不只是"补一条测试"，它**实测出一个真缺陷**：两条真机路径对同一次下发给出两套时间轴（§二之十五，`12cea64` 已修）。同族里曾剩一条「TOOLS→caps 之外有没有第二次工具名单映射」**未做清单化盘点**，也没有对应门禁能判红——这类缺口不会让任何东西变红，只会让该红的不红，与 §二之十一 同族；**本批扫掉**：AST 盘点盘到两处真映射（`af_orchestrator.observe()` 按名调注册表里没有的 `af_live`、`af_runtime_ext.mcp_tools()` 另抄一份含 `af_approve_proposal` 的五人名单），两处都是死代码 ⇒ 删除而非接线，判据做成 `scripts/check_tool_names.py`（§二之十九，`743aadf`）。**第五条已在上一批（§二之十六）扫掉并抓到两处真缺陷**（`af_service` 的 store 注入 + events 上限只装 HTTP 面，`dc8ac0d`，§二之十六）；同批扫到的第三处（单写者租约只在 HTTP 面）因涉及给 DB 新增可见拒收模式而投裁定（§五 第 10 件），代码未动。**第六条 = `af_watch` 的观察者装配，本批扫掉并抓到第三条真缺陷**（观察期把 `auto_rollback` 丢在接缝上，`af2ee56`，§二之十七）。已扫的**七条**覆盖 `af_cli` 的 serve/起桥/runtime 装配三面 + `af_service` 的 clock 与 store/cap 一面 + `af_watch` 的三个喂入点一面 + `af_mcp.TOOLS` 的名字真源一面；`af_watch` 侧本批已盘（§二之十七，抓到第三条真缺陷：观察期把 `auto_rollback` 丢在接缝上）。第七条 = **TOOLS 之外有没有第二份工具名单映射**，本批扫掉：盘到两处死映射并删除，判据进门禁（§二之十九，`743aadf`）。**参数递错那一族的判据已常驻**（§二之十八：`scripts/check_param_injection.py`，按 `store`/`readonly` **参数表**收，`gates.sh` 新节 ⇒ CI `quality-gates` 同口径判红），**名单手抄那一族也已常驻**（§二之十九：`scripts/check_tool_names.py`，注册表锚点读不到就 exit 2），**第三条族——"实现之间对同一条契约给相反结论"——同批补成静态门**（§二之二十：`scripts/check_snapshot_policy.py`，射程 = 类级 `snapshot` 且"标注 `-> Snapshot` ∪ 体里造 `Snapshot`"，锚点读不到 exit 2；此前它只有四条各认自己那几个类的契约测试），所以"这类洞没有门禁能判红"从本批起只对**静态判不出的形状**成立（`clock` 属"默认即设计"、`obj.method()` 与 `**` 解包与变量名工具属读不出值、**"某个容器是不是有界"属值语义**——`check_bounded_caches.py` 判的是"注册表说的名字在不在模块里、测试 id 收不收得到"，不是"这个字典会不会胀"）。**第八门 = 有界缓存注册表**（`c0476e2`，裁定 20261004 §一 3 B，§二之三十）：它拦的是"下一条约定只写在审计正文里"这个形状本身。同批按这条门盘出的两处"回收逻辑写好了但没人按"（`sweep()` 与 `purge_expired()`）也已接上生产路径并各钉判据——那是 §二之十四 那一族的第 8、9 次命中，两腿变异各 `rc=1 1 failed`。登记在此，避免被读成"接缝已系统扫过"。
 - **"实现间契约不一致"的静态门禁本批已交付**（`scripts/check_snapshot_policy.py`，`d7d1fff`，§二之二十）：
   第七轮那条 `StateProvider.snapshot()` 必须对未知实体 `raise UnknownEntity` 的跨实现契约，此前只有
@@ -3494,7 +3641,11 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
 - **掩码面上的"删除"会把掩码当码提交**（`ui-user` 的 `handleDelete(code.code)` 在 `reveal=false` 时拿到 `********`）：交付面认定已随裁定 20261005 §一 Q1=B 落到 `ui-user-mimo`，本条按 HEAD 复测**在主线树同样成立**——`AuthCodesView.vue` 的 `revoke(c.code)` 直接把后端返回的 `code` 字段送去 `DELETE /api/user/auth-code/{code}`，而 `/api/user/auth-codes` 对非 owner 主体返回的是定形掩码 `af_auth.CODE_MASK`（`"*" * 8`）；主线树没有 `reveal` 这一概念，视图始终渲染 `c.code` ⇒ 拿非 owner 的 write 令牌进这一页，"作废"就是拿掩码当码提交。**不是安全洞，是 UX**（撤销一个不存在的码不生效，后端 `revoke()` 返 `ok=False`），随 F-3 剩余半边（裁定 §五：下一批、含浏览器验证）一起收；本批不自决加第 12 个响应键（`masked` 这类字段属裁定未批的形状改动）。
 - F-3 的**浏览器验收在主线树尚未做**（裁定 §五 把它与 owner/非 owner 拆分一起排到下一批）：本批只有 node 判据 + 构建 + 同源部署三样静态读数，`AuthCodesView.vue` 的长期码面板在 `ui-user-mimo` 上**没跑过一次真实页面动作**（生成→复制→作废、短码倒计时、SSE 配对流）。裁定同时给了结论等级口径：**本机浏览器取不到视口时，按"DOM 事件驱动走通"写结论，不写成像素级验收**。做这一步的前置是主线树起 dev server 并连一个真后端（`VITE_USE_MOCK=false`），且非 owner 那条分支要有第二枚令牌才取到数——两样本批都没准备，登记不静默。
 - 原子写基线那 **9 站**（`af_premiere` ×2 → `af_version` → `af_scene` → `af_fire_recorder` → `af_predict`/`af_pretrigger`/`af_shadow`/`af_flock`，顺序是裁定 §二 钉的）——**→ 次日按该顺序全部收完，见 §二之三十九**：落点统一走新的 L0 助手 `af_atomic.atomic_write_text`，`.atomic-write-baseline.txt` 清空成 0 站，「登记进基线」这条出口从此关掉（只剩「走助手」或「带理由的就地豁免」）；D 腿与 A 腿两本账至此都清了（D 腿见 §二之三十六，A 腿剩下的 `af_auth._atomic_write_text` 并轨仍登记在 §二之三十九 第七节）。裁定 20261004《…落地回执与 write 域含 read 前提差》§五 的 **MCP 默认拒绝**同批未做（裁定自己写明下一批单独做）——**→ 本批已单独做完，见 §二之三十八**：`_guard` 的 `current is None` 从「全放行」收窄为「无身份 ⇒ 需鉴权工具默认拒绝」，显式放行只认 `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1`，公开工具 20 个照常；测试侧 **23 处**调用点改成显式身份（8 处需鉴权 + 15 处公开），"产品改动落地、测试一行没动就是 8 failed" 是这条门咬得住的第一读数。
+- **BUG-01 的第二半（跨段累计无防护）本批未修，且在裁定前不修**：封顶阈值、超限动作（fail / 只告警 / 按节点访问次数判）、`trace` 留存口径三样都会改变现网长命实例的**存活判定与可读历史**，而"经挂起点的环"是本仓自己判过的**合法 IR**（静态扫描只给 WARNING）⇒ AF 不自签一个魔法数。申请已投（§五 第 19 件），复现读数与六个唤醒入口的锚点在 §二之四十一。**这条不是"报告说的已修完"**：删掉的只是那条写了没人读的 `node_visits`；`ctx.trace` 仍在无上限增长，且它整份过存储（`af_instance.py:122` → `af_store.py:655`）。
+- 稳定性报告 §六 P3 那条「给 `check_pkg_markers.py` 做一条**不依赖 git** 的降级路径」**未做**。本仓口径澄清一下免得被读成缺陷：该门在外部沙箱 `rc=2` 是**射程限制**（它要读 git 索引），报告自己也标了"非代码缺陷"；降级路径等于再养一份"哪些文件算包标记"的口径，与 §二之十九 那族"名单手抄第二真源"同形，要做就得让降级档与 git 档**同一判据、可互相核对**，那是独立一批的事。
+- **本树（工作区）的全量 `pytest` 读数今天不能当作"这批的绿色证明"引用**：同一工作树里有并发会话未提交的 `af_nl_parse.py` + `tests/test_af_nl_roundtrip.py`，它带来 6 个未登记增长容器 ⇒ `check_bounded_caches` 判红、`test_bounded_caches_gate.py` 两条红（`test_real_repo_is_green`、`test_real_repo_measurements_are_pinned` 的"扫到"半边）。AF 的处置：**不替别人登记、不把 `BASELINE` 扩成第二块盖章区、不把钉数改成 81**；只把本批该动的那一处（删容器 ⇒ 75/73）改对，并当场量出"本树 81 − `af_nl_parse.py` 独占 6 = 75"来证明钉数是**已提交树**的真读数。远端 CI 跑的树不含那个文件，故 `gates.sh` 除这一条外本机全绿、`check_imports` 无违规。
+- 归档名别名的**读侧**与"无归档 conf 按折叠名键控"两面**未修**（修法要动名字→目录身份，属数据可见性变更 ⇒ §五 第 20 件，待提）。本批用两条"明写未覆盖"的判据把它钉在测试里（§二之四十 第三节），免得三个月后有人拿"别名那批已经修完"过账。
 
 ---
 
-—— AutoForge 开发 · 2026-10-05
+—— AutoForge 开发 · 2026-10-06

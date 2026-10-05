@@ -275,7 +275,7 @@ def test_d_registry_docstring_marker_is_not_counted_as_an_exemption(tmp_path):
 
 # ── 射程自证：读不出一律 2 ───────────────────────────────────────────
 def test_scope_repo_baseline_does_not_leak_into_another_tree(tmp_path, capsys):
-    """基线是本仓那一份扫描的冻结快照：拿它判另一棵树，74 条"已经不存在"会把 1 条真红埋掉。"""
+    """基线是本仓那一份扫描的冻结快照：拿它判另一棵树，整份"已经不存在"会把 1 条真红埋掉。"""
     gate = _gate()
     src = _fixture(tmp_path, bounded=_entry(),
                    extra={"af_other.py": DEMO_MODULE.replace("_CACHE", "_BOX")})
@@ -325,10 +325,15 @@ def test_real_repo_is_green(tmp_path):
 
 
 def test_real_repo_measurements_are_pinned():
-    """钉住本批实测：注册表 2 / 固定键 2 / 扫到 76 / 基线 74。
+    """钉住本批实测：注册表 2 / 固定键 2 / 扫到 75 / 基线 73。
 
     数字变了只有两种可能：新增了一个容器（那要走登记或豁免），或者有人动了基线。两者都不该
     悄悄发生——第六轮审计那句"四处现状已是两条腿"就是靠这种核对才没被本门照抄成假账。
+
+    75/73 是**已提交树**的读数：稳定性批次删掉 `af_executor.py::NodeExecutor.node_visits`
+    （一条写了却没人读的死代码容器）后，扫到数与基线各减 1。工作树里若躺着未提交的 WIP 模块，
+    扫到数会比 75 更大而基线仍是 73——那种红的意思是"新容器没登记"，不是这行数字错了，
+    登记处置归那一批自己，不许靠挪动这里的数字把它抹平。
     """
     gate = _gate()
     src = ROOT / "src" / "autoforge"
@@ -336,7 +341,7 @@ def test_real_repo_measurements_are_pinned():
     containers, _lines, scan_errs = gate.scan(src)
     assert errs == [] and scan_errs == []
     assert len(bounded) == 2 and len(fixed) == 2
-    assert len(containers) == 76 and len(gate.BASELINE) == 74
+    assert len(containers) == 75 and len(gate.BASELINE) == 73
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"

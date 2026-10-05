@@ -2446,7 +2446,8 @@ class Orchestrator:
 
     def _fix_loop(self, session: ComposeSession, stage: str, run: Callable[[], Mapping[str, Any]],
                   max_attempts: int | None = None):
-        budget = max_attempts or self.max_fix_attempts
+        # `or` 会把显式的 0（"跑一次不重试"）悄悄换成默认预算 ⇒ 必须按 None 判缺省
+        budget = self.max_fix_attempts if max_attempts is None else max_attempts
         attempts = 0
         raw, issues = {}, []
         while True:
