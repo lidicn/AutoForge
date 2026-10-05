@@ -25,8 +25,11 @@ __all__ = [
 ]
 
 #: 仿真/运行时注入的字段——不是 NL 可逆核心，往返只保留、不重建。
+#: 此集合须与 ir.schema.json node 段 $comment 白名单逐字一致（DCD 裁定
+#: 20261005-AF-ir_non_reversible是否升schema + scripts/check_ir_runtime_keys.py 硬门）。
+#: 注：审计载荷用的 `store_diff_sha256` 是返回值字段、非 IR 节点键，不在此集合。
 RUNTIME_ONLY_FIELDS: frozenset[str] = frozenset({
-    "stage", "diff_sha", "store_diff_sha", "simulate_track", "honest_report",
+    "stage", "diff_sha", "simulate_track", "honest_report",
 })
 
 #: L2/L3 不可逆标记键（写在节点上）。

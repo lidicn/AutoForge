@@ -55,6 +55,7 @@
       "type": "object",
       "required": ["id", "kind"],
       "additionalProperties": true,
+      "$comment": "运行时扩展键白名单（铁律#1 豁免：不在此列表的运行时键写入 IR 节点须先申请 DCD 裁定）：_non_reversible / stage / diff_sha / simulate_track / honest_report",
       "properties": {
         "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$" },
         "kind": { "enum": ["on", "if", "do", "ask", "wait", "set", "pass", "group"] },
