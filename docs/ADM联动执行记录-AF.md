@@ -3899,6 +3899,83 @@ uvicorn 访问日志把整条查询串原样记下（`GET /api/mcp/pair-request?
   的逐格点名，真正的口径还得靠人读那一格。
 
 
+## 二之四十七、收稳定性审计 §六 P1：把"只写不读的容器"做成能判红的第五判（判据 E），并给三处同族容器封顶——**基线冻的是"有没有界"，冻不掉"没人读"**
+
+- **来源（不是"顺手加个规则"）**：`docs/audit/审计报告-稳定性与功能性缺陷.md:144` §六 P1 原文
+  ——「在 `scripts/check_bounded_caches.py` 中新增规则：检测所有实例级 `list` 的 `append` 是否有对应裁剪/读取，
+  防止同类泄漏再次引入」。BUG-01 那一条（`NodeExecutor.node_visits` append 了从来没人读的列表）已在 §二之四十一
+  删掉，但**删掉一个不阻止下一个**：这一族的复发防线当时仍然是零。
+- **落的是什么**：`scripts/check_bounded_caches.py` 从四判变**五判**，第五判 E = 死写容器。三块新件：
+  `count_reads()`（全仓 Load 上下文计数，剔除写入通道 `_write_channel_nodes()`：赋值/`del` 目标、
+  `x.append(…)` 的方法名本身）、`dead_write_keys()`（**不看基线**——这是它与判据 C 的全部区别）、
+  `check_dead_writes()`（组装判红文案）。射程自证两档：未登记容器**全部**被判死写（≥3）⇒ exit 2、
+  读取点收集器数出 0 ⇒ exit 2；文案各带"是口径塌了，不是代码同时出问题"。
+- **首版探针的两类错（都留下判据，防止"改严的人"再犯）**：手搓读数曾把 81 个容器数成 65 个"死写"，
+  两个方向各错一次——① 把 `x.update(…)` 的接收者当读取、又把 `Call.func` 的方法名当读取（⇒
+  `test_e_method_name_is_not_a_read_of_a_container_with_that_name`）；② 漏掉 `setdefault`/`pop`/`popitem`
+  这类**内容读取**（`af_conflict.py:521` `self._release_log.setdefault(entity_id, [])` 是真在消费，
+  首版判它死写＝假红 ⇒ `CONTENT_READING_MUTATORS` + `test_e_setdefault_counts_as_a_read`）。
+- **实测读数（同一棵干净树 `../AF-p1-head`，detached HEAD `3c51973` + 本批六文件；只差那三个 src 文件）**：
+  修复前（`git checkout HEAD --` 三文件，并以 `grep -c INTENTS_MAX ha.py` = 0 自证还原真生效）：
+  `GATE_RC_HEAD=1`，判红恰好一条——
+  `[有界缓存] 死写容器 af_scheduler.py::Scheduler.rejections（af_scheduler.py:75）：全仓读不到 \`rejections\` 这个名字，只有写入点。…`
+  `共 1 处判红（注册表 2 项 / 固定键 2 项 / 基线 73 项 / 扫到 75 个容器）`。
+  修复后（文件还原回本批版本，`git status` 只剩本批改动）：
+  `GATE_RC_FIXED=0` ⇒
+  `[有界缓存] 注册表 2 项双腿齐全且测试 id 被收集；固定键 2 项带理由；扫到增长容器 75 个，其中基线冻结 73 个、就地豁免标记 2 处；死写容器 0 个（判据 E 按名字在全仓数读取点，3707 个名字被读到过）`。
+  全链同树：`GATES_PYTHON=<有 pytest 的解释器> bash gates.sh` ⇒ `GATES_RC=0`，16 节全绿、装配覆盖门与 import 冒烟都跑到
+  （读数 `/tmp/gates-p1.out`，6044 B）。
+- **E 报 1 红、真实同族是 3（这条是 §五 第 23 件的由来，不写成"门已收干净"）**：
+  `HAAdapter.intents` / `HTTPAdapter.intents` 两处**从未被 E 抓到**——掩护者是 `af_apply.py:271`
+  `intents = {i for _, i in ops}`，一个与适配器无关的**同名局部变量**。AF 是按同族人工识别后一起封顶的，
+  不是被门判红后修的，这个区别写进 DCD 与 §六，免得下一批把"门绿"读成"没有同类"。
+  反过来收紧口径也不免费：按文件数读取点会把 `af_vhass/harness.py:269`（读 `self.adapter.calls`）、
+  `af_executor.py:792-793`（读 `self.bus.emitted`）判成假红；按持有者数还会漏认
+  `af_cli.py:363` 的 `getattr(adapter, "unmodeled", ())`——那才是 `HighFidelityAdapter.unmodeled` /
+  `FakeHAAdapter.unmodeled` 两个容器的真消费点，而按名字数到的 8 次 `unmodeled` 读数**全部**来自同名局部变量。
+  三个方向各钉一条测试（`test_e_shared_name_in_another_module_masks_the_finding` 等），目的是让将来收紧的人
+  **先撞上反例**，而不是撞上之后随手放宽。
+- **三处封顶的落点与为什么不进注册表**：`af_adapters/ha.py:46` `INTENTS_MAX = 200` + `:259` 头部丢弃、
+  `af_adapters/http.py:25/:82` 同形、`af_scheduler.py:38` `REJECTIONS_MAX = 200` + `_record_rejection()`（`:218-222`）
+  收敛成单一写入口（`_reject` 与 `global_quota` 两支都走它）。
+  **没有**进 `BOUNDED_CACHES`：那张表的 `ttl` 字段是给"缓存"写的（`_SESSIONS` 有过期语义、`UndoStore` 有撤销窗口），
+  而这三处是 dry_run 意图提示与审计的内存镜像，填 TTL 就是往一张"门禁逐名核对"的表里写一句核不出真假的话。
+  单腿（条数封顶）要不要被承认为合格处置、要不要第三张表 `DIAGNOSTIC_RINGS` ⇒ **§五 第 23 件，不自签**。
+- **变异腿（E 不是 C 的回声，两条各自单独可红）**：
+  M1 = 拆掉 `REJECTIONS_MAX` 封顶 ⇒ 判据 E 红 + `tests/unit/test_diagnostic_ring_bounds.py` 2 条同时失败；
+  M2 = 把 §二之四十一 删掉的 BUG-01 历史形态装回 HEAD 树（定义 `af_executor.py:111` + `append` 两处）⇒
+  `RC=1`，判据 **C 与 E 双双**点名 `af_executor.py::NodeExecutor.node_visits` ⇒ 审计要的"防同类泄漏再次引入"
+  在这一族历史上真会响，且不需要有人记得往基线里加一行。
+- **产品侧判据（新文件 `tests/unit/test_diagnostic_ring_bounds.py`，9 条：`*_evicts_oldest_without_reads` 三_sites 各一条 =
+  审计 §三 那句"纯写不读也必须被回收"的形状；默认档被声明且为正的 2 条；空初始化仍是普通列表 1 条；
+  写站点接线 `RING_WIRING` 参数化 3 条）**。`deque(maxlen=…)` 会打破 `== []` 断言，所以这里按普通列表写、并在 docstring 里写明。
+- **本批自伤一次并如实记账（口径，不是细节）**：第一次全量 pytest 与 HEAD 还原腿**跑在同一棵 worktree**，
+  还原窗口 20:43:16→20:43:55 撞进测试运行中 ⇒ 那份读数是 `4 failed, 3117 passed, 53 skipped, PYTEST_RC=1`，
+  四条失败逐条对得上被还原的三个文件（3 条 `test_the_cap_is_wired_at_every_write_site` + 1 条
+  `test_real_repo_has_no_dead_write_container`），**不是代码红，是量具在被改造**。当场重跑（还原后、不做任何变异）
+  当场重跑（还原后、不做任何变异，同一棵树）取权威读数：`PYTEST_RC=0` ⇒
+  `3121 passed, 53 skipped, 1 warning, 7 subtests passed in 181.67s`（与上一份的 3117 passed + 4 failed 合计同数，
+  差额恰好就是那四条被我还原掉的判据 ⇒ 计数自洽，不是"多跑了几条测试"）。
+  口径：**做"把文件还原成另一版本"的测量腿，不许与仍在跑的测试作业共享同一棵树**；
+  要么串行，要么另开一棵树。
+- **主树这扇门现在是红的，且不是本批造成的**：`python scripts/check_bounded_caches.py src/autoforge` ⇒ `RC=1`，
+  6 处判红全部来自并发会话**未入库**的 `src/autoforge/af_nl_parse.py`（`_Builder.nodes:995`、`_Builder.edges:996`、
+  `_Builder._by_id:998`、`_REVERSE_ACTION:123`、`_VERB_ONLY_ACTION:125`、`_by_verb:126`）。
+  AF 不替并发会话登记基线、不替它写豁免，本批提交不含该文件（未跟踪 ⇒ 不会进这批 diff）。
+- **记账连带项**：判据 E 的两档新 exit-2 形状与"只写不读判死"已写进 `gates.sh`（本节门的标题、注释、
+  以及 exit=2/exit≠0 两段结论文案）；`af_bounded_caches.py` docstring 补一段"基线冻的是有没有界、冻不掉没人读"，
+  并写明**裁定前本文件保持两张表**。既有两条测试的预期同步更新（`test_scope_repo_baseline_does_not_leak_into_another_tree`
+  与端到端那条的"共 N 处判红"从 1 改 2），因为 E 让同一个容器在两条判据下各红一次——这是判据变多的必然后果，不是放宽。
+- **run 90 的逐作业读数（补 §二之四十六 欠的那一格，三枚 run 连成一条形状）**：
+  `run 90 id=37367283475 3c51973 conclusion=failure`，六条作业**全部** `cancelled`、`runner_name` **六条全空**、
+  取消时刻 `queue=20:02:44 → end=20:17:46`＝**入队 + 902 秒**（六条同一秒集体取消）。对照 run 88（两条 cancelled）、
+  run 89（三条 cancelled）⇒ 同一形状连续三枚 run，且**这一枚一条作业都没上 runner**。
+  结论按 §二之四十六 的口径写死：**不是代码问题、不是某条门的判据红**（拿到 runner 的作业一条都没 failed_steps），
+  取消来源在仓侧读不出，能读出的两条候选（队列容量 / 私有仓计费分钟数）都落在 SP 与 GitHub 侧（铁律 #3）。
+  本批**不加 `continue-on-error`**（那正是 2026-10-01 整改掉的假绿同型），改为：随本批 push 产生 run 91，
+  以它的逐作业读数作为本批 HEAD 的权威口径；若仍为"集体 +902 秒 + 零 runner"，AF 就把这三枚 run 的逐作业表
+  原样报给 SP 而不是继续在仓侧改 YAML。
+
 ## 四、审计侧
 
 
@@ -3950,6 +4027,16 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
   审计报告的清单是外部给的，而"docs/audit 里的全部 bug"这句objective 的射程不止那几份文件——
   真跑一遍既有验收链，本身就是发现缺陷的地方。
 
+**稳定性审计（§六 P1 那条"防复发规则"的要求）——本批按 HEAD 复测后落地，判据级已闭合、口径级仍开放**：
+报告要求的形状是"检测所有实例级 `list` 的 `append` 是否有对应裁剪/读取"。落成的东西是 `check_bounded_caches.py`
+的第五判 E（按名字在全仓数读取点，未登记且只有写入点 ⇒ 判红），且**基线不豁免它**——BUG-01 那一族的
+`Scheduler.rejections` 当时就在基线 74（现 73）项之内，若 E 认基线，这一族就等于没装门（`test_e_baseline_does_not_exempt_dead_writes` 钉住）。
+HEAD 实测：还原三文件 ⇒ `GATE_RC_HEAD=1` 点名 `af_scheduler.py::Scheduler.rejections`；本批版本 ⇒ `RC=0`、扫到 75 容器、死写 0。
+两条变异腿各自单独可红（M1 拆封顶 ⇒ E 红 + 2 条产品判据红；M2 装回 `node_visits` 历史形态 ⇒ C 与 E 双双点名 `af_executor.py::NodeExecutor.node_visits`）。
+**报告那句"所有实例级 list"的射程，本批做不到**：静态按名字数读取点会漏同名遮蔽（实测两处 `intents` 从未被 E 抓到，
+`af_apply.py:271` 的局部变量掩护），换按文件/按持有者口径又会对跨文件合法读与 `getattr` 消费点假红——
+"这一族的完整覆盖"是 DCD 题（§五 第 23 件），不是 AF 可以在一批里自签的口径变更。做法与全部读数见 §二之四十七。
+
 ## 五、已提 / 待提 DCD
 
 | # | 事项 | 状态 |
@@ -3978,6 +4065,8 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
 | 21 | **配对 bootstrap 两步都要求 `write` 令牌 ⇒ ForgeSight 配对码弹窗在三档配置下全部不可达**（本批修完 SSE 的 500、第一次用真服务器跑通"推码→弹窗"那一段之后，往回多问一句"这枚码到底由谁发起"才看见的）。事实面：`af_request_pair`（`af_mcp.py:503`）与 `af_pair`（`:519`）的 scope 都是 `"write"`，HTTP `/mcp` 面整面挂 `Depends(_write)`（`af_api.py:920`），前端 `createPairRequest` 明确不自建码（`ui-user-mimo/src/api/http.ts:186`：没有帧就抛 `PAIR_INVALID`）。真跑五档读数：匿名 ⇒ `HTTP 403`；read 令牌 ⇒ `HTTP 403`；write 令牌 ⇒ `isError=False`（可它本来就有令牌）；匿名 `af_pair` ⇒ `HTTP 403`；`AF_ALLOW_NOAUTH=1` 且无 registry ⇒ `HTTP 200` 但工具层拒 `拒绝：MCP 面没有令牌身份 ⇒ 工具 'write' 域默认拒绝（裁定 20261004 §一 Q2=B）`。**要拿到配对码必须先有 write 令牌，而配对恰恰是为了给没有令牌的 agent 弄到令牌** ⇒ 设计文档 `B2 配对 ✅ 已交付` 那句在令牌部署下不成立。三档：A（两工具 scope 降 `None` + HTTP 面为这两个工具单独放行）/ **B（AF 建议：工具层 default-deny 一个字不动，另开两个明确的匿名 bootstrap 端点 `POST /api/pair/request` / `POST /api/pair/redeem`，MCP 那两个工具改为"已配对才可用"或摘掉——匿名射程反而比今天更小，今天暴露的是整张工具表）** / C（宣布配对只服务本地开发档，把 B2 与弹窗那条产品口径正式作废并更正文档）。放宽 scope 是鉴权姿势，其中 A 会直接撞刚生效的裁定 Q2=B ⇒ **AF 不自裁**。请 DCD 另回两格：② 两个匿名端点的限速数（建议 request 每 IP ≤6/min、redeem 每 IP ≤10/min，超限锁 5 分钟，数字由 DCD 定稿）；③ 码参数维持现值（8 位数字 / 300s / 单次）还是另给，owner 侧要不要"暂停接受配对请求"开关 | `关键决策部/inbox/20261006-AF-配对bootstrap两步都要求write令牌-决策申请.md`（**已提交，待回话**）。裁定前 AF **不动任何 scope、不动 `_write` 传输门、不新增匿名端点**；同批已自决的三件都不碰鉴权姿势（SSE 500 修复 + 9 条判据 + 静态守卫；`af_mcp.py` 五处"6 位"过期措辞改 8 位；`api_pair_confirm` docstring 指向不存在的 `POST /api/mcp/pair` 改为 MCP `af_pair`），读数与四档变异见 §二之四十二 |
 
 | 22 | **裁定 20261005-AF-`ir_non_reversible` 是否升 schema 的回执（本批补记，不是新申请）**：判 **B（明确豁免 + schema 白名单注释）**——`_non_reversible` **不**升为 IR schema 正式字段，`node` 段以 `$comment` 写死运行时扩展键白名单五键（`_non_reversible / stage / diff_sha / simulate_track / honest_report`），并附一条 §四 自定的**成立前提**：`scripts/check_ir_runtime_keys.py` 断言"代码侧键集合 == 白名单"，未登记键即判红。落地在 `f0184de`（改 `ir.schema.json` 注释、`af_irreversible.py` 删过期条目 `store_diff_sha`、新增门脚本、`ci.yml` 加步骤），A/C 两档被裁驳回。**AF 侧状态：已落地，但两处缺口由本批补**——① 该批在账本里 0 命中（既无 §二之NN 也无本表回执，一份 L2 裁定的落地没有出处）；② 那条"前提"只挂在 `quality-gates` 作业里 `bash gates.sh` 的下一步，本机 `gates.sh` 不含它 ⇒ 本机绿、远端红。本批把它接进 `gates.sh`（脚本本体一字节未动），并把裁定 §七 三条验收按 HEAD 重测为 `RC=0` / `--self-test OK` / `tests/f14 103 passed`。**无需再回话**；读数、五档（对照 + 三档变异 + 主树）与 `run 88` 那条 `failure = 2 作业 cancelled、0 failed_steps` 的如实记账见 §二之四十五 |
+
+| 23 | **诊断型只写日志的"第二条腿"要不要成为合格处置（第三张注册表），以及判据 E 的读取点口径接受漏判还是接受假红**。§二之四十七 把 §六 P1 做成能判红的第五判之后，剩下的两件事都不是 AF 能自签的：① 现有 `BOUNDED_CACHES` 的 `ttl` 字段是给**缓存**写的（`_SESSIONS` 有过期语义、`UndoStore._records` 有撤销窗口），而本批封顶的三处（`HAAdapter.intents` / `HTTPAdapter.intents` 的 dry_run 意图环、`Scheduler.rejections` 的拒绝清单——后者每次拒绝同时落审计，那份只是内存镜像）**没有诚实的 TTL 可填**。AF 选的是"只封顶、不进表"，代价是注册表承认不了这类容器；四档 A（加第三张表 `DIAGNOSTIC_RINGS`：`module`/`attr`/`cap`/`test`，无 `ttl`，且核实必须认 `deque(maxlen=…)` 这种无读点的正确修法）/ B（`ttl` 允许填自由说明 ⇒ 表里出现核不出真假的话，AF 反对）/ C（真加时间戳与过期裁剪 ⇒ 为过口径造数据，AF 反对）/ D（维持现状 ⇒ 判据绿依赖封顶代码自己那句 `len(...)`，日后改成 `deque(maxlen)` 反被门打回）。② E 的口径：全仓按名字数读取点**实测漏判 2 处**（`af_apply.py:271` 同名局部变量掩护两个 `intents`），按文件数**假红 2 处**（`af_vhass/harness.py:269`、`af_executor.py:792-793` 跨文件合法读），按持有者数还得先认 `af_cli.py:363` 的 `getattr(adapter, "unmodeled", ())`，否则 `HighFidelityAdapter.unmodeled` / `FakeHAAdapter.unmodeled` 两处新假红。AF 默认 A + 维持现口径并把漏判写进 §六，不宣布"覆盖完整"。请 DCD 另回第三格：封顶数值 **200** 是 AF 取的保守档，若"运维在诊断面板最多该看多少条"另有档位请直接给数 | `关键决策部/inbox/20261006-AF-诊断型只写日志的第二条腿与判据E同名遮蔽-决策申请.md`（**已提交，待回话**）。裁定前 AF **不动 `af_bounded_caches.py` 的两张表形状、不把 E 的口径改成按文件/按持有者**；同批已自决的是判据 E 本体、三处封顶、9 条产品判据与三条反例钉口径测试，读数与两档变异见 §二之四十七 |
 
 ## 六、未在本版做（登记，不静默）
 
@@ -4089,6 +4178,20 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
   而它恰好就是当年把 IR 硬门只留在 `ci.yml` 时的那种说辞。现有防线是逐格点名的判据
   （`test_ci_only_exempt_entries_all_have_reasons_and_are_referenced`）＋ §二 的记录；
   做成机器可判需要给"理由"下可校验的语法（例如强制引用一个作业名 + 一条前置差），那是独立一批的事。
+- **判据 E 的漏判是**已知且已量化**的，不是"门绿了所以没有"**（§二之四十七）：`HAAdapter.intents` 与
+  `HTTPAdapter.intents` 两处从未被 E 抓到——`af_apply.py:271` 里一个与它们无关的同名局部变量 `intents`
+  把读取点撑住了。本批按同族人工识别把它们一起封顶，但**门对这一族的覆盖仍然是不完整的**：只要掩护者还在，
+  下一处新的"只写不读的 `intents`"照样会绿。收紧的两种口径各自有实测反例（跨文件合法读 2 处、
+  `getattr` 字面量消费点 2 处），所以这不是"AF 没做"而是"这一刀在 DCD 手里"（§五 第 23 件）。
+  同时登记另一侧：`Scheduler.rejections` 的封顶现在靠 `del self.rejections[0]` 前的 `len(self.rejections)`
+  才被读侧数到——**若有人把它改成 `deque(maxlen=200)`（更好的写法），E 会重新判红**。这一条是第 23 件里 D 档的反例，
+  不是本批的缺陷，但也不许装作看不见。
+- **§六 P1 那句"所有实例级 `list`"的射程，本批只做到"类属性容器 + 模块级容器"两形**（`scan()` 只对
+  `ast.ClassDef` 调 `_scan_class`、只对模块级空初始化调 `_module_level_inits` + `_module_level_mutated`）：
+  **函数内的局部列表不在射程**，`NAME += […]` 这种 AugAssign 增长也不被认成增长点（`_module_level_mutated`
+  只认下标赋值与 `NAME.<九种 mutator>(…)`）。射程只覆盖 `src/autoforge`（常驻服务所在），
+  `tests/` `ui*/` `scripts/` 三棵树整体不在本门之内。扩射程要先量假红率——首版探针把 81 个数成 65 的经验说明
+  "先扩后校准"会立刻造出一批永久红，故登记不做了。
 
 ---
 

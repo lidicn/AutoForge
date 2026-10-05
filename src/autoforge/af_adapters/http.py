@@ -21,6 +21,9 @@ __all__ = ["HTTPAdapter", "DEFAULT_TRANSPORT_TIMEOUT", "host_of"]
 #: 传输层超时（秒）——仅用于 socket，不是业务超时
 DEFAULT_TRANSPORT_TIMEOUT = 5.0
 
+#: dry_run 意图环的条数上限（稳定性审计 BUG-01 同类：常驻服务里只写不读的日志必须自己封顶）
+INTENTS_MAX = 200
+
 class _NoRedirectAllowed(Exception):
     pass
 
@@ -76,6 +79,8 @@ class HTTPAdapter:
                 params=dict(params),
             )
         if self.dry_run:
+            if len(self.intents) >= INTENTS_MAX:
+                del self.intents[0]  # 环形封顶：常驻服务里每次下发都记一条，不裁就只增不减
             self.intents.append((action, dict(params)))
             return CallResult.ok({"dry_run": True, "action": action, "url": url})
         # 真实请求走传输层；G1 默认不会走到这里

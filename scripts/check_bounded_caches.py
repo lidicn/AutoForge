@@ -7,13 +7,18 @@
 （本门首跑的实测：天真口径命中 76 处，其中真正"两条腿齐全且有测试钉住回收"的只有 2 处，其余冻结成基线）。
 所以做成**注册表式**：代码里那份 `af_bounded_caches.py` 是唯一真源，门核对它说的是不是真的。
 
-四条判据（各自能单独判红）：
+五条判据（各自能单独判红）：
 - **A 双腿可核对**：`BOUNDED_CACHES` 每一项给出的 `cap`/`ttl`/`trim` 名字必须真在那个模块里出现。
   注册表不许给一个说法盖章：写不出那条腿就是没有那条腿。
 - **B 测试 id 真存在且被收集**：每项的 `test`（`文件::用例名`）必须被 pytest 收集到。
   约定的第二半是"在测试里断言纯写不读也被回收"，指向一个不存在的用例等于没断言。
 - **C 新增必须登记或就地带理由豁免**：扫到的每个增长容器必须 ∈ 注册表 ∪ 固定键表 ∪ 基线名单，
   或在那一行带 `# bounded-cache: exempt(理由)`。
+- **D 反空洞**：固定键表声称的豁免必须真在代码里；基线里的容器必须真还存在；扫描器读出 0 个
+  增长容器 ⇒ 判据失效，按射程问题退 2（不是"没问题"）。
+- **E 死写容器防复发**（稳定性审计 §六 P1）：全仓读不到这个名字、又没登记裁剪的增长容器判红。
+  这条**不看基线**——基线冻的是"有没有界"，冻不掉"这份数据根本没人读"，而后者正是 BUG-01
+  （`NodeExecutor.node_visits`：每次进节点 append 一条、全文件从来没人读）那一族的形状。
 - **D 反空洞**：固定键表声称的豁免必须真在代码里；基线里的容器必须真还存在；扫描器读出 0 个
   增长容器 ⇒ 判据失效，按射程问题退 2（不是"没问题"）。
 
@@ -35,6 +40,9 @@ REGISTRY_REL = "af_bounded_caches.py"
 REGISTRY_TABLES = ("BOUNDED_CACHES", "FIXED_KEY_CACHES")
 EXEMPT_MARKER = "# bounded-cache: exempt("
 MUTATORS = {"append", "update", "setdefault", "add", "extend", "insert", "pop", "popitem", "clear"}
+#: 这三个mutator 会把**已有内容**交回调用方（`log = self._x.setdefault(k, [])` 之后 `len(log)` 就在读这个容器），
+#: 所以它们的接收者算读取点。剩下的 append/extend/insert/add/update/clear 只进不出，接收者算写入通道。
+CONTENT_READING_MUTATORS = {"setdefault", "pop", "popitem"}
 CONTAINER_FUNCS = {"dict", "list", "deque", "set", "defaultdict", "OrderedDict"}
 
 HERE = Path(__file__).resolve().parent
@@ -234,6 +242,98 @@ def _module_rel(module: str) -> str:
 
 def _registry_key(module: str, attr: str) -> str:
     return f"{_module_rel(module)}::{attr}"
+
+
+# ── 读取点收集（判据 E 用）──────────────────────────────────────────
+
+
+def _write_channel_nodes(tree: ast.AST) -> set[int]:
+    """出现在"写入通道"上的那些节点**不算读取**。
+
+    `self.intents.append(x)` 里的 `self.intents` 在 AST 里是 Load 上下文——按 naive 口径数读取，
+    每一次 append 都会被数成一次读取，于是"只写不读"永远判不出来。`self.x[k] = …`、
+    `del self.x[k]` 同理（它们的容器引用也带 Load）。
+    `setdefault`/`pop`/`popitem` 例外：它们把已有内容交给调用方，那是真读取。
+    """
+    out: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            out.add(id(node.func))  # `x.append(…)` 里的方法名 `append` 不是对任何容器的读取
+            if node.func.attr in MUTATORS - CONTENT_READING_MUTATORS \
+                    and isinstance(node.func.value, (ast.Attribute, ast.Name)):
+                out.add(id(node.func.value))
+        elif isinstance(node, (ast.Assign, ast.AugAssign, ast.Delete)):
+            targets = node.targets if isinstance(node, (ast.Assign, ast.Delete)) else [node.target]
+            for t in targets:
+                while isinstance(t, ast.Subscript):
+                    t = t.value
+                if isinstance(t, (ast.Attribute, ast.Name)):
+                    out.add(id(t))
+    return out
+
+
+def count_reads(src_root: Path) -> tuple[dict[str, int], list[str]]:
+    """`{名字: 读取点数}`：全 `src` 树里Load 上下文、且不在写入通道上的名字出现次数。
+
+    口径是**按名字**（不分持有者）：宁可放过共享尾名里被同伴掩护的那一个，也不要造出假红。
+    本判据因此是"拦新增死写"的窄口径，不是对象所有权分析——这一条盲区记在账上。
+    """
+    reads: dict[str, int] = {}
+    errs: list[str] = []
+    for path in sorted(src_root.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError as exc:
+            errs.append(f"{path.relative_to(src_root).as_posix()} 解析失败：{exc}")
+            continue
+        writes = _write_channel_nodes(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Attribute, ast.Name)) or id(node) in writes:
+                continue
+            if not isinstance(node.ctx, ast.Load):
+                continue
+            if isinstance(node, ast.Attribute):
+                reads[node.attr] = reads.get(node.attr, 0) + 1
+            else:
+                reads[node.id] = reads.get(node.id, 0) + 1
+    return reads, errs
+
+
+def dead_write_keys(containers: set[str], lines: dict[str, int], reads: dict[str, int],
+                    registry: set[str], fixed: set[str], markers: dict[str, str]) -> set[str]:
+    """判据 E 的判据本体：返回"只写不读、没登记裁剪、没就地豁免"的容器键。
+
+    基线冻的是"有没有界"，冻不掉"这份数据根本没人读"——所以这里**不看基线**，只看注册表
+    （注册表项带 `trim`，裁剪本身要读容器）和固定键表。清空它只有三条路：真去消费它、
+    给它一条封顶裁剪、或在那一行带理由豁免。
+    """
+    out: set[str] = set()
+    for key in containers - registry - fixed:
+        tail = key.rsplit("::", 1)[-1].rsplit(".", 1)[-1]
+        if reads.get(tail, 0):
+            continue
+        if f"{_rel_of(key)}:{lines.get(key)}" in markers:
+            continue
+        out.add(key)
+    return out
+
+
+def check_dead_writes(containers: set[str], lines: dict[str, int], reads: dict[str, int],
+                      registry: set[str], fixed: set[str], markers: dict[str, str]) -> list[str]:
+    """把判据 E 命中的键组装成能照着做的红消息（处置三选一写在消息里）。"""
+    findings: list[str] = []
+    for key in sorted(dead_write_keys(containers, lines, reads, registry, fixed, markers)):
+        tail = key.rsplit("::", 1)[-1].rsplit(".", 1)[-1]
+        loc = f"{_rel_of(key)}:{lines.get(key)}"
+        findings.append(
+            f"死写容器 {key}（{loc}）：全仓读不到 `{tail}` 这个名字，只有写入点。"
+            f"稳定性审计 BUG-01 删掉的就是这一族（append 了从来没人读、也没人裁的列表，"
+            f"常驻服务里内存单调上涨）。处置：真去读它 / 加封顶与裁剪 / 进 BOUNDED_CACHES / "
+            f"或把 {loc} 那一行标成 `{EXEMPT_MARKER}…）`"
+        )
+    return findings
 
 
 def check_legs(entries: Iterable[dict[str, str]], src_root: Path) -> list[str]:
@@ -493,10 +593,34 @@ def main(argv: list[str] | None = None) -> int:
         print(f"# 共 {len(containers)} 个")
         return 0
 
+    registry_keys = {_registry_key(e["module"], e["attr"]) for e in bounded}
+    fixed_keys = {_registry_key(e["module"], e["attr"]) for e in fixed}
     markers = _exempt_markers(src)
     baseline = set(BASELINE) if src == REPO_SCOPE else frozenset()
     try:
-        findings, scope_errs = judge(bounded, fixed, markers, containers, lines, src, baseline)
+        reads, read_errs = count_reads(src)
+    except Exception as exc:
+        print(f"[射程] 读取点收集器读不下去：{type(exc).__name__}: {exc}")
+        return 2
+    if read_errs:
+        for e in read_errs:
+            print(f"[射程] {e}")
+        return 2
+    if not reads:
+        # 判据 E 靠这张表判定"没人读"。整棵树数出 0 个读取点不是"代码全是死写"，是收集器塌了。
+        print("[射程] 读取点收集器数出 0 个读取点：判据 E 失效")
+        return 2
+    unjudged = containers - registry_keys - fixed_keys
+    dead = dead_write_keys(containers, lines, reads, registry_keys, fixed_keys, markers)
+    # 反空洞第二档：把每一个未登记容器都判成死写，不是"代码全泄漏"，是读取口径塌了——
+    # 本门首版的手搓探针就是这么把 81 个容器数成 65 个"死写"的（把 append 的接收者数成读取、
+    # 又把模块级 Name 读取整个漏掉，两个方向各错一次）。阈值 3：低于 3 个容器的树判不成这一档。
+    if len(unjudged) >= 3 and dead == unjudged:
+        print(f"[射程] 判据 E 把 {len(unjudged)} 个未登记容器全部判成死写：读取点口径失效，"
+              f"不是这些容器同时出问题")
+        return 2
+    try:
+        findings, scope_errs = judge(bounded, fixed, markers, containers, lines, src, baseline, reads)
     except Exception as exc:
         print(f"[射程] 判据读不下去：{type(exc).__name__}: {exc}")
         return 2
@@ -514,15 +638,17 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"[有界缓存] 注册表 {len(bounded)} 项双腿齐全且测试 id 被收集；固定键 {len(fixed)} 项带理由；"
-        f"扫到增长容器 {len(containers)} 个，其中基线冻结 {len(baseline)} 个、就地豁免标记 {len(markers)} 处"
+        f"扫到增长容器 {len(containers)} 个，其中基线冻结 {len(baseline)} 个、就地豁免标记 {len(markers)} 处；"
+        f"死写容器 {len(dead)} 个（判据 E 按名字在全仓数读取点，{len(reads)} 个名字被读到过）"
     )
     return 0
 
 
 def judge(bounded: list[dict[str, str]], fixed: list[dict[str, str]],
           markers: dict[str, str], containers: set[str], lines: dict[str, int],
-          src_root: Path, baseline: frozenset[str]) -> tuple[list[str], list[str]]:
-    """跑四条判据，返回 `(判红, 射程自证问题)`。拆成函数是为了让"门自己崩了"能被调用方按射程处理。"""
+          src_root: Path, baseline: frozenset[str],
+          reads: dict[str, int]) -> tuple[list[str], list[str]]:
+    """跑五条判据，返回 `(判红, 射程自证问题)`。拆成函数是为了让"门自己崩了"能被调用方按射程处理。"""
     findings: list[str] = []
     findings += check_legs(bounded, src_root)
     test_findings, scope_errs = check_tests(bounded)
@@ -537,6 +663,14 @@ def judge(bounded: list[dict[str, str]], fixed: list[dict[str, str]],
         set(baseline),
         markers,
         lines,
+    )
+    findings += check_dead_writes(
+        containers,
+        lines,
+        reads,
+        {_registry_key(e["module"], e["attr"]) for e in bounded},
+        {_registry_key(e["module"], e["attr"]) for e in fixed},
+        markers,
     )
     return findings, []
 

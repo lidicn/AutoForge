@@ -42,6 +42,9 @@ DEFAULT_HA_URL = (os.getenv("AUTOFORGE_HA_URL") or "").strip()
 #: domain/service 合法字符（P0-11：防止路径注入）
 _HA_DOMAIN_RE = re.compile(r"^[a-z0-9_]+$")
 
+#: dry_run 意图环的条数上限（稳定性审计 BUG-01 同类：常驻服务里只写不读的日志必须自己封顶）
+INTENTS_MAX = 200
+
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     """禁用重定向（P0-11：防止 HA 令牌随 3xx 外泄到外部主机）。"""
@@ -253,6 +256,8 @@ class HAAdapter:
             kind, error = fault
             return CallResult.fail(error, fault=kind, action=action, params=dict(params))
         if self.dry_run:
+            if len(self.intents) >= INTENTS_MAX:
+                del self.intents[0]  # 环形封顶：常驻服务里每次下发都记一条，不裁就只增不减
             self.intents.append((action, dict(params)))
             logging.getLogger(__name__).debug("[HAAdapter.dry_run] %s %s", action, dict(params))
             if self.on_dry_run is not None:

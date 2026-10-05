@@ -6,9 +6,13 @@
 真正两条腿齐全的只有 2 个 ⇒ 硬扫"无界"只会得到一堆永久红加一张豁免表（而豁免表正是 §二之十九
 扫掉的那族"第二份名单"）。所以本门不猜"有没有界"，只核对 `af_bounded_caches.py` 说没说实话。
 
-四条判据各自单独可红（A 腿的名字不在模块里 / B 测试 id 不被收集 / C 新增容器没登记 /
-D 固定键表的理由没写进代码、基线里的容器已消失），射程读不成退 2 不退 1。
+五条判据各自单独可红（A 腿的名字不在模块里 / B 测试 id 不被收集 / C 新增容器没登记 /
+D 固定键表的理由没写进代码、基线里的容器已消失 / E 死写容器），射程读不成退 2 不退 1。
 反空洞：注册表为空、扫到 0 个容器、注册表读不出 ⇒ 一律 exit 2——"没有发现"不等于"没有问题"。
+
+判据 E（稳定性审计 §六 P1）是这一批新加的第五条：只写不读、又没登记裁剪的增长容器判红。
+它与判据 C 的区别是 C 问"有没有登记"（基线里的 73 个全算登记过），E 问"有没有人读"
+——`node_visits` 那一族正是躺在基线口径够不着的地方被删掉的。
 """
 from __future__ import annotations
 
@@ -273,6 +277,225 @@ def test_d_registry_docstring_marker_is_not_counted_as_an_exemption(tmp_path):
     assert gate._exempt_markers(src) == {}
 
 
+# ── 判据 E：死写容器（BUG-01 那一族的防复发）────────────────────────
+# 本节的口径是"按名字在全仓数读取点"（不分持有者）。更严的"只在容器所在文件里数"试过并被
+# **否掉**，反例是真仓里两处跨文件读取：`af_vhass/harness.py:269` 读 `self.adapter.calls`、
+# `af_executor.py:792` 读 `self.bus.emitted`——按文件数会把它们判成死写，那是假红。
+# 保守方向的代价是真仓 `HAAdapter.intents` / `HTTPAdapter.intents` 被 `af_apply.py:271`
+# 的同名局部变量掩护掉（本门抓不到它们，但同一批已按 BUG-01 同类收口，见
+# tests/unit/test_diagnostic_ring_bounds.py）。盲区写在这里，不许当作没看见。
+
+DEAD_WRITE_MODULE = '''
+class Recorder:
+
+    def __init__(self):
+        self.log: list = []
+
+    def record(self, item):
+        self.log.append(item)
+'''
+
+READ_BACK_MODULE = '''
+class Recorder:
+
+    def __init__(self):
+        self.log: list = []
+
+    def record(self, item):
+        self.log.append(item)
+
+    def peek(self):
+        return list(self.log)
+'''
+
+# `af_conflict.py:521` 的真实形状：setdefault 把已有内容交给调用方，那一次就是读取。
+SETDEFAULT_MODULE = '''
+class Arbiter:
+
+    def __init__(self):
+        self._release_log: dict = {}
+
+    def note(self, key, now):
+        log = self._release_log.setdefault(key, [])
+        log.append(now)
+        self._release_log[key] = [t for t in log if t >= now - 1]
+'''
+
+# 只有写入通道的模块：读取点收集器在这里必须数出 0（判据 E 的射程塌了要说出来）
+WRITE_ONLY_MODULE = '''
+class Recorder:
+
+    def __init__(self):
+        self.log: list = []
+
+    def record(self):
+        self.log.append(1)
+'''
+
+MASKING_MODULE = '''
+def summarize(items):
+    intents = {i for _, i in items}
+    return sorted(intents)
+'''
+
+
+def _dead(gate, src, *, registry=frozenset(), fixed=frozenset(), markers=None):
+    containers, lines, errs = gate.scan(src)
+    assert errs == []
+    reads, read_errs = gate.count_reads(src)
+    assert read_errs == []
+    return gate.check_dead_writes(containers, lines, reads, set(registry), set(fixed), markers or {})
+
+
+def _only(tmp_path, **modules: str):
+    """只放注册表 + 指定模块的树（`demo=""`）：判据 E 的每条腿都只对自己那份代码负责。"""
+    return _fixture(tmp_path, bounded="", demo="", extra=modules)
+
+
+def test_e_append_only_container_goes_red(tmp_path):
+    gate = _gate()
+    findings = _dead(gate, _only(tmp_path, **{"af_rec.py": DEAD_WRITE_MODULE}))
+    assert any("af_rec.py::Recorder.log" in f and "死写容器" in f for f in findings), findings
+
+
+def test_e_a_read_back_clears_it(tmp_path):
+    """有消费者就不该判红：否则这条门的红线会被"全部加读取"这种装饰性改动绕过。"""
+    gate = _gate()
+    src = _only(tmp_path, **{"af_rec.py": READ_BACK_MODULE})
+    findings = _dead(gate, src)
+    assert findings == [], findings
+    # 同一份树把读取那半删掉就必须红：证明绿的是那句 `list(self.log)`，不是这条门没射程
+    src2 = _only(tmp_path / "second", **{"af_rec.py": DEAD_WRITE_MODULE})
+    assert _dead(gate, src2) != []
+
+
+def test_e_setdefault_counts_as_a_read(tmp_path):
+    """真仓反例：`af_conflict.py:521` 的 `ConflictArbiter._release_log` 只被 `setdefault` 取出来消费。
+    把它数成"只写"会给一条不存在的泄漏判红——`setdefault`/`pop`/`popitem` 会把已有内容交回调用方。
+    """
+    gate = _gate()
+    assert _dead(gate, _only(tmp_path, **{"af_arb.py": SETDEFAULT_MODULE})) == []
+
+
+def test_e_method_name_is_not_a_read_of_a_container_with_that_name(tmp_path):
+    """`other.update()` 里的 `update` 是方法名，不是对同名容器的读取：把它数成读取，
+    `self.update: list = []` 这种死写容器就蒙混过关了（本批首版正是这么漏的）。
+    """
+    gate = _gate()
+    module = '''
+class Bag:
+
+    def __init__(self):
+        self.update: list = []
+
+    def put(self, other):
+        self.update.append(other)
+        other.update()
+'''
+    src = _only(tmp_path, **{"af_bag.py": module})
+    findings = _dead(gate, src)
+    assert any("af_bag.py::Bag.update" in f for f in findings), findings
+
+
+def test_e_baseline_does_not_exempt_dead_writes(tmp_path):
+    """基线冻的是"有没有界"，冻不掉"这份数据根本没人读"。
+
+    HEAD 上被本判据抓到的 `af_scheduler.py::Scheduler.rejections` 正是一条**基线内**的容器：
+    把它按基线放过，这条门对 BUG-01 那一族就等于没装。
+    """
+    gate = _gate()
+    src = _only(tmp_path, **{"af_rec.py": DEAD_WRITE_MODULE})
+    containers, lines, _errs = gate.scan(src)
+    reads, _e = gate.count_reads(src)
+    key = "af_rec.py::Recorder.log"
+    assert key in containers
+    findings = gate.check_dead_writes({key}, lines, reads, set(), set(), {})
+    assert any("死写容器" in f for f in findings), findings
+    assert "baseline" not in gate.check_dead_writes.__code__.co_varnames
+
+
+def test_e_registered_cache_needs_no_reader(tmp_path):
+    """注册表项带 trim（裁剪本身要读容器），所以"全仓没人读"对已登记的缓存不判红。"""
+    gate = _gate()
+    src = _only(tmp_path, **{"af_rec.py": DEAD_WRITE_MODULE})
+    containers, lines, _errs = gate.scan(src)
+    reads, _e = gate.count_reads(src)
+    key = "af_rec.py::Recorder.log"
+    assert gate.check_dead_writes(containers, lines, reads, {key}, set(), {}) == []
+    assert gate.check_dead_writes(containers, lines, reads, set(), set(), {}) != []
+
+
+def test_e_shared_name_in_another_module_masks_the_finding(tmp_path):
+    """钉住盲区（口径按名字数，不分持有者）：别的模块里一个同名局部变量就能掩护它——
+    真仓的 `HAAdapter.intents` / `HTTPAdapter.intents` 就是被 `af_apply.py:271` 的同名局部变量
+    掩护掉的。记这一条是为了让"把它改严"的人先撞上反例（按文件数会把 `af_vhass/harness.py:269`
+    跨文件读的 `calls`、`af_executor.py:792` 跨文件读的 `emitted` 判成假红），而不是撞上之后随手放宽。
+    """
+    gate = _gate()
+    src = _only(tmp_path, **{
+        "af_rec.py": DEAD_WRITE_MODULE.replace("self.log", "self.intents")
+                                       .replace("Recorder", "Ring").replace("item", "thing"),
+        "af_sum.py": MASKING_MODULE,
+    }
+    )
+    containers, lines, _errs = gate.scan(src)
+    assert containers == {"af_rec.py::Ring.intents"}
+    reads, _e = gate.count_reads(src)
+    assert reads.get("intents", 0) >= 1, "掩护用的读取点必须真被数到，否则这条自证是空的"
+    assert gate.check_dead_writes(containers, lines, reads, set(), set(), {}) == []
+
+
+def test_e_every_container_dead_collapses_the_range(tmp_path, capsys):
+    """反空洞第二档：未登记容器**全部**被判成死写 ⇒ 是读取口径塌了，不是代码同时出问题。
+
+    本门首版的手搓探针就是把 81 个容器数成 65 个"死写"的（两个方向各错一次：把 append 的
+    接收者数成读取、又把模块级 Name 读取整个漏掉）。三棵树做实验：3 个全死 ⇒ 2；2 个全死 ⇒ 1。
+    """
+    gate = _gate()
+    three = _fixture(tmp_path / "t3", bounded=_entry(), extra={
+        f"af_r{i}.py": DEAD_WRITE_MODULE.replace("Recorder", f"Recorder{i}") for i in (1, 2, 3)
+    })
+    containers, _lines, errs = gate.scan(three)
+    # af_demo.py 那份是已登记的（注册表项带 trim，不参与 E）；未登记的三个必须全部被判死写
+    assert errs == [] and len(containers) == 4, containers
+    assert gate.main([str(three)]) == 2
+    assert "全部判成死写" in capsys.readouterr().out
+
+    two = _fixture(tmp_path / "t2", bounded=_entry(), extra={
+        f"af_r{i}.py": DEAD_WRITE_MODULE.replace("Recorder", f"Recorder{i}") for i in (1, 2)
+    })
+    assert gate.main([str(two)]) == 1
+    out2 = capsys.readouterr().out
+    assert "全部判成死写" not in out2 and "死写容器 af_r1.py" in out2
+
+
+def test_e_empty_read_map_collapses_the_range(tmp_path, capsys, monkeypatch):
+    """收集器数出 0 个读取点 ⇒ 退 2。真造不出一棵"有容器却一个读取点都没有"的树（连 `self`
+    都是 Load），所以这一档替换的只是收集器的返回值——要判红的是"塌了要说，不许保持沉默"。
+    """
+    gate = _gate()
+    src = _fixture(tmp_path, bounded=_entry())
+    monkeypatch.setattr(gate, "count_reads", lambda _src: ({}, []))
+    assert gate.main([str(src)]) == 2
+    assert "数出 0 个读取点" in capsys.readouterr().out
+
+
+def test_e_main_goes_red_on_a_dead_write_container(tmp_path, capsys):
+    """端到端：判据 C 与 E 各自单独可红——同一个未登记的死写容器两条都响，说明 E 不是 C 的回声。
+
+    注册表那份 `_entry()`（已登记的 `af_demo.py::Cache._CACHE`）留着：一是空名单会先撞上
+    "注册表是空的"那档射程退 2，二是它同时是 E 的对照组——已登记的那条不响，未登记的这条响。
+    """
+    gate = _gate()
+    src = _fixture(tmp_path, bounded=_entry(), extra={"af_rec.py": DEAD_WRITE_MODULE})
+    assert gate.main([str(src)]) == 1
+    out = capsys.readouterr().out
+    assert "新增增长容器 af_rec.py::Recorder.log" in out
+    assert "死写容器 af_rec.py::Recorder.log" in out
+    assert "死写容器 af_demo.py::Cache._CACHE" not in out
+    assert "共 2 处判红" in out
+
+
 # ── 射程自证：读不出一律 2 ───────────────────────────────────────────
 def test_scope_repo_baseline_does_not_leak_into_another_tree(tmp_path, capsys):
     """基线是本仓那一份扫描的冻结快照：拿它判另一棵树，整份"已经不存在"会把 1 条真红埋掉。"""
@@ -283,7 +506,9 @@ def test_scope_repo_baseline_does_not_leak_into_another_tree(tmp_path, capsys):
     out = capsys.readouterr().out
     assert out.count("[有界缓存] 新增增长容器") == 1
     assert "已经不存在" not in out
-    assert "共 1 处判红" in out
+    # 判据 E 上线后，那个未登记容器同时是死写容器（两条判据各自单独响，不是回声）
+    assert out.count("[有界缓存] 死写容器") == 1
+    assert "共 2 处判红" in out
 
 
 def test_scope_missing_registry_file_is_two(tmp_path):
@@ -346,3 +571,29 @@ def test_real_repo_measurements_are_pinned():
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"
     assert registered.isdisjoint(gate.BASELINE), "已登记的容器不许同时躺在基线里（两份口径各说各话）"
+
+
+def test_real_repo_has_no_dead_write_container():
+    """判据 E 在已提交树上的读数必须是 0——不是"这条门没射程"，是它扫过、找到了、已收口。
+
+    本批收口的三处：`HAAdapter.intents`、`HTTPAdapter.intents`（这两处 E 因同名局部变量掩护抓不到，
+    按同一形状一并封顶）、`Scheduler.rejections`（HEAD 上被 E 当场抓到的一处）。
+    外加 `tests/unit/test_diagnostic_ring_bounds.py` 里"纯写不读也被回收"的断言。
+    """
+    gate = _gate()
+    src = ROOT / "src" / "autoforge"
+    bounded, fixed, _errs = gate.read_registry(src)
+    containers, lines, _scan_errs = gate.scan(src)
+    reads, read_errs = gate.count_reads(src)
+    assert read_errs == []
+    dead = gate.dead_write_keys(
+        containers, lines, reads,
+        {gate._registry_key(e["module"], e["attr"]) for e in bounded},
+        {gate._registry_key(e["module"], e["attr"]) for e in fixed},
+        gate._exempt_markers(src),
+    )
+    assert dead == set(), f"死写容器没收口：{sorted(dead)}"
+    for token, path in (("INTENTS_MAX", "af_adapters/ha.py"), ("INTENTS_MAX", "af_adapters/http.py"),
+                        ("REJECTIONS_MAX", "af_scheduler.py")):
+        assert token in (src / path).read_text(encoding="utf-8"), f"{path} 里那条封顶腿不见了"
+

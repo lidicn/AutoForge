@@ -33,6 +33,10 @@ RESTART = "restart"
 QUEUED = "queued"
 PARALLEL = "parallel"
 
+#: `Scheduler.rejections` 的条数上限。这份是拒绝清单的内存镜像（每次拒绝都同时落审计），
+#: 常驻服务里若只增不减就是稳定性审计 BUG-01 那一族的无界增长。
+REJECTIONS_MAX = 200
+
 
 @dataclass(frozen=True)
 class Quota:
@@ -207,12 +211,18 @@ class Scheduler:
                     automation_id=auto.id,
                 )
             )
-            self.rejections.append(f"global_quota:{auto.id}")
+            self._record_rejection(f"global_quota:{auto.id}")
             return False
         return True
 
+    def _record_rejection(self, text: str) -> None:
+        """把拒绝原因记进环形清单：超过 `REJECTIONS_MAX` 时从头部丢最旧的。"""
+        if len(self.rejections) >= REJECTIONS_MAX:
+            del self.rejections[0]
+        self.rejections.append(text)
+
     def _reject(self, auto: Automation, reason: str) -> None:
-        self.rejections.append(f"{reason}:{auto.id}")
+        self._record_rejection(f"{reason}:{auto.id}")
         logger.info("[SCHED-REJECT] %s: %s", auto.id, reason)
         self.audit.add(
             AuditEvent(
