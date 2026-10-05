@@ -45,6 +45,29 @@ services:
       # 值由宿主机 env / .env 注入；deploy 前确保 AUTOFORGE_INBOX_KEY 已设，否则读侧（af_live.py:410）拒收全部 inbox 答案。
       # ⚠️ compose 自动加载的 .env 在「compose 同目录」（即本文件所在 docker/.env），不是仓库根；放错位置会取到空值。也可用 `docker compose --env-file .env` 显式指定。
       - AUTOFORGE_INBOX_KEY=${AUTOFORGE_INBOX_KEY:-}
+      # ---- ADM 联动桥（§5.3 第 10 件；裁定 20261004 18:35 §二：补齐引用、值一律留空）----
+      # 缺省关：只有显式给 1 才起桥，键名真源是 `af_mqtt_bridge.py` 的 `ENV_ENABLED`
+      # （`env_enabled()` 把空串/0/false/no/off 一律读成"关"）。
+      # 下面五个 MQTT_* 的键名**不在这份文件里发明**：唯一真源是烘进镜像的那枚 wheel
+      # （`Dockerfile.api` 按文件名钉死的 `docker/homesdk/homesdk-0.3.1-py3-none-any.whl`），
+      # `homesdk/mqtt.py` 的 `broker_settings()` 读 MQTT_HOST / MQTT_PORT / MQTT_KEEPALIVE，
+      # `resolve_credentials()` 读 MQTT_USER / MQTT_PASSWORD。它同时认别名
+      # （MQTT_USERNAME / MQTT_PASS / MQTT_PASSWD 与按 peer 作用域的 MQTT_USER_〈scope〉），
+      # 本仓只写规范那两条，免得同一台机器长出第二种习惯。这条同源由
+      # `tests/unit/test_mqtt_compose_env.py` 当场核对，不靠人记得。
+      # 留空是真 no-op：`homesdk/config.py` 的 `_lookup` 明写"空串与未设置同视" ⇒ 空的 MQTT_PORT
+      # 仍落 wheel 里的 DEFAULT_PORT（1883），而空的 MQTT_HOST 抛 MissingEnv 而不是匿名连出去。
+      # ⚠️ 打开开关不是改这里就完事：起桥排在 `uvicorn.run` 之前且不吞异常（§二之二十六），
+      # 值没配好就是整个 AF 起不来（含只读面，`restart: unless-stopped` 会变反复重启）。
+      # 真打开走**非停机窗**的配置推送，推送前先 `compose exec` 预检 `paho_available()` 与
+      # `broker_settings()` 两条都过。口令是敏感项，与 `AUTOFORGE_HA_TOKEN` 同档：值只从宿主机
+      # shell env 或 secrets 注入，**不要把真值写进这份入库的文件**。
+      - AUTOFORGE_MQTT=${AUTOFORGE_MQTT:-0}
+      - MQTT_HOST=${MQTT_HOST:-}
+      - MQTT_PORT=${MQTT_PORT:-}
+      - MQTT_KEEPALIVE=${MQTT_KEEPALIVE:-}
+      - MQTT_USER=${MQTT_USER:-}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-}
       # - AUTOFORGE_HA_TOKEN=${AUTOFORGE_HA_TOKEN:-}
       # - AUTOFORGE_API_TOKENS=${AUTOFORGE_API_TOKENS:-}
     restart: unless-stopped
