@@ -3738,6 +3738,12 @@ uvicorn 访问日志把整条查询串原样记下（`GET /api/mcp/pair-request?
   `POST /api/sessions/{id}/tick·/cancel·DELETE` 标了 ✅（"会话操作条"），而本门读数为零调用点。
   要么面板从未接、要么接了又被拆——两种都指向"那行 ✅ 过期"。已投 DCD（§五）还是登记 §六：本批取后者
   （§六 新增一条），因为它是**口径复核**而不是裁定项；真要删这 6 条路由才需要裁定，本批一条路由的字节都没动。
+  **→ 同批已把那份文档改对**（不是只登记）：`docs/plan/开发计划_WebUI全功能接入.md` 模块 E 那三行的 ✅ 换成
+  `后端 ✅ ／ UI ✗` 双段写法，并就地附一条更正注写明取数命令（`check_ui_api_paths.py --all`）、唯一命中的调用点
+  （`ui/src/api/client.ts:161`）与"别把这六条当冗余删掉"的警告。**独立复核过**：
+  `grep -rn "sessions" ui/src ui-user/src ui-user-mimo/src --include=*.ts --include=*.vue` 只回
+  `client.ts:161` 与 `types/api.ts:662` 两行（后者是注释），⇒ 反向读数不是门的口径毛病。
+  同份文档里 `conflicts` / `experience/export` / `asks/{name}` 三族**没有** ✅ 行（`grep -n` 零命中），故本批改动止于模块 E。
 - **为什么不自裁删冲突面那 5 条**：它们在 AF 之内零消费者，但那是仲裁运行时的对外出口、也是 §5.3 里
   冲突面板那一族的后端；删路由＝改跨仓契约，按铁律交裁而不是顺手清账。本批做的把它收成"可复核的形状"：
   名单逐条钉死 + 每条一句定性 + 证据行号，下一批无论接面板还是提删，都有起点。
@@ -3816,6 +3822,81 @@ uvicorn 访问日志把整条查询串原样记下（`GET /api/mcp/pair-request?
 - **为什么单独成节而不塞进 §二之四十四**：那条批的射程是 `UI↔路由契约`，本批改的是**门禁链的装配**
   （`gates.sh`）与**一份额外裁定的记账**；更要紧的是它盘出的是"已落地的裁定没有账"这个形状——按 §二之四十一
   立的口径，这类发现要单独成节，否则下一批读到 `f0184de` 只会看到一份没有出处的改动。
+
+
+## 二之四十六、给"门禁链的装配"本身立一条门：本机绿、CI 红这一族不再依赖"有人记得两边都接"
+
+缘起是 §二之四十五 刚修完的那个形状——裁定 20261005 要求的 `check_ir_runtime_keys.py` 当时只长在
+`.github/workflows/ci.yml` 的 `quality-gates` 作业里（`bash gates.sh` 的**下一步**，前置完全相同），
+`gates.sh` 没有 ⇒ 本机跑 15 道门全绿、推上去红。**修法本身不是收口**：接进 `gates.sh` 之后，
+"下一条门只装在一边"照样会发生，而这条链上没有任何东西会响——它不会红，只会让**该红的不红**。
+本批把装配口径变成静态可判的第四张表。
+
+- **新门 `scripts/check_gates_coverage.py`**（纯标准库，接进 `gates.sh` 的门禁序列——现共 19 段，本门是第 18 段，
+  其后只剩 import 冒烟；因此它自己也在自己的射程里）：
+  四条判据——① **漏跑**：盘上某个 `check_*.py` 既不在 `gates.sh` 也不在任何工作流（"写了没接"比"没写"更坏，
+  它看起来是一道门）；② **远端有、本机没有**：工作流引用而 `gates.sh` 没跑、又不在 `CI_ONLY_EXEMPT`；
+  ③ **豁免过期**：登记了却没有任何工作流引用（豁免表只减不增，接进 `gates.sh` 后必须当场删那格）；
+  ④ **豁免空理由**：理由为空即红——`"跑在别的作业里"` 这种写法不算理由，必须写清**前置为什么不同**。
+  射程塌了一律 `exit 2`（读不到 `gates.sh`／读不到 `workflows/`／盘上 0 个脚本／`gates.sh` 里 0 条调用形状／
+  引用了盘上不存在的脚本），不许把"没数到"报成"没问题"。
+- **真读数**（本机 `Python313\python.exe`）：`门禁装配覆盖门干净（盘上 \`check_*.py\` 17 个，\`gates.sh\` 覆盖 16 个，
+  工作流覆盖 1 个，独立作业豁免 1 格且理由齐全）` RC=0，`--self-test` RC=0（三档注入全部被检出，4 条问题）。
+  那 1 格豁免是 `check_imports.py`：判据是 grimp 的包图 + `.gates-imports-baseline.txt`，前置与失败口径都和
+  `quality-gates` 不同一条链（§二之十一），并进 `gates.sh` 会让本机每轮去装一套 CI 才需要的依赖。
+- **本门第一次响的是我自己**：初版按整份文本取引用，于是我为了说明"这条步骤为什么删掉"而在 `ci.yml` 写的那句
+  注释（提到两个脚本名）被算成"远端覆盖"，读数当场印成 `工作流覆盖 3 个`。这类泄漏有两个方向都致命：注释里
+  提到的脚本会被当成"CI 在跑它"（判据 ① 从此形同虚设），而只在注释里出现的名字又会进 `unknown` 把整门变成
+  `exit 2`。修法是把"什么算覆盖"钉死成**调用形状**：`gates.sh` 只认 `"$REPO/scripts/check_*.py"`，工作流跳过
+  整行注释——本仓 `ci.yml` 的写法是注释独占一行，`run:` 的命令不带行内注释，按行首判断即可覆盖这个形状。
+- **`ci.yml` 侧**：删掉 `quality-gates` 里那条与 `bash gates.sh` 前置相同的独立步骤（现在由 `gates.sh` 跑），
+  原地留注释指向本门。
+- **判据 `tests/unit/test_gates_coverage_gate.py` 18 条**：四判据各一档、注释不算覆盖两档（红的那档验"只有注释"
+  必须判红，绿的那档验"只有注释"不许退化成 `exit 2` 掩盖真红）、`gates.sh` 里非引号形状不算覆盖、
+  五档 `exit 2`、真仓读数非空洞（`len(on_disk) >= 15` 且 `check_ir_runtime_keys.py` 必须在 `gates.sh` 里）、
+  `check_gates_coverage.py` 的覆盖来源必须是 `gates.sh` 而不是 `ci.yml` 那句注释、
+  以及**反空洞的反空洞**：把 `check()` 换成永远返回干净的桩，`--self-test` 必须自己判失效。
+- **变异四档**（干净 `git worktree` @ `d769430` + 本批四文件，逐项 `cp` 还原）：control RC=0；
+  **M1** 把 `gates.sh` 的 IR 调用行换成一句 `# 见 scripts/check_ir_runtime_keys.py` ⇒ RC=1，红在
+  `漏跑：check_ir_runtime_keys.py …`（`gates.sh 跑 15 个`）；**M2** 复现落地前的原形状——`gates.sh` 删掉该行、
+  在 `quality-gates` 加回 `run: python scripts/check_ir_runtime_keys.py` ⇒ RC=1，红在
+  `远端有、本机没有：…`（`工作流跑 2 个`）；**M3** 往 `CI_ONLY_EXEMPT` 塞一格工作流根本不引用的 ⇒ RC=1
+  `豁免过期`；**M4** 把那格理由改成空白 ⇒ RC=1 `豁免没理由`；四档还原后 control 复绿 RC=0，同一棵 worktree 里
+  `test_gates_coverage_gate.py + test_ui_api_paths_gate.py` **68 passed**、`check_ir_runtime_keys.py` RC=0。
+  **一条作废档如实记**：M3 第一次注入是用字符串拼接改脚本本体，结果改出 `SyntaxError` ⇒ RC 也是 1。
+  那是量具坏了、不是门红了——与 §二之四十四 那条"不敏感档"同族：**RC 对上不等于判据来源对上**，
+  变异档必须核红的那行文案，不能只看退出码。
+- **全链读数（同一棵干净 worktree，`GATES_PYTHON` 指本机 `Python313`）**：`bash gates.sh` 全 19 段 **RC=0**，
+  结论行 `结论：门禁干净。注意 import 通过不等于服务能起，验收仍要 compose ps + HTTP。`，新门那一节印
+  `门禁装配覆盖门干净（盘上 \`check_*.py\` 17 个，\`gates.sh\` 覆盖 16 个，工作流覆盖 1 个，独立作业豁免 1 格且理由齐全）`。
+  同树 `python -m pytest -q`（`PYTHONPATH` 指该树的 `src`，否则会 import 到主树那份编辑中安装）=
+  **3101 passed, 53 skipped, 7 subtests passed in 394.81s**，RC=0。
+  **这两个总数不做相减**：主树那棵多了一个未跟踪的并发测试文件（`tests/test_af_nl_roundtrip.py`，
+  `--collect-only` 实测 45 条）以及它配套的 WIP 源码，两份读数不在同一个集合上，相减得到的"差"没有含义；
+  本批要的只是这一棵树：**HEAD + 本批四文件 = 全绿**。
+  **这一条同时反证 §二之四十五 的那道红**：本机主树里 `check_bounded_caches.py` 点名的 6 个容器全部来自并发会话
+  未提交的 `src/autoforge/af_nl_parse.py`（`??` 未跟踪），HEAD 这棵树上那一节是绿的 ⇒ 那不是本仓的回潮，
+  也不替别人登记、不扩基线、不改钉数。
+- **计划文档的一处更正**（§六 那条"文档 ✅ 与本门读数不一致"的收口，不改路由、只把口径改对）：
+  `docs/plan/开发计划_WebUI全功能接入.md` 模块 E 的会话面三行由 `✅` 改为 `后端 ✅ ／ UI ✗`，
+  并附复核命令、唯一有调用点的那条（`ui/src/api/client.ts:161` 的 `POST /api/sessions/{id}/answer`）、
+  六条零调用点路由的名单，以及"别按冗余删路由"的警告。
+- **CI 读数（把 §二之四十五 欠的"run 89 权威读数"当场补上，两条 run 逐作业取时间戳）**：
+  `run 89 id=37364467229 d769430 completed/failure` = `quality-gates` success（19:46:14→19:54:27，本机 `gates.sh`
+  那 16 节在远端也是绿的）、`ui-typecheck-build` success、`ui-user-mimo-judgments` success；
+  `adm-linkage-contracts` / `layering-gates` / `pytest` **cancelled**。对照 `run 88 id=37362057286 a5cd6e5`
+  同样 conclusion=failure，cancelled 的是 `adm-linkage-contracts` / `pytest` 两条。
+  关键读数不是结论而是**形状**：这五条 cancelled 作业的 `runner_name` **全为空**（从未上过 runner），
+  且两枚 run 的取消时间都恰好是"入队 + **15 分 01 秒**"（88：19:15:08→19:30:09；89：19:36:09→19:51:10，
+  同一秒集体取消），而拿到 runner 的作业最快 27 秒就绿。run 89 里 `quality-gates` 甚至比队列里的三条
+  **晚 10 分钟**才开跑（19:46:14）却成功 ⇒ 不是某条作业自己的判据红，也不是代码问题。
+  **本批不把它写成"环境抖动"**：取消来源在仓侧读不出，能读出的只有两条候选（作业队列容量 / 私有仓计费分钟数），
+  两条都落在 SP 与 GitHub 侧（铁律 #3），且 run 79–87 六作业全上是反证。做法：随本批 push 产生 run 90，
+  以它的逐作业读数作为新 HEAD 的权威口径；若仍出现"15 分 01 秒集体取消 + 无 runner"，那就是配额/容量面，
+  要按 §五 的口径向 SP 报而不是在 CI 里加 `continue-on-error`（那正是本仓 2026-10-01 整改掉的假绿同型）。
+- **本门判不出的东西（登记，见 §六）**：豁免理由的**语义**。静态只能判"有没有写字"，
+  写一句"跑在别的作业里"这种非理由本门会放过——防线是文案要求 + `test_ci_only_exempt_entries_all_have_reasons_and_are_referenced`
+  的逐格点名，真正的口径还得靠人读那一格。
 
 
 ## 四、审计侧
@@ -3924,6 +4005,9 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
   不是跨仓契约变更；真要**删**这 6 条会话路由才是改对外契约、那时要裁。本批**一条路由的字节都没动**，
   也没按那行 ✅ 去补 UI——补哪棵树、要不要补属 `ui-user` vs `ui-user-mimo` 交付面那一族（§五 已裁 Q1=B），
   不在本批射程。取数口径：`python scripts/check_ui_api_paths.py --all`（`--list-uncalled` 出逐条名单）。
+  **→ 本批已就地改掉那三行的 ✅**（`后端 ✅ ／ UI ✗` + 更正注），这条登记保留的意义变成"那份文档的 ✅ 口径
+  与门的口径不是一回事"这件事本身——**其余 ✅ 行未经逐行复测**，若下一批要拿这份计划表当"已完成"的依据，
+  先对一遍 `--list-uncalled` 的名单。
 - 同一门的射程边界登记清楚（本批内改过一次口径）：路由有**两张脸**，门认 `@app.get/post/put/patch/delete("…")`、`@router.…` 装饰器，以及 `("VERB", "/api/…", handler)` 形状 + `add_api_route` 的静态挂载表。剩下**一张脸读不出**：`af_runtime_plugins.py` 的 `add_api_route(path, …)` 里 `path` 是插件在运行期声明的数据，静态无从得知 ⇒ 门把它记成 `运行期挂载文件 1 个` 并写进绿色行，而不是报错也不是假装看过。**方向上要分清**：挂载表那条路若哪天改了形（有 `add_api_route` 有字面量 `"/api/…"` 却读出 0 条）⇒ `exit 2`，因为那时本门会对真端点报**假红**；而插件那张动态脸漏掉只会漏在"UI 未调用"的计数里，不会产假绿。首版把这两件事混为一谈，得到的是一条 `RC=2` 的长红——那才是本门最可能被关掉的方式。
 - §四 的 B（逐实体可见漂移 + `entity_drift` 记账）**未做**，按裁定的启动条件排队：下一次真实改动 `af_instance._refresh_snapshot` 时顺手做，或 AF v2.6。
 - 洞察面板的**投递源仍是本机手投**：§二之四的两条提案是用 `PersistentInsightSink.submit()` 直接写进 dev store 的，走的是"落盘之后的那一段"。本批把**桥回调 → 落盘 → `/api/insights/pending`** 这一段用契约形状的假消息钉住了（`test_contract_shaped_insight_reaches_the_panel_with_its_accounting`，注入假 client、真桥、真队列、真 API），但**真 paho + 真 broker** 那一段仍未端到端（paho 本机实测有，缺的是那台 broker：`MQTT_HOST` 未配），面板的空态文案因此把"桥未上线/没订到主题"列为四种成因之一，而不是当作已验证链路。
@@ -4000,6 +4084,11 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
   值替成 `***`，判据含真服务器对照腿（不挂 filter 必须看得见明文）与 AST 守卫。**仍未做**：反代 / nginx
   同样记完整 URL，属 NAS 部署者 / SP（铁律 #3），本仓不替它背书"日志干净"。若 DCD 对第 21 件选 B
   （专用匿名 bootstrap 端点），"长连接令牌换成一次性 stream ticket"这条更彻底的修法才有落点，届时是契约面改动。
+- **装配覆盖门判不出豁免理由的语义**（§二之四十六 那条门的已知边界）：`CI_ONLY_EXEMPT` 的文案要求是
+  "必须写清前置为什么不同"，静态只能判**有没有写字**。一句"跑在别的作业里"这种非理由本门会放过，
+  而它恰好就是当年把 IR 硬门只留在 `ci.yml` 时的那种说辞。现有防线是逐格点名的判据
+  （`test_ci_only_exempt_entries_all_have_reasons_and_are_referenced`）＋ §二 的记录；
+  做成机器可判需要给"理由"下可校验的语法（例如强制引用一个作业名 + 一条前置差），那是独立一批的事。
 
 ---
 

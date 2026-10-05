@@ -217,6 +217,16 @@ echo "══ IR 运行时扩展键白名单硬门（写进节点的运行时键�
 ir_keys_rc=$?
 
 echo
+echo "══ 门禁装配覆盖门（\`check_*.py\` 必须真被某条链跑到，远端有的本机也得有）══"
+# §二之四十六 盘出：裁定 20261005 要求的那条 IR 运行时键硬门当时只写在 ci.yml 的 quality-gates 作业里
+# （`bash gates.sh` 的下一步、前置一模一样），`gates.sh` 里没有 ⇒ 本机绿、远端红。"装配不对称"这件事
+# 本身没有任何东西会判红：脚本在盘上、CI 在跑、作业是绿的，只有本机开发者看不见它。同族的先例是
+# 包标记门（为一次 .gitignore 事故立的复发门）。本门同时拦"写了没接"（盘上有、谁都不跑）和
+# "豁免过期"（豁免表里的脚本工作流已经不引用）。
+"$PYTHON" "$REPO/scripts/check_gates_coverage.py"
+coverage_rc=$?
+
+echo
 echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）════════════════════"
 # 单跑冒烟：只走 `import` 子进程，慢但一次性看清。
 # 注意：这条在开发机上的红多半是「依赖没装齐 / 本地副本不完整」，
@@ -329,6 +339,15 @@ fi
 if [ $ir_keys_rc -ne 0 ]; then
   echo "结论：IR 运行时扩展键门禁红（exit=$ir_keys_rc）。写进 IR 节点的运行时键必须同时在 \`ir.schema.json\` 的白名单注释与 \`af_irreversible.RUNTIME_ONLY_FIELDS\`（或 \`NON_REVERSIBLE_KEY\`）里：这五个键是铁律 #1 的**明确豁免面**，豁免范围由裁定 20261005 §三 逐条写死，白名单之外再加一个运行时键就是绕过铁律 #1——先申请裁定，不要就地加键。反向漂移（白名单列了代码没声明的）同样判红，因为它把豁免面虚报得比实际宽；锚点读不出（schema 注释不在、\`af_irreversible\` 导入失败）也走这一条，脚本此刻是抛异常退出而不是报『干净』。"
   exit $ir_keys_rc
+fi
+
+if [ $coverage_rc -eq 2 ]; then
+  echo "结论：门禁装配覆盖门读不出（exit=$coverage_rc）。\`gates.sh\` 或 \`.github/workflows/\` 不在预期位置、\`scripts/\` 下一个 \`check_*.py\` 都没数到、\`gates.sh\` 里一个引用都没有、或某处引用了盘上不存在的脚本（那是**死步骤**：那一行看着像在判，其实什么都没判）。四种都是射程塌了，报『干净』没有依据。"
+  exit $coverage_rc
+fi
+if [ $coverage_rc -ne 0 ]; then
+  echo "结论：门禁装配覆盖门红（exit=$coverage_rc）。三种形状：① 盘上有某个 \`check_*.py\` 而 \`gates.sh\` 与任何工作流都不跑它（写了没接＝看起来像一道门，其实没人按）；② 工作流引用了它而 \`gates.sh\` 没有且不在 \`CI_ONLY_EXEMPT\`（远端响、本机不响——本机开发者拿的是半条链，正是 §二之四十五 撞到的那件）；③ 豁免表里那一格已经过期（工作流不再引用它）或理由为空。把门接进 \`gates.sh\`，或给豁免那一格写清**前置为什么不同**——『跑在别的作业里』本身不是理由。"
+  exit $coverage_rc
 fi
 
 if [ $ast_rc -ne 0 ]; then

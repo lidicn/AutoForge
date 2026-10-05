@@ -71,12 +71,14 @@ jobs:
         # 干净环境必须能成功 import af_runtime（缺 homesdk 会直接失败）。
         run: python -c "import autoforge.af_runtime"
       - name: Run quality gates
+        # 这里跑的是**本机同一条链**：`gates.sh` 一节不落。
+        # 2026-10-06 更正（§二之四十六）：DCD 裁定 20261005 §四 要求的那条
+        # `python scripts/check_ir_runtime_keys.py` 原先作为**本步的下一步**单独存在，
+        # 于是"远端响、本机不响"——本机开发者跑 `bash gates.sh` 拿到绿，同一份代码推上来才红。
+        # 现已接进 `gates.sh`（同一条链、同一套前置），此处不再单列；
+        # 由 `scripts/check_gates_coverage.py` 钉住"工作流引用的门必须在 gates.sh 或有豁免理由"，
+        # 防止下一次又把门只装在 CI 上。
         run: bash gates.sh
-      - name: IR 运行时扩展键白名单硬门（check_ir_runtime_keys.py）
-        # DCD 裁定 20261005-AF-ir_non_reversible是否升schema：B + 硬约束。
-        # 代码侧运行时键集合（RUNTIME_ONLY_FIELDS ∪ {NON_REVERSIBLE_KEY}）须与
-        # ir.schema.json node 段 $comment 白名单一致；任何未登记键写入 IR 节点即判红。
-        run: python scripts/check_ir_runtime_keys.py
 
   architecture:
     name: layering-gates

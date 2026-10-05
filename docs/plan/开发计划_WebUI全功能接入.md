@@ -72,10 +72,18 @@
 ### 模块 E · 会话 / ask 人机回路（R2-A，进程内）
 | 后端端点 | 能力 | UI 展现 | 状态 |
 |---|---|---|---|
-| `POST /api/sessions`·`GET /api/sessions` | 创建/列出会话 | 会话列表 | ✅ |
-| `GET /api/sessions/{id}` | 会话状态视图 | 会话详情（挂起的 ask） | ✅ |
+| `POST /api/sessions`·`GET /api/sessions` | 创建/列出会话 | 会话列表 | 后端 ✅ ／ **UI ✗**（见下方更正注） |
+| `GET /api/sessions/{id}` | 会话状态视图 | 会话详情（挂起的 ask） | 后端 ✅ ／ **UI ✗**（见下方更正注） |
 | `POST /api/sessions/{id}/answer` | 人工应答 ask | ask 卡片「回复」输入 | ✅ |
-| `POST /api/sessions/{id}/tick`·`/cancel`·`DELETE` | 推进时钟/取消/删除 | 会话操作条 | ✅ |
+| `POST /api/sessions/{id}/tick`·`/cancel`·`DELETE` | 推进时钟/取消/删除 | 会话操作条 | 后端 ✅ ／ **UI ✗**（见下方更正注） |
+
+> **更正注（2026-10-06，按 `scripts/check_ui_api_paths.py --all` 的实测读数改）**：本模块原把上面三行标成 ✅
+> （"会话列表/详情/操作条"已完成），而契约门在**三棵第一方 UI 树**（`ui/`、`ui-user/`、`ui-user-mimo/`）里
+> 读到的会话族调用点**只有 `POST /sessions/{sid}/answer` 一条**（`ui/src/api/client.ts:161`）；
+> 其余六条（`POST/GET /api/sessions`、`GET/DELETE /api/sessions/{id}`、`…/tick`、`…/cancel`）为**零 UI 调用点**，
+> 独立复核 `grep -rn "sessions" ui/src ui-user/src ui-user-mimo/src` 也只有上面那一行命中。
+> ⇒ 那三行的 ✅ 指的是**后端交付**（契约与测试在册），不是"面板已接"。改成本栏的双段写法，避免下一批把"标了 ✅"
+> 读成"有 UI 消费者"而把那六条路由当冗余删掉。分类逐条证据见 `docs/ADM联动执行记录-AF.md` §二之四十四。
 
 ### 模块 F · 待批队列（v1.4.0 治理）
 | 后端端点 | 能力 | UI 展现 | 状态 |
