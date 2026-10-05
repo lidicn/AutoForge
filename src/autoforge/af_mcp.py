@@ -241,7 +241,7 @@ def _pair_store(store: GraphStore) -> PairCodeStore:
 
 
 def _t_request_pair(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    """agent 发起配对：后端生成 6 位单次短时效配对码，经 SSE 推送给用户弹窗。
+    """agent 发起配对：后端生成 8 位单次短时效配对码，经 SSE 推送给用户弹窗。
 
     码只回显给用户（不返回给 agent），agent 等待用户口述码后调 `af_pair` 兑换令牌。
     """
@@ -250,7 +250,7 @@ def _t_request_pair(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": True,
         "expires_at": pc.expires_at,
-        "message": "配对请求已发起，请在 ForgeSight 中输入显示的 6 位码完成配对",
+        "message": "配对请求已发起，请在 ForgeSight 中输入显示的 8 位码完成配对",
     }
 
 
@@ -490,7 +490,7 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
     ),
     (
         "af_request_pair",
-        "【配对·第1步】agent 发起配对请求：后端生成 6 位单次短时效配对码，经 SSE 推送到"
+        "【配对·第1步】agent 发起配对请求：后端生成 8 位单次短时效配对码，经 SSE 推送到"
         "用户 ForgeSight 弹窗。码只显示给用户，agent 不拿码，等用户口述后调 af_pair 兑换。"
         "参数：agent_name_hint(str 可选，agent 自报名称)。返回 {ok,expires_at}。",
         {
@@ -504,13 +504,13 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
     ),
     (
         "af_pair",
-        "【配对·第2步】用用户口述的 6 位配对码兑换运行时签发的 Bearer 令牌。"
+        "【配对·第2步】用用户口述的 8 位配对码兑换运行时签发的 Bearer 令牌。"
         "参数：code(str 必填)、agent_name(str 可选，默认用请求时的 hint)。"
         "返回 {ok,token,subject}；token 作为 Bearer 调用 AutoForge API。",
         {
             "type": "object",
             "properties": {
-                "code": {"type": "string", "description": "用户在 ForgeSight 弹窗显示的 6 位配对码"},
+                "code": {"type": "string", "description": "用户在 ForgeSight 弹窗显示的 8 位配对码"},
                 "agent_name": {"type": "string", "description": "agent 名称（可选）"},
             },
             "required": ["code"],

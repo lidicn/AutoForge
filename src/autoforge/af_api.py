@@ -970,14 +970,15 @@ def build_app(
 
     @app.get("/api/mcp/pair-request")
     async def api_pair_request_stream(
-        request: Request, token: str | None = Query(default=None)
+        request: Request,
+        token: str | None = Query(default=None),
+        creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
     ) -> StreamingResponse:
         """SSE：前端 App 启动建立长连接，收到配对请求即弹窗。
 
         SSE（EventSource）不支持自定义请求头，令牌经 ?token= 传递；
         也兼容 Authorization: Bearer 头。
         """
-        creds = _bearer(request)
         raw = (creds.credentials if creds else None) or token
         info = None
         if raw:
@@ -1049,7 +1050,7 @@ def build_app(
 
     @app.post("/api/user/pair/{code}/confirm", dependencies=[Depends(_write)])
     def api_pair_confirm(code: str) -> dict[str, Any]:
-        """用户在前端点'确认配对成功'：agent 已用码经 /api/mcp/pair 兑换令牌。
+        """用户在前端点'确认配对成功'：agent 已用码经 MCP `af_pair` 兑换令牌。
 
         返回已存在的 agent 身份（subject 由 af_pair 签发）；agent 尚未兑换则返回 409。
         """

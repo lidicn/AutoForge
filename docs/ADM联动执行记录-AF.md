@@ -3498,6 +3498,139 @@ trace 与序列化体积随段**线性**增长；墙钟在 300→600→1200 段�
 - 全量 `pytest` 在本树仍带并发 WIP 的噪声（未登记容器 + 其自身未过的用例），AF 不为了凑绿去动别人的文件，
   也不把 BASELINE 扩到替他们登记——那正是 §二之三十九 立过的"名单手抄第二真源"的另一种形态。
 
+## 二之四十二、F-3 真机验收链把配对 SSE 端点撞出 500：根因是 async 端点里直调 `HTTPBearer` 实例；修完顺手盘出配对 bootstrap 的死锁并投裁
+
+### 一、这条缺陷是怎么露出来的（不是审出来的，是"真跑一次"跑出来的）
+
+§二之四十一 收尾时为了把 F-3 的 owner／非 owner 两面在**真后端**上验收，写了条 live 链：起 uvicorn →
+`GET /api/mcp/pair-request?token=…` → 从帧里取配对码 → 匿名 `af_pair` 兑换 agent 令牌 → 用该令牌读
+`/api/user/auth-codes`。链在第二步就断了：
+
+```
+HTTPError: HTTP Error 500
+后端日志：AttributeError: 'coroutine' object has no attribute 'credentials'
+         RuntimeWarning: coroutine 'HTTPBearer.__call__' was never awaited
+```
+
+根因在 `src/autoforge/af_api.py:980`（修前）：处理器是 `async def`，里面写的是 `creds = _bearer(request)`
+——`HTTPBearer.__call__` 是**协程**，直调拿回来的是 coroutine 对象，它永远为真值，于是下一行
+`creds.credentials` 必抛。同文件其余四处（`:276/:302/:343/:905`）用的都是正确形状
+`creds: HTTPAuthorizationCredentials | None = Depends(_bearer)`，只有这一处漏了。
+
+**为什么活了这么久**：`grep -rn "mcp/pair-request" tests/` 在修前是**零命中**——这条端点一条判据都没有。
+而它的失败模式不是"某档配置下不对"，是"每一次请求都 500"，包括 `AF_ALLOW_NOAUTH=1` 的本地开发档。
+产品后果写在结论上：**ForgeSight 的配对码弹窗对着真后端从来没有工作过**。
+
+修法按其余四处的同一形状走（把 `creds` 变成依赖入参，删掉直调那一行），一字节语义不变：
+
+```python
+async def api_pair_request_stream(
+    request: Request,
+    token: str | None = Query(default=None),
+    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> StreamingResponse:
+    raw = (creds.credentials if creds else None) or token
+```
+
+### 二、判据为什么必须跑在真 uvicorn 上（`TestClient` 这条路实测走不通）
+
+先按惯例用 `TestClient` 写，结果 `timeout 180 python -m pytest …` ⇒ **`RC=124`**：两条 403 判据先绿，
+第三条"读到第一帧"的挂住不动。原因在 starlette 0.27/1.6 的 `TestClient`：`receive()` 在请求体读完后
+是 `await response_complete.wait()` 才返回 `http.disconnect`，而 SSE 生成器要收到 disconnect 才结束
+⇒ **双方互等**，任何无限流端点在这套假传输上都无法"读一帧再收口"。所以这批判据起真
+`uvicorn.Server`（随机空闲端口、daemon 线程、`log_level="error"`），客户端 `close()` 之后生成器下一轮
+`is_disconnected()` 自然为真，测试 5–7 秒一组跑完。
+
+落点 `tests/unit/test_sse_pair_request_stream.py`，9 条：匿名 403、坏令牌 403、Bearer 头建流（read/write
+两档令牌参数化）、`?token=` 回落建流、逃生舱档建流、帧形对齐前端解析器、消费后的码不再进取源、
+静态守卫。**造码走的是 `PairCodeStore` 而不是 `af_request_pair`**——后者在令牌部署下根本调不到（见第四节），
+本批判的是 SSE 那一段，"谁来注入"这件事恰好是投给 DCD 的那件。
+
+### 三、变异自证（四档，含 CONTROL；从内存字节还原，不碰 git）
+
+| 档 | 改法 | 读数 | 判红的判据 |
+| --- | --- | --- | --- |
+| CONTROL | 什么都不改 | `RC=0  9 passed in 5.35s` | — |
+| M1 | 退回修前形状（删依赖入参 + 恢复 `creds = _bearer(request)`） | `RC=1  8 failed, 1 passed` | 匿名/坏令牌 403、两档 Bearer、`?token=`、逃生舱档、帧形、静态守卫 |
+| M2 | 撤掉 fail-closed 拒收（`if not local_escape:` → `if False:`） | `RC=1  2 failed, 7 passed` | 匿名 403、坏令牌 403 |
+| M3 | 帧里 `expires_at` 改成字符串 | `RC=1  1 failed, 8 passed` | 帧形判据 |
+
+`还原核对: True`（驱动脚本结尾比对字节）。M1 里唯一没红的那条是"消费后的码不再进取源"——它是
+存储层判据，与本端点的鉴权形状无关，这正说明它不该被算作这条缺陷的防线。M1 让**两条 403 判据也红**
+（修前匿名用户拿到的是 500 而不是 403），这条读数值得留着：fail-closed 那半边此前也不是"正确地拒绝"，
+只是崩溃得比较早。
+
+### 四、修好之后顺出来的两件（一件自决，一件不自决）
+
+1. **自决（文档卫生，零行为改动）**：`af_mcp.py` 有 5 处把配对码写成"6 位"（工具描述 + 给 agent 的
+   `message`），而 `_rand6()` 自安全审计 N-P0-sec 起就发 **8 位**（10^6 被证实 0.5s 可穷举）——这是给
+   agent 看的说明书，写错等于教人按 10^6 去估防线。另外 `api_pair_confirm` 的 docstring 指向一个
+   **不存在**的 `POST /api/mcp/pair`，改成 MCP 工具 `af_pair`。两处都只改字符串。
+2. **不自决（已投 DCD，§五 第 21 件）**：把链路往回多问一步"这枚码由谁发起"，盘出配对 bootstrap 的
+   死锁——`af_request_pair`（`af_mcp.py:503`）与 `af_pair`（`:519`）的 scope 都是 `"write"`，HTTP `/mcp`
+   面又整面挂着 `Depends(_write)`（`af_api.py:920`），而前端 `createPairRequest` 明确不自建码
+   （`ui-user-mimo/src/api/http.ts:186`：没有帧就抛 `PAIR_INVALID`）。真跑读数：匿名 ⇒ `HTTP 403`、
+   read 令牌 ⇒ `HTTP 403`、write 令牌 ⇒ `isError=False`（可它已经有令牌了）、`AF_ALLOW_NOAUTH=1` 且无
+   registry ⇒ `HTTP 200` 但工具层拒 `拒绝：MCP 面没有令牌身份 ⇒ 工具 'write' 域默认拒绝（裁定 20261004 §一 Q2=B）`。
+   ⇒ **要拿到配对码必须先有 write 令牌，而配对恰恰是为了给没有令牌的 agent 弄到令牌**。设计文档里
+   `B2 配对 ✅ 已交付` 那句在令牌部署下不成立。放宽 scope 是鉴权姿势，且其中一档修法会直接撞刚生效的
+   裁定 Q2=B ⇒ AF 不自签，按 A/B/C 三档投出去（AF 建议 B：另开两个**明确的**匿名 bootstrap 端点，
+   `_write` 大门与 default-deny 一个字不动，匿名射程反而比今天更小——今天暴露的是整张工具表）。
+
+### 五、两件"看着像缺陷、盘过不是"的读数（登记，免得下一批当新洞再挖）
+
+- **`mark_pushed` 排在 `yield` 之后 ⇒ 推送是 at-least-once**：客户端读到帧就断线时标记不落盘，重连会把
+  同一枚码再推一次。这不是缺陷：EventSource 本来就会自动重连，宁可重弹一次也不能把码吞掉；单次性由
+  `af_pair` 的 `consume` 保证（`consume` 后 `pending_events()` 不含该码，本批已钉判据）。首版本批想钉
+  "推过一次就没了"，实测把它判红以后改成判 `consume`——那条断言依赖任务取消时序，钉上去只会变成随机红。
+- **配对码长度 8 位**：本批一度按多份旧设计文档的"6 位"下断言，`re.fullmatch(r"\d{6}", …)` 当场判红，
+  读数 `code='61461393'`。是文档过期，不是实现退化（第四节第 1 件把产品码那 5 处措辞改掉了；
+  `af_premiere` 的首演码是真 6 位，两回事，没动）。
+
+### 六、`?token=` 回落的两半（一半 AF 可自决、一半不在 AF 手里）
+
+SSE 建流的令牌经 `?token=` 传递（EventSource 发不了自定义头），于是**令牌明文进了 URL**：本批实测
+uvicorn 访问日志把整条查询串原样记下（`GET /api/mcp/pair-request?token=<值>`）——这是凭据落进日志，
+不是凭据泄露给用户看。分两半处理：
+- AF 侧可自决的一半（**登记，本批未做**）：`af_cli serve` 装一个 logging filter，把 access log 里
+  `token=` 的值替成 `***`。纯本机、零契约变更，下一次真碰 `af_cli` 时顺手做（与 §六 那族"别为了凑绿
+  动别人的文件"同一口径：不在本批里为一行日志把 serve 装配面重开）。
+- 不在 AF 手里的一半：反代/nginx 那侧同样会记完整 URL；属 NAS 部署方（铁律 #3，AF 不碰 compose 与宿主配置）。
+- 若 DCD 选 B（专用匿名 bootstrap 端点），"把长连接令牌换成一次性 stream ticket"这条更彻底的修法才有落点，
+  届时是契约面改动，不再由 AF 单方面定形。
+
+### 七、门禁与解释器读数（本批）
+
+- `gates.sh` ⇒ **`GATES_RC=1`**，唯一一条红是有界缓存注册表门，六处判红**全部**指向并发会话那枚未提交的
+  `af_nl_parse.py`（当场读数：注册表 2 项 / 固定键 2 项 / 基线 73 项 / **扫到 81 个容器**）。这组数与上一批
+  量出的"本树 81 − `af_nl_parse.py` 独占 6 = 已提交树 75"逐字对上。本批不替别人登记、不把基线扩成第二块
+  盖章区、不把钉数从 75/73 改成 81。
+- 与本批改动同族的那些门全绿：工具名单（扫 99 文件 / 注册表 31 工具 / 按名调用点全命中）、
+  MCP 参数↔schema（31 工具：声明 61 / 消费 61 / 双向差额 0）、原子写站点（`os.replace` 5 处：走助手 3 /
+  固定名 0）、状态源 fail-closed（5 实现全抛 `UnknownEntity`）、出向 MQTT 写者（2 调用点 / 1 文件）、
+  入向订阅、paho 三面、UI↔路由契约（85 调用点：`ui` 50、`ui-user` 16、`ui-user-mimo` 19）、
+  import 冒烟（新增/未获批 0 条，基线内存量 0 条 ⇒ 无违规）。
+- **`?token=` 进访问日志这一条报的是实测时的产物读数**：验收链跑完后留下的后端访问日志里，
+  `GET /api/mcp/pair-request?token=<已脱敏>` **1 条**（值不外抄，只报条数与形状；那份 `.log` 属本机
+  scratch，按卫生规程随本批清掉，不进仓 ⇒ 这条读数以本文所记为准，不在仓里可复取）。
+  这就是 §六 那条"AF 侧 logging filter 未做"的实测起点，也是它没被写成猜测的原因。
+- **全量 `pytest` 两档跑法，把"谁的账"分开记**（同一工作树里躺着并发会话未提交的
+  `af_nl_parse.py` + `tests/test_af_nl_roundtrip.py`，§二之四十一 已登记过这个形状）：
+  ① 原样全量 ⇒ `42 failed, 3095 passed, 53 skipped in 158.17s`；
+  ② 只把那个未提交的测试文件排除掉（`--ignore=tests/test_af_nl_roundtrip.py`，不改别人任何字节）⇒
+  **`2 failed, 3060 passed, 53 skipped in 206.62s`**，且这 2 条逐条是
+  `test_bounded_caches_gate.py::test_real_repo_is_green` 与 `::test_real_repo_measurements_are_pinned`
+  ——正是 §二之四十一 说的那两条：并发 WIP 独占的 6 个未登记容器把"扫到"从 75 顶到 81。
+  两档相减 ⇒ **40 条失败来自那枚未提交的 WIP 测试文件，2 条来自它带来的容器，0 条指向本批改动的文件**。
+  本批不把这个读数写成"全绿"，也不为了凑绿去动别人的文件或替他的容器盖章；远端 CI 跑的树不含那两个文件。
+- **本批改动面的定点跑法**：`pytest -k "pair or tool or mcp or sse or bearer"` ⇒
+  `187 passed, 1 skipped, 2972 deselected, 4 subtests passed in 41.03s`，`RC=0`。
+  这一档是专门为了"改了 `TOOLS` 里那 5 处工具描述字符串会不会撞到钉住描述的判据"而跑的——不跑就不能说零回归。
+- **上一批那条"CI 读数待复取"的账已了**：本批向 GitHub 取数时，`961dd6a` 的 run **84** 已是
+  `completed / success`（同批取到的 `f0184de` run 81/82/83 亦 `success`）。上一批记的是"total 6 / success 2、
+  四条腿仍 `in_progress`"，那是**取数时刻**的状态而不是终态——按"回归结论对 HEAD 重跑"的同一口径补复取，
+  登记在此免得下一批把那条旧读数当成悬红的账。
+
 ## 四、审计侧
 
 
@@ -3539,6 +3672,15 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
 另：报告 §四 那张门禁表里 `check_pkg_markers.py ⚠️ rc=2「沙箱无 git，非代码缺陷」`与本仓口径一致
 （该门依赖 git 索引，外部沙箱取不到 ⇒ 是**射程限制**而不是红），它的 P3 建议"给该门做一条不依赖 git 的降级路径"
 **未做**，登记在 §六。
+- **本批还有一条不在任何审计报告里的缺陷，是"真跑一次验收链"跑出来的**：`GET /api/mcp/pair-request`
+  对**每一次**请求返回 500（async 端点里直调 `HTTPBearer` 实例，协程当真值用 ⇒ `creds.credentials`
+  抛 `AttributeError`），修前 `grep -rn "mcp/pair-request" tests/` 零命中，所以它从没被任何判据照到。
+  它不是报告点名的，也不是静态扫出来的——是 §二之三十六 那条 F-3 验收链在真后端上走到第二步断掉才露出来的。
+  修法、9 条判据（含一条 AST 静态守卫）、CONTROL + 三档变异读数见 §二之四十二。
+  **同一条链往回多问一句又盘出一件 AF 不能自决的**：配对码的两步发起/兑换都要求 `write` 令牌
+  ⇒ 配对弹窗在令牌部署与逃生舱档下全不可达，已按 A/B/C 投 §五 第 21 件。**登记这件事的意义在于口径**：
+  审计报告的清单是外部给的，而"docs/audit 里的全部 bug"这句objective 的射程不止那几份文件——
+  真跑一遍既有验收链，本身就是发现缺陷的地方。
 
 ## 五、已提 / 待提 DCD
 
@@ -3565,6 +3707,7 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
 | 18 | **两棵用户 WebUI 哪棵是交付面，以及 `ui-user` 的数据层断链要不要本批就补**（F-3 浏览器验证撞出来的，HEAD 即存在、非本批引入）。实测三件：① console 首条错 `TypeError: Se.openPairStream is not a function`，根因 `ui-user/src/api/index.ts:8` 把**模块 namespace** 当对象用（方法装在 `client.ts:35` / `mock.ts:83` 的 `export const api = {...}` 里）⇒ 整个 `api.*` 调用面运行时都是 undefined，面板显示"暂无"而**同页 `fetch` 同一端点 200、1 行明文**；② 名字层三处（`stores/main.ts:49/53/59` 的 `getAuthCodes`/`generateAuthCode`/`deleteAuthCode` vs 客户端的 `listAuthCodes`/`createAuthCode`/`revokeAuthCode`）+ 值语义两处（视图过滤 `c.type` 而后端字段 `kind`；`formatDate()` 期待 ISO 而拿到 epoch 秒）；③ `vue-tsc --noEmit` 在 `ui-user` 上 `TSC_RC=2`、**51 条**（其中 28 条 TS2307 含本机 `node_modules` 装不全的部分，AF 不把它算成代码缺陷）。同族另一棵：`ui-user-mimo` 的 node 判据 **60 条 / 7 条红**，`store.test.mjs` 在裸 node 下 import 就失败（`import.meta.env` 未定义），已用逐字节 HEAD 对照档确认非本批。三问：Q1 交付面 A=`ui-user` / B=`ui-user-mimo` / C=两棵都要（AF 判最贵）；Q2 CI 射程扩到用户树是"先修后加"还是"先加红着当账"（现在加当天就红）；Q3 两棵树 `VITE_USE_MOCK` 缺省档相反（`=== 'true'` vs `!== 'false'`）要不要统一成"缺省=真后端" | `关键决策部/inbox/20261004-AF-用户WebUI交付面与数据层断链-决策申请.md`（**裁定 20261005 §一 已回，三问全裁 B/先修后加/批准**）。AF 侧本批**两棵用户树的数据层一个字节未改**、未自决扩 CI 射程、未加第 12 个响应键（`masked` 属裁定未批的形状改动）；已落地部分（D 腿门、F-3 后端半边、同源部署读数）见同一份申请第五节与 §二之三十六。**→ 裁定 20261005 §一 三问全裁（B / 先修后加 / 批准），本批已按三条落地**：**Q1=B**——`ui-user-mimo` 是交付面，且该题**早在 `20260928-AutoForge-v2.1设计难题A-F-决策.md` §G 已裁过**（"以 `ui-user-mimo` 为主线，`ui-user/` 冻结归档"），裁定明确认定本次撞出的数据层断链**正是该裁定的又一证据**、`ui-user` 不该再投人力；F-3/F-2 的浏览器验证改挂主线树，`ui-user/` 就地冻结（保留可读，不再开发）。**Q2=先修后加**——先修主线树那 7 条红（HEAD 即存在、非本批引入），再把它的 node 判据加进 CI 硬门；`ui-user`（冻结树）**不进 CI**，裁定给的理由与本仓既有口径同一条："先加红着当账 = 造一条会假红的门"。**Q3=批准收敛为"缺省=真后端，mock 必须显式开"**，改动只落主线树。**AF 侧本批的实际落法**：7 红逐条分档为 **2 条产品缺陷**（`compareAutomation` 把"从未触发"与"日期串解析不成"都折成 `-Infinity`，同键退化到名称序；`applyTheme()` 住在 store 里让判据在裸 node 上 import 即炸）+ **5 条量具缺陷**（MCP_URL 值抄成 8000、flipIn 三段只钉一段、375px 宽度正则漏钉响应式媒体查询、store 判据跑法没钉"不碰 DOM"、主题开关落点钉的是字样而非活代码）——分档理由与七档变异 + 对照档见 §二之三十七，其中 M3 当场自捕一次**假绿**（字面存在性判据在把代码注释掉之后照旧绿），据此新立口径"**钉『某段代码存在』的判据，必须同时钉『它活着』**"。env 读数收进唯一接缝 `ui-user-mimo/src/api/env.ts`（`VITE_USE_MOCK === 'true'`，缺省即真后端；判据跑法用 `package.json` 的 `--env-file=tests/mock.env` 显式声明 mock，不让量具依赖不安全的那一档）；`ui-user-mimo` 判据 **60 条 / 7 红 → 74 条 / 0 红**、`npm run build` `RC=0`、`GATES_RC=0`；CI 新增 `ui-user-mimo-judgments` 作业（node 22 + `--replace-registry-host=always` 的源自证 + `npm test` + `npm run build`）。**盘出来没做、已登记的三件**（§六）：mock 常量仍进生产产物、`vue-tsc` 不进 CI、F-3 面板的浏览器验收仍未完成 |
 | 19 | **稳定性审计 BUG-01 的第二半：跨段累计步数要不要封顶、封在哪、超限动作是什么，以及 `ctx.trace` 的留存口径**。报告（§二 BUG-01）写的是"`resume()` 没有步数计数"，本批按 HEAD 复测把它扩成一个更大的面：`MAX_STEPS_PER_SEGMENT=1000` 用的 `steps` 是 `run()` 局部变量（`af_executor.py:118`），而 `resume`（`:164`）/`resume_then`（`:418`）/`timeout`（`:394`）/`on_cancel`（`:435`）/调度器 tick 三条分派（`af_scheduler.py:111-117`）**每次都把它归零** ⇒ 段间累计无上限。报告没量的两半本批补了读数：① 经挂起点的环是**合法 IR**（`af_ir/models.py:373-376` 判 `ask/wait` 为挂起点 ⇒ `af_scanner.py:876-895` 对同一形状只给 **WARNING**，能过扫描、能进待批、能被批准）；② 真正留下来的增长是 `Ctx.trace`（`af_instance.py:105` 无上限、`:153-154` 追加、`:122` 整份序列化、`af_store.py:655` 原样恢复 ⇒ **过存储**，不是内存尾巴）。实测复现（合成时钟 + Mock 适配器，单实例自循环）：`tick=2000 ⇒ 累计被唤醒段=2000 / trace最长=4003 / mock下发累计=2000 / 审计条数=0 / 失败段=0`，规模档墙钟 `100⇒0.12s / 600⇒3.65s / 1200⇒15.23s`、单实例序列化 `19502 B⇒225202 B`（**≈平方**在耗时上、**线性**在体积上；该脚本收尾统计落盘字节时抛 `FileNotFoundError`，故"落盘总字节"本批**没有读数**，不补）。三档：问题一 A（实例级双计数 + 超限 `_fail`，建议档 S=1000 段 / T=20000 步）/ B（只告警 + 监护视图常驻，零误杀但泄漏照旧）/ C（按同一节点访问次数判）；AF 倾向 **A+B 组合但阈值由 DCD 定**——把合法轮询形态判死是产品裁定，不是工程修 bug。问题二（`trace`）A（定长环）/ B（截断 + `trace_dropped` 摘要，AF 倾向，因"丢了什么必须自己声明"合铁律 #5）/ C（不动，交给问题一封顶），并附一问：新增持久化键 `trace_dropped` 是否要走铁律 #1 的 schema 登记 | `关键决策部/inbox/20261006-AF-段间累计步数封顶与trace留存-决策申请.md`（**已提交，待回话**）。裁定前 AF **不动 `run()` 的计数器作用域、不动 `Ctx.trace`**，也不自签一个魔法阈值；同批已自决的是 BUG-01 前半（`node_visits` 死代码容器删除 + 门禁基线摘除）与 BUG-02（`or` ⇒ `is None`），10 条判据 + 三腿变异读数见 §二之四十一 |
 | 20 | **（待提，本批未投）**归档别名的**读侧**那一面与"无归档 conf 仍按折叠名键控"：修法要动「名字 → 目录」的身份关系（给 `_dir` 加名字账本，或改清洗方案），属**数据可见性变更** ⇒ 不是 AF 自决项。本批把它钉在判据里而不是偷偷修：`tests/unit/test_dcd_archive_name_alias.py::test_read_side_alias_is_still_a_read_of_the_owners_archive` 与 `::test_conf_without_any_archive_is_still_keyed_by_the_folded_name` 两条**明写"当前未覆盖"**，作用是不让下一批把没修读成已修。是否值得动身份关系请 DCD 定向（若第 19 件给 `trace` 的口径也要碰存储面，AF 建议并件再投，免得两份裁定各说各话） | 尚未成文；触发条件 = 第 19 件裁定回来、或下一次真实触碰 `af_store._dir` 的命名面 |
+| 21 | **配对 bootstrap 两步都要求 `write` 令牌 ⇒ ForgeSight 配对码弹窗在三档配置下全部不可达**（本批修完 SSE 的 500、第一次用真服务器跑通"推码→弹窗"那一段之后，往回多问一句"这枚码到底由谁发起"才看见的）。事实面：`af_request_pair`（`af_mcp.py:503`）与 `af_pair`（`:519`）的 scope 都是 `"write"`，HTTP `/mcp` 面整面挂 `Depends(_write)`（`af_api.py:920`），前端 `createPairRequest` 明确不自建码（`ui-user-mimo/src/api/http.ts:186`：没有帧就抛 `PAIR_INVALID`）。真跑五档读数：匿名 ⇒ `HTTP 403`；read 令牌 ⇒ `HTTP 403`；write 令牌 ⇒ `isError=False`（可它本来就有令牌）；匿名 `af_pair` ⇒ `HTTP 403`；`AF_ALLOW_NOAUTH=1` 且无 registry ⇒ `HTTP 200` 但工具层拒 `拒绝：MCP 面没有令牌身份 ⇒ 工具 'write' 域默认拒绝（裁定 20261004 §一 Q2=B）`。**要拿到配对码必须先有 write 令牌，而配对恰恰是为了给没有令牌的 agent 弄到令牌** ⇒ 设计文档 `B2 配对 ✅ 已交付` 那句在令牌部署下不成立。三档：A（两工具 scope 降 `None` + HTTP 面为这两个工具单独放行）/ **B（AF 建议：工具层 default-deny 一个字不动，另开两个明确的匿名 bootstrap 端点 `POST /api/pair/request` / `POST /api/pair/redeem`，MCP 那两个工具改为"已配对才可用"或摘掉——匿名射程反而比今天更小，今天暴露的是整张工具表）** / C（宣布配对只服务本地开发档，把 B2 与弹窗那条产品口径正式作废并更正文档）。放宽 scope 是鉴权姿势，其中 A 会直接撞刚生效的裁定 Q2=B ⇒ **AF 不自裁**。请 DCD 另回两格：② 两个匿名端点的限速数（建议 request 每 IP ≤6/min、redeem 每 IP ≤10/min，超限锁 5 分钟，数字由 DCD 定稿）；③ 码参数维持现值（8 位数字 / 300s / 单次）还是另给，owner 侧要不要"暂停接受配对请求"开关 | `关键决策部/inbox/20261006-AF-配对bootstrap两步都要求write令牌-决策申请.md`（**已提交，待回话**）。裁定前 AF **不动任何 scope、不动 `_write` 传输门、不新增匿名端点**；同批已自决的三件都不碰鉴权姿势（SSE 500 修复 + 9 条判据 + 静态守卫；`af_mcp.py` 五处"6 位"过期措辞改 8 位；`api_pair_confirm` docstring 指向不存在的 `POST /api/mcp/pair` 改为 MCP `af_pair`），读数与四档变异见 §二之四十二 |
 
 ## 六、未在本版做（登记，不静默）
 
@@ -3645,6 +3788,8 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
 - 稳定性报告 §六 P3 那条「给 `check_pkg_markers.py` 做一条**不依赖 git** 的降级路径」**未做**。本仓口径澄清一下免得被读成缺陷：该门在外部沙箱 `rc=2` 是**射程限制**（它要读 git 索引），报告自己也标了"非代码缺陷"；降级路径等于再养一份"哪些文件算包标记"的口径，与 §二之十九 那族"名单手抄第二真源"同形，要做就得让降级档与 git 档**同一判据、可互相核对**，那是独立一批的事。
 - **本树（工作区）的全量 `pytest` 读数今天不能当作"这批的绿色证明"引用**：同一工作树里有并发会话未提交的 `af_nl_parse.py` + `tests/test_af_nl_roundtrip.py`，它带来 6 个未登记增长容器 ⇒ `check_bounded_caches` 判红、`test_bounded_caches_gate.py` 两条红（`test_real_repo_is_green`、`test_real_repo_measurements_are_pinned` 的"扫到"半边）。AF 的处置：**不替别人登记、不把 `BASELINE` 扩成第二块盖章区、不把钉数改成 81**；只把本批该动的那一处（删容器 ⇒ 75/73）改对，并当场量出"本树 81 − `af_nl_parse.py` 独占 6 = 75"来证明钉数是**已提交树**的真读数。远端 CI 跑的树不含那个文件，故 `gates.sh` 除这一条外本机全绿、`check_imports` 无违规。
 - 归档名别名的**读侧**与"无归档 conf 按折叠名键控"两面**未修**（修法要动名字→目录身份，属数据可见性变更 ⇒ §五 第 20 件，待提）。本批用两条"明写未覆盖"的判据把它钉在测试里（§二之四十 第三节），免得三个月后有人拿"别名那批已经修完"过账。
+- **F-3 的浏览器验收：SSE 那一段本批已从"没跑过"升成"真服务器判据"，但像素级仍未做，非 owner 那一档的数仍缺**。现状：`tests/unit/test_sse_pair_request_stream.py` 9 条跑在真 uvicorn + 真 SSE 客户端上（三档鉴权、`?token=` 回落、帧形对齐前端解析器）；owner/非 owner 的**掩码分层**目前只有 in-process 判据（`tests/unit/test_dcd_20261004_auth_limits.py` 用 write 域第三方令牌 `tok-bot`），**"由配对签发的 agent 令牌"那一档在真后端取不到数**——根因不在测试而在产品面：配对 bootstrap 本身不可达（§五 第 21 件），拿不到一枚走完全链的 agent 令牌。浏览器通道本机仍不可用（`evaluate_script`/`list_console_messages`/`handle_dialog` 连 `() => 1 + 1` 都 15s 超时，`navigate_page`/`select_page` 正常），故这条的结论等级只能写"真服务器 HTTP/SSE 判据级"，不写"页面动作级"。裁定 §五 那句口径照用：取不到视口就不把像素级验收挂在账上。
+- **`?token=` 落进 uvicorn 访问日志这一半本批未修**（§二之四十二 第六节）：SSE 建流的令牌经查询串传递（EventSource 发不了自定义头），本机实测 access log 原样记下 `?token=<值>` ⇒ 凭据落进日志。AF 侧可自决的落法是 `af_cli serve` 装一条 logging filter，把 `token=` 的值替成 `***`——纯本机、零契约变更，下一次真实触碰 `af_cli` 的 serve 装配面时顺手做，本批不为一行日志把那条面重开。**不在 AF 手里的一半**：反代/nginx 同样记完整 URL，属 NAS 部署者/SP（铁律 #3）。若 DCD 对第 21 件选 B（专用匿名 bootstrap 端点），"长连接令牌换成一次性 stream ticket"这条更彻底的修法才有落点，届时是契约面改动。
 
 ---
 
