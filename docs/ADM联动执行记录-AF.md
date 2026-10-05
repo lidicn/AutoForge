@@ -4078,6 +4078,32 @@ uvicorn 访问日志把整条查询串原样记下（`GET /api/mcp/pair-request?
   ⇒ 两枚 run 的红都是**一条**、都是**同一行**、都不是容量问题；run 92 其余作业已拿到 runner
   （`ui-user-mimo-judgments`/`ui-typecheck-build`/`adm-linkage-contracts` 三条 `completed/success`）。
   本批修法 push 后产生 run 93，以它的逐作业读数作为"这条红修掉了"的权威口径；若 run 93 仍红，AF 继续逐行对账而不是再等一枚。
+- **修法 commit `3dc0f30` 的全链权威读数（干净树副本，`bash gates.sh` @ HEAD `3dc0f30`）**：`GATES_RC=0`，
+  逐节 16 段全绿。两条与本批直接相关的原文：
+  `✓ 包标记门禁干净（5 个包目录都有入库的 __init__.py，索引内 98 个 .py）`；
+  `[有界缓存] 注册表 2 项双腿齐全且测试 id 被收集；固定键 2 项带理由；扫到增长容器 75 个，其中基线冻结 73 个、就地豁免标记 2 处；死写容器 0 个（判据 E 按名字在全仓数读取点，3707 个名字被读到过）`。
+  75/73 与 `test_real_repo_measurements_are_pinned` 的钉数一致 ⇒ **钉数锁的是已提交树**这件事第一次有了双口径对照：
+  同一份代码在干净树 75、在主树（含并发 WIP）81。读数 `/tmp/gates-head93.out`。
+- **run 93 = 承诺兑现的那枚：本条红修掉了，远端全绿**。逐作业原样（`jobs 37375588356`，HEAD `3dc0f30`）：
+
+  ```
+  pytest: completed/success job_id=111983357906 failed_steps=[]
+  adm-linkage-contracts: completed/success job_id=111983358213 failed_steps=[]
+  ui-user-mimo-judgments: completed/success job_id=111983358220 failed_steps=[]
+  layering-gates: completed/success job_id=111983358222 failed_steps=[]
+  ui-typecheck-build: completed/success job_id=111983358236 failed_steps=[]
+  quality-gates: completed/success job_id=111983358291 failed_steps=[]
+  pytest_job=111983357906
+  匹配 0 行（关键词 'FAILED'）
+  ```
+
+  run 级：`status=completed conclusion=success`，`created 2026-10-05T21:23:49Z → updated 2026-10-05T21:36:31Z` ⇒ 全程 **762 秒**，
+  六条作业 **0 cancelled / 0 failed_steps**。对照 run 90 的"六条同一秒集体取消、入队 +902 秒、`runner_name` 全空"：
+  90/91/92/93 四枚里只有 run 91 的 `ui-user-mimo-judgments` 一条 cancelled（被 run 92 的并发触发挤掉，属同仓互斥取消，不是容量），
+  run 92/93 全部作业都拿到 runner 并跑完 ⇒ **run 90 那格按"供给瞬时不足"记账，CI YAML 一个字没改**；
+  若下一枚 run 再出现集体 +902 秒，AF 按 §二之四十七 的口径把逐作业表原样报给 SP，而不是在仓侧加 `continue-on-error` 之类的软处理。
+- **本批不写"环境抖动"**：run 91/92 的红是可复现、可归因到单个字节的一行（`git log -S` 定位到 `7e48e68` 自己写的 docstring），
+  run 93 的绿也是同一判据在远端 clean checkout 上重新量的。远端与本机两处口径这次一致，因为两边扫的都是**不含并发 WIP 的已提交树**。
 - **不在本批**：`af_nl_parse.py` 那 6 处新增增长容器的登记归属（谁写谁登记，见 §二之四十七 末格口径）。
 
 
@@ -4278,8 +4304,17 @@ HEAD 实测：还原三文件 ⇒ `GATE_RC_HEAD=1` 点名 `af_scheduler.py::Sche
 - F-3 的**浏览器验收在主线树尚未做**（裁定 §五 把它与 owner/非 owner 拆分一起排到下一批）：本批只有 node 判据 + 构建 + 同源部署三样静态读数，`AuthCodesView.vue` 的长期码面板在 `ui-user-mimo` 上**没跑过一次真实页面动作**（生成→复制→作废、短码倒计时、SSE 配对流）。裁定同时给了结论等级口径：**本机浏览器取不到视口时，按"DOM 事件驱动走通"写结论，不写成像素级验收**。做这一步的前置是主线树起 dev server 并连一个真后端（`VITE_USE_MOCK=false`），且非 owner 那条分支要有第二枚令牌才取到数——两样本批都没准备，登记不静默。
 - 原子写基线那 **9 站**（`af_premiere` ×2 → `af_version` → `af_scene` → `af_fire_recorder` → `af_predict`/`af_pretrigger`/`af_shadow`/`af_flock`，顺序是裁定 §二 钉的）——**→ 次日按该顺序全部收完，见 §二之三十九**：落点统一走新的 L0 助手 `af_atomic.atomic_write_text`，`.atomic-write-baseline.txt` 清空成 0 站，「登记进基线」这条出口从此关掉（只剩「走助手」或「带理由的就地豁免」）；D 腿与 A 腿两本账至此都清了（D 腿见 §二之三十六，A 腿剩下的 `af_auth._atomic_write_text` 并轨仍登记在 §二之三十九 第七节）。裁定 20261004《…落地回执与 write 域含 read 前提差》§五 的 **MCP 默认拒绝**同批未做（裁定自己写明下一批单独做）——**→ 本批已单独做完，见 §二之三十八**：`_guard` 的 `current is None` 从「全放行」收窄为「无身份 ⇒ 需鉴权工具默认拒绝」，显式放行只认 `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1`，公开工具 20 个照常；测试侧 **23 处**调用点改成显式身份（8 处需鉴权 + 15 处公开），"产品改动落地、测试一行没动就是 8 failed" 是这条门咬得住的第一读数。
 - **BUG-01 的第二半（跨段累计无防护）本批未修，且在裁定前不修**：封顶阈值、超限动作（fail / 只告警 / 按节点访问次数判）、`trace` 留存口径三样都会改变现网长命实例的**存活判定与可读历史**，而"经挂起点的环"是本仓自己判过的**合法 IR**（静态扫描只给 WARNING）⇒ AF 不自签一个魔法数。申请已投（§五 第 19 件），复现读数与六个唤醒入口的锚点在 §二之四十一。**这条不是"报告说的已修完"**：删掉的只是那条写了没人读的 `node_visits`；`ctx.trace` 仍在无上限增长，且它整份过存储（`af_instance.py:122` → `af_store.py:655`）。
-- 稳定性报告 §六 P3 那条「给 `check_pkg_markers.py` 做一条**不依赖 git** 的降级路径」**未做**。本仓口径澄清一下免得被读成缺陷：该门在外部沙箱 `rc=2` 是**射程限制**（它要读 git 索引），报告自己也标了"非代码缺陷"；降级路径等于再养一份"哪些文件算包标记"的口径，与 §二之十九 那族"名单手抄第二真源"同形，要做就得让降级档与 git 档**同一判据、可互相核对**，那是独立一批的事。
-- **本树（工作区）的全量 `pytest` 读数今天不能当作"这批的绿色证明"引用**：同一工作树里有并发会话未提交的 `af_nl_parse.py` + `tests/test_af_nl_roundtrip.py`，它带来 6 个未登记增长容器 ⇒ `check_bounded_caches` 判红、`test_bounded_caches_gate.py` 两条红（`test_real_repo_is_green`、`test_real_repo_measurements_are_pinned` 的"扫到"半边）。AF 的处置：**不替别人登记、不把 `BASELINE` 扩成第二块盖章区、不把钉数改成 81**；只把本批该动的那一处（删容器 ⇒ 75/73）改对，并当场量出"本树 81 − `af_nl_parse.py` 独占 6 = 75"来证明钉数是**已提交树**的真读数。远端 CI 跑的树不含那个文件，故 `gates.sh` 除这一条外本机全绿、`check_imports` 无违规。
+- 稳定性报告 §六 P3 那条「给 `check_pkg_markers.py` 做一条**不依赖 git** 的降级路径」**已做**（§二之四十八，commit `b5057d8`）：
+  口径按当初的顾虑收住了——降级档**不是默认**，要显式 `--allow-degraded`，且绿线自称 `DEGRADED / 索引半边未验`，
+  与 git 主档同判据（同一个"有 .py 的目录必须有包标记"），两边都能被 `tests/unit/test_pkg_markers_gate.py` 的 7 条钉住；
+  同一批还顺手堵掉一条"索引读得出却为空 ⇒ 报干净"的假绿（改判 `[射程]` 退 2）。
+- **本树（工作区）的全量 `pytest` 读数今天不能当作"这批的绿色证明"引用**：同一工作树里有并发会话未提交的 `af_nl_parse.py` + `tests/test_af_nl_roundtrip.py`，它带来 6 个未登记增长容器 ⇒ `check_bounded_caches` 判红、`test_bounded_caches_gate.py` 两条红（`test_real_repo_is_green`、`test_real_repo_measurements_are_pinned` 的"扫到"半边）。AF 的处置：**不替别人登记、不把 `BASELINE` 扩成第二块盖章区、不把钉数改成 81**；只把本批该动的那一处（删容器 ⇒ 75/73）改对，并当场量出"本树 81 − `af_nl_parse.py` 独占 6 = 75"来证明钉数是**已提交树**的真读数。远端 CI 跑的树不含那个文件，故 `gates.sh` 除这一条外本机全绿、`check_imports` 无违规。**口径升级（§二之四十九 起）**：凡"本批 HEAD 的权威读数"一律在干净副本树上取（`git worktree add` 一枚 detached HEAD，验完删除），主树读数只当对照——run 91 那条真红正是靠这条区分才量准的（主树两条计数红 ≠ HEAD 的红）。
+- **计划 §5.3 第 5 行（AgentOps 建仓后模板首次 commit）的 AF 侧已到"模板可交付"级，"建仓"这一格不在 AF 手里**。当场核实（只读）：
+  `E:/NAS/AgentOps/gates/templates/ci/gates.yml` 在盘，且该行验收要求的反面**由模板自己判红**
+  （`if grep -nE '^[[:space:]]*continue-on-error[[:space:]]*:' $gate_files` ⇒ 出现即"判红：门禁 workflow 里出现 continue-on-error"）；
+  同目录还有 `gates.sh` 与 `test_quality_gates.py` 两份模板。而 `git -C E:/NAS/AgentOps status` ⇒
+  `fatal: not a git repository`——**那个目录根本不是 git 仓**，所以"模板首次 commit"的前置没到位。
+  AF 不做的事：替别的团队目录 `git init` 并定初始提交（那会决定别人的初始树形，属铁律 #3），此格保持**阻塞**并报 SP。
 - 归档名别名的**读侧**与"无归档 conf 按折叠名键控"两面**未修**（修法要动名字→目录身份，属数据可见性变更 ⇒ §五 第 20 件，待提）。本批用两条"明写未覆盖"的判据把它钉在测试里（§二之四十 第三节），免得三个月后有人拿"别名那批已经修完"过账。
 - **F-3 的浏览器验收：SSE 那一段本批已从"没跑过"升成"真服务器判据"，但像素级仍未做，非 owner 那一档的数仍缺**。现状：`tests/unit/test_sse_pair_request_stream.py` 9 条跑在真 uvicorn + 真 SSE 客户端上（三档鉴权、`?token=` 回落、帧形对齐前端解析器）；owner/非 owner 的**掩码分层**目前只有 in-process 判据（`tests/unit/test_dcd_20261004_auth_limits.py` 用 write 域第三方令牌 `tok-bot`），**"由配对签发的 agent 令牌"那一档在真后端取不到数**——根因不在测试而在产品面：配对 bootstrap 本身不可达（§五 第 21 件），拿不到一枚走完全链的 agent 令牌。浏览器通道本机仍不可用（`evaluate_script`/`list_console_messages`/`handle_dialog` 连 `() => 1 + 1` 都 15s 超时，`navigate_page`/`select_page` 正常），故这条的结论等级只能写"真服务器 HTTP/SSE 判据级"，不写"页面动作级"。裁定 §五 那句口径照用：取不到视口就不把像素级验收挂在账上。
 - **`?token=` 落进 uvicorn 访问日志这一半：AF 侧本批已收（§二之四十三），不在 AF 手里的那一半仍挂着**。
