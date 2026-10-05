@@ -4104,6 +4104,13 @@ uvicorn 访问日志把整条查询串原样记下（`GET /api/mcp/pair-request?
   若下一枚 run 再出现集体 +902 秒，AF 按 §二之四十七 的口径把逐作业表原样报给 SP，而不是在仓侧加 `continue-on-error` 之类的软处理。
 - **本批不写"环境抖动"**：run 91/92 的红是可复现、可归因到单个字节的一行（`git log -S` 定位到 `7e48e68` 自己写的 docstring），
   run 93 的绿也是同一判据在远端 clean checkout 上重新量的。远端与本机两处口径这次一致，因为两边扫的都是**不含并发 WIP 的已提交树**。
+- **run 94 = 记账提交 `dee0ee6`（只改本文件）后远端再次全绿**：`status=completed conclusion=success`，
+  六条作业 `layering-gates` / `ui-typecheck-build` / `ui-user-mimo-judgments` / `adm-linkage-contracts` / `pytest` / `quality-gates`
+  全 `completed/success`、`failed_steps` 全空。**至此本仓 HEAD 的 CI 口径连续两枚绿（93、94）**，
+  run 90 那格"集体 +902 秒 / 零 runner"至此只作为一次瞬时供给读数留着，不构成仓侧改动理由。
+  本文件后续若再追加 ledger 行：当场核过**没有门禁扫这个文件**（`grep -ln "docs/" scripts/*.py` 只命中
+  `audit_r5_repro.py` 与 `check_mcp_arg_schemas.py`，两者都不读执行记录），所以 docs-only 提交不改变判据读数——
+  这句是**射程说明**，不是"docs 提交免验"的豁免章：一旦哪天有门扫到 `docs/`，这条口径立刻作废。
 - **不在本批**：`af_nl_parse.py` 那 6 处新增增长容器的登记归属（谁写谁登记，见 §二之四十七 末格口径）。
 
 
