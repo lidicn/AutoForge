@@ -207,6 +207,16 @@ echo "══ 有界缓存注册表门禁（TTL 与硬上限成对，且回收要
 cache_rc=$?
 
 echo
+echo "══ IR 运行时扩展键白名单硬门（写进节点的运行时键必须在白名单里）════"
+# 裁定 20261005-AF-ir_non_reversible是否升schema 判 B（明确豁免 + schema 白名单注释），并自己写明
+# "B 能成立的前提"是这条断言：白名单只是注释、约束力弱于 A，所以代码侧键集合
+# （`RUNTIME_ONLY_FIELDS ∪ {NON_REVERSIBLE_KEY}`）必须与 `ir.schema.json` 的 `node.$comment` 逐键相等，
+# 且写入点源码里出现未登记的下划线键即判红。此前它只在 `.github/workflows/ci.yml` 有一步，
+# `gates.sh` 里没有 ⇒ 本机跑 `gates.sh` 得到绿、CI 得到红，正是本仓反复登记的"该红的不红"一族。
+"$PYTHON" "$REPO/scripts/check_ir_runtime_keys.py"
+ir_keys_rc=$?
+
+echo
 echo "══ import 冒烟（解释器：$("$PYTHON" -V 2>&1)）════════════════════"
 # 单跑冒烟：只走 `import` 子进程，慢但一次性看清。
 # 注意：这条在开发机上的红多半是「依赖没装齐 / 本地副本不完整」，
@@ -314,6 +324,11 @@ fi
 if [ $cache_rc -ne 0 ]; then
   echo "结论：有界缓存注册表门禁红（exit=$cache_rc）。注册表说的那条腿必须真在模块里（\`cap\`/\`ttl\`/\`trim\` 逐个核对）、指向的测试必须真被收集、新增增长容器必须进 \`BOUNDED_CACHES\`（两条腿 + 一条『纯写不读也被回收』的测试）或在那一行写 \`# bounded-cache: exempt(理由)\`；基线名单只减不增。约定来自第六轮审计 §三，落法来自裁定 20261004 §一 3 B。"
   exit $cache_rc
+fi
+
+if [ $ir_keys_rc -ne 0 ]; then
+  echo "结论：IR 运行时扩展键门禁红（exit=$ir_keys_rc）。写进 IR 节点的运行时键必须同时在 \`ir.schema.json\` 的白名单注释与 \`af_irreversible.RUNTIME_ONLY_FIELDS\`（或 \`NON_REVERSIBLE_KEY\`）里：这五个键是铁律 #1 的**明确豁免面**，豁免范围由裁定 20261005 §三 逐条写死，白名单之外再加一个运行时键就是绕过铁律 #1——先申请裁定，不要就地加键。反向漂移（白名单列了代码没声明的）同样判红，因为它把豁免面虚报得比实际宽；锚点读不出（schema 注释不在、\`af_irreversible\` 导入失败）也走这一条，脚本此刻是抛异常退出而不是报『干净』。"
+  exit $ir_keys_rc
 fi
 
 if [ $ast_rc -ne 0 ]; then

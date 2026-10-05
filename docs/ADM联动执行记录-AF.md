@@ -3765,6 +3765,59 @@ uvicorn 访问日志把整条查询串原样记下（`GET /api/mcp/pair-request?
   `UI↔路由契约` 那一行的数字（调用点 90、反向读数 13）与判据数 37 ⇒ 50。
 
 
+## 二之四十五、给裁定 20261005（`_non_reversible` 判 B）补一条本机也会响的腿：那条硬门当时只长在 `ci.yml` 上，本机 `gates.sh` 跑的是绿
+
+缘起不是计划项，是取 run 88 的 CI 读数时顺手把两份清单对了一遍：盘上有 **16 个 `scripts/check_*.py`**，
+`gates.sh` 里出现 **14 个**（`check_undefined_names.py` 被调两次 ⇒ 15 处调用），缺的两个是
+`check_imports.py` 与 `check_ir_runtime_keys.py`；而 `.github/workflows/ci.yml` 的 `quality-gates` 作业在
+`bash gates.sh` 之后**另有一步** `python scripts/check_ir_runtime_keys.py` ⇒ 同一条链上远端 15 个、本机 14 个。裁定 20261005 §四
+明写它是"B 能成立的前提"（白名单只是注释、约束力弱于 A，所以必须有一条 CI 断言），可它只在远端响：
+本机 `bash gates.sh` 得到绿、推上去 CI 得到红，正是本仓一路在登记的"该红的不红"一族（同一族先例是
+§二之十六 的"本机全链绿不等于 CI 绿"，只是方向反过来——这次是**本机看不见而远机看得见**）。
+**与 `check_imports.py` 的区别要说清**（否则会被读成"本来就有门不在 `gates.sh`"）：`check_imports.py` 在
+`layering-gates` 那个**独立作业**里，装的是 `.[dev]`+grimp 那一套前置，与 `gates.sh` 不是一条链，本机跑不了它是
+**场地不同**；`check_ir_runtime_keys.py` 就挂在 `quality-gates` 作业里 `bash gates.sh` 的**下一步**，
+吃的前置与 `gates.sh` 完全一样（同一个 venv、同一条 `pip install -e .[dev]`）⇒ 它没有理由不在本机那条链上。
+
+- **顺带盘出第二件事，比那条腿更要紧**：落地这份裁定的那批 `f0184de`（动了 `ir.schema.json` 注释、
+  `af_irreversible.py` 删掉 `store_diff_sha`、新增门脚本、`ci.yml` 加步骤）**在账本里 0 命中**——
+  `git show a5cd6e5:"docs/ADM联动执行记录-AF.md" | grep -c "check_ir_runtime_keys\|ir_non_reversible\|运行时扩展键"`
+  = **0**（按上一枚已推的 commit 量，不是按本批写完的工作树——那棵树现在必然含本节自己）。
+  也就是一份 L2 裁定的落地既没有 §二之NN 记账、也没进 §五 回执栏，而它**改的是产品代码**（不是纯注释）。
+  这不是"别人没写"就能过的账：铁律 #5 的口径是"读数必须当场量"，所以本批把裁定 §七 那三条验收**按 HEAD 重测一遍**，
+  而不是转抄 commit message 里那句"硬门跑绿、tests/f14 103 passed"：
+  `python scripts/check_ir_runtime_keys.py` ⇒ `IR 运行时扩展键白名单校验通过（白名单 ['_non_reversible',
+  'diff_sha', 'honest_report', 'simulate_track', 'stage']，代码 同一份）` `RC=0`；
+  `--self-test` ⇒ `[self-test] OK：未登记键 '_bogus_marker' 被检出（共 2 条问题）` `RC=0`（反空洞腿：检测器本体真能抓）；
+  `pytest tests/f14 -q` ⇒ **`103 passed in 1.89s`**。三条到此都是实测，本批把它们补进账本。
+- **落法**：`gates.sh` 新增一节（放在有界缓存之后、import 冒烟之前）+ 一段结论档。脚本本体**一个字节未动**。
+  结论档只写 `-ne 0` 一档、**不给它编 `-eq 2`**：读 `check_ir_runtime_keys.py` 的退出码语义，它只有
+  `return 0/1`（锚点没了是抛异常退出，不是 2），把别处那条 `exit=2` 的写法搬过来就是写一档永远不走的分支；
+  改成在那句话里明写"锚点读不出也走这一条，脚本此刻是抛异常退出而不是报『干净』"。
+- **读数五档**（全部真跑，跑的是 `gates.sh` 全链，不是只跑那个脚本）：
+
+| 档 | 场地 | 结果 |
+| --- | --- | --- |
+| 主树（同一工作树里有并发会话未提交的 `af_nl_parse.py`） | `E:\NAS\AutoForge` | `GATES_RC=1`，红的是**有界缓存那一腿**（判定先于本节），新节照常打印绿行 ⇒ 证明**接线生效**而不遮蔽别人的红 |
+| 对照档（HEAD 干净树） | `git worktree add --detach ../af_wt_b45 HEAD` | `CTRL_RC=0`、`结论：门禁干净。` ⇒ 本批没把任何腿改红 |
+| M1 正向：代码多一个未登记键（`RUNTIME_ONLY_FIELDS` 加 `_bogus_key`） | 同一 worktree | `M1_RC=1`，`- 代码写入未登记运行时键 '_bogus_key'（不在 ir.schema.json 白名单，须先申请 DCD 裁定）`，结论行是本批新写的那条 |
+| M2 反向漂移：白名单列了代码没声明的键（删 `stage`） | 同上 | `M2_RC=1`，`- 白名单含代码未声明的键 'stage'` ⇒ 双向都对得上，不是只拦一个方向 |
+| M3 锚点死亡：删掉 `ir.schema.json` 的 `node` 段白名单注释行 | 同上 | `M3_RC=1`，`[ir.schema.json] node 段缺少 $comment 运行时扩展键白名单（DCD 裁定要求写死）` ⇒ **射程塌了是判红，不是静默绿**（本门最可能被关掉的方式） |
+
+  三档变异都**赢在前面各腿全绿的干净树**上，所以那条结论行确实是被本批这一节打出来的，不是别的腿替它响。
+  worktree 用完 `git worktree remove --force`（`WT_REMOVED`，`git worktree list` 只剩主树一条），
+  主树与别人的未提交文件全程未碰。
+- **CI run 88 的读数如实记，且不读成"代码红"**：`run 88 id=37362057286 a5cd6e5 status=completed conclusion=failure`，
+  六个作业 = `ui-typecheck-build` / `layering-gates` / `quality-gates` / `ui-user-mimo-judgments` **4 条 success**、
+  `adm-linkage-contracts` / `pytest` **2 条 `cancelled`**，六个作业的 `failed_steps` **全空**、`annotate` 读不回任何注解。
+  ⇒ 整条 run 的 `failure` 来自两个作业被取消（含本批所核那条契约门的 `quality-gates` 是绿的），不是断言判红；
+  **本批不在这里给它下"环境抖动"的结论**，因为取消来源在本仓侧读不出（无人重推、`git ls-remote origin main` 顶端仍是 `a5cd6e5`）。
+  连续绿按此断在 **run 79–87**；run 88 之后以 **run 89**（本批 `gates.sh` 那枚 commit 触发的）作为新 HEAD 的权威读数。
+- **为什么单独成节而不塞进 §二之四十四**：那条批的射程是 `UI↔路由契约`，本批改的是**门禁链的装配**
+  （`gates.sh`）与**一份额外裁定的记账**；更要紧的是它盘出的是"已落地的裁定没有账"这个形状——按 §二之四十一
+  立的口径，这类发现要单独成节，否则下一批读到 `f0184de` 只会看到一份没有出处的改动。
+
+
 ## 四、审计侧
 
 
@@ -3842,6 +3895,8 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
 | 19 | **稳定性审计 BUG-01 的第二半：跨段累计步数要不要封顶、封在哪、超限动作是什么，以及 `ctx.trace` 的留存口径**。报告（§二 BUG-01）写的是"`resume()` 没有步数计数"，本批按 HEAD 复测把它扩成一个更大的面：`MAX_STEPS_PER_SEGMENT=1000` 用的 `steps` 是 `run()` 局部变量（`af_executor.py:118`），而 `resume`（`:164`）/`resume_then`（`:418`）/`timeout`（`:394`）/`on_cancel`（`:435`）/调度器 tick 三条分派（`af_scheduler.py:111-117`）**每次都把它归零** ⇒ 段间累计无上限。报告没量的两半本批补了读数：① 经挂起点的环是**合法 IR**（`af_ir/models.py:373-376` 判 `ask/wait` 为挂起点 ⇒ `af_scanner.py:876-895` 对同一形状只给 **WARNING**，能过扫描、能进待批、能被批准）；② 真正留下来的增长是 `Ctx.trace`（`af_instance.py:105` 无上限、`:153-154` 追加、`:122` 整份序列化、`af_store.py:655` 原样恢复 ⇒ **过存储**，不是内存尾巴）。实测复现（合成时钟 + Mock 适配器，单实例自循环）：`tick=2000 ⇒ 累计被唤醒段=2000 / trace最长=4003 / mock下发累计=2000 / 审计条数=0 / 失败段=0`，规模档墙钟 `100⇒0.12s / 600⇒3.65s / 1200⇒15.23s`、单实例序列化 `19502 B⇒225202 B`（**≈平方**在耗时上、**线性**在体积上；该脚本收尾统计落盘字节时抛 `FileNotFoundError`，故"落盘总字节"本批**没有读数**，不补）。三档：问题一 A（实例级双计数 + 超限 `_fail`，建议档 S=1000 段 / T=20000 步）/ B（只告警 + 监护视图常驻，零误杀但泄漏照旧）/ C（按同一节点访问次数判）；AF 倾向 **A+B 组合但阈值由 DCD 定**——把合法轮询形态判死是产品裁定，不是工程修 bug。问题二（`trace`）A（定长环）/ B（截断 + `trace_dropped` 摘要，AF 倾向，因"丢了什么必须自己声明"合铁律 #5）/ C（不动，交给问题一封顶），并附一问：新增持久化键 `trace_dropped` 是否要走铁律 #1 的 schema 登记 | `关键决策部/inbox/20261006-AF-段间累计步数封顶与trace留存-决策申请.md`（**已提交，待回话**）。裁定前 AF **不动 `run()` 的计数器作用域、不动 `Ctx.trace`**，也不自签一个魔法阈值；同批已自决的是 BUG-01 前半（`node_visits` 死代码容器删除 + 门禁基线摘除）与 BUG-02（`or` ⇒ `is None`），10 条判据 + 三腿变异读数见 §二之四十一 |
 | 20 | **（待提，本批未投）**归档别名的**读侧**那一面与"无归档 conf 仍按折叠名键控"：修法要动「名字 → 目录」的身份关系（给 `_dir` 加名字账本，或改清洗方案），属**数据可见性变更** ⇒ 不是 AF 自决项。本批把它钉在判据里而不是偷偷修：`tests/unit/test_dcd_archive_name_alias.py::test_read_side_alias_is_still_a_read_of_the_owners_archive` 与 `::test_conf_without_any_archive_is_still_keyed_by_the_folded_name` 两条**明写"当前未覆盖"**，作用是不让下一批把没修读成已修。是否值得动身份关系请 DCD 定向（若第 19 件给 `trace` 的口径也要碰存储面，AF 建议并件再投，免得两份裁定各说各话） | 尚未成文；触发条件 = 第 19 件裁定回来、或下一次真实触碰 `af_store._dir` 的命名面 |
 | 21 | **配对 bootstrap 两步都要求 `write` 令牌 ⇒ ForgeSight 配对码弹窗在三档配置下全部不可达**（本批修完 SSE 的 500、第一次用真服务器跑通"推码→弹窗"那一段之后，往回多问一句"这枚码到底由谁发起"才看见的）。事实面：`af_request_pair`（`af_mcp.py:503`）与 `af_pair`（`:519`）的 scope 都是 `"write"`，HTTP `/mcp` 面整面挂 `Depends(_write)`（`af_api.py:920`），前端 `createPairRequest` 明确不自建码（`ui-user-mimo/src/api/http.ts:186`：没有帧就抛 `PAIR_INVALID`）。真跑五档读数：匿名 ⇒ `HTTP 403`；read 令牌 ⇒ `HTTP 403`；write 令牌 ⇒ `isError=False`（可它本来就有令牌）；匿名 `af_pair` ⇒ `HTTP 403`；`AF_ALLOW_NOAUTH=1` 且无 registry ⇒ `HTTP 200` 但工具层拒 `拒绝：MCP 面没有令牌身份 ⇒ 工具 'write' 域默认拒绝（裁定 20261004 §一 Q2=B）`。**要拿到配对码必须先有 write 令牌，而配对恰恰是为了给没有令牌的 agent 弄到令牌** ⇒ 设计文档 `B2 配对 ✅ 已交付` 那句在令牌部署下不成立。三档：A（两工具 scope 降 `None` + HTTP 面为这两个工具单独放行）/ **B（AF 建议：工具层 default-deny 一个字不动，另开两个明确的匿名 bootstrap 端点 `POST /api/pair/request` / `POST /api/pair/redeem`，MCP 那两个工具改为"已配对才可用"或摘掉——匿名射程反而比今天更小，今天暴露的是整张工具表）** / C（宣布配对只服务本地开发档，把 B2 与弹窗那条产品口径正式作废并更正文档）。放宽 scope 是鉴权姿势，其中 A 会直接撞刚生效的裁定 Q2=B ⇒ **AF 不自裁**。请 DCD 另回两格：② 两个匿名端点的限速数（建议 request 每 IP ≤6/min、redeem 每 IP ≤10/min，超限锁 5 分钟，数字由 DCD 定稿）；③ 码参数维持现值（8 位数字 / 300s / 单次）还是另给，owner 侧要不要"暂停接受配对请求"开关 | `关键决策部/inbox/20261006-AF-配对bootstrap两步都要求write令牌-决策申请.md`（**已提交，待回话**）。裁定前 AF **不动任何 scope、不动 `_write` 传输门、不新增匿名端点**；同批已自决的三件都不碰鉴权姿势（SSE 500 修复 + 9 条判据 + 静态守卫；`af_mcp.py` 五处"6 位"过期措辞改 8 位；`api_pair_confirm` docstring 指向不存在的 `POST /api/mcp/pair` 改为 MCP `af_pair`），读数与四档变异见 §二之四十二 |
+
+| 22 | **裁定 20261005-AF-`ir_non_reversible` 是否升 schema 的回执（本批补记，不是新申请）**：判 **B（明确豁免 + schema 白名单注释）**——`_non_reversible` **不**升为 IR schema 正式字段，`node` 段以 `$comment` 写死运行时扩展键白名单五键（`_non_reversible / stage / diff_sha / simulate_track / honest_report`），并附一条 §四 自定的**成立前提**：`scripts/check_ir_runtime_keys.py` 断言"代码侧键集合 == 白名单"，未登记键即判红。落地在 `f0184de`（改 `ir.schema.json` 注释、`af_irreversible.py` 删过期条目 `store_diff_sha`、新增门脚本、`ci.yml` 加步骤），A/C 两档被裁驳回。**AF 侧状态：已落地，但两处缺口由本批补**——① 该批在账本里 0 命中（既无 §二之NN 也无本表回执，一份 L2 裁定的落地没有出处）；② 那条"前提"只挂在 `quality-gates` 作业里 `bash gates.sh` 的下一步，本机 `gates.sh` 不含它 ⇒ 本机绿、远端红。本批把它接进 `gates.sh`（脚本本体一字节未动），并把裁定 §七 三条验收按 HEAD 重测为 `RC=0` / `--self-test OK` / `tests/f14 103 passed`。**无需再回话**；读数、五档（对照 + 三档变异 + 主树）与 `run 88` 那条 `failure = 2 作业 cancelled、0 failed_steps` 的如实记账见 §二之四十五 |
 
 ## 六、未在本版做（登记，不静默）
 
