@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { NConfigProvider, NDialogProvider, NMessageProvider, darkTheme, lightTheme } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
 import { useMainStore } from './stores/main.ts'
@@ -58,6 +58,11 @@ const lightOverrides: GlobalThemeOverrides = {
 
 const theme = computed(() => (store.darkMode ? darkTheme : lightTheme))
 const themeOverrides = computed(() => (store.darkMode ? darkOverrides : lightOverrides))
+
+//:<html> 上的 data-theme 是主样式唯一的主题开关，写在这里而不是 store 里——store 判据跑在裸
+//: node（npm test 直接 import 它），而主题落地是 DOM 副作用。immediate 保证首帧就有属性，
+//: bootstrap 读回存档值改 darkMode 时同一个 watcher 跟进。
+watch(() => store.darkMode, (dark) => document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light'), { immediate: true })
 </script>
 
 <template>

@@ -148,3 +148,41 @@ jobs:
       - name: 构建产物（vite build + manifest）
         run: npm run build
         working-directory: ui
+
+  ui-user-mimo:
+    name: ui-user-mimo-judgments
+    runs-on: ubuntu-latest
+    # 裁定 20261005 §一 Q1=B：用户 WebUI 的交付面是 `ui-user-mimo`；`ui-user/` 冻结归档、不进 CI。
+    # Q2 判的是「先修后加」：HEAD 那 7 条 node 判据红已在本批修绿（对照档 + 七档变异见 §二之三十七），
+    # 所以这条今天才配当硬门。红就是红，不带 continue-on-error。
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 判据跑法要 --experimental-strip-types（Node 22.6 起可用），mimo 的 engines 同步抬到 >=22.6.0。
+          node-version: "22"
+      - name: Install deps（锁文件安装，交付面走官方源）
+        # 改写的理由与读数口径见 ui 作业同名那一步的注释。本树的读数：锁文件 426 个包全带
+        # integrity，resolved 426/426 指 registry.npmmirror.com、0 条指 registry.npmjs.org
+        # ⇒ 只写 --registry= 是空操作，必须配 --replace-registry-host=always 才真改写主机。
+        # 镜像与官方同源同 tarball，426 条 integrity 不会 EINTEGRITY；这一步只证明"从哪儿拉的"。
+        run: |
+          set -o pipefail
+          npm ci --registry=https://registry.npmjs.org --replace-registry-host=always \
+            --no-audit --loglevel=http 2>&1 | tee /tmp/npm-ci-user.log
+          mirror_hits=$(grep -c 'npmmirror\.com' /tmp/npm-ci-user.log || true)
+          official_hits=$(grep -c 'registry\.npmjs\.org' /tmp/npm-ci-user.log || true)
+          echo "fetch 主机读数：npmmirror=${mirror_hits} npmjs=${official_hits}"
+          if [ "$mirror_hits" -ne 0 ] || [ "$official_hits" -eq 0 ]; then
+            echo "::error::CI 没有从官方源拉包（用户树仍在吃第三方镜像）"
+            exit 1
+          fi
+        working-directory: ui-user-mimo
+      - name: 判据（npm test：74 条，含缺省档与 DOM 无关三条新钉）
+        run: npm test
+        working-directory: ui-user-mimo
+      - name: 构建产物（vite build + PWA precache）
+        # 本批实测：PWA precache 23 条入口（527.61 KiB），dist 下 JS 合计 538,186 bytes（含 sw.js/workbox，
+        # 10 个 assets chunk）。构建红就在这一步红，不混进判据那一步。
+        run: npm run build
+        working-directory: ui-user-mimo

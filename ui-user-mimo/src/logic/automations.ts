@@ -71,12 +71,21 @@ export function blastMeta (radius: string): BlastMeta {
 // ---------- 分组 / 排序 ----------
 export interface AgentGroup { agent_id: string; agent_name: string; items: Automation[] }
 
+//: 两个哨兵都早于 Date 能表示的最小时刻（-8.64e15）⇒ 一起沉底，且坏时间戳比"从未触发"再靠后
+//: 一档：缺席是常态，读不出是数据出问题了；混在同一档会按名称插进正常项中间，伪装成"很久没触发"。
+const NEVER = -8.64e15 - 1
+const BROKEN = -8.64e15 - 2
+
+function triggerKey (raw: string | null): number {
+  if (!raw) return NEVER
+  const ts = Date.parse(raw)
+  return Number.isNaN(ts) ? BROKEN : ts
+}
+
 export function compareAutomation (a: Automation, b: Automation): number {
-  const ta = a.last_triggered ? Date.parse(a.last_triggered) : NaN
-  const tb = b.last_triggered ? Date.parse(b.last_triggered) : NaN
-  const va = Number.isNaN(ta) ? -Infinity : ta
-  const vb = Number.isNaN(tb) ? -Infinity : tb
-  if (va !== vb) return vb - va                              // 最近触发的排前面
+  const ka = triggerKey(a.last_triggered)
+  const kb = triggerKey(b.last_triggered)
+  if (ka !== kb) return kb - ka                              // 最近触发的排前面
   return collator.compare(a.name, b.name) || collator.compare(a.id, b.id)
 }
 

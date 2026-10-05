@@ -17,7 +17,7 @@ beforeEach(() => {
 const isErr = (code) => (e) => { assert.equal(e.code, code); return true }
 
 test('MCP 端点常量固定（顶栏卡片展示用）', () => {
-  assert.equal(MCP_URL, 'http://192.168.2.200:8000/mcp')
+  assert.equal(MCP_URL, 'http://192.168.2.200:8787/mcp')
 })
 
 test('登录语义与后端对齐：任意非空凭据 ⇒ 单 owner 会话，用户名原样回显', async () => {
@@ -62,8 +62,10 @@ test('deleteAgent 级联归档其自动化（不物理删）', async () => {
 })
 
 test('createPairRequest 产出 6 位数字码 + 5 分钟有效期 + 名称预填', async () => {
-  const t0 = mockApi.now()
   const req = await mockApi.createPairRequest('  ')
+  // t0 必须取在调用之后：mock 的 now() 是真墙钟，调用前取会因 await 让出事件循环而多出几毫秒，
+  // 把"有效期不超过 5 分钟"的上界判成竞态红（HEAD 实测 ttl=300002）。取在后面误差只剩一个方向。
+  const t0 = mockApi.now()
   assert.match(req.code, /^\d{6}$/)
   assert.equal(req.agent_name_hint, '新 Agent')                       // 空名称兜底
   const ttl = Date.parse(req.expires_at) - t0

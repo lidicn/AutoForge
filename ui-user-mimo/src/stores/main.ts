@@ -2,12 +2,12 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { Agent, AuthCode, Automation, PairRequest, PendingItem, User } from '../types/api.ts'
 import { api } from '../api/index.ts'
+import { USE_MOCK } from '../api/env.ts'
 import { closePairStream, openPairStream, restoreSession } from '../api/http.ts'
 import { activeShortCode, shortRemainMs } from '../logic/authcodes.ts'
 import { groupByAgent, splitByArchived } from '../logic/automations.ts'
 import { deleteKey, readJSON, writeJSON } from '../logic/storage.ts'
 
-const USE_MOCK = (import.meta.env.VITE_USE_MOCK as string | undefined) !== 'false'
 const SESSION_KEY = 'autoforge.session.v1'
 const THEME_KEY = 'autoforge.theme.v1'
 
@@ -40,7 +40,6 @@ export const useMainStore = defineStore('main', () => {
   // ---------- 会话 ----------
   function bootstrap (): void {
     darkMode.value = readJSON<boolean>(THEME_KEY, true)
-    applyTheme()
     if (USE_MOCK) user.value = readJSON<User | null>(SESSION_KEY, null)
     booted.value = true
   }
@@ -61,14 +60,10 @@ export const useMainStore = defineStore('main', () => {
     return false
   }
 
-  function applyTheme (): void {
-    document.documentElement.setAttribute('data-theme', darkMode.value ? 'dark' : 'light')
-  }
-
+  // data-theme 的 DOM 写入在 App.vue：浏览器不存在「没有 document」这种状态，但 store 判据跑在裸 node 上。
   function toggleTheme (): void {
     darkMode.value = !darkMode.value
     writeJSON(THEME_KEY, darkMode.value)
-    applyTheme()
   }
 
   async function login (username: string, password: string): Promise<User> {

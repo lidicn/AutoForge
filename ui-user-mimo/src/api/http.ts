@@ -8,9 +8,9 @@
  */
 import type { Agent, AuthCode, Automation, PairRequest, PendingItem, User } from '../types/api.ts'
 import { apiError, type ApiClient, type ApiErrorCode } from './mock.ts'
+import { API_BASE } from './env.ts'
 
 const TOKEN_KEY = 'forgesight_token'
-const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || ''
 
 // ---------------- token 持久化 ----------------
 function loadToken (): string | null {
