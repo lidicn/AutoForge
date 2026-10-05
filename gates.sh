@@ -249,7 +249,7 @@ if [ $topic_rc -ne 0 ]; then
   exit $topic_rc
 fi
 if [ $pkg_rc -ne 0 ]; then
-  echo "结论：包标记门禁红（exit=$pkg_rc）。1=有包目录的 __init__.py 没入库，CI 上 grimp 不递归、架构门禁比本机少分析模块；2=拿不到 git 索引。"
+  echo "结论：包标记门禁红（exit=$pkg_rc）。1=有包目录的 __init__.py 没入库，CI 上 grimp 不递归、架构门禁比本机少分析模块；2=拿不到 git 索引，**或**索引读得出却一个 \`*.py\` 都没有（射程塌了——那不是『都入库了』，是本门无从判定）。本链**不带** \`--allow-degraded\`：那条磁盘口径（审计 §六 P3 要的无 git 降级路径）只在显式要它的沙箱里生效，且读数自称 DEGRADED / 索引半边未验，绝不当本门的绿。"
   exit $pkg_rc
 fi
 if [ $fanout_rc -ne 0 ]; then
