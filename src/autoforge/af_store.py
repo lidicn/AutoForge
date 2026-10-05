@@ -32,6 +32,7 @@ __all__ = [
     "GraphStore",
     "GraphDiff",
     "WriteConflictError",
+    "ArchiveNameConflict",
     "diff_graphs",
     "find_node",
     "dump_confidence",
@@ -77,6 +78,26 @@ def _validate_graph_dict(graph_dict: Any) -> None:
 
 class WriteConflictError(Exception):
     """v0.9.0 跨进程写入版本冲突：`expect_version` 与当前最新版本不符（拒绝覆盖写入）。"""
+
+
+class ArchiveNameConflict(Exception):
+    """两个不同归档名折叠进同一目录时拒绝写入/删除（v1.5.x，审计 §四「路径处理」那一项）。
+
+    `_dir()` 的字符白名单是**多对一**映射：`"客厅 v2"` 与 `"客厅_v2"` 都是 `客厅_v2`，
+    `"###"`、`"@@@"`、`""` 都落到兜底的 `graph`。穿越这一半在 HEAD 上盘过、不成立（保留集里没有
+    `/` 与 `\\`）；成立的是这一半——两个不同名字共享同一个版本目录后，写是静默互相覆盖
+    （新版本记录里的 `name` 还是上一个名字，别名就此隐身），而 `overwrite` 导入与
+    `DELETE /api/automations/{name}` 走的是删除，删 A 连带把 B 的整条归档 rmtree 掉。
+    ⇒ 判据落在"名字与目录的归属对不上"这一步，抛具名异常而不是继续写。
+    """
+
+
+def _alias_conflict(name: str, owner: str, dir_name: str) -> str:
+    return (
+        f"归档名 {name!r} 与 {owner!r} 折叠到同一目录 {dir_name!r}"
+        f"（`_dir` 的字符白名单是多对一映射）；拒绝写入以免两条归档互相覆盖——"
+        f"请改用不会被折叠的名字"
+    )
 
 
 def append_jsonl(path: Path, obj: Any) -> None:
@@ -129,6 +150,53 @@ class GraphStore:
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name).strip("_") or "graph"
         return self.root / safe
 
+    def _dir_owner(self, name: str) -> str | None:
+        """该归档目录**最新**记录里的 `name`；目录不存在或没有记录时 None。"""
+        directory = self._dir(name)
+        if not directory.is_dir():
+            return None
+        target = self.latest(name)
+        if target is None:
+            return None
+        try:
+            record = json.loads((directory / f"v{target}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        owner = record.get("name") if isinstance(record, dict) else None
+        return owner if isinstance(owner, str) else None
+
+    def _assert_name_owns_dir(self, name: str) -> None:
+        """写入前的归属核对：目录里最新记录若属于另一个名字，就是别名撞车，拒绝继续写。
+
+        只读**最新那一条**记录（一次 `json.loads`），不扫全目录——按版本数线性放大读是另一条账
+        （第五轮审计判的正是"只增不减"那一族）。别名一旦出现，最新记录必然带着上一个主人的名字。
+        """
+        owner = self._dir_owner(name)
+        if owner is not None and owner != name:
+            raise ArchiveNameConflict(_alias_conflict(name, owner, self._dir(name).name))
+
+    def assert_deletable(self, name: str) -> None:
+        """删除前的归属核对：目录里**每一条**记录都得属于这个名字。
+
+        比写入那条严格（写入只看最新一条）：删除是不可逆的，而 `DELETE /api/automations/{name}`
+        与 `overwrite` 导入会 `rmtree`/逐条 unlink 整个目录——只要目录里混进过别人的版本记录，
+        删下去就是连带销毁另一条归档。
+        """
+        directory = self._dir(name)
+        if not directory.is_dir():
+            return
+        for path in sorted(directory.glob("v*.json")):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue  # 坏记录由加载路径各自处置，这里不为它放行别名
+            if isinstance(record, dict) and isinstance(record.get("name"), str) \
+                    and record["name"] != name:
+                raise ArchiveNameConflict(
+                    f"归档目录 {directory.name!r} 里混有 {record['name']!r} 的版本记录，"
+                    f"拒绝按 {name!r} 删除（删除不可逆，会连带销毁对方整条归档）"
+                )
+
     @property
     def conflicts_path(self) -> Path:
         """跨进程共享的 write_conflict JSONL 日志。"""
@@ -168,6 +236,7 @@ class GraphStore:
         `owner`（v1.3.0）：**归档归属**——创建/持有该版本的主体（多 agent 接入后用于
         所有权隔离）。与 `writer`（落盘进程 id）不同，这是「谁建的」。
         """
+        self._assert_name_owns_dir(name)
         directory = self._dir(name)
         directory.mkdir(parents=True, exist_ok=True)
         with FileLock(directory / ".lock", timeout=self.lock_timeout):
@@ -215,6 +284,11 @@ class GraphStore:
         directory.mkdir(parents=True, exist_ok=True)
         with FileLock(directory / ".lock", timeout=self.lock_timeout):
             rec = self.load_record(name)
+            # 别名核对在锁内、且**复用刚读出来的那条记录**——resave_raw 本来就要 load_record，
+            # 归属检查这里一分钱 IO 都不多花（save 那侧才需要额外读）。
+            owner = rec.get("name")
+            if isinstance(owner, str) and owner != name:
+                raise ArchiveNameConflict(_alias_conflict(name, owner, directory.name))
             mutate(rec.setdefault("graph", {}))
             version = (self.latest(name) or 0) + 1
             rec["version"] = version
@@ -365,6 +439,7 @@ class GraphStore:
 
         P1-18 修复：写入在 FileLock 内完成，防止并发写同一归档时版本号冲突。
         """
+        self._assert_name_owns_dir(name)
         directory = self._dir(name)
         directory.mkdir(parents=True, exist_ok=True)
         record = {
@@ -382,7 +457,11 @@ class GraphStore:
         return version
 
     def save_conf_raw(self, name: str, payload: Mapping[str, Any]) -> Path:
-        """直接写入置信度快照 payload（不经 ConfidenceStore round-trip）。"""
+        """直接写入置信度快照 payload（不经 ConfidenceStore round-trip）。
+
+        conf 文件名同样过 `_dir()`，所以别名会写进同一个 `.conf.json`——这里也必须先核对归属。
+        """
+        self._assert_name_owns_dir(name)
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.root / f"{self._dir(name).name}.conf.json"
         atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
@@ -396,6 +475,7 @@ class GraphStore:
         这里不套 `self._write_tags()`——它自己会再拿一次同一把锁，而 `FileLock` 不做
         重入引用计数，嵌套会由内层 `release()` 把外层的锁放开。
         """
+        self.assert_deletable(name)
         directory = self._dir(name)
         if directory.is_dir():
             for p in directory.glob("v*.json"):
@@ -513,6 +593,7 @@ class GraphStore:
     # ── 置信度持久化（G4 ConfidenceStore）──────────────────────────────
     def save_conf(self, store: ConfidenceStore, name: str, note: str = "") -> Path:
         """把 ConfidenceStore 落盘到 `{root}/{name}.conf.json`。"""
+        self._assert_name_owns_dir(name)
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.root / f"{self._dir(name).name}.conf.json"
         payload = {"name": name, "saved_at": _utc_now_iso(), "note": note, "conf": dump_confidence(store)}

@@ -75,7 +75,7 @@ from .af_auth import (
     TokenRegistry,
 )
 from .af_ir import AskSpec, IRValidationError
-from .af_store import GraphStore
+from .af_store import ArchiveNameConflict, GraphStore
 
 __all__ = ["build_app"]
 
@@ -399,6 +399,13 @@ def build_app(
         allow_headers=["*"],
         allow_credentials=True,
     )
+
+    # 归档名别名折叠（审计 §四「路径处理」）：两个不同 name 经 `_dir()` 白名单落进同一目录，
+    # 写入会静默互相覆盖、删除会连带销毁对方。存储层在写/删前拒绝并抛具名异常，HTTP 面把它
+    # 落成 409（不是 400：请求本身合法，是**盘上已有归属**与它冲突；也不是 500：可重试可改名）。
+    @app.exception_handler(ArchiveNameConflict)
+    def api_archive_name_conflict(request: Request, exc: ArchiveNameConflict) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"ok": False, "error": str(exc)})
 
     @app.get("/api/health")
     def api_health() -> dict[str, Any]:
@@ -1190,6 +1197,8 @@ def build_app(
         d = store._dir(name)
         if not d.is_dir():
             raise HTTPException(status_code=404, detail="未找到自动化")
+        # rmtree 是不可逆的：目录里混有别人的版本记录时，store 层抛 ArchiveNameConflict ⇒ 409
+        store.assert_deletable(name)
         shutil.rmtree(d)
         return {"ok": True, "deleted": name}
 
