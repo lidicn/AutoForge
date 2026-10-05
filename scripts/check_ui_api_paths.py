@@ -16,12 +16,23 @@
   而不是"跳过这一条继续"。依据是实测：早期正则版把
   `` `/graphs/${encodeURIComponent(name)}${version ? `?version=${version}` : ''}` `` 这类
   嵌套反引号**静默丢掉**，于是报出"缺失 0"——0 里混着"根本没进射程"的空洞。条件表达式
-  `cond ? '/a' : '/b'` 两个分支都要计入射程。
+  `cond ? '/a' : '/b'` 两个分支都要计入射程。唯一的例外是**整条路径都是变量**的传输层包装
+  （见上文的 `transport`），它登记进单独一格、在绿色行里可见，不静默丢。
 
-调用点有三张脸（实测，见 `HELPERS`）：`ui` 是 `request('GET', '/undo/…')`（动词在前）；两棵用户端树是
-`req('/user/agents')` 与 `req(path, { method: 'DELETE' })`（路径在前、动词在 `RequestInit` 里、**省略即 GET**）。
-只认前一张会把两棵用户端树整个读成 0 个调用点。路径归一按**它自己带不带 `/api`**：`ui-user-mimo` 把
-`/api/…` 写全（它的 `API_BASE` 默认空串），另外两棵写 BASE 之后的相对段。
+调用点有四张脸（实测，见 `HELPERS`）：`ui` 是 `request('GET', '/undo/…')`（动词在前）；两棵用户端树是
+`req('/user/agents')` 与 `req(path, { method: 'DELETE' })`（路径在前、动词在 `RequestInit` 里、**省略即 GET**）；
+`ui` 的两棵视图另有第四张——不经 api 层、直接 `fetch(`${base}/watch/start`)`。第四张是本轮补的：
+门只数得着前三张时，`POST /api/watch/start|stop` 两条**有真前端消费者**的接口躺在反向读数里
+（§二之四十四 实测：16 ⇒ 14），照着那个数删接口就是删活的。变量前缀的形状整条读不出，
+按**字面量尾巴**比对（`_tail_hit`/`_tail_claim`），前缀对不对归部署（`VITE_API_BASE` 配错在运行时是 404）。
+路径归一按**它自己带不带 `/api`**：`ui-user-mimo` 把 `/api/…` 写全（它的 `API_BASE` 默认空串），另外两棵写 BASE 之后的相对段。
+
+两张判据要用**两种松紧**，这是本轮盘出来的一个真区别：可达（`_hit`，判 404）认通配——
+`/api/asks/{name}` 在 HTTP 层确实接得住 `GET /asks/pending`，报"路由表里没有这条"是假红；
+认领（`_claimed`，判"谁还没被调"）**不认** UI 字面量段配路由 `{param}`——否则 `/asks/pending` 那一处
+会把参数路由 `/api/asks/{name}` 读成"有人调"，反向读数少一条、而那条其实一条消费者都没有。
+传输层包装本身（`fetch(BASE + path)`、`${API_BASE}${path}`，路径零个字面量段）登记成 `transport` 计数、
+不占调用点数也不判红：它没有路径可判，混进"有人调"等于把"读不出"报成"已验证"。
 
 射程面是**树登记表**（`UI_TREES`）：本仓有三棵第一方 UI 树，门曾经只看 `ui/src`。那不只是少看一棵树——
 反向读数因此把 33 条报成"UI 从未调"，而其中 17 条是 `ui-user`/`ui-user-mimo` 在真调的活接口
@@ -39,8 +50,9 @@
 ⇒ 属**登记在册的射程边界**，计入绿色行而非报错。判别用文件自己的形状（有没有字面量路径），不把文件名写死在门里。
 
 现场豁免 `# ui-api: exempt(理由)`，理由不能空，且**单独计入读数**（把靠豁免过关的算进干净里，
-等于把未验证的当已验证）。反向读数（服务端有、UI 从未调）只计数不判红：MCP/DB 面向的路由本来
-就不该有前端调用点，判红只会逼人把门关掉。
+等于把未验证的当已验证）。反向读数（服务端有、UI 从未**认领**）只计数不判红：MCP/DB 面向的路由本来
+就不该有前端调用点，判红只会逼人把门关掉。`--list-uncalled` 把它逐条打到盘上（方法 + 路径 +
+`af_api.py:行`），因为"还剩几条、各是谁在用"这件事只能逐条定性，一个总数定不了性。
 
 纯标准库：本机禁 pip install，依赖第三方 JS 解析器的门等于没有门禁。
 """
@@ -53,6 +65,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 API_PREFIX = "/api"
 MARK = "\x01"  # `${…}` 的通配占位符
+# 替换体里"引号紧跟 `?`"= 这段拼的是 query（见 `_normalize` 的文档）。
+_QUERY_IN_SUB = re.compile(r"""['"`]\?""")
 VERBS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 _EXEMPT = re.compile(r"ui-api:\s*exempt\(\s*(\S[^)]*)\s*\)")
 DECORATOR = re.compile(r'@(?:app|router)\.(get|post|put|patch|delete)\(\s*["\']([^"\']+)["\']')
@@ -65,13 +79,26 @@ MOUNT_MECHANISM = "add_api_route"
 # `af_runtime_plugins.py` 有 `add_api_route` 却 0 个字面量 `/api/`——路径是插件在运行期声明的，
 # 静态永远读不出，这不是"表改了形"。用它自己的形状区分，而不是把文件名写死在门里。
 API_LITERAL = re.compile(r'["\']/api/[^"\']*["\']')
-# 三种调用脸（实测得出，不是猜的）：
+# 四种调用脸（实测得出，不是猜的）：
 # - `request('GET', '/undo/…')`：`ui/src/api/client.ts` 的形状，动词在前。
 # - `req('/user/agents')` / `req(path, { method: 'DELETE' })`：两棵用户端树的形状，路径在前、
 #   动词藏在 `RequestInit` 对象里，**省略即 GET**（fetch 的默认档）。
+# - `fetch(\`${base}/watch/start\`, { method: 'POST' })`：视图里**不经 api/ 门面**直接调 fetch 的
+#   形状（`ui/src/views/AutomationDetailView.vue:35`、`RunningView.vue:31,46` 三处，实测）。
+#   它的前缀是变量（`base = VITE_API_BASE ?? 'http://localhost:8787/api'`），静态读不出整条路径，
+#   所以按**字面量尾巴**对齐路由（见 `_tail_hit`）；尾巴也读不出来的那种（`${API_BASE}${path}`
+#   是传输层包装本身）登记成 `transport` 计数，不当调用点也不判红。
+#   漏认这张脸的后果是实测过的：`/api/watch/start|stop` 两条活接口在反向读数里躺成"UI 从未调用"，
+#   与 §二之三十二 那条"泛型里的 `;` 让 17 个调用点静默丢掉"同族——**门自己瞎了的时候报的是干净**。
 # 只认第一种会把两棵用户端树整个读成"0 个调用点"——那正好是射程塌了的形状。
-HELPERS = {"request": "verb-first", "req": "path-first"}
-HELPER_RE = re.compile(r"\b(request|req)\b")
+HELPERS = {"request": "verb-first", "req": "path-first", "fetch": "path-first"}
+# 名单只有一个真源：正则从 `HELPERS` 的键生成。抄两份的错法本仓实测过——
+# "脸加在字典里、没加在正则上"等于那张脸静默不在射程，而门照印"干净"（§二之三十二 同族）。
+HELPER_RE = re.compile(r"\b(" + "|".join(sorted(HELPERS, key=len, reverse=True)) + r")\b")
+# 第五张脸：SSE。`EventSource` 发不了自定义头，令牌只能进 query，所以建流必须走它（§二之四十二 修的
+# 就是这条端点）。它不在 `HELPERS` 里是有意的：动词恒为 GET、没有 `init` 可抄，形状与四张调用脸都不同。
+SSE_FACE = re.compile(r"\bEventSource\b")
+SSE_DECL = re.compile(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*")
 METHOD_KEY = re.compile(r"method")
 # 第一方 UI 树登记表。门曾只看 `ui/src`，而 `ui-user/src/api/client.ts` 一直在真调
 # `/automations…`、`/user/agents…` ⇒ 33 条"UI 从未调"里有 11 条其实是射程外的活接口。
@@ -237,7 +264,14 @@ def _top_literals(expr: str) -> list[tuple[str, str]] | None:
 
 
 def _normalize(inner: str) -> str | None:
-    """字面量内容 → 可比对的路径：`${…}` 折成通配，query 只在替换外的 `?` 处切。"""
+    """字面量内容 → 可比对的路径：`${…}` 折成通配，query 只在替换外的 `?` 处切。
+
+    替换**体内**的 query 也要切：`fetch(`${base}/watch/stop?owner=${…}`)` 之外的形状是
+    `${API_BASE}/api/mcp/pair-request${token ? `?token=${…}` : ''}`（`ui-user-mimo/src/api/http.ts:41`，
+    实测）——`?` 藏在三元里的字符串中，只在替换外扫 `?` 的旧写法会把它当成**多一段路径**，
+    于是那条 SSE 路由永远对不齐（= 有真消费者的接口躺在反向读数里）。判别用"引号紧跟 `?`"：
+    `` `?token= `` 是 query，`'a' ? 'x' : 'y'` 那种三元不算（引号与 `?` 之间隔了空格）。
+    """
     chars: list[str] = []
     i = 0
     n = len(inner)
@@ -247,6 +281,8 @@ def _normalize(inner: str) -> str | None:
             k = _skip_braces(inner, i + 1)
             if k is None:
                 return None
+            if _QUERY_IN_SUB.search(inner[i + 2:k - 1]):
+                break
             chars.append(MARK)
             i = k
             continue
@@ -365,6 +401,21 @@ def _init_verb(expr: str) -> tuple[str | None, str]:
     return "GET", ""
 
 
+def _decl_rhs(text: str, upto: int, name: str) -> str | None:
+    """回看 `upto` 之前最近一次 `const|let|var <name> = …`，取**到行尾为止**的右值。
+
+    行尾为界是有意的保守：跨行拼接的 URL 读不出 ⇒ 走 `unparsed`（exit 2），不静默当成"没人调"。
+    """
+    best = None
+    for m in SSE_DECL.finditer(text[:upto]):
+        if m.group(1) == name:
+            best = m
+    if best is None:
+        return None
+    end = text.find("\n", best.end())
+    return text[best.end():len(text) if end < 0 else end]
+
+
 def _call_sites(text: str, rel: str) -> tuple[list[dict], list[str]]:
     """返回 `(解析出的调用点, 解析不出的说明)`。调用点 = dict(method, paths, line, rel, exempt, kinds)。"""
     sites: list[dict] = []
@@ -374,6 +425,26 @@ def _call_sites(text: str, rel: str) -> tuple[list[dict], list[str]]:
     def site(line: int, verb: str, paths: list[str], kinds: set[str]) -> None:
         sites.append({"method": verb, "paths": paths, "line": line, "rel": rel,
                       "exempt": _is_exempt(lines, line), "kinds": kinds})
+
+    def finish(line: int, verb: str, path_lits: list[tuple[str, str]],
+               extra_kind: str = "") -> None:
+        """字面量 → 路径 → 落调用点。整条都是变量的（`${API_BASE}${path}` 是传输层包装自己）
+        不算调用点：登记成 `transport` 计数，别让"这里读不出具体路径"混进"没人调它"。"""
+        paths: list[str] = []
+        for quote, inner in path_lits:
+            norm = _normalize(inner)
+            if norm is None:
+                unparsed.append(f"{rel}:{line}: 模板里的 `${{…}}` 不闭合")
+                return
+            if norm:
+                paths.append(norm)
+        literal = [p for p in paths if any(seg != "*" for seg in _shape(p))]
+        kinds = {q for q, _ in path_lits}
+        if extra_kind:
+            kinds.add(extra_kind)
+        if not literal:
+            kinds.add("transport")
+        site(line, verb, literal, kinds)
 
     for m in HELPER_RE.finditer(text):
         shape = HELPERS[m.group(1)]
@@ -412,21 +483,39 @@ def _call_sites(text: str, rel: str) -> tuple[list[dict], list[str]]:
             unparsed.append(f"{rel}:{line}: 路径表达式里有不闭合的引号/括号")
             continue
         if not path_lits:
-            unparsed.append(f"{rel}:{line}: 路径不是字面量（`{path_expr.strip()[:40]}`）——"
-                            f"要么改成静态可读的写法，要么就地写 `# ui-api: exempt(理由)`")
+            # 路径整个是变量（`fetch(BASE + path)` 就是传输层包装的定义本身）：静态读不出具体路径，
+            # 归 `transport` 计数而不是判红。理由是它**不贡献任何路径** ⇒ 救不了反向读数里的任何一条路由，
+            # "看不见整条路径"不会被算成"有人调"。真正的可读消费者在同一文件的 `req('/user/agents')` 上。
+            site(line, verb, [], {"transport"})
             continue
-        paths: list[str] = []
-        bad = False
-        for quote, inner in path_lits:
-            norm = _normalize(inner)
-            if norm is None:
-                unparsed.append(f"{rel}:{line}: 模板里的 `${{…}}` 不闭合")
-                bad = True
-                break
-            paths.append(norm)
-        if bad:
+        finish(line, verb, path_lits)
+
+    # 第五张脸：SSE 建流。`EventSource` 发不了自定义头 ⇒ 配对/进度的流只能把令牌放 query，
+    # 而 URL 一定是"先拼进变量、再一次性交出去"（实测 `ui-user/src/api/client.ts:72-73`、
+    # `ui-user-mimo/src/api/http.ts:41-42`），所以实参是标识符时要回看同文件最近一次赋值。
+    # 漏这张脸的后果不是"少一条计数"：`GET /api/mcp/pair-request` 有**两棵树的真消费者**，
+    # 却躺在反向读数里——§二之四十二 刚把这条端点从"每次都 500"修好，照那个数删的就是刚修好的那条。
+    for m in SSE_FACE.finditer(text):
+        if text[:m.start()].rstrip().endswith("."):
+            continue          # 别人对象上的 .EventSource
+        i = _call_paren(text, m.end())
+        if i >= len(text) or text[i] != "(":
+            continue          # 类型标注 `es: EventSource | null`、探针 `typeof EventSource` 都走这里
+        line = text[:m.start()].count("\n") + 1
+        args = _split_args(text, i)
+        if args is None or not args:
+            unparsed.append(f"{rel}:{line}: EventSource 的实参没能切出来（引号/括号不闭合）")
             continue
-        site(line, verb, paths, {q for q, _ in path_lits})
+        expr = args[0].strip()
+        path_lits = _top_literals(expr)
+        if not path_lits and re.fullmatch(r"[A-Za-z_$][\w$]*", expr):
+            rhs = _decl_rhs(text, m.start(), expr)
+            path_lits = _top_literals(rhs) if rhs is not None else None
+        if not path_lits:
+            unparsed.append(f"{rel}:{line}: SSE 的 URL 静态读不出（`{expr[:40]}`）——"
+                            f"这条路径必须能对回路由表：读不出的话门就看不见它，而前端只会静默收不到帧")
+            continue
+        finish(line, "GET", path_lits, "sse")
     return sites, unparsed
 
 
@@ -537,13 +626,67 @@ def _matches(ui_path: str, route_path: str) -> bool:
     return all(x == y or x == "*" or y == "*" for x, y in zip(a, b))
 
 
-def _used_shapes(sites: list[dict]) -> set[tuple[str, ...]]:
-    return {tuple(_shape(_full(p))) for s in sites for p in s["paths"]}
+def _tail_hit(ui_path: str, route_path: str) -> bool:
+    """前缀是变量的形状（`${base}/watch/start`）：只比字面量尾巴。
+
+    比整条对齐松，所以有两道自限：① 尾巴必须至少 1 个**字面量**段（`${API_BASE}${path}`
+    这种全变量的不算调用点，由 `_call_sites` 登记成 transport）；② 变量前缀段不参与比对，
+    因此对 `GET /api/health` 与 `GET /v1/health` 一视同仁——门判的是"这条路径脸服务端有没有"，
+    前缀对不对归部署（`VITE_API_BASE` 配错在运行时是 404，不在本门射程）。
+    """
+    a = _shape(ui_path)[1:]          # 丢掉开头的变量段
+    if not any(s != "*" for s in a):
+        return False
+    b = _shape(route_path)
+    if len(b) < len(a):
+        return False
+    return all(x == y or x == "*" or y == "*" for x, y in zip(a, b[-len(a):]))
+
+
+def _hit(upath: str, route_path: str) -> bool:
+    """一个 UI 路径**可达**不达一条服务端路由（404 判据用这条，松）。
+
+    松是故意的：`/api/asks/{name}` 在 HTTP 层确实接得住 `/asks/pending` 这种字面量段，
+    报"路由表里没有这条"就是假红。可达 ≠ 有人调 ⇒ 反向读数不看这个，看 `_claimed`。
+    """
+    if upath.startswith(MARK):
+        return _tail_hit(upath, route_path)
+    return _matches(upath, route_path)
+
+
+def _tail_claim(ui_path: str, route_path: str) -> bool:
+    """变量前缀的**认领**判据：字面量尾巴必须落在路由的字面量段上。
+
+    比 `_tail_hit` 紧一档：UI 侧字面量段配路由侧 `{param}` 不算认领。理由就在实测里——
+    `ui/src/api/client.ts:155` 的 `GET /asks/pending` 经 `_tail_hit` 会打中 `GET /api/asks/{name}`
+    （尾巴 `pending` 对上了 `{name}` 的通配），于是那条**没有 UI 消费者**的参数路由被读成"有人调"，
+    下一批就有人照着这个数去删真正在用的 `/asks/pending`。反向读数是"谁还没被调"的名单，
+    宁可少认领一条，也不能多认领。
+    """
+    a = _shape(ui_path)[1:]
+    if not any(s != "*" for s in a):
+        return False
+    b = _shape(route_path)
+    if len(b) < len(a):
+        return False
+    return all(x == y or x == "*" for x, y in zip(a, b[-len(a):]))
+
+
+def _claimed(upath: str, route_path: str) -> bool:
+    """一个 UI 路径算不算这条路由的**消费者**（反向读数用这条，紧）。"""
+    if upath.startswith(MARK):
+        return _tail_claim(upath, route_path)
+    return tuple(_shape(_full(upath))) == tuple(_shape(route_path))
 
 
 def _unused_routes(sites: list[dict], routes: list[dict]) -> list[dict]:
-    used = _used_shapes(sites)
-    return [r for r in routes if tuple(_shape(r["path"])) not in used]
+    """反向读数：没有任何调用点**认领**的路由。变量前缀那类按字面量尾巴认领，所以
+    `fetch(`${base}/watch/start`)` 这种"门看不见整条路径、但真有人调"的面不再躺成未调用。"""
+    out = []
+    for r in routes:
+        if not any(_claimed(p, r["path"]) for s in sites for p in s["paths"]):
+            out.append(r)
+    return out
 
 
 def check(sites: list[dict], routes: list[dict]):
@@ -551,12 +694,12 @@ def check(sites: list[dict], routes: list[dict]):
     active = [s for s in sites if not s["exempt"]]
     for site in active:
         for upath in site["paths"]:
-            if not upath.startswith("/"):
+            if not upath.startswith("/") and not upath.startswith(MARK):
                 findings.append(f"{site['rel']}:{site['line']}: `{site['method']}` 的相对路径不以 "
-                                f"`/` 开头（{upath!r}）——拼到 API_BASE 上会得到错路径")
+                                f"`/` 开头（{_display(upath)!r}）——拼到 API_BASE 上会得到错路径")
                 continue
-            hits = [r for r in routes if _matches(upath, r["path"])]
-            api = _display(_full(upath))
+            hits = [r for r in routes if _hit(upath, r["path"])]
+            api = _display(upath if upath.startswith(MARK) else _full(upath))
             if not hits:
                 findings.append(
                     f"{site['rel']}:{site['line']}: UI 调 `{site['method']} {api}`，服务端两张路由脸"
@@ -575,16 +718,21 @@ def check(sites: list[dict], routes: list[dict]):
 
 def _counts(sites: list[dict], routes: list[dict], excluded: list[dict], unused: list[dict],
             unparsed: list[str], boundary: list[str]) -> dict[str, int]:
+    # 传输层包装（`${API_BASE}${path}`）不占"调用点"这个数：它没有具体路径，
+    # 混进去等于把"读不出"报成"有人调"。单列一格，绿行里看得见。
+    live = [s for s in sites if "transport" not in s["kinds"]]
     kinds = {"plain": 0, "template": 0, "branch": 0}
-    for s in sites:
+    for s in live:
         if len(s["paths"]) > 1:
             kinds["branch"] += 1
         elif "`" in s["kinds"]:
             kinds["template"] += 1
         else:
             kinds["plain"] += 1
-    return {"sites": len(sites), "plain": kinds["plain"], "template": kinds["template"],
-            "branch": kinds["branch"], "exempted": sum(1 for s in sites if s["exempt"]),
+    return {"sites": len(live), "plain": kinds["plain"], "template": kinds["template"],
+            "branch": kinds["branch"], "transport": len(sites) - len(live),
+            "sse": sum(1 for s in sites if "sse" in s["kinds"]),
+            "exempted": sum(1 for s in sites if s["exempt"]),
             "unparsed": len(unparsed), "routes": len(routes), "excluded": len(excluded),
             "mounted": sum(1 for r in routes if r["how"] == "add_api_route"),
             "unused": len(unused), "boundary": len(boundary)}
@@ -638,7 +786,10 @@ def _registry_trees() -> list[dict]:
 
 def main(argv: list[str]) -> int:
     args = list(argv[1:])
-    all_trees = bool(args) and args[0] == "--all"
+    listing = bool(args) and args[0] == "--list-uncalled"
+    if listing:
+        args = args[1:]
+    all_trees = listing or (bool(args) and args[0] == "--all")
     if all_trees:
         args = args[1:]
     ui_arg = Path(args[0]) if args else (REPO if all_trees else REPO / "ui" / "src")
@@ -677,7 +828,14 @@ def main(argv: list[str]) -> int:
         return 2
 
     findings = check(sites, routes)
-    totals = _counts(sites, routes, excluded, _unused_routes(sites, routes), unparsed, boundary)
+    unused = _unused_routes(sites, routes)
+    if listing:
+        for r in sorted(unused, key=lambda r: (r["path"], r["method"])):
+            print(f"{r['method']:<6} {r['path']:<52} {r['rel']}:{r['line']}")
+        print(f"— 反向读数 {len(unused)} 条（跨 {len(trees)} 棵第一方 UI 树读不出静态调用点；"
+              f"只列不判红——门只看 UI 三棵树，DB/MCP/CLI 消费面在射程外）")
+        return 0
+    totals = _counts(sites, routes, excluded, unused, unparsed, boundary)
     if findings:
         print(f"✗ UI↔路由契约门禁发现 {len(findings)} 处（UI 调用点 {totals['sites']} 处、"
               f"服务端参与匹配路由 {totals['routes']} 条、现场豁免 {totals['exempted']} 处）：")
@@ -688,10 +846,15 @@ def main(argv: list[str]) -> int:
               f"（外链、代理）就地写 `# ui-api: exempt(理由)`。")
         return 1
     # 绿色行每个数字都是本轮实测计数，不写"都在/全部"这类没数过的断言（铁律 #5）
-    per_tree = "、".join(f"{t['name']} {sum(1 for s in sites if s['tree'] == t['name'])}"
+    # 逐树数的是 `live`（有具体路径的调用点）：传输层包装没有路径，算进去就是拿"读不出"充数。
+    live_sites = [s for s in sites if "transport" not in s["kinds"]]
+    per_tree = "、".join(f"{t['name']} {sum(1 for s in live_sites if s['tree'] == t['name'])}"
                          for t in trees)
     print(f"✓ UI↔路由契约门禁干净（UI 调用点 {totals['sites']} 处（{per_tree}）："
-          f"字面量 {totals['plain']}、模板拼接 {totals['template']}、条件分支 {totals['branch']}；"
+          f"字面量 {totals['plain']}、模板拼接 {totals['template']}、条件分支 {totals['branch']}、"
+          f"传输层包装 {totals['transport']} 处（`${{API_BASE}}${{path}}` 一类，整条路径静态读不出，"
+          f"只登记不占调用点数）；SSE 建流 {totals['sse']} 处（`new EventSource(url)`，动词恒为 GET、"
+          f"URL 先拼进变量再回看）；"
           f"服务端参与匹配路由 {totals['routes']} 条（装饰器 {totals['routes'] - totals['mounted']}、"
           f"`add_api_route` 挂载表 {totals['mounted']}）、被排除的兜底/MCP {totals['excluded']} 条；"
           f"运行期挂载文件 {totals['boundary']} 个（路径由插件声明，静态读不出，登记在册的射程边界）；"

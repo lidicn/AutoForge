@@ -3,9 +3,11 @@
 背景：`ui/` 没有 vitest，UI 侧判据只有 `vue-tsc` + `vite build` + 真浏览器读数，前两条只证能编译。
 路径是手抄字符串，服务端改名/删路由/换方法，前端照编译照 build，只有真点一次才炸。本门钉三件事：
 A 路径在路由表里、B 方法一致、C **每个调用点都必须进射程**（解析不出就 exit 2）。
-另有射程面两件事（本批新增，因为它们最坏的表现恰恰是**绿行**）：调用点的**三张脸**
-（`request('GET', …)` / `req(…)` / `req(…, { method: 'X' })`）都要读得出，登记表上某棵树读不出
-任何调用点要红、盘上多出没登记的 UI 形状目录也要红。
+另有射程面三件事（本批新增，因为它们最坏的表现恰恰是**绿行**）：调用点的**四张脸**
+（`request('GET', …)` / `req(…)` / `req(…, { method: 'X' })` / 视图里直接 `fetch(`${base}/…`)`）都要读得出，
+登记表上某棵树读不出任何调用点要红、盘上多出没登记的 UI 形状目录也要红。
+整条路径都是变量的那一处是**传输层包装的定义本身**，登记成 `transport` 计数（不占调用点数、不判红），
+由 `test_transport_wrappers_are_pinned_to_the_api_layer` 逐文件名钉住。
 
 C 是这条门自己的前提：早期正则版把嵌套反引号
 `` `/graphs/${encodeURIComponent(name)}${version ? `?version=${version}` : ''}` `` 静默丢掉，
@@ -146,6 +148,7 @@ def test_known_good_shape_is_actually_counted(tmp_path):
     assert totals["unparsed"] == 0
     assert totals["sites"] == 8
     assert (totals["plain"], totals["template"], totals["branch"]) == (2, 5, 1)
+    assert totals["transport"] == 1                    # `fetch(`${API_BASE}${path}`)` 读到了，但没占调用点数
     assert totals["routes"] == 9 and totals["excluded"] == 2
     assert totals["branch"] == 1
 
@@ -212,13 +215,42 @@ def test_method_mismatch_is_red(tmp_path):
 
 # ── 判据 C：射程自证（解析不出就 exit 2，不许当"没调用"） ────────────
 
-def test_non_literal_path_exits_2(tmp_path):
-    """`request('GET', p)` 这种静态读不出的写法必须让门变 2，不是静默跳过。"""
-    assert _main(tmp_path, CLIENT_HEAD + '''
+def test_non_literal_path_is_registered_as_transport(tmp_path):
+    """`request('GET', p)`：整条路径都是变量 ⇒ 静态没有路径可判，登记成 `transport` 而不是判红。
+
+    这一档本批从 exit 2 改成登记，起因是第四张脸把传输层包装的**定义本身**
+    （`fetch(BASE + path)`）暴露成了调用点；照旧判红等于要求三棵树的 api 层改写成静态可读形状，
+    而那正是它们不该改的东西。代价要说清：动态路径不再自动响 ⇒ 兜底换成
+    `test_transport_wrappers_are_pinned_to_the_api_layer`（真仓那 3 处逐文件名钉住，多一处红在测试里）。
+    """
+    findings, totals = _scan(tmp_path, CLIENT_HEAD + '''
 export const extra = {
   dynamic: (p: string) => request<Anything>('GET', p),
 }
-''', API_HEAD) == 2
+''', API_HEAD)
+    assert findings == []
+    assert totals["unparsed"] == 0
+    assert (totals["sites"], totals["transport"]) == (8, 2)
+    assert totals["plain"] + totals["template"] + totals["branch"] == totals["sites"]
+
+
+def test_transport_wrapper_does_not_claim_any_route(tmp_path):
+    """`transport` 不贡献路径 ⇒ 它救不了反向读数里的任何一条路由。
+
+    反例控制（铁律 #8）：如果把"这里读不出具体路径"当成"这里有人调"，活接口数会虚高、
+    死接口数会虚低，下一批就有人照着虚低的数去删。这条用「只有包装、没有消费者」的树把它钉住。
+    """
+    mod = _module()
+    ui, src = _roots(tmp_path, '''
+async function go<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`)
+  return (await res.json()) as T
+}
+''', API_HEAD)
+    sites, unparsed = mod.collect_ui_sites(ui)
+    routes, _exc, _me, _b = mod.collect_routes(src)
+    assert unparsed == [] and len(sites) == 1 and sites[0]["paths"] == []
+    assert len(mod._unused_routes(sites, routes)) == len(routes)
 
 
 def test_unbalanced_quote_exits_2(tmp_path):
@@ -418,7 +450,9 @@ def test_real_ui_and_src_are_clean_and_counted():
     assert unparsed == []
     assert mount_errs == []
     assert mod.check(sites, routes) == []
-    assert len(sites) == 50 and len(excluded) == 2
+    assert len(sites) == 54 and len(excluded) == 2
+    live = [s for s in sites if "transport" not in s["kinds"]]
+    assert len(live) == 53 and len(sites) - len(live) == 1   # +1 = `api/client.ts` 的 `fetch` 包装
     mounted = sum(1 for r in routes if r["how"] == "add_api_route")
     assert mounted == 5                              # af_conflict_runtime._ROUTES
     assert len(routes) - mounted + len(excluded) == 81   # == grep -c "@app." src/autoforge/af_api.py
@@ -486,10 +520,13 @@ def test_path_first_shape_is_green(tmp_path):
     assert _main(tmp_path, USER_CLIENT_HEAD, USER_API_HEAD) == 0
 
 
-def test_path_first_shape_actually_parses_all_five_sites(tmp_path):
+def test_path_first_shape_parses_five_live_sites_plus_one_wrapper(tmp_path):
+    """五个 `req(…)` 调用点 + 包装定义里那一处 `fetch(BASE + path)`：后者登记成 transport，不占调用点数。"""
     mod, sites, unparsed, _ = _sites(tmp_path, USER_CLIENT_HEAD, USER_API_HEAD)
     assert unparsed == []
-    assert len(sites) == 5
+    assert len(sites) == 6
+    live = [s for s in sites if "transport" not in s["kinds"]]
+    assert len(live) == 5 and len(sites) - len(live) == 1
 
 
 def test_omitted_init_defaults_to_get_because_fetch_does(tmp_path):
@@ -593,6 +630,222 @@ def test_all_trees_of_this_repo_are_in_scope_and_green(capsys):
     mod = _module()
     assert mod.main(["check_ui_api_paths.py", "--all"]) == 0
     out = capsys.readouterr().out
-    for name in ("ui 50", "ui-user 16", "ui-user-mimo 19"):
+    for name in ("ui 53", "ui-user 17", "ui-user-mimo 20"):
         assert name in out, out
-    assert "跨 3 棵树仍未被调用 16 条" in out, out
+    assert "传输层包装 3 处" in out, out
+    assert "SSE 建流 2 处" in out, out
+    assert "跨 3 棵树仍未被调用 13 条" in out, out
+
+
+# ── 第四张调用脸：视图里直接 `fetch(`${base}/watch/start`)`（前缀是变量）──────
+
+VIEW_CLIENT = '''
+export function startAutomation(id: string) {
+  const base = import.meta.env.VITE_API_BASE ?? 'http://localhost:8787/api'
+  return fetch(`${base}/watch/start`, { method: 'POST', body: JSON.stringify({ automation_id: id }) })
+}
+
+export function stopIt(owner: string) {
+  const base = import.meta.env.VITE_API_BASE ?? '/api'
+  return fetch(`${base}/watch/stop?owner=${encodeURIComponent(owner)}`, { method: 'POST' })
+}
+'''
+
+VIEW_API = '''
+def build_app():
+    @app.post("/api/watch/start")
+    def watch_start():
+        return {}
+
+    @app.post("/api/watch/stop")
+    def watch_stop():
+        return {}
+'''
+
+
+def test_fetch_with_variable_base_enters_scope(tmp_path):
+    """补这张脸的理由是实测的：`/api/watch/start|stop` 两条**有真前端消费者**的接口
+    躺在反向读数里（16 条 → 14 条），照那个数删接口等于删活的。"""
+    findings, totals = _scan(tmp_path, VIEW_CLIENT, VIEW_API)
+    assert findings == []
+    assert (totals["sites"], totals["plain"], totals["template"], totals["transport"]) == (2, 0, 2, 0)
+
+
+def test_variable_prefix_site_is_read_by_its_literal_tail(tmp_path):
+    """`${base}/watch/stop?query=${…}` 归一后只剩 `*/watch/stop` 三段尾巴：
+    query 在替换外切掉、变量前缀不参与比对，所以段数不会多出一段把这条读成"路径不存在"（假红）。"""
+    mod, sites, unparsed, _ = _sites(tmp_path, VIEW_CLIENT, VIEW_API)
+    assert unparsed == []
+    assert sorted(mod._display(s["paths"][0]) for s in sites) == ["*/watch/start", "*/watch/stop"]
+
+
+def test_variable_prefix_site_goes_red_when_the_route_is_renamed(tmp_path):
+    """这张脸得有牙：只数不红等于把"读不出整条路径"换成"报成有人调"。服务端改名 ⇒ 必须红。"""
+    findings, _ = _scan(tmp_path, VIEW_CLIENT, VIEW_API.replace('"/api/watch/start"', '"/api/watch/begin"'))
+    assert len(findings) == 1
+    assert "*/watch/start" in findings[0] and "POST" in findings[0]
+
+
+def test_variable_prefix_site_checks_the_verb_too(tmp_path):
+    """路径对、方法不对也红（判据 B 对第四张脸同样生效）：405 与 404 是两种故障。"""
+    findings, _ = _scan(tmp_path, VIEW_CLIENT,
+                       VIEW_API.replace('@app.post("/api/watch/stop")', '@app.get("/api/watch/stop")'))
+    assert len(findings) == 1
+    assert "405" in findings[0]
+
+
+def test_literal_segment_reaches_a_param_route_but_does_not_claim_it(tmp_path):
+    """可达（判 404，松）与认领（判"谁还没被调"，紧）必须分两档，这是本批盘出来的真区别。
+
+    `GET /asks/pending` 在 HTTP 层确实被 `GET /api/asks/{name}` 接住 ⇒ `check()` 不能报它不存在（假红）；
+    但它不是那条参数路由的消费者 ⇒ 反向读数里它得继续躺着。合成档里两半各钉一次：
+    合在一条判据上必然一头错——上一版用 `_hit` 算认领时，`/api/asks/{name}` 就是被
+    `ui/src/api/client.ts:155` 的 `/asks/pending` 冒领的（实测：反向读数少一条，而那条零消费者）。
+    """
+    mod = _module()
+    ui, src = _roots(tmp_path, '''
+export const api = {
+  asks: () => req<AsksResponse>('/asks/pending'),
+}
+''', '''
+def build_app():
+    @app.get("/api/asks/pending")
+    def asks_pending():
+        return {}
+
+    @app.get("/api/asks/{name}")
+    def asks_one(name):
+        return {}
+''')
+    sites, unparsed = mod.collect_ui_sites(ui)
+    routes, *_ = mod.collect_routes(src)
+    assert unparsed == []
+    assert mod.check(sites, routes) == []                     # 可达：不报假红
+    assert mod._hit("/asks/pending", "/api/asks/{name}")      # 松的那档确实放行
+    got = [r["path"] for r in mod._unused_routes(sites, routes)]
+    assert got == ["/api/asks/{name}"]                        # 没被认领：仍在未调用名单里
+    assert not mod._claimed("/asks/pending", "/api/asks/{name}")
+
+
+def test_transport_wrappers_are_pinned_to_the_api_layer():
+    """真仓只有三处"整条路径是变量"的传输层包装，且都在各棵树的 api 门面文件里。
+
+    这条是 `test_non_literal_path_is_registered_as_transport` 放宽判红之后的兜底：视图里再冒出一处
+    动态路径（那才是真该追问"调的是哪条接口"的地方）会红在这里，逼来留名而不是静默过关。
+    """
+    mod = _module()
+    got: list[str] = []
+    for t in mod._registry_trees():
+        sites, _ = mod.collect_ui_sites(t["root"], t["name"])
+        got += [f"{s['rel']}:{s['line']}" for s in sites if "transport" in s["kinds"]]
+    assert sorted(got) == ["ui-user-mimo/src/api/http.ts:92", "ui-user/src/api/client.ts:27",
+                           "ui/src/api/client.ts:28"], got
+
+
+def test_helper_names_have_one_source():
+    """`HELPER_RE` 从 `HELPERS` 的键生成：抄两份的错法是"脸加在字典里、没加在正则上"
+    ⇒ 那张脸静默不在射程，而门照印"干净"（§二之三十二 同族）。"""
+    mod = _module()
+    alt = mod.HELPER_RE.pattern.partition("(")[2].rpartition(")")[0]
+    assert sorted(alt.split("|")) == sorted(mod.HELPERS), mod.HELPER_RE.pattern
+    assert mod.HELPERS["fetch"] == "path-first"
+
+
+def test_reverse_reading_of_this_repo_is_a_named_list(capsys):
+    """`--list-uncalled` 逐条打到盘上：一个总数定不了"还剩谁在用"这件事，只能逐条定性。
+
+    13 这个数是棘轮——删一条活接口、或给某条补上前端调用点，都要在这里留名。
+    """
+    mod = _module()
+    assert mod.main(["check_ui_api_paths.py", "--list-uncalled"]) == 0
+    out = capsys.readouterr().out
+    lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("—")]
+    assert len(lines) == 13, out
+    assert "/api/watch/start" not in out and "/api/watch/stop" not in out   # 已被 fetch 那张脸认领
+    assert "pair-request" not in out                                       # 已被 SSE 那张脸认领
+    assert "反向读数 13 条" in out, out
+    # 整个集合逐条钉住（不是只钉总数）：这 13 条的定性写在执行记录 §二之四十四，
+    # 谁给某条补上前端调用点、或删掉某条路由，都必须同时动这张表和这段名单——
+    # 只数数不记名的话，下一批又会把"门读不出"当成"接口没人用"。
+    assert {ln.split()[0] + " " + ln.split()[1] for ln in lines} == {
+        "GET /api/asks/{name}",                                             # 单条咨询详情：无 UI 消费者（`/asks`、`/asks/pending` 才有）
+        "GET /api/conflicts",                                               # 冲突仲裁面 5 条：全 NAS 零消费者，面板未接
+        "GET /api/conflicts/summary",
+        "GET /api/conflicts/locks",
+        "DELETE /api/conflicts/locks/{entity_id}",
+        "POST /api/conflicts/{automation_id}/reset",
+        "GET /api/experience/export",                                       # 经验导出：消费走 CLI `forge experience export`（同函数，不经 HTTP）
+        "GET /api/sessions",                                                # 会话管理面 6 条：只有 `POST .../answer` 被 ui 调
+        "POST /api/sessions",
+        "GET /api/sessions/{session_id}",
+        "DELETE /api/sessions/{session_id}",
+        "POST /api/sessions/{session_id}/cancel",
+        "POST /api/sessions/{session_id}/tick",
+    }, out
+
+
+# ── 第五张调用脸：`new EventSource(url)`（SSE 只能走 query，URL 先拼进变量）──
+
+PAIR_ROUTE = '''
+def build_app():
+    @app.get("/api/mcp/pair-request")
+    async def pair_request():
+        return {}
+'''
+
+# 两棵用户端树各自的真实形状（抄自 `ui-user/src/api/client.ts:72-73`、`ui-user-mimo/src/api/http.ts:41-42`）
+SSE_CLIENT = '''
+export function openPairStream(token: string) {
+  const BASE = import.meta.env.VITE_API_BASE || '/api'
+  const t = token
+  const url = BASE + '/mcp/pair-request' + (t ? `?token=${encodeURIComponent(t)}` : '')
+  const es = new EventSource(url)
+  es.addEventListener('pair-request', (ev) => ev)
+  return es
+}
+
+let es: EventSource | null = null
+export function mimoStream(API_BASE: string, token: string) {
+  if (es || typeof EventSource === 'undefined') return
+  const url = `${API_BASE}/api/mcp/pair-request${token ? `?token=${encodeURIComponent(token)}` : ''}`
+  es = new EventSource(url)
+}
+'''
+
+
+def test_event_source_face_parses_both_real_shapes(tmp_path):
+    """变量前缀（`${API_BASE}/api/…`）与 `BASE + '/mcp/pair-request'` 两种拼法都要读出同一条路由。
+
+    类型标注 `let es: EventSource | null` 与探针 `typeof EventSource === 'undefined'` 不是调用点：
+    把它们算进去会让"调用点数"这个读数失去意义。
+    """
+    findings, totals = _scan(tmp_path, SSE_CLIENT, PAIR_ROUTE)
+    assert findings == []
+    assert (totals["sites"], totals["sse"], totals["transport"]) == (2, 2, 0)
+
+
+def test_event_source_query_inside_a_substitution_is_not_a_path_segment(tmp_path):
+    """`${base}/api/mcp/pair-request${token ? `?token=${…}` : ''}`：query 藏在替换**体内**。
+
+    只在替换外扫 `?` 的旧归一会把那一段当成多出来的路径段 ⇒ 段数对不齐 ⇒ 这条 SSE 永远认领不上
+    它自己的路由（实测：`GET /api/mcp/pair-request` 因此躺在反向读数里，而 §二之四十二 刚修好它）。
+    """
+    mod = _module()
+    assert mod._normalize("/api/mcp/pair-request${token ? `?token=${encodeURIComponent(token)}` : ''}"
+                          ) == "/api/mcp/pair-request"
+    assert mod._normalize("/graphs/${encodeURIComponent(name)}${version ? `?version=${version}` : ''}"
+                          ) == "/graphs/\x01"
+
+
+def test_event_source_on_a_missing_route_is_red(tmp_path):
+    """这张脸同样得有牙：端点改名 ⇒ 建流静默收不到帧，必须红而不是"读不出所以放过"。"""
+    findings, _ = _scan(tmp_path, SSE_CLIENT, PAIR_ROUTE.replace('"/api/mcp/pair-request"',
+                                                                 '"/api/mcp/pair-stream"'))
+    assert len(findings) == 2
+    assert all("pair-request" in f for f in findings)
+
+
+def test_event_source_with_unreadable_url_exits_2(tmp_path):
+    """判据 C 对 SSE 生效：URL 来自读不出的地方（跨行拼接、外部变量）⇒ exit 2，不能当成"没人调"。"""
+    assert _main(tmp_path, SSE_CLIENT.replace("const url = BASE + '/mcp/pair-request'", "const url = build()"),
+                 PAIR_ROUTE) == 2

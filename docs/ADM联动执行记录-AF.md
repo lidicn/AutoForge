@@ -3680,6 +3680,91 @@ uvicorn 访问日志把整条查询串原样记下（`GET /api/mcp/pair-request?
   一条取数口径顺手钉住：`gh_ci_status.py jobs` 的位置参数是 **run id**（`37355373390`），填 run number
   （`86`）得到的是 `HTTP 404`——本仓第一次有人这么填，红得像 API 坏了。
 
+## 二之四十四、反向读数 16 ⇒ 13 之前，门先学认第四、第五张调用脸：这两张脸盖住的恰是**活接口**，而"可达"与"有人调"原来是同一个函数
+
+缘起是 §六 那句"剩下那 16 条的逐条定性仍未做"。要逐条定性，前提是名单可信；名单是门给的，
+而门到 HEAD 只认三张调用脸（`request('GET', …)` / `req(path)` / `req(path, init)`）。三条独立证据，
+都是本轮当场量出来的，不是推的：
+
+- **名单假高（把活接口读成没人用）**：`ui/src/views/AutomationDetailView.vue:35`、`RunningView.vue:31,46`
+  三处**不经 api 门面**直接 `fetch(\`${base}/watch/start\`)` / `${base}/watch/stop?owner=…`。⇒ 那两条
+  `POST /api/watch/*` 一直躺在"UI 从未调用"里。补第四张脸：`HELPERS` 加 `fetch`，同时把 `HELPER_RE`
+  改成**从 `HELPERS` 的键生成**——名单抄两份正是 §二之三十二 那一族（"脸加在字典里、没加在正则上"
+  ⇒ 那张脸静默不在射程而门照印干净），现在由 `test_helper_names_have_one_source` 钉住单一真源。
+  变量前缀的比法：整条读不出 ⇒ 按**字面量尾巴**对齐路由（`_tail_hit`），前缀对不对归部署
+  （`VITE_API_BASE` 配错在运行时是 404，不在本门射程）。
+- **名单假低（把别人的调用算成它的）**：把同一个函数既用来判 404 又用来判"有人调"之后，
+  `GET /api/asks/{name}` 被 `ui/src/api/client.ts:155` 的 `GET /asks/pending` **冒领**了。
+  两半各证一次：HTTP 层确实接得住（`_hit` 报"路由不存在"就是假红），但那条参数路由**一条 UI 消费者都没有**
+  （反向读数因此少一条，而少的那条最该被追问"谁在用"）。⇒ 拆成两档：`_hit`（可达，松，判红用）/
+  `_claimed`（认领，紧，反向读数用；UI 字面量段不许对路由 `{param}`），合成一条判据必然一头错。
+- **又是假高，且这次盖住的是刚修好的那条**：`GET /api/mcp/pair-request` 有**两棵树**的真消费者
+  （`ui-user/src/api/client.ts:72-73`、`ui-user-mimo/src/api/http.ts:41-42`），走 `new EventSource(url)`
+  ——第五张脸。这条最刺人的一处：§二之四十二 才把这条端点从"每次都 500"修好，照着反向读数删的就是它。
+  SSE 的 URL 必然是"先拼进变量、再一次性交出去"（`EventSource` 只吃一个字符串、发不了自定义头），
+  所以加了 1-hop 回看 `_decl_rhs`：取同文件最近一次 `const url = …` **到行尾为止**的右值。
+  行尾为界是有意的保守——跨行拼接读不出就走 `unparsed`（`exit 2`），不静默当成"没人调"。动词恒 GET。
+- **归一化里的一处真 bug**（不修就认领不上）：mimo 那条把 query 写在**替换体内**
+  （`` ${API_BASE}/api/mcp/pair-request${token ? `?token=${encodeURIComponent(token)}` : ''} ``），
+  而旧 `_normalize` 只在替换**外**扫 `?` ⇒ 尾巴多出一段通配、段数对不齐 ⇒ 这条 SSE 永远打不到自己的路由。
+  现在认"引号紧跟 `?`"为 query（`` `?token= ``），而 `'a' ? 'x' : 'y'` 那种三元不算（引号与 `?` 间隔了空格）。
+- **传输层包装改档**：整条路径都是变量的那 3 处（实测 `ui/src/api/client.ts:28`、
+  `ui-user/src/api/client.ts:27`、`ui-user-mimo/src/api/http.ts:92`）是包装**定义本身**
+  （`fetch(BASE + path)` / `${API_BASE}${path}`），登记成 `transport` 计数、不占调用点数、不判红。
+  这一档原本判 `exit 2`：第四张脸把包装暴露成调用点之后，照旧判红等于要求三棵树的 api 层改写成
+  静态可读形状，而那正是它们不该改的东西。**放宽的代价明写**：动态路径不再自动响 ⇒ 兜底换成
+  `test_transport_wrappers_are_pinned_to_the_api_layer`（三处逐文件名钉死，第四处冒出来就红在测试里）。
+- **读数**（本机 `Python313\python.exe`，纯标准库）：`--all` 绿行 =
+  `UI 调用点 90 处（ui 53、ui-user 17、ui-user-mimo 20）：字面量 51、模板拼接 38、条件分支 1、传输层包装 3 处；SSE 建流 2 处；服务端参与匹配路由 84 条（装饰器 79、add_api_route 挂载表 5）、被排除的兜底/MCP 2 条；运行期挂载文件 1 个；反向读数跨 3 棵树仍未被调用 13 条；现场豁免 0 处`。
+  反向读数的移动是 **16 ⇒ 14（fetch 脸）⇒ 13（SSE 脸）**，逐条名单由新 `--list-uncalled` 打到盘上
+  （方法 + 路径 + `af_api.py:行`）——一个总数定不了"还剩谁在用"这件事。
+- **变异三档**（各跑一次真读数，`cp` 还原）：M1 从 `HELPERS` 摘掉 `fetch` ⇒ **13 failed, 33 passed**
+  （含真仓 `--all`、真仓逐条名单、transport 三处点名）；M2 把 `_claimed` 退回 `_hit` ⇒
+  **3 failed, 43 passed**（参数路由被冒领那条 + 两条真仓名单）；M3 把 `SSE_FACE` 改成不匹配的词 ⇒
+  **4 failed, 46 passed**（`pair-request` 回到未调用名单）。还原后 **50 passed**、绿行逐字未变。
+  **一条不敏感档如实记**：`test_event_source_with_unreadable_url_exits_2` 在 M3 下仍然绿——它拿到的 `exit 2`
+  换了来源（"这棵树一个调用点都没解析出来"那条射程判据），不是它本体验的语义 ⇒ 名单类判据不能只看红没红。
+- **13 条的逐条定性**（证据即上面各行；这份名单同时被 `test_reverse_reading_of_this_repo_is_a_named_list`
+  逐条钉死，动一条路由就要动这段，防它烂成"只有总数"）：
+
+| 路由 | 定性 | 证据 |
+| --- | --- | --- |
+| `GET /api/asks/{name}` | 参数化单条详情面：**零 UI 消费者**；只有精确路径 `/asks`、`/asks/pending` 被调 | `ui/src/api/client.ts:153,155`；`tests/contract/test_af_ask_contract.py:156` 只钉"精确路径必须先于 `{name}`"这条注册顺序 |
+| `GET /api/conflicts`、`/summary`、`/locks`、`DELETE /locks/{entity_id}`、`POST /{automation_id}/reset` | 冲突仲裁运行时的对外出口（`add_api_route` 挂载表那 5 条）：**全 NAS 检索零消费者**（含 40+ 兄弟仓，命中的只有 AF 自己的挂载表与测试），面板从未接 | `src/autoforge/af_conflict_runtime.py:499-503`；`tests/test_af_conflict_runtime.py:293-302` 用假 app 直调 handler，不走 HTTP |
+| `GET /api/experience/export` | 经验导出面：同一能力的消费走 **CLI** `forge experience export`（同一个 `svc.export_experience`，不经 HTTP），HTTP 这条留作对外契约 | `src/autoforge/af_api.py:523-526`、`src/autoforge/af_service.py:656`、`src/autoforge/af_cli.py:1112` |
+| `GET /api/sessions`、`POST /api/sessions`、`GET/DELETE /api/sessions/{id}`、`POST /{id}/cancel`、`POST /{id}/tick` | 会话管理面 6 条：其中**只有 `POST /{id}/answer` 有 UI 调用点**（因此它不在名单里），其余 6 条静态零调用点；契约在册（`docs/reference/API_CONTRACT.md:68-69`），`tick` 是裁定 D1 那条看门狗自愈的推进口 | `ui/src/api/client.ts:161`（answer）；`tests/contract/test_af_ask_contract.py:407,442,445` 走 TestClient 而非 UI |
+
+  一处**文档与读数的不一致**（不自裁、只登记）：`docs/plan/开发计划_WebUI全功能接入.md:78` 把
+  `POST /api/sessions/{id}/tick·/cancel·DELETE` 标了 ✅（"会话操作条"），而本门读数为零调用点。
+  要么面板从未接、要么接了又被拆——两种都指向"那行 ✅ 过期"。已投 DCD（§五）还是登记 §六：本批取后者
+  （§六 新增一条），因为它是**口径复核**而不是裁定项；真要删这 6 条路由才需要裁定，本批一条路由的字节都没动。
+- **为什么不自裁删冲突面那 5 条**：它们在 AF 之内零消费者，但那是仲裁运行时的对外出口、也是 §5.3 里
+  冲突面板那一族的后端；删路由＝改跨仓契约，按铁律交裁而不是顺手清账。本批做的把它收成"可复核的形状"：
+  名单逐条钉死 + 每条一句定性 + 证据行号，下一批无论接面板还是提删，都有起点。
+- **判据数**：`tests/unit/test_ui_api_paths_gate.py` 37 ⇒ **50 条**（+13：四张脸/五张脸各配"能变红"档、
+  可达与认领分档、`_normalize` query 体内外两档、transport 三处点名、`HELPERS` 单一真源、真仓 13 条逐条名单）。
+- **全链读数（本机 `GATES_PYTHON` 指 `Python313\python.exe`，两条都在本轮真跑过，不是推断）**：
+  - `gates.sh` ⇒ **`GATES_RC=1`**，且**只有一条腿红**：有界缓存注册表门"共 6 处判红（注册表 2 项 / 固定键 2 项 /
+    基线 73 项 / **扫到 81 个容器**）"，6 处逐一指名 `af_nl_parse.py:123/125/126/995/996/998`。
+    `UI↔路由契约` 那一腿在本轮印出的就是上面那条绿行（`反向读数跨 3 棵树仍未被调用 13 条`）。其余各腿（工具名单、
+    MCP 参数↔schema、原子写、状态源、出向/入向 MQTT、联动桥依赖、`check_imports`）全 ✓。
+  - 全量 `pytest tests` ⇒ **`42 failed, 3116 passed, 53 skipped, 1 warning, 35 subtests passed in 210.37s`，`PYTEST_RC=1`**。
+    42 条失败行**全部落在两个文件**：`tests/test_af_nl_roundtrip.py` 40 行（含 30 行 `SUBFAILED`）、
+    `tests/unit/test_bounded_caches_gate.py` 2 行（`test_real_repo_is_green`、`test_real_repo_measurements_are_pinned`）。
+    按文件聚合过一遍：`FAILED|SUBFAILED` 里非这两个文件的行数 = **0**，故本批改过的
+    `tests/unit/test_ui_api_paths_gate.py` 在全量语境下无失败行（单独跑另取到 `50 passed`）。
+- **这 42 条红不是本批引入的，本批也不替它盖章**（处置口径与 §二之四十一 逐字一致）：红名单指向的
+  `src/autoforge/af_nl_parse.py` + `tests/test_af_nl_roundtrip.py` 是**同一工作树里并发会话的未提交 WIP**
+  （`git status` 读数为 `??` 两条，非本批所写；`F14 P1` 那条计划项的实现），它带来 6 个未登记增长容器 ⇒
+  有界缓存门判红、该门的两条真仓判据随之红。**三条不做**：不把 `af_nl_parse.py` 那 6 个容器登记进
+  `BOUNDED_CACHES`（不替别人的模块判定 TTL/硬上限）、不把 `BASELINE` 扩成第二块盖章区、不把钉数从
+  "已提交树 75/73" 改成 "本树 81/73"。远端 CI 跑的树不含那两个未跟踪文件，故这两条红**不会**在 CI 复现——
+  也正因如此，本批 push 后的 CI 读数不能反过来当"本机这 42 条已经绿了"的证据。
+- **口径补一句**（防被读成"本批让全链变红"）：本轮 `gates.sh` 的 `RC=1` 与全量 `RC=1` 都发生在**同一颗工作树**上，
+  而本批的三个文件（门、门的测试、账本）不碰 `af_*` 运行时与 store；本批对全链读数的净影响只有
+  `UI↔路由契约` 那一行的数字（调用点 90、反向读数 13）与判据数 37 ⇒ 50。
+
+
 ## 四、审计侧
 
 
@@ -3765,9 +3850,25 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
 - **§5.3 第 4 件的两条未测项——一条本批已补成实测，另一条仍无读数**：① ~~切页后定时器是否还在打接口~~ **已实测销账**：页面内挂钩子记请求时刻（XHR+fetch 两通道，axios 走 XHR），`/live` 上 5 次命中、间隔 `10451/9995/10166/9830` ms ⇒ 10s 档真在打；SPA 切回 `/overview` 后**等 51 秒（五个档）新增 0 次** ⇒ `clearInterval` 生效，无后台轮询残留。读数与做法见 §二之二十七 第七节。② **同一浏览器多开两个标签会各自轮询**（本批新引入的负载面）**仍无直接 QPS 读数**：`window.open` 被弹窗策略拒、`browser-use` 无"新建标签页"动作 ⇒ 只能实测到前提"零跨标签协调"（`grep -rn "BroadcastChannel\|navigator.locks" ui/src` **0 命中**，且 `LiveView.vue` 只有一对 `setInterval`/`clearInterval`），"N 标签 ⇒ N 轮询"是由前提两步**推出**而非量出。两者都只涉只读 GET（`available()` 不碰设备），放大的是请求量。若在窗后复盘要给"UI 长期开着"下结论，②得先有数——办法要么是能开双页的浏览器，要么是给 `ui/` 装测试框架跑双挂载，本批都不做。另：本批的"点撤销走通"是**按 DOM 事件驱动**（本机浏览器取不到视口），**真实指针事件与真实家电未验**，结论等级已按此写。
 - 第 2 步 `kill -9` → broker 代发 offline 的真 broker 验收：同上，须进窗随镜像重烤一次跑。
 - ②A 的 `instance_id` 过渡字段**未删**（删除时点 = AF v2.6，属破坏性变更须与窗口同做）。
-- **UI↔路由契约门禁（§二之二十八）判"路径可达"，不判"值语义对"**：M6 是实测不是推理——服务端把 `/api/undo/available` 改名成 `/api/undo/ready` 后，前端那一行仍被 `/api/undo/{deploy_id}` 的通配段接住 ⇒ 门绿。HTTP 层这确实可达（请求真会落到参数路由上），错的是业务语义（多半 404 在 handler 里）。要把它做成红，得先把 33 条"UI 从未调"的路由**分类**（MCP/DB 面向 vs 前端本该调），那是另一批的事；本批只登记不判，反向也**只计数不判红**（判红只会逼下一个人给整节加 `continue-on-error`）。
+- **UI↔路由契约门禁（§二之二十八）判"路径可达"，不判"值语义对"**：M6 是实测不是推理——服务端把 `/api/undo/available` 改名成 `/api/undo/ready` 后，前端那一行仍被 `/api/undo/{deploy_id}` 的通配段接住 ⇒ 门绿。HTTP 层这确实可达（请求真会落到参数路由上），错的是业务语义（多半 404 在 handler 里）。要把它做成红，得先把 33 条"UI 从未调"的路由**分类**（MCP/DB 面向 vs 前端本该调），那是另一批的事；本批只登记不判，反向也**只计数不判红**（判红只会逼下一个人给整节加 `continue-on-error`）。**→ 分类那一步已在 §二之四十四 做完**（33 ⇒ 16 ⇒ 13，13 条逐条定性并钉成名单），"做成红"这一半仍未做，且**不自动因分类完成而变可做**：名单里 6 条会话面 + 5 条冲突面按定性都是"对外契约/跨仓出口"，判红等于要求前端必须调它们，那是改产品范围而不是修缺陷。
 - **那 33 条"UI 从未调"的第一手盘点已开局，且第一条结论是：这个反向读数现在不能当"没人用"读**。门只扫 `ui/src`（开发面板那一棵树），而本仓还有 `ui-user/src`（用户端 ForgeSight）——`ui-user/src/api/client.ts` 里逐条实调着 `/automations?group_by=…`、`/automations/{name}`、`…/enable|disable|archive|unarchive`、`DELETE /automations/{name}`、`/user/agents`、`PATCH|DELETE /user/agents/{id}`、`/mcp/pair-request` ⇒ 33 条里**至少 automations 一族 7 条 + user/agents 3 条 + pair-request 1 条共 11 条不是死面，是门射程外**。要收口得先把两棵树的消费者分开登记（谁调、哪棵树、跨仓还是第一方），否则"分类"这一步会把真实消费者误判成冗余。同批盘出的一条对照事实顺手钉住：`ui/src/api/index.ts:4` 是 `USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false'`（**默认走 mock**，靠 `ui/.env.production` 的 `VITE_USE_MOCK=false` 在生产构建关掉），而 `ui-user/src/api/index.ts:5` 是 `=== 'true'`（**默认走真后端**）——两棵树的默认档相反；`import.meta.env.*` 是构建期内联，所以这不是运行期缺陷，但"改档必须重新 `npm run build`"这条只写在 `ui/README.md`，分类那一批要一并处理。
 - **上一条那个"至少 11 条"是手抄估算，本批已用实测换掉**：门扩到三棵第一方 UI 树后，反向读数 **33 ⇒ 16**，被移出去的是 **17 条**真消费者（`automations` 一族、`user/agents` 一族、`auth/*`、`pending/*`）。同批还修掉一条更要紧的漏：泛型实参里的 `;` 会让整条调用被**静默丢掉**（修前纳入那两棵树的读数是 11/16 与 7/19 ⇒ 85 个调用点里 17 个根本没进射程）。上一条里"要先把两棵树的消费者分开登记"那半步已随 `UI_TREES` 登记表落地，且加了"登记树读不出调用点 ⇒ exit 2""盘上多出没登记的 UI 形状目录 ⇒ exit 2"两条射程判据。做法与六档变异读数见 §二之三十二。**剩下那 16 条的逐条定性仍未做**——本批只把"数错了"改成"数对了"，没有宣布分类完成。
+  **→ 这一条本批收口**：门先学会认第四、第五张调用脸（`${base}/…` 的 `fetch`、`new EventSource(url)`），
+  反向读数 **16 ⇒ 14 ⇒ 13**（出去那 3 条恰是活接口：`POST /api/watch/start|stop` 是面板直调、
+  `GET /api/mcp/pair-request` 是两棵用户树的配对流——§二之四十二 才修好、照旧名单删的就是它）；
+  同时把"可达"与"有人调"从一个函数拆成两档（`_hit` / `_claimed`，此前 `GET /api/asks/{name}` 被
+  `/asks/pending` 冒领）。**13 条已逐条定性**（会话面 6 / 冲突面 5 / 经验导出 1 / 参数化单条详情 1），
+  名单由 `test_reverse_reading_of_this_repo_is_a_named_list` 逐条钉死、`--list-uncalled` 可打到盘上，
+  不再是"只有一个总数"。做法、三档变异与本树全链读数见 §二之四十四。**遗留的不是"分类没做"，而是分类出来的
+  结果怎么处理**：冲突面那 5 条全 NAS 零消费者却是对跨仓出口，接面板还是提删**不在 AF 手里**（见本 §六 下一条）。
+- **反向读数从"总数"变成"逐条名单"之后，盘出一条文档与读数的不一致（登记，不自裁）**：
+  `docs/plan/开发计划_WebUI全功能接入.md:78` 把 `POST /api/sessions/{id}/tick`、`POST /{id}/cancel`、
+  `DELETE /api/sessions/{id}` 标了 ✅（"会话操作条"已完成），而本门在**三棵第一方 UI 树**里读到的调用点为 **0**
+  （会话一族只有 `POST /{id}/answer` 有调用点，见 §二之四十四 定性表）。两种解释都指向那行 ✅ 过期：要么面板从未接上，
+  要么接上后被拆。**为什么这条停在登记而不进裁定**：它是**口径复核**（一份计划文档的完成标记 vs 门的实测读数），
+  不是跨仓契约变更；真要**删**这 6 条会话路由才是改对外契约、那时要裁。本批**一条路由的字节都没动**，
+  也没按那行 ✅ 去补 UI——补哪棵树、要不要补属 `ui-user` vs `ui-user-mimo` 交付面那一族（§五 已裁 Q1=B），
+  不在本批射程。取数口径：`python scripts/check_ui_api_paths.py --all`（`--list-uncalled` 出逐条名单）。
 - 同一门的射程边界登记清楚（本批内改过一次口径）：路由有**两张脸**，门认 `@app.get/post/put/patch/delete("…")`、`@router.…` 装饰器，以及 `("VERB", "/api/…", handler)` 形状 + `add_api_route` 的静态挂载表。剩下**一张脸读不出**：`af_runtime_plugins.py` 的 `add_api_route(path, …)` 里 `path` 是插件在运行期声明的数据，静态无从得知 ⇒ 门把它记成 `运行期挂载文件 1 个` 并写进绿色行，而不是报错也不是假装看过。**方向上要分清**：挂载表那条路若哪天改了形（有 `add_api_route` 有字面量 `"/api/…"` 却读出 0 条）⇒ `exit 2`，因为那时本门会对真端点报**假红**；而插件那张动态脸漏掉只会漏在"UI 未调用"的计数里，不会产假绿。首版把这两件事混为一谈，得到的是一条 `RC=2` 的长红——那才是本门最可能被关掉的方式。
 - §四 的 B（逐实体可见漂移 + `entity_drift` 记账）**未做**，按裁定的启动条件排队：下一次真实改动 `af_instance._refresh_snapshot` 时顺手做，或 AF v2.6。
 - 洞察面板的**投递源仍是本机手投**：§二之四的两条提案是用 `PersistentInsightSink.submit()` 直接写进 dev store 的，走的是"落盘之后的那一段"。本批把**桥回调 → 落盘 → `/api/insights/pending`** 这一段用契约形状的假消息钉住了（`test_contract_shaped_insight_reaches_the_panel_with_its_accounting`，注入假 client、真桥、真队列、真 API），但**真 paho + 真 broker** 那一段仍未端到端（paho 本机实测有，缺的是那台 broker：`MQTT_HOST` 未配），面板的空态文案因此把"桥未上线/没订到主题"列为四种成因之一，而不是当作已验证链路。
