@@ -4,9 +4,10 @@
 （`bash gates.sh` 的**下一步**、前置完全相同），`gates.sh` 里没有 ⇒ 本机绿、推上去 CI 红。那种不对称
 不会让任何东西变红，只会让"该红的不红"。本门把"盘上的门 = 某条链真跑过的门"钉成静态判据。
 
-四条判据各自单独可红：① 漏跑（盘上有、两条链都不跑）② 远端有本机没有（工作流引用而 `gates.sh` 没跑、
-又没豁免）③ 豁免过期（登记了却没工作流引用）④ 豁免空理由。反空洞档同样单独可红：读不到 `gates.sh`／
-读不到 `workflows/`／盘上 0 个脚本／`gates.sh` 里 0 条调用／引用了盘上不存在的脚本 ⇒ 一律 `exit 2`，
+五条判据各自单独可红：① 漏跑（盘上有、两条链都不跑）② 远端有本机没有（工作流引用而 `gates.sh` 没跑、
+又没豁免）③ 豁免过期（登记了却没工作流引用）④ 豁免空理由 ⑤ 豁免理由的锚点核对不住（点名的作业没在引用
+这个脚本 / 没有路径锚点 / 路径是编的）。反空洞档同样单独可红：读不到 `gates.sh`／读不到 `workflows/`／
+盘上 0 个脚本／`gates.sh` 里 0 条调用／引用了盘上不存在的脚本／工作流数不出任何一个 job ⇒ 一律 `exit 2`，
 "没有发现"不等于"没有问题"。
 
 本文件最要害的一族是**注释不算覆盖**：往工作流里加一行 `# 见 check_x.py`、或把 `gates.sh` 的调用行
@@ -19,6 +20,7 @@ import contextlib
 import importlib.util
 import io
 import pathlib
+import re
 import sys
 from unittest import mock
 
@@ -42,6 +44,10 @@ jobs:
 
 #: 合成树用的最小工作流：不含任何 `check_*.py` 引用，也不缺目录（缺目录会先撞射程塌那档）。
 WF_MIN = "name: ci\non: push\njobs:\n  q:\n    steps:\n      - run: bash gates.sh\n"
+
+#: 判据⑤ 合格理由的形状：反引号点名的作业**本体真引用了这个脚本**（`layering` 作业里有 `check_b.py`），
+#: 外加一个**盘上真存在**的路径锚点（`_tree` 会在沙箱根写 `anchor.txt`，并把 `PATH_ROOT` 指过去）。
+GOOD_REASON = "跑在 `layering` 独立作业：前置差见 `anchor.txt`"
 
 #: 哨兵：这一档要的是「workflows/ 目录根本不存在」，不能和 None（= 用默认最小工作流）混用。
 NO_DIR = object()
@@ -92,10 +98,13 @@ def _tree(
         for name, text in workflows.items():
             (wf_dir / name).write_text(text, encoding="utf-8")
     mod = _module()
+    # 判据⑤ 的路径锚点按 PATH_ROOT 核对：沙箱树里写一个真文件，并把根指到沙箱。
+    (tmp_path / "anchor.txt").write_text("前置差锚点（合成）\n", encoding="utf-8")
     for attr, value in (
         ("GATES_SH", gates),
         ("WORKFLOWS", wf_dir),
         ("SCRIPTS", scripts_dir),
+        ("PATH_ROOT", tmp_path),
     ):
         monkeypatch.setattr(mod, attr, value)
     if exempt is not None:
@@ -112,7 +121,7 @@ def _green_tree(tmp_path, monkeypatch):
         scripts=("check_a.py", "check_b.py"),
         gates_sh=GATES_A,
         workflows={"ci.yml": CI_ONLY_B},
-        exempt={"check_b.py": "跑在独立作业：前置不同"},
+        exempt={"check_b.py": GOOD_REASON},
     )
     return _tree.mod
 
@@ -225,7 +234,7 @@ $PYTHON $REPO/scripts/check_b.py
         monkeypatch,
         scripts=("check_a.py", "check_b.py"),
         gates_sh=gates,
-        workflows={"ci.yml": "name: ci\njobs: {}\n"},
+        workflows={"ci.yml": WF_MIN},
         exempt={},
     )
     rc, out = _run(_tree.mod)
@@ -300,18 +309,116 @@ def test_self_test_fails_when_detector_is_blind(tmp_path, monkeypatch):
 def test_real_repo_reading_is_clean_and_nontrivial():
     mod = _module()
     on_disk, gates_refs, ci_refs = mod.collect()
-    assert mod.check(on_disk, gates_refs, ci_refs) == []
+    jobs = mod.collect_jobs()
+    assert mod.check(on_disk, gates_refs, ci_refs, jobs) == []
     # 反空洞：真仓的门数量必须像样，否则"干净"是空集给的干净。
     assert len(on_disk) >= 15
     assert len(on_disk & gates_refs) >= 15
     assert "check_ir_runtime_keys.py" in gates_refs  # 裁定 20261005 那条硬门，本机链上也得在
+    assert jobs, "工作流数不出任何 job：判据⑤ 没有射程，本门的『干净』包括豁免语义核对在内都没依据"
 
 
 def test_ci_only_exempt_entries_all_have_reasons_and_are_referenced():
+    """每一格豁免：有理由、被工作流引用、在盘上，且**理由的两个锚点当场核对得住**（判据⑤）。
+
+    本门原先只能判"有没有写字"，那句"跑在别的作业里"当年就混得过；现在锚点是现取的：
+    作业名来自 YAML（不建第二份名单），且那个作业本体必须真引用了这个脚本；路径要在盘上。
+    """
     mod = _module()
     on_disk, _gates_refs, ci_refs = mod.collect()
+    jobs = mod.collect_jobs()
     assert mod.CI_ONLY_EXEMPT  # 空表就等于没有豁免口径，本门只验形状不验语义
     for name, reason in mod.CI_ONLY_EXEMPT.items():
         assert reason.strip(), name
         assert name in ci_refs, name
         assert name in on_disk, name
+        assert mod._reason_problems(name, reason, jobs) == [], name
+
+
+# ── 判据 ⑤：豁免理由的锚点必须核对得住 ─────────────────────────────
+
+def test_reason_naming_an_unrelated_job_goes_red(tmp_path, monkeypatch):
+    """真存在、但不引用这个脚本的作业名——拉个不相干的作业当掩护，过不了。"""
+    mod = _green_tree(tmp_path, monkeypatch)
+    monkeypatch.setattr(mod, "CI_ONLY_EXEMPT", {"check_b.py": "跑在 `q` 独立作业：前置差见 `anchor.txt`"})
+    rc, out = _run(mod)
+    assert rc == 1
+    assert "没点名一个**真的在引用它**的作业" in out, out
+
+
+def test_reason_naming_a_fabricated_job_goes_red(tmp_path, monkeypatch):
+    mod = _green_tree(tmp_path, monkeypatch)
+    monkeypatch.setattr(mod, "CI_ONLY_EXEMPT", {"check_b.py": "跑在 `ghost-job` 独立作业：前置差见 `anchor.txt`"})
+    rc, out = _run(mod)
+    assert rc == 1
+    assert "没点名一个**真的在引用它**的作业" in out, out
+
+
+def test_reason_citing_an_absent_path_goes_red(tmp_path, monkeypatch):
+    """本批的真实猎物：旧理由里的 `.gates-imports-baseline.txt` 盘上从来没有过。"""
+    mod = _green_tree(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        mod, "CI_ONLY_EXEMPT",
+        {"check_b.py": "跑在 `layering` 独立作业：判据是 grimp 的包图 + `.gates-imports-baseline.txt`"},
+    )
+    rc, out = _run(mod)
+    assert rc == 1
+    assert "锚点是编的" in out and ".gates-imports-baseline.txt" in out, out
+
+
+def test_reason_without_any_path_anchor_goes_red(tmp_path, monkeypatch):
+    mod = _green_tree(tmp_path, monkeypatch)
+    monkeypatch.setattr(mod, "CI_ONLY_EXEMPT", {"check_b.py": "跑在 `layering` 独立作业：前置不同"})
+    rc, out = _run(mod)
+    assert rc == 1
+    assert "缺前置差锚点" in out, out
+
+
+def test_reason_may_cite_the_job_display_name(tmp_path, monkeypatch):
+    """`name:` 与 job id 同源同权：写显示名也算数（本仓 `ci.yml` 的实际书写习惯）。"""
+    yml = """name: ci
+on: push
+jobs:
+  layering:
+    name: layering-gates
+    steps:
+      - name: gate
+        run: python scripts/check_b.py
+"""
+    mod = _tree(
+        tmp_path,
+        monkeypatch,
+        scripts=("check_a.py", "check_b.py"),
+        gates_sh=GATES_A,
+        workflows={"ci.yml": yml},
+        exempt={"check_b.py": "跑在 `layering-gates` 独立作业：前置差见 `anchor.txt`"},
+    ) or _tree.mod
+    rc, out = _run(mod)
+    assert rc == 0, out
+
+
+def test_zero_jobs_in_workflows_collapses_the_range(tmp_path, monkeypatch):
+    """工作流里没有 `jobs:` 段 ⇒ 判据⑤ 没有射程，一律 exit 2 而不是报干净。"""
+    yml = "name: ci\non: push\nsteps:\n  - run: python scripts/check_a.py\n"
+    _tree(
+        tmp_path,
+        monkeypatch,
+        scripts=("check_a.py",),
+        gates_sh=GATES_A,
+        workflows={"ci.yml": yml},
+    )
+    rc, out = _run(_tree.mod)
+    assert rc == 2, out
+    assert "数不出任何一个 job" in out, out
+
+
+def test_collect_jobs_is_taken_from_yaml_not_a_hand_list():
+    """锚点的唯一真源是工作流本身：作业数与 `ci.yml` 里 `jobs:` 的条目数一致。"""
+    mod = _module()
+    jobs = mod.collect_jobs()
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    declared = re.findall(r"^  ([A-Za-z0-9_.-]+):\s*$", text.split("jobs:", 1)[1], re.M)
+    assert declared and set(declared) <= set(jobs), (declared, sorted(jobs))
+    # 反向也核：只有 `architecture` 真引用 check_imports.py，别的服务作业不许被算成它的覆盖。
+    runners = sorted(jid for jid, (_n, refs) in jobs.items() if "check_imports.py" in refs)
+    assert runners == ["architecture"], runners
