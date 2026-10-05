@@ -3672,6 +3672,13 @@ uvicorn 访问日志把整条查询串原样记下（`GET /api/mcp/pair-request?
   `import 冒烟` 新增/未获批 **0 条**。远端 CI 跑的树不含那两枚未提交文件，故 CI 侧该腿仍绿。
   另记一条本机环境事实：`gates.sh` 的 `PYTHON="${GATES_PYTHON:-python3}"` 在裸 `bash gates.sh` 下选中的
   解释器**没有** `homesdk` ⇒ `RC=2` 停在第一道 preflight（§二之三十一 那族"量具跑错解释器"的本机版本）。
+- **CI 侧本批已取到终态**（`scripts/gh_ci_status.py`，run **86** = `f1fa3c0`）：整条 `completed / success`，
+  六作业逐条 `completed/success` 且 `failed_steps` 全空（`quality-gates` / `ui-user-mimo-judgments` /
+  `ui-typecheck-build` / `layering-gates` / `pytest` / `adm-linkage-contracts`）。这条同时证了两件事：
+  新判据在 runner 上被收集并通过（runner 树上没有并发会话那两枚未提交文件，故 `quality-gates` 那一腿在
+  远端是绿的——本机 `RC=1` 的那 6 条容器属别人的 WIP），且连续绿按 run 计延伸到 **run 77–86（10 条）**。
+  一条取数口径顺手钉住：`gh_ci_status.py jobs` 的位置参数是 **run id**（`37355373390`），填 run number
+  （`86`）得到的是 `HTTP 404`——本仓第一次有人这么填，红得像 API 坏了。
 
 ## 四、审计侧
 
