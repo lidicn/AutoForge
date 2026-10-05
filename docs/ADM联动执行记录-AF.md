@@ -3631,6 +3631,48 @@ uvicorn 访问日志把整条查询串原样记下（`GET /api/mcp/pair-request?
   四条腿仍 `in_progress`"，那是**取数时刻**的状态而不是终态——按"回归结论对 HEAD 重跑"的同一口径补复取，
   登记在此免得下一批把那条旧读数当成悬红的账。
 
+## 二之四十三、`?token=` 进访问日志这一半收口：filter 挂在 `serve` 上，判据先学会"uvicorn 会把自己的 handlers 清一遍"
+
+上一批（§二之四十二 第六节）量到的是产物读数：验收链跑完后本机后端日志里有 **1 条**
+`GET /api/mcp/pair-request?token=<值>` —— 配对 SSE 只能经查询串传令牌（EventSource 发不了自定义头），
+而 uvicorn 的 access log 原样记整条 URL ⇒ **凭据进磁盘**。登记给 AF 的那一半当时写明"下一次真实触碰
+`af_cli` 的 serve 装配面时顺手做"，本批就是那次触碰。
+
+- **落点（`af_cli.py` +35）**：`AccessLogTokenMask(logging.Filter)` 把 `([?&]token=)[^&\s"']+` 替成
+  `\1***`；`install_access_log_token_mask()` 幂等挂载（同一 logger 上重复调用返回 `False`，不叠第二层）；
+  `serve` 在 `uvicorn.run` **之前**调它。两个细节是写的时候现学的：① 掩码后必须把 `record.args` 置空
+  （整行已是成品串），否则 URL 里 percent-encoding 的 `%` 会被 `msg % args` 二次格式化，实测炸出
+  `--- Logging error ---` 堆栈；② 只覆盖 `[?&]token=`，路径里 `token=literal` 这种不是查询键的形状
+  一字不动，免得把正常 URL 改成读不懂（这条钉在参数化判据里）。
+- **射程只判本进程，账上不写成"凭据不会进日志"**：反代 / nginx 同样记完整 URL，那一半在 NAS 部署者手里
+  （铁律 #3）。`af_api.api_pair_request_stream` 的 docstring 同批补了这段代价说明，防止下一个人把
+  `?token=` 当免费通道。
+- **判据 8 条（`tests/unit/test_access_log_token_mask.py`）里最要紧的是那条对照腿**。跑真 uvicorn 而不是
+  只喂自造 `LogRecord`，是因为只喂记录时"filter 从没被挂上"也能绿（logger 名、args 展开、格式化路径全是猜的）。
+  故第一腿 = 不挂 filter 的真服务器真请求，断言明文**必须**出现在收集到的日志行里；第二腿同一套捕获路径
+  挂上 filter，断言明文零命中且 `token=***` 恰 2 次（两种 URL 位置各一）。第三条是 AST 守卫：`serve` 里
+  少了 `install_access_log_token_mask()`、或它排到 `uvicorn.run` 之后 ⇒ 当场红。
+- **写判据时踩到的真机制（单独记，因为它会骗过任何人写的这类测试）**：`uvicorn.Config` 在 `server.run()`
+  里做 `dictConfig`，把 `uvicorn.access` 的 **handlers 清空重建**。第一版 collector 在 fixture 进例就
+  `addHandler` ⇒ 两条真服务器腿 `实收：[]` 全红，而掩码本身其实一直生效（对照腿与掩码腿同时"没收到"，
+  只看失败条数会误判成"产品码坏了"）。修法是把挂 handler 挪到 `server.started` **之后**；`filters` 不在
+  `dictConfig` 的重建范围里，所以掩码 filter 先挂后挂都有效——这个不对称正是那条对照腿存在的理由：
+  **没有它，"一条也没收到"和"收到但被干净地掩掉了"在绿灯上长得一模一样。**
+- **读数**：定点 `pytest tests/unit/test_access_log_token_mask.py -q` ⇒ **8 passed in 2.77s**。
+  变异档（把正则里的 `[?&]token=` 改成 `[?&]zztoken=`）⇒ **3 failed, 5 passed**，红的是掩码腿 + 两条
+  参数化腿，**对照腿保持绿**（它本就不依赖正则，正是它在证明"捕获路径没坏、坏的是掩码"）。改完 `cp` 还原，
+  `git diff --numstat` 只见 `af_cli.py 35 0` + `af_api.py` 那 4 行注释。
+  全量 `python -m pytest -q` ⇒ **42 failed / 3103 passed / 53 skipped / 35 subtests，`PYTEST_RC=1`（150.78s）**：
+  上批同树读数 42 failed / 3095 passed ⇒ **失败条数一字未变、通过数 +8 恰为本批 8 条新判据** ⇒ 本批零回归。
+  那 42 条仍全部来自并发会话未提交的 `tests/test_af_nl_roundtrip.py`（40 条）与它带进 `src/` 的
+  `af_nl_parse.py` 那 6 个未登记容器（顶红 `test_bounded_caches_gate.py` 两条），处置口径与 §二之四十一、
+  §二之四十二 相同：**不替别人登记、不把 `BASELINE` 扩成第二块盖章区、不改钉数**。
+  `gates.sh`（`GATES_PYTHON` 指本机 3.13）⇒ **`RC=1`，唯一红腿就是有界缓存注册表门那 6 条 `af_nl_parse.py`**
+  （注册表 2 / 固定键 2 / 基线 73 / **扫到 81** ⇒ 81 − 6 = 75 与已提交树的钉数对得上）；其余各腿全绿，
+  `import 冒烟` 新增/未获批 **0 条**。远端 CI 跑的树不含那两枚未提交文件，故 CI 侧该腿仍绿。
+  另记一条本机环境事实：`gates.sh` 的 `PYTHON="${GATES_PYTHON:-python3}"` 在裸 `bash gates.sh` 下选中的
+  解释器**没有** `homesdk` ⇒ `RC=2` 停在第一道 preflight（§二之三十一 那族"量具跑错解释器"的本机版本）。
+
 ## 四、审计侧
 
 
@@ -3789,7 +3831,12 @@ fail-open（五处落盘站点 + 撤销名单"读不成即复活已撤销令牌"
 - **本树（工作区）的全量 `pytest` 读数今天不能当作"这批的绿色证明"引用**：同一工作树里有并发会话未提交的 `af_nl_parse.py` + `tests/test_af_nl_roundtrip.py`，它带来 6 个未登记增长容器 ⇒ `check_bounded_caches` 判红、`test_bounded_caches_gate.py` 两条红（`test_real_repo_is_green`、`test_real_repo_measurements_are_pinned` 的"扫到"半边）。AF 的处置：**不替别人登记、不把 `BASELINE` 扩成第二块盖章区、不把钉数改成 81**；只把本批该动的那一处（删容器 ⇒ 75/73）改对，并当场量出"本树 81 − `af_nl_parse.py` 独占 6 = 75"来证明钉数是**已提交树**的真读数。远端 CI 跑的树不含那个文件，故 `gates.sh` 除这一条外本机全绿、`check_imports` 无违规。
 - 归档名别名的**读侧**与"无归档 conf 按折叠名键控"两面**未修**（修法要动名字→目录身份，属数据可见性变更 ⇒ §五 第 20 件，待提）。本批用两条"明写未覆盖"的判据把它钉在测试里（§二之四十 第三节），免得三个月后有人拿"别名那批已经修完"过账。
 - **F-3 的浏览器验收：SSE 那一段本批已从"没跑过"升成"真服务器判据"，但像素级仍未做，非 owner 那一档的数仍缺**。现状：`tests/unit/test_sse_pair_request_stream.py` 9 条跑在真 uvicorn + 真 SSE 客户端上（三档鉴权、`?token=` 回落、帧形对齐前端解析器）；owner/非 owner 的**掩码分层**目前只有 in-process 判据（`tests/unit/test_dcd_20261004_auth_limits.py` 用 write 域第三方令牌 `tok-bot`），**"由配对签发的 agent 令牌"那一档在真后端取不到数**——根因不在测试而在产品面：配对 bootstrap 本身不可达（§五 第 21 件），拿不到一枚走完全链的 agent 令牌。浏览器通道本机仍不可用（`evaluate_script`/`list_console_messages`/`handle_dialog` 连 `() => 1 + 1` 都 15s 超时，`navigate_page`/`select_page` 正常），故这条的结论等级只能写"真服务器 HTTP/SSE 判据级"，不写"页面动作级"。裁定 §五 那句口径照用：取不到视口就不把像素级验收挂在账上。
-- **`?token=` 落进 uvicorn 访问日志这一半本批未修**（§二之四十二 第六节）：SSE 建流的令牌经查询串传递（EventSource 发不了自定义头），本机实测 access log 原样记下 `?token=<值>` ⇒ 凭据落进日志。AF 侧可自决的落法是 `af_cli serve` 装一条 logging filter，把 `token=` 的值替成 `***`——纯本机、零契约变更，下一次真实触碰 `af_cli` 的 serve 装配面时顺手做，本批不为一行日志把那条面重开。**不在 AF 手里的一半**：反代/nginx 同样记完整 URL，属 NAS 部署者/SP（铁律 #3）。若 DCD 对第 21 件选 B（专用匿名 bootstrap 端点），"长连接令牌换成一次性 stream ticket"这条更彻底的修法才有落点，届时是契约面改动。
+- **`?token=` 落进 uvicorn 访问日志这一半：AF 侧本批已收（§二之四十三），不在 AF 手里的那一半仍挂着**。
+  SSE 建流的令牌经查询串传递（EventSource 发不了自定义头），本机实测 access log 原样记下 `?token=<值>`
+  ⇒ 凭据落进日志。**已做**：`af_cli serve` 在 `uvicorn.run` 前挂 `AccessLogTokenMask`，把 `[?&]token=` 的
+  值替成 `***`，判据含真服务器对照腿（不挂 filter 必须看得见明文）与 AST 守卫。**仍未做**：反代 / nginx
+  同样记完整 URL，属 NAS 部署者 / SP（铁律 #3），本仓不替它背书"日志干净"。若 DCD 对第 21 件选 B
+  （专用匿名 bootstrap 端点），"长连接令牌换成一次性 stream ticket"这条更彻底的修法才有落点，届时是契约面改动。
 
 ---
 

@@ -978,6 +978,9 @@ def build_app(
 
         SSE（EventSource）不支持自定义请求头，令牌经 ?token= 传递；
         也兼容 Authorization: Bearer 头。
+
+        ⚠️ 代价：`?token=` 会整条落进 uvicorn 访问日志。`forge serve` 起桥时挂了
+        `af_cli.AccessLogTokenMask` 把值替成 `***`（只保本进程；反代/nginx 那一半属部署侧）。
         """
         raw = (creds.credentials if creds else None) or token
         info = None

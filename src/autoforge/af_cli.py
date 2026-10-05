@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 import sys
 import threading
 from pathlib import Path
@@ -1339,6 +1341,38 @@ def _start_linkage_bridge(clock=None, store_root=DEFAULT_STORE_ROOT):
     return bridge
 
 
+# 稳定性审计 §六 / 执行记录 §二之四十二：SSE 建流的令牌只能经 ?token= 传递
+# （EventSource 发不了自定义头），于是 uvicorn 访问日志会把凭据原样记进磁盘。
+_TOKEN_IN_URL = re.compile(r"([?&]token=)[^&\s\"']+")
+_ACCESS_LOG = "uvicorn.access"
+
+
+class AccessLogTokenMask(logging.Filter):
+    """把访问日志里的 `?token=<值>` 替成 `?token=***`，其余一字不动。
+
+    射程只有本进程：反代 / nginx 同样记完整 URL，那一半属 NAS 部署侧（铁律 #3），
+    不要把这条读成"凭据不会进日志"。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        line = record.getMessage()
+        masked = _TOKEN_IN_URL.sub(r"\1***", line)
+        if masked != line:
+            record.msg = masked
+            record.args = None
+        return True
+
+
+def install_access_log_token_mask(logger_name: str = _ACCESS_LOG) -> bool:
+    """给 uvicorn 访问日志挂掩码 filter；返回本次是否新挂（重复调用不叠 filter）。"""
+    lg = logging.getLogger(logger_name)
+    for f in lg.filters:
+        if isinstance(f, AccessLogTokenMask):
+            return False
+    lg.addFilter(AccessLogTokenMask())
+    return True
+
+
 @app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="监听地址（容器内用 0.0.0.0）"),
@@ -1378,6 +1412,7 @@ def serve(
     if ui_dir and Path(ui_dir).is_dir():
         typer.echo(f"· 前端静态托管：http://{host}:{port}/（dist={ui_dir}）")
     bridge = _start_linkage_bridge(store_root=store_root)
+    install_access_log_token_mask()
     try:
         uvicorn.run(app_, host=host, port=port, log_level="info")
     finally:
