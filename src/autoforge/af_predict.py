@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from .af_atomic import atomic_write_text
 from .af_time import SystemTimeSource, ensure_aware, load_tz
 
 __all__ = [
@@ -842,11 +843,10 @@ class Predictor:
             }
         try:
             os.makedirs(self._persist_dir, exist_ok=True)
-            tmp = self.predictions_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False, indent=2, sort_keys=True)
-                fh.write("\n")
-            os.replace(tmp, self.predictions_path)  # 原子替换
+            atomic_write_text(
+                self.predictions_path,
+                json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            )
         except OSError as exc:  # fail-open：写盘失败不打断运行，内存模型继续生效
             logger.warning("预测模型持久化失败（%s），继续使用内存模型", exc)
 

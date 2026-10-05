@@ -106,7 +106,7 @@ include_external_packages = false
 name = "Service boundary never imported by kernel"
 type = "forbidden"
 source_modules = [
-  "autoforge.af_ir", "autoforge.af_flock", "autoforge.af_fault",
+  "autoforge.af_ir", "autoforge.af_flock", "autoforge.af_atomic", "autoforge.af_fault",
   "autoforge.af_time", "autoforge.af_adapters", "autoforge.af_auth",
 ]
 forbidden_modules = [

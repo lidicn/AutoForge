@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .af_flock import FileLock
-from .af_store import atomic_write_text
+from .af_atomic import atomic_write_text
 
 __all__ = ["ExperienceStore", "EXPERIENCE_FILENAME"]
 

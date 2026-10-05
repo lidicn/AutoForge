@@ -8,7 +8,7 @@
 层级定义（简化版，以"核心包前缀"分组）：
   L2 服务入口  → af_service, af_api, af_cli, af_mcp
   L1 运行时    → 所有其他非 L0 的 af_* 模块
-  L0 内核底座  → af_ir, af_adapters, af_flock, af_fault, af_time, af_auth
+  L0 内核底座  → af_ir, af_adapters, af_flock, af_atomic, af_fault, af_time, af_auth
 
 注：仿真胶水层（af_vhass.harness/bridge/high_fidelity/sse_stream）天然需要
 组装 Runtime/Scheduler，属于 L1 运行时的一部分，不是内核底座。
@@ -43,6 +43,7 @@ LAYERS = [
         "autoforge.af_ir",
         "autoforge.af_adapters",
         "autoforge.af_flock",
+        "autoforge.af_atomic",
         "autoforge.af_fault",
         "autoforge.af_time",
         "autoforge.af_auth",
@@ -53,7 +54,7 @@ LAYERS = [
 
 L2_KEYWORDS = ("autoforge.af_service", "autoforge.af_api", "autoforge.af_cli", "autoforge.af_mcp")
 L0_KEYWORDS = ("autoforge.af_ir", "autoforge.af_adapters",
-               "autoforge.af_flock", "autoforge.af_fault",
+               "autoforge.af_flock", "autoforge.af_atomic", "autoforge.af_fault",
                "autoforge.af_time", "autoforge.af_auth")
 
 
@@ -68,6 +69,7 @@ L0_KEYWORDS = ("autoforge.af_ir", "autoforge.af_adapters",
 L0_KERNEL = (
     "autoforge.af_ir",        # IR schema/模型（纯数据结构）
     "autoforge.af_flock",     # 文件锁（跨进程原语）
+    "autoforge.af_atomic",    # 原子落盘助手（只依赖标准库；af_flock/af_store 都要它）
     "autoforge.af_fault",     # 故障注入定义（纯数据类）
     "autoforge.af_time",      # 时间源基类
     "autoforge.af_adapters",  # adapter 基类（ha/http/mock 是 L1 实现，adapter.base 是 L0）

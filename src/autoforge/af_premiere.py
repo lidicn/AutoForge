@@ -18,6 +18,8 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from .af_atomic import atomic_write_text
+
 __all__ = [
     "PremiereCode",
     "ConsumeResult",
@@ -183,7 +185,7 @@ class PremiereStore:
     def peek(self, code: str) -> Optional[PremiereCode]:
         return self._by_code.get(code)
 
-    # ---- JSON 落盘（原子替换，抄 af_version._save / shadow_log 模式）----
+    # ---- JSON 落盘（走 `af_atomic.atomic_write_text`：随机 tmp + fsync）----
 
     def save(self, path: Optional[str] = None) -> None:
         """写透当前首演码仓库（原子替换，崩溃不留半截文件）。"""
@@ -195,10 +197,7 @@ class PremiereStore:
             "ttl_s": self._ttl_s,
             "codes": [c.to_dict() for c in self._by_code.values()],
         }
-        tmp = f"{path}.tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
+        atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
     def load(self, path: Optional[str] = None) -> int:
         """从磁盘恢复首演码仓库（启动期调用）。返回加载条数。"""
@@ -455,10 +454,7 @@ class TrialStore:
             "last_sha": self._last_sha,
             "trials": [t.to_dict() for t in self._trials.values()],
         }
-        tmp = f"{path}.tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
+        atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
     def load(self, path: Optional[str] = None) -> int:
         """从磁盘恢复试演期仓库（启动期调用）。返回加载条数。"""

@@ -35,7 +35,8 @@ from typing import Any, Callable, Iterable, Mapping
 from .af_adapters import DEFAULT_HA_URL, HATransport
 from .af_affordance import affordance_for, domain_of
 from .af_flock import FileLock
-from .af_store import DEFAULT_STORE_ROOT, atomic_write_text
+from .af_atomic import atomic_write_text
+from .af_store import DEFAULT_STORE_ROOT
 
 __all__ = [
     "DeviceCatalog",
@@ -293,7 +294,7 @@ class DeviceCatalog:
 
         这一站原来既没有锁也没有随机 tmp 名：两个进程同时刷新目录会写同一个
         `catalog.json.tmp`，交错内容被最后一次 `os.replace` 装上，下次 `_load()`
-        把整份设备目录按损坏读空。走 `af_store.atomic_write_text`（本文件已 import）。
+        把整份设备目录按损坏读空。走 `af_atomic.atomic_write_text`（本文件已 import）。
         """
         path = self.catalog_path
         path.parent.mkdir(parents=True, exist_ok=True)

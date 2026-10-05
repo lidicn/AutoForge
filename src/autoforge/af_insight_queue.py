@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .af_feedback import clock_now
-from .af_store import atomic_write_text
+from .af_atomic import atomic_write_text
 from .af_time import SystemTimeSource
 
 __all__ = ["InsightRecord", "InsightQueue", "PersistentInsightSink", "InsightQueueFull"]
@@ -61,7 +61,7 @@ class InsightRecord:
 
 
 def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
-    """落盘一条记录：随机 tmp 名 + fsync（`af_store.atomic_write_text`）。
+    """落盘一条记录：随机 tmp 名 + fsync（`af_atomic.atomic_write_text`）。
 
     原来是固定名 `path.with_suffix(".tmp")` + 裸 `write_text`：同一个 proposal_id
     被并发复写（pending 与 decided 同名、或同一记录二次提交）时两边写同一个 tmp，

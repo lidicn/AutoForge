@@ -14,12 +14,13 @@ recovery 语义：重启时发现 state='claimed'（崩溃在 confirm 之前）�
 from __future__ import annotations
 
 import json
-import os
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
+
+from .af_atomic import atomic_write_text
 
 
 @dataclass
@@ -55,12 +56,10 @@ class JsonFireStore:
                 self._records = {}
 
     def _save(self) -> None:
-        tmp = self._path.with_suffix(".json.tmp")
-        tmp.write_text(
+        atomic_write_text(
+            self._path,
             json.dumps({"records": self._records}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
-        os.replace(tmp, self._path)
 
     def _get(self, rule_key: str, day: str) -> dict[str, Any] | None:
         return self._records.get(rule_key, {}).get(day)

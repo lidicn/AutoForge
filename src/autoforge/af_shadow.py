@@ -24,6 +24,7 @@ from enum import Enum
 from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
 
+from autoforge.af_atomic import atomic_write_text
 from autoforge.af_conf import AUTO_MIN, Band, ConfidenceStore
 from autoforge.af_feedback import (
     FeedbackKind, FeedbackRecorder, LaterFn,
@@ -164,13 +165,10 @@ class ShadowLogStore:
         return len(rows)
 
     def save(self, path: str) -> None:
-        """落盘 shadow_log.json（原子替换，崩溃不留半截文件，抄 af_version._save 模式）。"""
+        """落盘 shadow_log.json（走 `af_atomic.atomic_write_text`：随机 tmp + fsync，崩溃不留半截文件）。"""
         import json
-        payload = json.dumps(self.dump(), ensure_ascii=False, indent=2)
-        tmp = f"{path}.tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(payload)
-        os.replace(tmp, path)                    # 原子替换
+
+        atomic_write_text(path, json.dumps(self.dump(), ensure_ascii=False, indent=2))
 
     def load_file(self, path: str) -> int:
         """从 shadow_log.json 恢复。"""

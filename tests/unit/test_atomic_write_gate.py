@@ -1,11 +1,12 @@
 """原子写站点门禁必须**能变红**（铁律 #8），红的必须是"下一个写错的落盘点"。
 
 起因：安全审计那份 zip 的 out_of_scope 14 个单元里盘出的写原子性族——`af_store._atomic_write`
-在 P1-18 已经改成"随机 tmp 名 + fsync"，但这条纪律没扩散：AST 盘 src 全集实测 16 站里一半以上
-仍是"固定名 `.tmp` + 裸 `write_text` + `os.replace`"。反例必须逐条覆盖判据：固定名站点未登记
-（红）、走 mkstemp（绿）、就地豁免带理由（绿）/ 空理由（红且说的是理由为空）、射程塌了
-（扫不到站点 / 解析失败 ⇒ exit 2，不许变成"没有发现"）。另外钉两条键的形状：同名方法分属两个类
-必须是两条独立基线（否则修好一处等于冻结另一处），以及**本仓基线每条都必须带非空理由**。
+（P1-18 已改成"随机 tmp 名 + fsync"，本批收进内核助手 `af_atomic.atomic_write_text`）那条纪律没扩散：
+AST 盘 src 全集实测 16 站里一半以上仍是"固定名 `.tmp` + 裸 `write_text` + `os.replace`"。反例必须逐条
+覆盖判据：固定名站点未登记（红）、走 mkstemp（绿）、就地豁免带理由（绿）/ 空理由（红且说的是理由为空）、
+射程塌了（扫不到站点 / 解析失败 ⇒ exit 2，不许变成"没有发现"）。另外钉两条键的形状：同名方法分属两个类
+必须是两条独立基线（否则修好一处等于冻结另一处），以及**本仓基线必须为空**——裁定 20261004 §二 那 9 站
+收完之后，"有理由的冻结站"这条路已经关掉了，基线重新长出条目就是回潮。
 
 D 腿（授权面 `.auth/` 落盘必经原子助手，DCD 裁定 20261004 §二）的反例是另一族，它要证明的是
 **政策性**而不是形状：① `af_auth.py` 内裸 `write_text` 红、② 常量可写模式的 `open()` 同样红、
@@ -199,7 +200,7 @@ def test_missing_directory_is_range_failure(tmp_path):
     assert "目录不存在" in out
 
 
-# ── 本仓真值：门在 HEAD 上必须绿，且基线每条都有理由 ──────────────────
+# ── 本仓真值：门在 HEAD 上必须绿，且基线必须为空 ──────────────────────
 
 def test_real_src_is_clean_and_measurable():
     mod = _module()
@@ -231,19 +232,20 @@ def test_real_auth_face_files_all_go_through_the_helper():
         assert bare not in text, f"授权面里出现了裸写 {bare}"
 
 
-def test_every_baseline_entry_carries_a_nonempty_reason():
-    assert BASELINE.is_file()
+def test_baseline_is_empty_now_that_the_nine_sites_are_closed():
+    """棘轮翻面：立门时这条判"每条都有理由"，裁定 20261004 §二 把 9 站收完后判"必须为空"。
+
+    基线再长条目只有两种可能——有人把落盘改回固定名（该红），或账本被挪走（该红）。所以这条不再是
+    "格式检查"而是"回潮检查"。豁免标记的理由仍由判据 B 把守（见 `test_exempt_with_empty_reason_is_red`），
+    新固定名站点没有第三个出口：走 `af_atomic.atomic_write_text`，或写带理由的就地豁免。
+    """
+    assert BASELINE.is_file(), "账本被挪走 ⇒ 棘轮失去参照，这条要跟着红"
     entries = [
         ln.strip()
         for ln in BASELINE.read_text(encoding="utf-8").splitlines()
         if ln.strip() and not ln.lstrip().startswith("#")
     ]
-    assert entries, "基线空了 ⇒ 要么真修完了（那这条测试该改），要么文件被挪走"
-    for line in entries:
-        key, _, reason = line.partition("#")
-        assert key.strip().endswith(tuple("abcdefghijklmnopqrstuvwxyz_"))
-        assert reason.strip(), f"{key.strip()} 没有理由"
-        assert "::" in key, key
+    assert not entries, f"原子写基线必须为空（9 站已收完），现在仍有 {len(entries)} 站：{entries}"
 
 
 def test_baseline_keys_match_the_generator():

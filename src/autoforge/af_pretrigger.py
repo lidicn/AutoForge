@@ -28,6 +28,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .af_atomic import atomic_write_text
 from .af_predict import PREDICTIONS_FILE, Predictor
 from .af_time import SystemTimeSource, ensure_aware, load_tz
 
@@ -109,14 +110,12 @@ class TriggerHistory:
             return
         try:
             os.makedirs(self.persist_dir, exist_ok=True)
-            tmp = path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(
-                    {"events": self._events}, fh,
-                    ensure_ascii=False, indent=2, sort_keys=True,
-                )
-                fh.write("\n")
-            os.replace(tmp, path)
+            atomic_write_text(
+                path,
+                json.dumps(
+                    {"events": self._events}, ensure_ascii=False, indent=2, sort_keys=True
+                ) + "\n",
+            )
         except OSError as exc:  # fail-open：写盘失败不影响运行
             logger.warning("预触发历史持久化失败（%s）", exc)
 

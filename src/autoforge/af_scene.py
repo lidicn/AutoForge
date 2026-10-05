@@ -6,7 +6,7 @@
   **先**关掉组内其他已激活场景（fail-closed：宁可短暂空档，绝不两个互斥场景并存）。
 - ``deactivate(scene_id)``：关闭场景内全部自动化（逐个尽力下发，不短路）。
 - ``list_scenes()``       ：返回全部场景快照（拷贝，外部改写不影响内部状态）。
-- 状态持久化到 ``persist_dir/scenes.json``（原子写：``*.tmp`` + ``os.replace``）。
+- 状态持久化到 ``persist_dir/scenes.json``（原子写走 ``af_atomic.atomic_write_text``：随机 tmp + fsync）。
 
 依赖注入：``executor`` 承担真正的自动化开/关（af_executor），本模块只做编排与状态。
 executor 的形状见 :class:`SceneExecutor`；由于现网签名未在契约中给出，
@@ -29,6 +29,8 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Iterable, Protocol, runtime_checkable
+
+from .af_atomic import atomic_write_text
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型标注
     from typing import Any
@@ -297,12 +299,9 @@ class SceneManager:
             },
         }
         path = self.state_path
-        tmp = path + ".tmp"
         try:
             os.makedirs(self._persist_dir, exist_ok=True)
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False, indent=2, sort_keys=True)
-            os.replace(tmp, path)
+            atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         except OSError as exc:
             self.last_persist_error = str(exc)
             logger.warning("持久化状态写入失败（fail-open，状态未落盘）：%s", exc)

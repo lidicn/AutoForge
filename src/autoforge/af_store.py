@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from .af_atomic import atomic_write_text
 from .af_audit import record_conflict
 from .af_conf import ConfidenceStore
 from .af_flock import FileLock, owner_id
@@ -76,46 +77,6 @@ def _validate_graph_dict(graph_dict: Any) -> None:
 
 class WriteConflictError(Exception):
     """v0.9.0 跨进程写入版本冲突：`expect_version` 与当前最新版本不符（拒绝覆盖写入）。"""
-
-
-def _atomic_write(path: Path, text: str) -> None:
-    """同目录临时文件 + `os.replace` 原子替换（并发读者永远看到完整文件）。
-
-    P1-18 修复：
-    - 用 tempfile.mkstemp 生成随机 tmp 名（避免并发写同名 .tmp 互相截断）
-    - 写后 fsync 文件句柄（掉电时数据已落盘）
-    - replace 后 fsync 目录（确保目录项持久化）
-    """
-    import tempfile
-    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, path)
-        # 目录 fsync（确保 rename 持久化）；Windows 上可能 PermissionError，尽力而为
-        try:
-            dir_fd = os.open(str(path.parent), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except OSError:
-            pass
-    finally:
-        # 清理残留的 tmp 文件（如果 replace 失败）
-        try:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-        except OSError:
-            pass
-
-
-def atomic_write_text(path: Path, text: str) -> None:
-    """公开版原子写（自动建父目录）；供 v1.5.0 遥测/经验/知识库复用。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write(path, text)
 
 
 def append_jsonl(path: Path, obj: Any) -> None:
@@ -234,7 +195,7 @@ class GraphStore:
                 "owner": owner,  # v1.3.0 归档归属（谁建的）
                 "graph": _graph_raw(graph),
             }
-            _atomic_write(
+            atomic_write_text(
                 directory / f"v{version}.json",
                 json.dumps(record, ensure_ascii=False, indent=2),
             )
@@ -258,7 +219,7 @@ class GraphStore:
             version = (self.latest(name) or 0) + 1
             rec["version"] = version
             rec["saved_at"] = _utc_now_iso()
-            _atomic_write(
+            atomic_write_text(
                 directory / f"v{version}.json",
                 json.dumps(rec, ensure_ascii=False, indent=2),
             )
@@ -311,7 +272,7 @@ class GraphStore:
         self.root.mkdir(parents=True, exist_ok=True)
         # v0.9.0：read-modify-write 是跨进程竞态窗口，整段拿锁 + 原子替换
         with FileLock(self.root / "tags.lock", timeout=self.lock_timeout):
-            _atomic_write(
+            atomic_write_text(
                 self._tags_path(),
                 json.dumps(data, ensure_ascii=False, indent=2),
             )
@@ -328,7 +289,7 @@ class GraphStore:
                 data[name] = clean
             else:
                 data.pop(name, None)
-            _atomic_write(
+            atomic_write_text(
                 self._tags_path(), json.dumps(data, ensure_ascii=False, indent=2)
             )
 
@@ -415,7 +376,7 @@ class GraphStore:
             "graph": dict(graph_dict),
         }
         with FileLock(directory / ".lock", timeout=self.lock_timeout):
-            _atomic_write(
+            atomic_write_text(
                 directory / f"v{version}.json", json.dumps(record, ensure_ascii=False, indent=2)
             )
         return version
@@ -424,7 +385,7 @@ class GraphStore:
         """直接写入置信度快照 payload（不经 ConfidenceStore round-trip）。"""
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.root / f"{self._dir(name).name}.conf.json"
-        _atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2))
+        atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
         return path
 
     def _delete_archive(self, name: str) -> None:
@@ -450,7 +411,7 @@ class GraphStore:
             data = self._read_tags()
             if name in data:
                 data.pop(name, None)
-                _atomic_write(
+                atomic_write_text(
                     self._tags_path(), json.dumps(data, ensure_ascii=False, indent=2)
                 )
 
@@ -555,7 +516,7 @@ class GraphStore:
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.root / f"{self._dir(name).name}.conf.json"
         payload = {"name": name, "saved_at": _utc_now_iso(), "note": note, "conf": dump_confidence(store)}
-        _atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2))
+        atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
         return path
 
     def load_conf(self, name: str) -> ConfidenceStore:

@@ -2,7 +2,8 @@
 """原子写站点门禁：`os.replace` 的临时名不能是固定名，除非同一函数里有 `mkstemp`/公共助手。
 
 起因（2026-10-04，安全审计那份 zip 的 out_of_scope 14 个单元里优先级最高的两族）：
-`af_store._atomic_write` 的 docstring 把 P1-18 那次修复写得很清楚——"用 `tempfile.mkstemp`
+`af_atomic.atomic_write_text`（P1-18 那次的修法原本写在 `af_store._atomic_write` 的 docstring 里，
+本批下沉成独立助手）把纪律写得很清楚——"用 `tempfile.mkstemp`
 生成随机 tmp 名（避免并发写同名 .tmp 互相截断）+ 写后 fsync + replace 后 fsync 目录"。
 可这条修好的纪律只落在了 `af_store` 自己头上：AST 盘 src 全集，`os.replace(` 的站点里
 **一半以上**仍是"固定名 tmp + 不 fsync"的旧形状（`with_suffix(".tmp")` / `path + ".tmp"` /
@@ -29,7 +30,8 @@
 
 基线（`.atomic-write-baseline.txt`）由 `--print-baseline` 从扫描生成、不手敲，**只减不增**：
 每修好一处，重跑一次生成器，条目数往下走。基线只对本仓 `src/` 生效（`argv[1]` 另给目录时
-不读基线，也不写）。
+不读基线，也不写）。**当前基线为空**（立门时冻结的 9 站已按裁定 20261004 §二 的顺序收完），
+所以"新站点登记进基线"这条路实际上已经没有了——要么走助手，要么写带理由的就地豁免。
 
 豁免/基线**不覆盖**的事：本门判的是"临时文件名唯不唯一、有没有走已经修过的那条路"，
 是纯调用图形状。至于"这个文件到底有没有第二个写者"是值语义，静态判不出——
@@ -212,7 +214,7 @@ def check(root: Path, baseline_keys: list[str]) -> tuple[list[str], dict[str, in
         shape = "固定名 tmp（并发写会互相截断）" if site["fixed"] else "裸 os.replace（无 mkstemp、无 fsync）"
         findings.append(
             f"[原子写] {site['file']}:{lines} 函数 `{site['key'].split('::', 1)[1]}` 里的 `os.replace` "
-            f"是{shape}，且既没登记进基线也没就地豁免：走 `af_store.atomic_write_text`"
+            f"是{shape}，且既没登记进基线也没就地豁免：走 `af_atomic.atomic_write_text`"
             f"（随机 tmp + fsync + 目录 fsync），或把这一站写进基线并给理由"
         )
     stale = [k for k in baseline_keys if k not in {s["key"] for s in sites}]

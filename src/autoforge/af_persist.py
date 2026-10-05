@@ -26,7 +26,8 @@ from typing import Any, Mapping
 from .af_flock import owner_id
 from .af_instance import Instance, InstanceContext, InstanceTimer
 from .af_ir import Automation
-from .af_store import atomic_write_text, restore_context
+from .af_atomic import atomic_write_text
+from .af_store import restore_context
 from .af_time import TimeSource
 
 __all__ = ["PersistStore", "record_instance", "restore_instance", "INSTANCES_SUBDIR"]

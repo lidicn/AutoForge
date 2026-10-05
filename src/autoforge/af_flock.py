@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from .af_atomic import atomic_write_text
+
 __all__ = ["owner_id", "FileLock", "SERVE_LOCK_NAME", "serve_lock_path"]
 
 # 单写者租约的文件名只有一个真源：serve 用它抢锁，`live_run` 用它判"别人在写"。
@@ -183,8 +185,10 @@ class FileLock:
     def _stamp(self) -> None:
         """写持有者信息到 sidecar（best effort；失败不影响锁语义）。"""
         try:
-            tmp = self._info_path.with_suffix(".info.tmp")
-            tmp.write_text(
+            # mkstemp 建的临时文件天生是 0o600，`os.replace` 之后 sidecar 继承这个位
+            # （ADM B-14 的"锁信息文件限权"因此不靠显式 chmod）。
+            atomic_write_text(
+                self._info_path,
                 json.dumps(
                     {
                         "owner": owner_id(),
@@ -193,13 +197,7 @@ class FileLock:
                     },
                     ensure_ascii=False,
                 ),
-                encoding="utf-8",
             )
-            try:
-                tmp.chmod(0o600)  # ADM B-14：锁信息文件限权
-            except OSError:
-                pass
-            os.replace(tmp, self._info_path)
         except OSError:
             pass
 

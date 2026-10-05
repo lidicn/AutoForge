@@ -21,7 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from .af_store import append_jsonl, atomic_write_text, read_jsonl_bounded
+from .af_atomic import atomic_write_text
+from .af_store import append_jsonl, read_jsonl_bounded
 
 __all__ = [
     "PreferenceRecord",

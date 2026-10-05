@@ -17,7 +17,8 @@
 
 硬约束（§2.2）：不改任何现有文件、零新依赖（标准库 + 现有 autoforge 模块）、
 不碰现网配置、**不 import af_store 内部**——IR 读写全部走注入接口
-(``ir_provider`` 取 IR / ``ir_writer`` 回写)。
+(``ir_provider`` 取 IR / ``ir_writer`` 回写)；落盘走内核助手
+``af_atomic.atomic_write_text``（只依赖标准库，正是为了不破上面那条「不 import af_store 内部」）。
 """
 
 from __future__ import annotations
@@ -25,7 +26,6 @@ from __future__ import annotations
 import copy
 import dataclasses
 import json
-import os
 import re
 import time
 from collections.abc import Mapping
@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Sequence
 from uuid import uuid4
+
+from .af_atomic import atomic_write_text
 
 try:  # 与 af_feedback 的时钟 / 审计口径对齐；极简环境下本地降级（不构成硬依赖）
     from autoforge.af_feedback import audit_write as _af_audit_write
@@ -751,9 +753,7 @@ class VersionManager:
         }
         try:
             self.versions_dir.mkdir(parents=True, exist_ok=True)
-            tmp = path.parent / (path.name + ".tmp")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp, path)                    # 原子替换，崩溃不留半截文件
+            atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
         except Exception as exc:                     # noqa: BLE001
             raise VersionError(f"版本持久化失败：{path}（{type(exc).__name__}: {exc}）") from exc
 
