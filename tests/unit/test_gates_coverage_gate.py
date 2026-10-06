@@ -4,33 +4,51 @@
 （`bash gates.sh` 的**下一步**、前置完全相同），`gates.sh` 里没有 ⇒ 本机绿、推上去 CI 红。那种不对称
 不会让任何东西变红，只会让"该红的不红"。本门把"盘上的门 = 某条链真跑过的门"钉成静态判据。
 
-五条判据各自单独可红：① 漏跑（盘上有、两条链都不跑）② 远端有本机没有（工作流引用而 `gates.sh` 没跑、
+六条判据各自单独可红：① 漏跑（盘上有、两条链都不跑）② 远端有本机没有（工作流引用而 `gates.sh` 没跑、
 又没豁免）③ 豁免过期（登记了却没工作流引用）④ 豁免空理由 ⑤ 豁免理由的锚点核对不住（点名的作业没在引用
-这个脚本 / 没有路径锚点 / 路径是编的）。反空洞档同样单独可红：读不到 `gates.sh`／读不到 `workflows/`／
-盘上 0 个脚本／`gates.sh` 里 0 条调用／引用了盘上不存在的脚本／工作流数不出任何一个 job ⇒ 一律 `exit 2`，
+这个脚本 / 没有路径锚点 / 路径是编的）⑥ `gates.sh` 的 `echo "…"` 文案里有**未转义反引号**（bash 会把那段
+当命令替换执行一遍，打印的不是作者写的那句话，而退出码照旧对——⑤ 抓到过真猎物，见 §二之五十二）。
+反空洞档同样单独可红：读不到 `gates.sh`／读不到 `workflows/`／盘上 0 个脚本／`gates.sh` 里 0 条调用／
+引用了盘上不存在的脚本／工作流数不出任何一个 job／`gates.sh` 里 `echo "` 行数掉到下限以下 ⇒ 一律 `exit 2`，
 "没有发现"不等于"没有问题"。
 
 本文件最要害的一族是**注释不算覆盖**：往工作流里加一行 `# 见 check_x.py`、或把 `gates.sh` 的调用行
-改成任何非 `"$REPO/scripts/…"` 形状，都等于把那道门从链上摘掉——所以 ⑥⑦⑧ 三条腿专门验"只有注释／
-只有非引号形状"时门必须红，而不是把那句注释读成覆盖。
+改成任何非 `"$REPO/scripts/…"` 形状，都等于把那道门从链上摘掉——所以"注释／非引号形状"那几条腿
+专门验门必须红，而不是把那句注释读成覆盖。判据 ⑥ 的要害相反：**转义形状与注释行都不许红**（红了就等于
+逼文案少写信息），所以除了"注进去必红"还有一档"仓里现有写法零误伤"。
 """
 from __future__ import annotations
 
 import contextlib
 import importlib.util
 import io
+import os
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_gates_coverage.py"
 
+
+def _echo_fill(n: int = 8) -> str:
+    r"""合成 `gates.sh` 的文案行：满足判据 ⑥ 的射程下限，且**全是仓里在用的合法形状**。
+
+    第一行带一对已转义的 `\``（现仓二十多条结论文案都这么写）——它同时是本文件的"不误伤"反例：
+    这些行存在而门不红，才说明下限那一档不是靠"没有 echo 行"蒙过去的。
+    """
+    lines = ['echo "已转义的形状：\\`gates.sh\\` 与 \\`check_a.py\\` 不判红"\n']
+    lines += [f'echo "结论文案 {i}（$rc）"\n' for i in range(2, n + 1)]
+    return "".join(lines)
+
+
 GATES_A = '''#!/usr/bin/env bash
 set -e
 "$PYTHON" "$REPO/scripts/check_a.py"
-'''
+''' + _echo_fill()
 
 CI_ONLY_B = '''name: ci
 on: push
@@ -228,7 +246,7 @@ jobs:
 def test_unquoted_call_shape_in_gates_sh_is_not_coverage(tmp_path, monkeypatch):
     gates = '''"$PYTHON" "$REPO/scripts/check_a.py"
 $PYTHON $REPO/scripts/check_b.py
-'''
+''' + _echo_fill()
     _tree(
         tmp_path,
         monkeypatch,
@@ -422,3 +440,105 @@ def test_collect_jobs_is_taken_from_yaml_not_a_hand_list():
     # 反向也核：只有 `architecture` 真引用 check_imports.py，别的服务作业不许被算成它的覆盖。
     runners = sorted(jid for jid, (_n, refs) in jobs.items() if "check_imports.py" in refs)
     assert runners == ["architecture"], runners
+
+
+# ── 判据 ⑥：`echo "…"` 文案里的未转义反引号＝命令替换 ─────────────────
+
+#: §二之五十二 抓到的那条真缺陷的**原文形状**（本门自己接线时写的一句标题）。
+LOOSE = 'echo "══ 计划表口径门（`docs/plan` 那份表）══"\n'
+
+
+def test_loose_backtick_in_echo_text_goes_red(tmp_path, monkeypatch):
+    mod = _green_tree(tmp_path, monkeypatch)
+    gates = mod.GATES_SH.read_text(encoding="utf-8") + LOOSE
+    mod.GATES_SH.write_text(gates, encoding="utf-8")
+    rc, out = _run(mod)
+    assert rc == 1, out
+    assert "未转义反引号" in out and "计划表口径门" in out, out
+
+
+def test_escaped_backticks_and_comment_lines_are_not_red(tmp_path, monkeypatch):
+    r"""反例档：仓里在用的 `\`` 转义形状 + 整行注释里的裸反引号都不许红。
+
+    红了就会把人逼成"文案里少写信息"（不写路径、不写脚本名），那比原缺陷更坏。
+    """
+    mod = _green_tree(tmp_path, monkeypatch)
+    gates = (mod.GATES_SH.read_text(encoding="utf-8")
+             + LOOSE.replace('echo "', '# echo "')  # 注释不执行 ⇒ 不在射程
+             + 'echo "已转义：\\`docs/plan\\` 与 \\`check_a.py\\`"\n')
+    mod.GATES_SH.write_text(gates, encoding="utf-8")
+    rc, out = _run(mod)
+    assert rc == 0, out
+
+
+def test_few_echo_lines_collapse_the_range(tmp_path, monkeypatch):
+    """文案口径改了（printf／heredoc／变量）⇒ 数不出下限那么多 `echo "` 行，本门宁红不装干净。"""
+    mod = _green_tree(tmp_path, monkeypatch)
+    gates = ('"$PYTHON" "$REPO/scripts/check_a.py"\n'
+             'echo "one"\necho "two"\necho "three"\n')
+    mod.GATES_SH.write_text(gates, encoding="utf-8")
+    rc, out = _run(mod)
+    assert rc == 2, out
+    assert "没有射程" in out and "echo" in out, out
+
+
+def test_real_repo_gates_sh_echo_text_is_clean_and_has_range():
+    """真读数：本仓 `gates.sh` 的 echo 文案零未转义反引号，且行数值得住（下限不是空集给的干净）。"""
+    mod = _module()
+    text = (ROOT / "gates.sh").read_text(encoding="utf-8")
+    problems, n_echo = mod.echo_quoting_problems(text, "`gates.sh`")
+    assert problems == [], problems
+    assert n_echo >= mod.ECHO_LINE_FLOOR, n_echo
+
+
+def test_self_test_fails_when_echo_detector_is_blind(tmp_path, monkeypatch):
+    """判据 ⑥ 的注入腿必须真的能失效：检测器被致盲时 `--self-test` 必须红。"""
+    mod = _green_tree(tmp_path, monkeypatch)
+    monkeypatch.setattr(mod, "echo_quoting_problems", lambda *a, **k: ([], 99))
+    rc, out = _run(mod, ("--self-test",))
+    assert rc == 1 and "检测器失效" in out, out
+
+
+def _gnu_bash() -> str | None:
+    """找一个**真会做命令替换**的 GNU bash。
+
+    本机 `bash` 的第一候选是 WSL 那个占位程序（它连 WSL 都没装，只会回一段 UTF-16 的提示并以 rc=1 结束），
+    拿它跑这一腿会得到一个与引号语义毫无关系的红。所以逐个试、以 `--version` 自报 GNU bash 为准；
+    全都找不到就让腿红（不是 skip——skip 等于这条证据不存在）。
+    """
+    for cand in (os.environ.get("BASH"), shutil.which("bash"),
+                 "/bin/bash", r"C:/Program Files/Git/bin/bash.exe"):
+        if not cand:
+            continue
+        try:
+            out = subprocess.run([cand, "--version"], capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace", timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if out.returncode == 0 and "GNU bash" in out.stdout:
+            return cand
+    return None
+
+
+def test_bash_really_runs_the_loose_backticks_and_prints_something_else():
+    """判据 ⑥ 不是排版洁癖：这一段用 bash 自己的语义证明"未转义 ⇒ 那句文案没被打出来"。
+
+    这条腿跑的是**真实命令替换**：`docs/plan` 当命令执行会失败，替换成空串——退出码照旧 0。
+    转义那一行是配对反例（同一段文字，加了反斜杠就照原样打出来）。
+    """
+    exe = _gnu_bash()
+    assert exe, "找不到 GNU bash（WSL 占位程序不算）：这一族证据只能靠真解释器给，本腿不能默认成立"
+
+    def run(payload: str):
+        return subprocess.run([exe, "-c", payload], cwd=str(ROOT), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=30)
+
+    loose = run('echo "══ 计划表口径门（`docs/plan` 那份表）══"')
+    assert loose.returncode == 0, loose.stderr
+    assert "docs/plan" not in loose.stdout, loose.stdout
+    assert loose.stderr.strip(), "命令替换没被执行过——这一族形状变了，本腿失去意义"
+
+    escaped = run('echo "══ 计划表口径门（\\`docs/plan\\` 那份表）══"')
+    assert escaped.returncode == 0, escaped.stderr
+    assert "docs/plan" in escaped.stdout, escaped.stdout
+    assert escaped.stderr == "", escaped.stderr

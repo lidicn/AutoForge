@@ -1,11 +1,11 @@
-"""门禁装配覆盖门：`scripts/check_*.py` 必须真被某条链跑到，且远端有的本机也得有。
+r"""门禁装配覆盖门：`scripts/check_*.py` 必须真被某条链跑到，且远端有的本机也得有。
 
 缘起（§二之四十六）：裁定 20261005 要求的那条 `check_ir_runtime_keys.py` 当时只写在
 `.github/workflows/ci.yml` 的 `quality-gates` 作业里（`bash gates.sh` 的**下一步**，前置完全相同），
 `gates.sh` 里没有 ⇒ 本机 `bash gates.sh` 绿、推上去 CI 红。这类不对称不会让任何东西变红，
 只会让"该红的不红"，与包标记门（`check_pkg_markers.py`，为一次 `.gitignore` 事故立的复发门）同族。
 
-五条判据（全部静态可判）：
+六条判据（全部静态可判）：
 - **漏跑**：盘上某个 `check_*.py` 既不在 `gates.sh`、也不在任一工作流里 ⇒ 本门**射程里有它**，
   没有任何一条链跑它 ⇒ 判红。（"写了没接"比"没写"更坏：它看起来是一道门。）
 - **远端有、本机没有**：工作流里引用的 `check_*.py` 不在 `gates.sh`，且不在 `CI_ONLY_EXEMPT` ⇒ 判红。
@@ -17,8 +17,14 @@
   且**那个作业的本体真的引用了这个脚本**（"跑在别的作业里"这种话、以及拉一个不相干的真作业当掩护，都过不了）；
   ② 反引号点名的一个**盘上真实存在**的路径，用来说明前置差落在哪里。
   两个锚点各自可红：只给话不给锚点 ⇒ 红；给了锚点但锚点是编的 ⇒ 红。
+- **`echo` 文案里有未转义反引号**（§二之五十二）：`gates.sh` 的 `echo "…"` 双引号文案里，反引号**必须转义**。
+  未转义不是排版问题——bash 会把反引号中间那段**当命令替换执行一遍**，跑不出来就替换成空串：
+  开发者读到的是作者没写的那句话（本仓真发生过：`计划表口径门（`docs/plan` 那份表…）` 打出来变成
+  `计划表口径门（ 那份表…）`），而**退出码照旧对**，所以这条不对称不会让任何东西变红。
+  只数 `echo "` 开头的行（整行 `#` 注释不执行，不算）；`\`` 的写法不算（现仓二十多条结论文案都在用）。
 - **射程塌了不许报干净**：`gates.sh` 或 `.github/workflows/` 读不到、或 `gates.sh` 里一个
-  `check_*.py` 都没数到、或工作流里数不出**任何一个 job** ⇒ `exit 2`（"没有发现"不等于"没有问题"）。
+  `check_*.py` 都没数到、或工作流里数不出**任何一个 job**、或 `gates.sh` 里数不出一批
+  `echo "…"` 行（判据 ⑥ 的下限）⇒ `exit 2`（"没有发现"不等于"没有问题"）。
 
 判据⑤能判的是"引用的东西真不真"，**判不了"这句话是不是那条前置差的正确解释"**——那需要人读。
 所以它挡住的是空话与假锚点，剩下的语义对不对仍归 §二 的记录与复核。
@@ -214,12 +220,43 @@ def check(
     return problems
 
 
+#: 判据 ⑥ 的射程下限：`gates.sh` 里 `echo "…"` 的行数。数不出这一族行 ⇒ 本门的文案口径已经不是
+#: 这份脚本（改成 printf／heredoc／变量了），此时"没有未转义反引号"是空集给的干净。
+ECHO_LINE_FLOOR = 8
+
+
+def echo_quoting_problems(text: str, label: str) -> tuple[list[str], int]:
+    r"""判据 ⑥：`echo "…"` 双引号文案里的反引号**必须转义**——未转义就是命令替换。
+
+    为什么算装配问题而不是排版问题：那行文案不是"显示得丑一点"，而是 bash 真的把反引号中间那段
+    **当命令执行了一遍**，执行失败就替换成空串——开发者读到的是作者没写的那句话，而退出码照旧对。
+    本仓先例（`scripts/mutation_check_templates.py:99` 记的同一族）："文案里的反引号被 bash 当命令
+    替换执行，rc 恰好也对，自检差点把这条假通过当成果"。判红只数 `echo "…"` 里的未转义反引号，
+    `\`` 的写法不算（现仓二十多条结论文案都在用），整行 `#` 注释不算（注释不执行）。
+    """
+    problems: list[str] = []
+    n_echo = 0
+    for i, line in enumerate(text.splitlines(), 1):
+        s = line.strip()
+        if s.startswith("#") or 'echo "' not in s:
+            continue
+        n_echo += 1
+        body = s.split('echo "', 1)[1]
+        loose = sum(1 for k, ch in enumerate(body) if ch == "`" and (k == 0 or body[k - 1] != "\\"))
+        if loose:
+            problems.append(
+                f"{label} L{i}: `echo \"…\"` 的文案里有 {loose} 个未转义反引号 ⇒ bash 会把中间那段当"
+                f"**命令替换执行**（跑不出来就替换成空串），这一行打印的不是作者写的那句话，而退出码照旧对："
+                f"{s[:88]}")
+    return problems, n_echo
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--self-test",
         action="store_true",
-        help="负控：注入五个假形状，断言五类判红都真能触发后退出 0",
+        help="负控：注入六个假形状 + 两个『不该红』的形状，断言判红都真能触发、反例都不误伤后退出 0",
     )
     args = ap.parse_args()
 
@@ -233,8 +270,19 @@ def main() -> int:
         print("[gates-coverage] 读不出（exit 2）：工作流里数不出任何一个 job（判据⑤ 此刻没有射程）")
         return 2
 
+    # 判据 ⑥ 的射程核对：`echo "` 行数是这份脚本自己的文案口径，掉到下限以下 ⇒ 形状已经变了，
+    # 此时"没有未转义反引号"只是空集给的干净，不能报。
+    echo_problems, n_echo = echo_quoting_problems(
+        GATES_SH.read_text(encoding="utf-8"), "`gates.sh`")
+    if n_echo < ECHO_LINE_FLOOR:
+        print(
+            f"[gates-coverage] 读不出（exit 2）：`gates.sh` 里只数出 {n_echo} 行 `echo \"…\"`"
+            f"（下限 {ECHO_LINE_FLOOR}）——文案已经不是这一族行（printf／heredoc／变量），判据 ⑥ 此刻没有射程"
+        )
+        return 2
+
     if args.self_test:
-        # 五类判红各注入一次，证明检测器本体真能抓到（反空洞自证）。
+        # 六类判红各注入一次，证明检测器本体真能抓到（反空洞自证）。
         legs = {
             "漏跑": check(on_disk | {"check_unwired.py"}, gates_refs, ci_refs, jobs),
             "远端有、本机没有": check(on_disk, gates_refs, ci_refs | {"check_ci_only.py"}, jobs),
@@ -249,28 +297,44 @@ def main() -> int:
                     "跑在 `layering-gates` 独立作业：判据是 grimp 的包图 + `.gates-imports-baseline.txt`，"
                     "前置与失败口径都和 `quality-gates` 不同一条链（§二之十一），不并进 `gates.sh`"
                 )}),
+            # 本门抓到的那条**真缺陷**的形状（§二之五十二）：标题里的路径没转义 ⇒ bash 执行了它。
+            "echo 未转义反引号": echo_quoting_problems(
+                'echo "══ 计划表口径门（`docs/plan` 那份表）══"\n', "`gates.sh`")[0],
         }
         for k, v in legs.items():
             if not v:
                 print(f"[self-test] FAIL：{k} 这一档没检出任何东西，检测器失效")
                 return 1
-        print(f"[self-test] OK：五档注入全部被检出（{sum(len(v) for v in legs.values())} 条问题）")
+        # 反例档：仓里现有写法（`\`` 转义）与注释行都**不该**红——红了就等于逼文案少写信息。
+        escaped, n_esc = echo_quoting_problems(
+            'echo "已转义的形状：\\`gates.sh\\` 与 \\`check_a.py\\`"\n'
+            'echo "没有反引号的结论文案（在册 18 个）"\n'
+            '# echo "注释里的 `docs/plan` 不执行，不算射程"\n',
+            "`gates.sh`")
+        if escaped or n_esc != 2:
+            print(f"[self-test] FAIL：反例档被误伤（n_echo={n_esc}，问题 {len(escaped)} 条）："
+                  f"{'；'.join(escaped) or '行号核对不住'}")
+            return 1
+        print(f"[self-test] OK：{len(legs)} 档注入全部被检出（{sum(len(v) for v in legs.values())} 条问题），"
+              f"反例档（\\` 转义 + 注释行）零误伤")
         return 0
 
-    problems = check(on_disk, gates_refs, ci_refs, jobs)
+    problems = check(on_disk, gates_refs, ci_refs, jobs) + echo_problems
     if problems:
         print("门禁装配覆盖门未通过：")
         for p in problems:
             print(f"  - {p}")
         print(
             f"（在册 {len(on_disk)} 个 / `gates.sh` 跑 {len(on_disk & gates_refs)} 个 / "
-            f"工作流跑 {len(on_disk & ci_refs)} 个 / 豁免 {len(CI_ONLY_EXEMPT)} 格 / 作业 {len(jobs)} 条）"
+            f"工作流跑 {len(on_disk & ci_refs)} 个 / 豁免 {len(CI_ONLY_EXEMPT)} 格 / 作业 {len(jobs)} 条 / "
+            f"`gates.sh` echo 文案 {n_echo} 行）"
         )
         return 1
     print(
         f"门禁装配覆盖门干净（盘上 `check_*.py` {len(on_disk)} 个，"
         f"`gates.sh` 覆盖 {len(on_disk & gates_refs)} 个，工作流覆盖 {len(on_disk & ci_refs)} 个，"
-        f"独立作业豁免 {len(CI_ONLY_EXEMPT)} 格且两个锚点都核对得住——作业真引用了该脚本、路径真在盘上）"
+        f"独立作业豁免 {len(CI_ONLY_EXEMPT)} 格且两个锚点都核对得住——作业真引用了该脚本、路径真在盘上；"
+        f"echo 文案 {n_echo} 行无未转义反引号）"
     )
     return 0
 
