@@ -56,7 +56,7 @@
 
 ## §2 小版本规划（细分功能矩阵，已融入 DCD 裁定）
 
-### §2.0 v2.0.1 投产收口版（决策 H，先于 v2.1）
+### §2.0 v2.0.1 投产收口版（决策 H，先于 v2.1） ✅ **已交付**
 **目标**：收口 v2.0 投产硬阻塞，让"测试由采信台真跑"的铁律重新成立（跑的不是真相 = 铁律失效）。工期 2–3 天。
 - **F0.1 阻塞项收口**：P0-9 鉴权 fail-closed、103 个未提交文件（优先，否则测试失真）、镜像未烘、token 在 env_file 迁移。
 - **F0.2 文档鲜度修复**：README/KICKOFF 仍写 488 passed，实际 v1.7.1 已 529 passed；同步 ADM 路线图剩余项。
@@ -66,21 +66,21 @@
 ### v2.1 仿真保真与真实闭环强化（对应"最想加的 af_replay + af_watch"）
 **目标**：收缩 M4 诚实报告 `non_simulable` 区；影子验证 + 运行时监护做成可信闭环；并落地决策 C 阶段契约。
 
-- **F1 仿真底座补域建模** `[新建域 SM]`
+- **F1 仿真底座补域建模** ✅ 已交付` `[新建域 SM]`` `[新建域 SM]`
   - 现状：~8 域已建模，其余 unmodeled（`fake.py:179`）。
   - 涉及：`af_vhass/device_sm.py`（`SM_REGISTRY:402`）、`fake.py`（`SERVICE_STATE:136` `DYNAMIC_SERVICES:163`）、`high_fidelity.py`。
   - 细分（按决策 A 达标域清单）：① **P1** `scene.turn_on`/`script.turn_on` 间接触发展开 + `notify.*` 标"副作用不可观测"；② **P2** vacuum/valve/water_heater 最小状态机；③ **P3** alarm_control_panel/humidifier/button/input_* 等真实需求出现再做（**不许为凑数字建模**）。
   - 验收：P1 域完成并单测；诚实报告 `non_simulable` 区下降；P2/P3 按需求排期。
   - 决策结论（A）：保真度达标线 = P1 必做、P2 按需、P3 等需求；**不追求全域建模**。
 
-- **F2 双轨对拍测试（防漂移，非架构动作）** `[决策 A 修正]`
+- **F2 双轨对拍测试（防漂移，非架构动作）** ✅ 已交付` `[决策 A 修正]`` `[决策 A 修正]`
   - 现状：原"单一真值源 + 切 HiFi 默认"前提错误——`SERVICE_STATE`（`fake.py:135`）本就是单一真值源，HiFi 仅在 7 域加增强层、未建模域自动回落（`device_sm.py:100-106` `_fallback`）。
   - 涉及：`af_vhass/` 双轨。
   - 细分：① **保持 FakeHA 默认、HiFi opt-in**（`AUTOFORGE_VHASS_HIFI` 默认关）；② 新增"双轨对拍测试"防止 `SERVICE_STATE` 与 `SM_REGISTRY` 漂移（无需冻结真值源，加测试即可）。
   - 验收：双轨对拍测试通过；HiFi 切默认 = 否（切默认需全量断言重写 + 太阳几何语义分歧，不在 v2.1）。
   - 决策结论（A）：前提错误、问题比预想小；不切默认、不冻结真值源。
 
-- **F3 Shadow 期望态推导扩展 + EXEMPT 人审** `[强化，对应 af_replay，决策 B]`
+- **F3 Shadow 期望态推导扩展 + EXEMPT 人审** ✅ 已交付` `[强化，对应 af_replay，决策 B]`` `[强化，对应 af_replay，决策 B]`
   - 现状：`af_shadow.py:185` `DEFAULT_EFFECTS` 仅 8 动作；toggle/set_cover_position 等 UNVERIFIABLE 永不转正。
   - 涉及：`af_shadow.py`（`ShadowRunner` `DefaultExpectedStateResolver:185` `shadow_log.json:151`）。
   - 细分（按决策 B）：① **期望态推导扩展**（约 20 行）：toggle=前态取反、set_temperature/set_cover_position/volume_set=参数值，与现有 `set_hvac_mode/set_state(@params)` 同模式；② **新 verdict `EXEMPT`**（与 MATCHED/MISMATCH/UNVERIFIABLE 并列，**不计入 streak**）；③ 真不可推导动作走 EXEMPT 人审通道（与 approve 同级权限、附理由、写审计）；④ 诚实报告新增 `exempted` 分区单独展示（EXEMPT ≠ VERIFIED，诚实铁律 `af_expect.py:238-271` 毫发无损）；⑤ shadow_log 落盘持久化 + 重启回放。
@@ -94,7 +94,7 @@
   - 验收：上线自动化真实 HA 跑 24h 后，诚实报告能显示"仿真 non_simulable 项 X，其中 Y 真实验证通过、Z 真实失败"。
   - 设计困难（非决策项）：运行态/仿真态标识符对齐；真实状态采集隐私边界。
 
-- **F5 阶段契约冻结（决策 C，v2.1 必做）** `[契约]`
+- **F5 阶段契约冻结（决策 C，v2.1 必做）** ✅ 已交付` `[契约]`` `[契约]`
   - 现状：`issues_from()`（`loop.py:266-302`）多形状兜底解析，掩盖漂移（注释自承"容错解析"）。
   - 涉及：`af_closedloop/loop.py` `af_orchestrator.py:2300-2315`（消费点 3 处）。
   - 细分：① build/simulate 返回加 `"schema":"af-stage/1"` 版本字段；② `issues_from` 改严格模式（无版本→降级警告+容错过渡，有版本→严格校验）；③ 消费点集中（约 1 天）。
@@ -102,7 +102,7 @@
   - 决策结论（C）：**冻结，v2.1 就做**——6 项里成本最低、杠杆最高。
 
 ### v2.2 意图生命周期与安全红线
-- **F6 Premiere 持久化 + 试演期失败即暂停** `[决策 F]`
+- **F6 Premiere 持久化 + 试演期失败即暂停** ✅ 已交付` `[决策 F]`` `[决策 F]`
   - 现状：内存-only（`af_premiere.py:252`）；试演期 assert 失败仅 `pause_and_notify:206`，但 paused 未接执行闸（`af_premiere.py:221-235`）。
   - 涉及：`af_premiere.py` `TrialStore:180` `af_apply.py`（`enter_trial:143`）。
   - 细分（按决策 F：改"只统计不封禁"为"失败即暂停"，分级）：① 两 Store 加 JSON 写透（抄 `af_version.py:743-758` 原子替换 + 启动 load）；② paused 状态接进 `af_apply` 执行闸；③ **分级**：低风险 band 首次失败→通知、24h 内二次→暂停；高风险 band 首次失败→立即暂停+通知；④ 恢复必须人工（WebUI/CLI），不许自动恢复。
@@ -208,14 +208,14 @@
   - 部署（待窗口）：scp `src/autoforge/af_evo.py` + 两个测试文件到 NAS `/src`，镜像烘焙重建 `autoforge-api`；evo scan 产出真 IR、ProposalManager 消费闭环真机冒烟。
 
 ### v2.5 NL 双向结构化保真
-- **F14 NL→IR 结构化可逆编译器** `[新建/强化]`
+- **F14 NL→IR 结构化可逆编译器** ✅ 已交付（commit 9742102）` `[新建/强化]`` `[新建/强化]`
   - 现状：IR→NL 成熟（`af_nl.py`）；NL→IR 是启发式+LLM（`af_orchestrator.py:847`）。
   - 涉及：`af_nl.py` `af_orchestrator.py` `af_draft.py`。
   - 细分：① NL→IR 改结构化（复用 M3 AskSpec 控件元数据反向生成）；② 保证 IR→NL→IR 往返保真（同 IR 往返文本可 diff）。
   - 验收：给定 IR，render→解析→render 文本稳定；复杂条件句 NL 能反解回等价 IR。
   - 设计困难（非决策项）：自然语言歧义→结构化可逆保真边界（建议接受"IR 为唯一真源，NL 仅视图"）。
 
-- **F15 词表 / 算子单一真值源** `[强化]`
+- **F15 词表 / 算子单一真值源** ✅ 已交付` `[强化]`` `[强化]`
   - 现状：词表/算子手写映射（`af_nl.py:23` `_ACTION_VERBS` `:43` `_CMP_SYMBOL`）。
   - 涉及：`af_nl.py` `af_ir/schema/ir.schema.json`（与 M2 forbid 词表同源）。
   - 细分：① NL 词表与 AF-Spec forbid 词表统一真值源；② 新域自动派生 NL 文案（顺带覆盖决策 A 的补域词表）。
@@ -255,9 +255,35 @@
 
 ---
 
-## §6 待关键决策部下一步
-本路线图已把 A–H 裁定落到 v2.0.1–v2.5 功能卡。建议决策部据此**制定更全面的版本规划与里程碑拆分**（含每个 F 的 PR 拆分、工时、依赖序），并补充：
-- v2.3 需求决策门的数据采集方案（多意图请求占比统计）。
-- F4/F14 两项非决策类设计困难的进一步评审。
+## §6 路线图收口状态（2026-10-06 核实）
 
-> 路线图 v2.1+ 决策融合版完。A–F 已裁定落地，新增 G/H 治理项已纳入；所有功能卡均附 DCD 裁定引用。
+> 核实方式：源码 file:line 证据 + 全仓 grep + git 历史（至 `8a37a8b`）。
+> 结论：**A–H 八项 DCD 裁定全部落地；v2.0.1–v2.5 全部 F 卡已交付或属部署配置项；本路线图功能内容已收口。**
+> 唯一未提交文件为本文档自身（doc 阶段不部署，符合铁律 §3-3）。
+
+| 版本 | 功能卡 | 状态 | 证据 |
+|---|---|---|---|
+| v2.0.1 | F0.1 阻塞项收口（P0-9 fail-closed / 未提交文件 / token env_file / 镜像） | ✅ | `af_api.py:289-380` fail-closed；未提交文件 103 → 1（良性 doc）；compose `env_file:../.env` 注入 token |
+| v2.0.1 | F0.2 文档鲜度修复 | ✅ | README 已更新为「1300 passed / 51 skipped（2026-09-30 核实）」 |
+| v2.1 | F1 仿真补域（P1 scene/script/notify + P2 vacuum/valve/water_heater） | ✅ | `af_vhass/fake.py:42-45,164-175`；`af_actions.py:47-58`；`EXEMPT_DOMAINS` |
+| v2.1 | F2 双轨对拍测试 | ✅ | `af_vhass/dual_track.py:80-81` fake/hifi 对拍 |
+| v2.1 | F3 Shadow 期望态推导 + EXEMPT 人审 | ✅ | `af_shadow.py:49,107-115,340,416-421`；`af_expect.py:280-303`；`af_service.py:946` |
+| v2.1 | F4 运行时监护聚合（af_watch） | ✅ | 已标记 `177aa1c` + 2026-10-05 收口 |
+| v2.1 | F5 阶段契约冻结 | ✅ | `af_service.py:739,776,948` 返回 `schema:"af-stage/1"`；`loop.py:279-281` strict 校验 |
+| v2.2 | F6 Premiere 持久化 + 失败即暂停 | ✅ | `af_premiere.py:200,259-346,461` JSON 持久化 + paused 闸；`af_apply.py:113-127` 执行闸拦截 |
+| v2.2 | F7 通用撤销 / 设备态回滚 | ✅ | 已标记 2026-09-28 + 2026-10-01 补丁 |
+| v2.2 | F8 冲突仲裁 / band 归一 | ✅(①②) / ②部署配置 | `af_conf` 单一真值源 + `test_conflict_band.py`；② 经 `AUTOFORGE_CONFLICT_ARBITER` env 开启 |
+| v2.3 | F9 group 容器节点 | ✅ | 已标记 2026-09-28（DCD 方案 B） |
+| v2.3 | F10 复合部署与跨自动化一致性 | ✅ | 已标记 2026-09-28 |
+| v2.4 | F11 af_experience 消费闭环 | ✅ | ① `af_experience` 定向读 + `DeviceCatalog._experience_counts`；② `af_pretrigger.py:257-311` 注入 `empirical_prior` |
+| v2.4 | F12 af_predict 与 G4 联动 | ✅ | 已标记 2026-09-29 |
+| v2.4 | F13 af_evo 真 IR 内联 + band | ✅ | 已标记 2026-09-29 |
+| v2.5 | F14 NL→IR 可逆编译器 | ✅ | `9742102 feat(nl): F14 NL<->IR 方言对齐，render/parse 往返 45 项全过` |
+| v2.5 | F15 词表 / 算子单一真值源 | ✅ | `af_actions.py:1-13,73-103` `KNOWN_ACTIONS` 超集锚点 + `test_f15_word_table_alignment.py` |
+
+### 待决策部下一步（收口后）
+- A–H 裁定已全部执行回填；**无新增待裁项**。F14 的「NL 仅视图 / IR 唯一真源」边界已在 `9742102` 落地（方言对齐 + 往返保真），无需再裁。
+- v2.3 需求决策门：多意图占比采集已就位（`ComposeMetrics` + `af_mcp._t_draft` 透传 `session_id`），生产传稳定 `session_id` 即可评估；DCD 已裁定撤销「门真值不可采集」前提，group 按架构价值直接建。
+- 后续演进建议另起 `v2.6+` 路线图，不在本 v2.1+ 融合版范围。
+
+> 路线图 v2.1+ 决策融合版**已收口**：A–H 裁定全部落地，v2.0.1–v2.5 全部 F 卡已交付（详见 §6 收口状态总览）。所有功能卡均附 DCD 裁定引用与源码证据。
