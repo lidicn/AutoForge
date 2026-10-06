@@ -137,6 +137,9 @@ AF 代码全绿但镜像未烤——**这是 AF 唯一的硬阻塞**，且与 DB
 | 9 | 安全遗留（裁定 18:35 §一 / §五）：长期码加可配绝对上限（默认 180 天，`AUTOFORGE_AUTH_LONGCODE_TTL_DAYS`，0=显式关）+ `af_auth.list()` 输出"距生成多久"；**MCP 未设令牌默认拒绝**（`AUTOFORGE_MCP_ALLOW_NO_TOKEN=1` 才放行）；`GET /api/asks/pending` 加 `Depends(_read)`；`/api/user/auth-codes` 收紧到 `_write` 且 owner 面给明文、非 owner 面只给掩码+状态；`docstring` 里的 `demo/forge2026` 明文默认凭据移除；"只在可信 LAN"写成显式部署前提进 README + compose 注释 | 未授权默认结论必须能被测试判红；read 令牌取 auth-codes 列表 403；明文只在 write 面；掩码不可还原 | 无 |
 | 10 | 窗内开关（裁定 18:35 §二）：compose 补齐 `MQTT_HOST`/`MQTT_USER_*`/`MQTT_PASSWORD` 引用**但留空**，`AUTOFORGE_MQTT` 维持缺省关；`paho-mqtt` 钉上界 `>=1.6,<2.1` | **仓侧半边已交付**（`729343b`，§二之五十一）：compose 补齐 `MQTT_HOST`/`MQTT_PORT`/`MQTT_KEEPALIVE`/`MQTT_USER`/`MQTT_PASSWORD` 五条引用且值一律留空、`AUTOFORGE_MQTT` 缺省 `0`；键名不手抄——唯一真源是 `Dockerfile.api:26` 钉死的那枚 vendored wheel 的 `homesdk/mqtt.py`（`MQTT_USER_*` 那种带作用域的形式与 `MQTT_USERNAME`/`MQTT_PASS`/`MQTT_PASSWD` 别名在注释里点名但本仓不用），"留空是真 no-op"由真模块当场判（空 host 抛 `MissingEnv`、空 port 落回 `DEFAULT_PORT`、空账密抛 `MqttCredentialsMissing`）。`paho-mqtt>=1.6,<2.1` 早已钉（`pyproject.toml:42` 与 `:54`，裁定 Q2=B）。**窗内半边仍待第 1 件**：重烤后服务照常起、桥 no-op；开关真打开走**非停机窗**配置推送（先 `compose exec` 预检 `paho_available()` + `broker_settings()` 通过） | 1 |
 
+| 11 | **落地 DCD 20261006 §二**：段间累计封顶两档（S=1000 段 / T=20000 步越档告警，2× 才 `_fail`，落 `AuditLog` + 监护视图常驻指示）+ trace 截断（N=1000 + `trace_dropped`，不进 IR schema） | **已交付**（commit `e876678`，13 条腿）。残留：真机 HA 上未量（要等第 1 件那个窗） | — |
+| 12 | **落地 DCD 20261006 §一**：配对 bootstrap 走**两个匿名端点**（裁定 B）+ 限速 `request` 6/min、`redeem` 10/min、超限锁该 IP 于该端点 5 分钟 + 维持 8 位/300s/单次 + owner 侧"暂停接受配对请求"开关 | 匿名射程只开这两条（整张工具表仍 default-deny）；限速与锁定可被测试判红；owner 开关关掉后配对请求进不来 | 无（裁定已给） |
+
 ### 5.4 原本列在这里的四件：**已全部裁定**（2026-10-04 同日，勿重投）
 
 | 件 | 裁定 | 出处 |
