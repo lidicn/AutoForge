@@ -120,6 +120,14 @@ def _is_empty_container(node: ast.AST) -> bool:
         return len(node.elts) == 0
     if isinstance(node, ast.Call) and _call_name(node) in CONTAINER_FUNCS:
         return not node.args
+    # dataclass 字段：`X = field(default_factory=dict/list/deque/set/...)` 也是空容器初值，
+    # 但 `_scan_class` 旧逻辑只认 `self.X` 属性、不认类级 `Name` 字段，导致整类 dataclass
+    # 字段容器在射程外（BUG-21）。这里把 `field(default_factory=容器)` 也判成空容器初值。
+    if isinstance(node, ast.Call) and _call_name(node) == "field":
+        for kw in node.keywords:
+            if kw.arg == "default_factory" and isinstance(kw.value, ast.Name) \
+                    and kw.value.id in CONTAINER_FUNCS:
+                return True
     return False
 
 
@@ -213,6 +221,12 @@ def _scan_class(rel: str, cls: ast.ClassDef, found: set[str], lines: dict[str, i
                 and isinstance(node.target.value, ast.Name) and node.target.value.id == "self" \
                 and _is_empty_container(node.value):
             inits.setdefault(node.target.attr, node.lineno)
+        # dataclass 字段容器：类级 `Name = field(default_factory=容器)`，target 是 Name 而非 self.X。
+        # 旧逻辑只认 self.X 属性，漏掉这一整类（BUG-21：ConfidenceStore.samples /
+        # HealthEngine.demote_errors / InterventionDetector.records 等全在射程外）。
+        elif isinstance(node, ast.AnnAssign) and node.value is not None \
+                and isinstance(node.target, ast.Name) and _is_empty_container(node.value):
+            inits.setdefault(node.target.id, node.lineno)
     for name, lineno in inits.items():
         if _mutated_by_name(cls, name, self_prefix=True):
             key = f"{rel}::{cls.name}.{name}"
@@ -554,6 +568,54 @@ BASELINE = frozenset(
         "af_vhass/high_fidelity.py::HighFidelityAdapter.calls",
         "af_vhass/high_fidelity.py::HighFidelityAdapter.unmodeled",
         "af_watch.py::WatchAggregator._by_auto",
+        # ── BUG-21 收口：关闭 dataclass 字段容器盲点后新扫到的 41 个容器 ──
+        # 20261006 前 `_scan_class` 只认 `self.X` 属性，漏掉类级 `Name = field(default_factory=容器)`
+        # 这一整类；本轮补完后扫描从 81 涨到 122，多出的 41 个 dataclass 字段容器在此冻结。
+        # 其中 `ConfidenceStore.samples` / `HealthEngine.demote_errors` / `InterventionDetector.records`
+        # 已由 BUG-14/18 加 count 上限（有界）；其余多为随实例生命周期回收的诊断/状态容器。
+        # 基线只减不增：这些容器应随 DCD 裁定逐个转 BOUNDED_CACHES（补 TTL 腿 + 测试）或就地豁免，
+        # 不应永久冻结（呼应最终轮报告 P1「基线解冻」）。
+        "af_canary_supervisor.py::CanarySupervisor.records",
+        "af_conf.py::ConfidenceStore.samples",
+        "af_conf.py::ConfidenceStore.values",
+        "af_evo.py::EvoScanner._seen",
+        "af_evo.py::EvoScanner.order",
+        "af_evo.py::EvoScanner.proposals",
+        "af_evo.py::EvoScanner.warnings",
+        "af_evo.py::GraphView._ids",
+        "af_evo.py::GraphView.warnings",
+        "af_fault.py::FaultPlan.specs",
+        "af_feedback.py::FeedbackRecorder.events",
+        "af_health.py::HealthEngine._demotions",
+        "af_health.py::HealthEngine._history",
+        "af_health.py::HealthEngine._last_conf",
+        "af_health.py::HealthEngine.demote_errors",
+        "af_health.py::HealthEngine.extra_ids",
+        "af_health.py::HealthEngine.warnings",
+        "af_intervention.py::InterventionDetector.applied",
+        "af_intervention.py::InterventionDetector.managed",
+        "af_intervention.py::InterventionDetector.pending",
+        "af_intervention.py::InterventionDetector.records",
+        "af_orchestrator.py::AutomationDraft.assumptions",
+        "af_orchestrator.py::ComposeSession.history",
+        "af_proposal.py::ProposalManager.order",
+        "af_proposal.py::ProposalManager.proposals",
+        "af_runtime_ext.py::ConfGrading.restore_corrupt",
+        "af_runtime_plugins.py::RuntimeExtensions.lifecycle_errors",
+        "af_shadow.py::ShadowLogStore.records",
+        "af_state.py::InMemoryStateProvider.attributes",
+        "af_state.py::InMemoryStateProvider.states",
+        "af_vhass/action_queue.py::ActionQueue._pending",
+        "af_vhass/action_queue.py::ActionQueue._sms",
+        "af_vhass/event_bus.py::FakeEventBus._history",
+        "af_vhass/event_bus.py::FakeEventBus._subscribers",
+        "af_vhass/fake.py::FakeHA.attributes",
+        "af_vhass/fake.py::FakeHA.states",
+        "af_vhass/harness.py::VhassHarness.unmodeled",
+        "af_vhass/high_fidelity.py::HighFidelityHA._attributes",
+        "af_vhass/high_fidelity.py::HighFidelityHA._states",
+        "af_vhass/sse_stream.py::FakeSSEStream._buffer",
+        "af_vhass/sse_stream.py::FakeSSEStream._emitted_ids",
     }
 )
 

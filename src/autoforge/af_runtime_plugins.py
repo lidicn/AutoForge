@@ -63,7 +63,7 @@ class RuntimeExtensions:
     _observe_hooks: list[Callable[[str, Any, Any, float | None], None]] = field(default_factory=list)
     # 生命周期失败记账：persist/restore 失败绝不能静默——restore 静默失败会让服务
     # 以空状态启动却以为已恢复（新增审计 BUG-07）。
-    lifecycle_errors: dict[str, str] = field(default_factory=dict)
+    lifecycle_errors: dict[str, str] = field(default_factory=dict)  # bounded-cache: exempt(诊断型只写清单：lifecycle_errors 仅记录 persist/restore 失败项，随 RuntimeExtensions 实例回收，全仓读点仅有运维转储)
 
     def _record_lifecycle_error(self, op: str, exc: BaseException) -> None:
         """记录 persist/restore 失败：日志 + 记账 + 审计条目，三处都留痕。"""

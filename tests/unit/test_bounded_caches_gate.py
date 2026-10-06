@@ -550,20 +550,22 @@ def test_real_repo_is_green(tmp_path):
 
 
 def test_real_repo_measurements_are_pinned():
-    """钉住本批实测：注册表 2 / 固定键 2 / 扫到 81 / 基线 73。
+    """钉住本批实测：注册表 2 / 固定键 2 / 扫到 122 / 基线 114。
 
     数字变了只有两种可能：新增了一个容器（那要走登记或豁免），或者有人动了基线。两者都不该
     悄悄发生——第六轮审计那句"四处现状已是两条腿"就是靠这种核对才没被本门照抄成假账。
 
-    基线 73 自稳定性批次起未动过（`af_executor.py::NodeExecutor.node_visits` 那条删掉时
-    扫到数与基线各减 1）。扫到数 75 → 81 是**已提交树**的变化：`af_nl_parse.py`
-    （F14 的 NL 解析器，commit 9742102）带进来 6 个容器，并已逐个就地豁免带理由——
-    3 个是 import 期一次填满的静态反查表（`_REVERSE_ACTION` / `_VERB_ONLY_ACTION` /
-    `_by_verb`，键空间编译期封闭），3 个是 `_Builder` 的单次解析累加器
-    （`nodes` / `edges` / `_by_id`，上界=输入行数，随 `parse_automation` 返回即回收）。
-    6 个都落了 `# bounded-cache: exempt(理由)`，所以这里是"已登记"的增量，不是拿数字抹平。
+    基线 114：73 自稳定性批次起未动过（`af_executor.py::NodeExecutor.node_visits` 那条删掉时
+    扫到数与基线各减 1）；BUG-21 收口（20261006）关闭 dataclass 字段容器盲点后新增 41 个冻结
+    （见 `scripts/check_bounded_caches.py` 尾部注释）。扫到数 81 → 122：F14 的 `af_nl_parse.py`
+    （commit 9742102）带进来 6 个容器已就地豁免带理由；BUG-21 收口后 `_scan_class` 开始识别类级
+    `Name = field(default_factory=容器)` 这一整类，多扫到 41 个 dataclass 字段容器，冻结进基线。
 
-    工作树里若躺着未提交的 WIP 模块，扫到数会比 81 更大而基线仍是 73——那种红的意思是
+    这 41 个里 `ConfidenceStore.samples` / `HealthEngine.demote_errors` / `InterventionDetector.records`
+    已由 BUG-14/18 加 count 上限（有界）；其余多为随实例生命周期回收的诊断/状态容器。它们按
+    DCD 裁定逐个转 `BOUNDED_CACHES`（补 TTL 腿 + 测试）或就地豁免，基线只减不增。
+
+    工作树里若躺着未提交的 WIP 模块，扫到数会比 122 更大而基线仍是 114——那种红的意思是
     "新容器没登记"，不是这行数字错了，登记处置归那一批自己，不许靠挪动这里的数字把它抹平。
     """
     gate = _gate()
@@ -572,7 +574,7 @@ def test_real_repo_measurements_are_pinned():
     containers, _lines, scan_errs = gate.scan(src)
     assert errs == [] and scan_errs == []
     assert len(bounded) == 2 and len(fixed) == 2
-    assert len(containers) == 81 and len(gate.BASELINE) == 73
+    assert len(containers) == 122 and len(gate.BASELINE) == 114
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"

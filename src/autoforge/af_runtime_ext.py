@@ -65,7 +65,7 @@ class ConfGrading:
     binding: ShadowBinding | None = None
     pretrigger: Any = None
     persist_dir: str | None = None
-    restore_corrupt: list[str] = field(default_factory=list)
+    restore_corrupt: list[str] = field(default_factory=list)  # bounded-cache: exempt(诊断型只写清单：restore_corrupt 仅记录本 grading 实例的恢复失败项，随实例回收，全仓无读取点)
 
     # ---- 生命周期 ------------------------------------------------------- #
 
