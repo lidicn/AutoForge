@@ -1352,7 +1352,7 @@ def _start_linkage_bridge(clock=None, store_root=DEFAULT_STORE_ROOT):
     )
     af_mqtt_bridge.attach(bridge)
     typer.echo(
-        f"· MQTT 联动桥已上线：adm/{af_mqtt_bridge.PRESENCE_NAME}/status=online，"
+        f"· MQTT 联动桥已上线：向 adm/{af_mqtt_bridge.PRESENCE_NAME}/status 发布在线态（retained），"
         f"发 {af_mqtt_bridge.FIRED_TOPIC}|{af_mqtt_bridge.FAILED_TOPIC}，订 {af_mqtt_bridge.INSIGHTS_TOPIC}"
         f"（洞察提案落 {Path(str(store_root)) / 'insight_proposals'}，只读不部署）"
     )

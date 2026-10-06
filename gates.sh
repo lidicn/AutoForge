@@ -35,8 +35,15 @@ if [ ! -f "$REPO/.gates.toml" ]; then
 fi
 
 echo "══ AST 门禁（不含冒烟）═══════════════════════════════════════"
-"$PYTHON" -m homesdk.gates "$REPO" --no-smoke
-ast_rc=$?
+# 退出码单独不够：依赖门禁**崩掉**时 Python 也退 1（第十五轮 F16 实测 `RecursionError` ⇒ RC=1），
+# 与"判出违规"同形。把输出交给分类器分三档，崩＝无从判定（RC=2），不许按真红去补基线。
+ast_out=$("$PYTHON" -m homesdk.gates "$REPO" --no-smoke 2>&1)
+ast_raw_rc=$?
+printf '%s\n' "$ast_out"
+ast_class=$("$PYTHON" "$REPO/scripts/classify_homesdk_run.py" --rc "$ast_raw_rc" <<< "$ast_out")
+ast_class_rc=$?
+printf '%s\n' "$ast_class"
+ast_rc=$ast_class_rc
 
 echo
 echo "══ 计数棘轮（全量总数对登记上限）══════════════════════════════"
@@ -384,6 +391,10 @@ if [ $coverage_rc -ne 0 ]; then
   exit $coverage_rc
 fi
 
+if [ $ast_rc -eq 2 ]; then
+  echo "结论：AST 门禁**没崩在结论上，是崩在了判定路上**（exit=2）。依赖门禁退出码 1 有两种完全不同的成因：判出违规，或它自己在某个文件上抛了栈。分类器在输出里抓到崩溃签名就是后者——那一刻 \`homesdk.gates\` 一个计数都没产出。此时**两件事都不许做**：① 按『真违规』去 \`--update-baseline\` 或往 \`.gates-baseline.txt\` 追加指纹（崩掉的门没有指纹可对齐，这一按下去留下的是『它绿了』）；② 把那个文件加进忽略名单绕开。缺陷在依赖里（\`homesdk/gates/scan.py\` 的 \`_numeric_literal\`/\`_dotted\`/\`_literal_secret\` 三个自递归函数无深度预算，第十五轮 F16；0.3.1 与 0.3.2 实测同样 RC=1），修它要库侧动刀 ⇒ 交 DCD。"
+  exit $ast_rc
+fi
 if [ $ast_rc -ne 0 ]; then
   echo "结论：AST 门禁红（exit=$ast_rc）。修，或在 .gates-baseline.txt 里逐条写明放行理由。"
   exit $ast_rc

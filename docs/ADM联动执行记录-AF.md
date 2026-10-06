@@ -4848,3 +4848,92 @@ M2 是本条最要紧的一格：**旧射程下这一站不是被判绿，是连
   本仓能做的是"**依赖门禁崩掉时不许读成 0**"——另条处理。
 
 —— AutoForge 开发 · 2026-10-07
+
+## 二之五十七、收第十五轮：F15 有了行为级确证、F16 的"崩"与"红"在 AF 的门禁里分成三档——顺手记下 homesdk 0.3.2 已经在盘上而本仓还钉着 0.3.1
+
+**缺陷来源**：`docs/audit/AutoForge_第十五轮审计报告.md`（F15 的行为级 PoC 复核 + 新增 F16）。
+
+### 一、F15：这一轮给的是"护栏真的拦住了没有"的那一格证据
+
+前十四轮所有确证都是"崩没崩 / 数据丢没丢"，第十五轮第一次起本地 HTTP 服务做重定向靶子实测：
+
+| 场景 | 审计的读数 | 与本仓的关系 |
+|---|---|---|
+| 原仓库直连 `urlopen` | 跟随重定向到白名单外主机，拿到 `__F15_EVIL__` ⇒ `bypass_confirmed_unfixed` | 形状判定与 §二之五十六 一致：默认 opener 不重校验 `Location` |
+| 补丁副本 `guarded_urlopen` | 拦截跨主机重定向 | 与 AF 已合并的 `guarded_open` 同一设计（把已有 `_WhitelistRedirector` 包成可替换 `urlopen` 的函数，`allowed_hosts` 取各自 `host_of(base_url)`）——**两仓独立收敛到同一个形状**，说明这条修法不是拍脑袋 |
+| 同主机重定向 | 正常放行（不误伤） | AF 的对应判据是 `tests/unit/test_f15_outbound_guard.py` 里三条 monkeypatch 默认腿：实际交出的白名单是 `("ha",)` / `("ma",)`，第一跳行为与修复前一致 |
+
+**报告 §四 那句"台账 F1–F16 全部 still_open"与本仓台账不一致，是口径不同不是谁撒谎**：审计跑的是 zip 快照
+（`[[project-external-audit-source-ref]]`），§三 也写明"F8/F10/F13/F14/F15 补丁只存在于只读副本
+`/data/workspace/repos/af-patched`，原仓库未改动"——那份"原仓库"不是 `79d1c3e` 之后的 main。
+
+### 二、F16：依赖门禁崩掉时，本仓的门不许把它读成"违规"，也不许读成"干净"
+
+缺陷本体：`homesdk/gates/scan.py` 的 `_numeric_literal` / `_dotted` / `_literal_secret` 三个自递归函数无深度预算。
+**AF 不复述审计，AF 在自己那台上再崩一次**（临时仓放 `x = -×500 1` 与 `y = a.b×500`）：
+
+```
+python -m homesdk.gates <tmp> --no-baseline --no-smoke   →  raw_rc=1 + RecursionError 栈
+[门禁分类] RC=2：依赖门禁崩在半路（签名：Traceback (most recent call last) / RecursionError）——它没产出判定，只产出栈。
+```
+
+**关键读数是 `raw_rc=1`**：崩与"判出违规"在退出码上同形。这一族的危险不是 CI 变红，而是**下一个读红的人的常规动作**
+——`--update-baseline` 或往 `.gates-tally.txt` 加额度：崩掉的门一个计数都没产出，这一按下去留在门禁上的记录变成"它绿了"。
+AF 改不了别人仓的源码（`E:\NAS\homesdk` 不是本仓射程），能自决的是自己那三处调用的**读数口径**。
+
+**修法**：`scripts/classify_homesdk_run.py` 把一次运行分成三档——
+崩／无从判定 = **2**（签名优先于退出码：`rc==0` 但输出里有栈也判崩）；真红 = **1**；干净 = **0**；
+**空输出也判 2**（读不到不是没违规）。崩溃签名只认解释器级硬证据（traceback 头 / `RecursionError` / `MemoryError` /
+`Fatal Python error`），**不认 `✗`**——那是依赖门禁自己的判红格式，混进签名表就会把真红读成无从判定（另一种假绿，
+所以单独有一条测试钉它）。`gates.sh` 的 AST 腿由 `ast_rc=$?` 改成 `ast_out` + `ast_raw_rc` + `ast_class_rc`，
+并补一条 `-eq 2` 的独立结论，把"两件事都不许做"写进文案。
+
+**边界（不冒充全覆盖）**：`--only-smoke` 那一腿**没接**分类器。冒烟的输出里本来就合法地含被检模块的 traceback
+（导入失败就是它的判据），"门自己崩"与"被测模块崩"在这一腿的输出里静态分不开——硬接会把真红读成崩。
+计数棘轮那条腿（`gates.sh:51` 起）**此前已经是 fail-closed**：解析不到计数就 `exit 2`，不判绿。
+
+**测试**：`tests/unit/test_f16_gate_crash_reading.py` **12 条全过**（含三档读数、空输出反空转、`✗` 不误判、CLI 口径、
+`gates.sh` 接线两腿、`bash -n` 语法腿——取不到 GNU bash 就**红**，不 skip，skip 等于这条证据不存在），
+外加那条**真依赖真崩真分类**的端到端腿：它同时是 F16 仍存在的读数，一旦库侧修掉，它会以
+"依赖门禁这次没崩——F16 的口径要重新对"提醒本仓重对。
+
+### 三、同批顺手一处：CLI 那句 banner 在替库承诺一个字节形状
+
+`af_cli.py:1355` 原文 `adm/autoforge/status=online`。homesdk 0.3.2 的 `presence.py:105-106` 已把 retained 值换成
+`encode_status(...)` 的 JSON，那句话从今天起**描述的不是线上真实载荷**；AF 也不该在自己的文案里钉一枚由库拥有的形状。
+改成"向 `adm/<name>/status` 发布在线态（retained）"——说的是 AF 拥有的那件事（发布动作 + retain），不是字节的值。
+
+### 四、本批最重要的一条**未修**读数：本仓与开发机已经不在同一份 homesdk 上
+
+- 本机 `import homesdk` = **0.3.2**（`E:\NAS\homesdk\src\homesdk\__init__.py:40`，`dist/homesdk-0.3.2-py3-none-any.whl` 已在盘上）；
+- 仓内五处仍钉 0.3.1：`.github/workflows/ci.yml:25/42/63`、`docker/Dockerfile.api:26-27`、`docker/Dockerfile.test:26-27`、
+  `docker/docker-compose.api.yml:52`、`pyproject.toml:61` `homesdk>=0.3.1`。
+
+于是 §5.3 第 10 件立的那条同源门**当场红，且红得对**：
+
+```
+tests/unit/test_mqtt_compose_env.py::test_installed_homesdk_is_the_version_the_image_installs
+AssertionError: ('E:\\NAS\\homesdk\\src\\homesdk\\__init__.py', '0.3.2', '0.3.1')
+```
+
+同因另两条红：`test_af_mqtt_bridge.py:91/104` 断言的是 0.3.1 的字面量载荷，0.3.2 发的是 JSON。
+**本批三条一条都没"改绿"**：改测试就是把"两仓跑不同版本"这件事从看得见改成看不见；而 bump vendored wheel 是
+换供应链工件 + 换镜像内容，本仓在 `归档/审计报告_安全审计_核实与修复.md:122` 已把 homesdk wheel 的来源与完整性判给 DCD。
+
+**规格 §三 的 AF 侧两格，实测之后是空集，本批不谎报"已迁移"**：
+- §三.1「删掉手写的 ADM 错误码 / status schema / probe 底座，改 import」——全仓 grep 无 `ADM_ERR_*`、无自建 status
+  schema、无 probe 底座；状态发布唯一写点 `af_mqtt_bridge.py:319` 是**委托** `_presence.advertise`，且 AF 不读任何
+  `adm/*/status`（AF 只发不收）。可删的东西不存在。
+- §三.2「`BridgeUnavailable` 字符串分支归零」——它是**进程内异常类**（`af_mqtt_bridge.py:90/104/121/399`），
+  出向 `error` 字段走 `_failure_reason()`（取 `ctx.context["fail_reason"]` 或 `NO_FAILURE_REASON` 哨兵），
+  类名不上总线。上线的 ad-hoc 前缀本来就没有，**这一格是"核实后确认无需改动"，不是"已改"**。
+
+### 五、DCD 申请已投（三件，都不属 AF 自决）
+
+`E:\NAS\关键决策部\inbox\20261007-AF-homesdk0.3.2消费窗口与presence载荷定性与F16深度预算-决策申请.md`：
+① 0.3.2 消费窗口（vendored wheel bump 动交付面 5 处 + 要 0.3.2 的权威 sha256）；
+② presence 的 retained 载荷由字面量变 JSON 的**定性**——规格 §四 写"presence 一个字符不动"、§三.4 写"AF/MA 已接调用零改动"，
+而签名未变、**载荷变了**，两份口径在同一枚字上打架；若此刻仍有按字面量比状态的消费方，"升级库 = 静默把伙伴判成离线"；
+③ F16 的库侧深度预算排期（A 库侧修／B 授权 AF 临时绕行并显式报范围损失），并问一句 MA/DB 的 CI 是否同炸。
+
+—— AutoForge 开发 · 2026-10-07
