@@ -44,12 +44,29 @@ __all__ = [
     "AskSession",
     "NodeExecutor",
     "MAX_STEPS_PER_SEGMENT",
+    "MAX_SEGMENTS_PER_INSTANCE",
+    "MAX_STEPS_PER_INSTANCE",
+    "HARD_CAP_MULTIPLIER",
+    "CAP_WARNING",
     "classify_answer",
     "EMIT_TIMER_KIND",
 ]
 
 #: 求值段最大步数——静态图死循环的最后一道防线（静态扫描应提前拦住）
 MAX_STEPS_PER_SEGMENT = 1000
+
+# ── DCD 裁定 20261006 §二 问题一（A+B 组合）：跨段累计封顶 ──────────────────
+# 阈值与硬倍数由 DCD 定，AF 不自签。`steps` 是 `run()` 的局部量、每段归零，所以段内封顶
+# 拦不住"经挂起点的环"——`wait → do → wait` 是合法 IR（`af_ir/models.py:373-376` `is_suspending`
+# 只给 WARNING），实测 2000 段 / 4003 条 trace / 2000 次真实下发 / 0 失败 / 0 审计事件。
+# 今天这两档的形状：**越警戒档先告警**（WARNING + AuditLog + 监护视图常驻指示，只发一次），
+# **到 2× 才 `_fail`**——纯等待型自动化合法地转很多段，不能一越档就杀。
+MAX_SEGMENTS_PER_INSTANCE = 1000
+MAX_STEPS_PER_INSTANCE = 20000
+HARD_CAP_MULTIPLIER = 2
+
+#: 跨段累计超警戒档的审计事件类型（与 `ASK_VIOLATION` 同族：运行期诊断要留痕，不能只打在日志里）
+CAP_WARNING = "instance_cumulative_cap_warning"
 
 #: v2 收敛纪律：同一实例连续 ask 轮数上限（一次成功的 `do` 即清零）
 MAX_ASK_ROUNDS = 3
@@ -115,11 +132,17 @@ class NodeExecutor:
     def run(self, instance: Instance) -> Instance:
         """执行一个求值段：从 `current_node` 走到挂起或终态。"""
         auto = instance.automation
+        instance.ctx.segments += 1
+        if self._over_cap(instance):
+            return instance
         steps = 0
         while True:
             steps += 1
+            instance.ctx.steps += 1
             if steps > MAX_STEPS_PER_SEGMENT:
                 self._fail(instance, "求值段超过最大步数，疑似静态图死循环")
+                return instance
+            if self._over_cap(instance):
                 return instance
 
             node_id = instance.ctx.current_node
@@ -703,6 +726,66 @@ class NodeExecutor:
             if instance.state == SUSPENDED:
                 self.instances.resume(instance)
             self.instances.done(instance)
+
+    def _over_cap(self, instance: Instance) -> bool:
+        """跨段累计封顶（DCD 裁定 20261006 §二 问题一 · A+B 组合）。返回 True ⇒ 本段已结束。
+
+        两档：**越警戒档（S=1000 段 / T=20000 步）只告警**——WARNING + 一条 `AuditEvent` +
+        监护视图常驻指示，且每实例只发一次（否则后面每一段都要刷一条）；**到 2× 才 `_fail`**。
+        不是一越档就杀的理由写在裁定里：纯等待型自动化（`wait → do → wait` 轮询）可以合法地
+        转很多段，警戒档买的是"运维看得见这个实例已经转了 N 段"，硬档才动状态机。
+        """
+        ctx = instance.ctx
+        exceeded = []
+        if ctx.segments > MAX_SEGMENTS_PER_INSTANCE:
+            exceeded.append(f"段数 {ctx.segments}>{MAX_SEGMENTS_PER_INSTANCE}")
+        if ctx.steps > MAX_STEPS_PER_INSTANCE:
+            exceeded.append(f"步数 {ctx.steps}>{MAX_STEPS_PER_INSTANCE}")
+        if not exceeded:
+            return False
+        reason = "、".join(exceeded)
+        if (
+            ctx.segments > HARD_CAP_MULTIPLIER * MAX_SEGMENTS_PER_INSTANCE
+            or ctx.steps > HARD_CAP_MULTIPLIER * MAX_STEPS_PER_INSTANCE
+        ):
+            self._fail(
+                instance,
+                f"实例跨段累计超硬上限（{reason}，硬倍数 {HARD_CAP_MULTIPLIER}×）：疑似经挂起点的段间循环",
+            )
+            return True
+        if ctx.cap_warned:
+            return False
+        ctx.cap_warned = True
+        logger.warning(
+            "实例 %s 跨段累计超警戒档：%s（到 %s× 才终止）%s",
+            ctx.instance_id,
+            reason,
+            HARD_CAP_MULTIPLIER,
+            f" trace 已丢 {ctx.trace_dropped} 条" if ctx.trace_dropped else "",
+        )
+        self.audit.add(
+            AuditEvent(
+                type=CAP_WARNING,
+                at=self.clock.now(),
+                message=f"跨段累计超警戒档：{reason}",
+                automation_id=instance.automation.id,
+                instance_id=ctx.instance_id,
+                node_id=ctx.current_node,
+            )
+        )
+        try:  # 指示只是给运维看的，聚合失败绝不能反过来影响执行（与 _watch_canary 同一纪律）
+            from . import af_watch
+
+            af_watch.record_cap_warning(
+                instance.automation.id,
+                ctx.segments,
+                ctx.steps,
+                ctx.trace_dropped,
+                self.clock.now().timestamp(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("af_watch 聚合段间封顶告警失败（不影响执行）：%r", exc)
+        return False
 
     def _fail(self, instance: Instance, reason: str) -> None:
         if instance.state == SUSPENDED:

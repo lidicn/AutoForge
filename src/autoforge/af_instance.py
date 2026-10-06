@@ -62,6 +62,12 @@ _ALLOWED: dict[str, frozenset[str]] = {
 #: 实例存活上限（IR §3 / §12-6）
 DEFAULT_TTL_SECONDS = 24 * 3600
 
+#: 单实例 trace 保留条数（DCD 裁定 20261006 §二 问题二 · B 档）。
+#: 与 `MAX_SEGMENTS_PER_INSTANCE`（1000）同量级：够诊断"这个实例转过的最后一段路径"，
+#: 又不让 trace 随段数无界增长——`trace` 是随实例持久化往返的（`to_dict()` 整份放进去），
+#: 不是纯内存调试尾巴。丢掉的数量记进 `InstanceContext.trace_dropped`，"被丢了 k 条"本身可见。
+MAX_TRACE_ENTRIES = 1000
+
 
 class IllegalTransition(Exception):
     """非法状态迁移。故意抛异常而不是静默忽略。"""
@@ -103,6 +109,15 @@ class InstanceContext:
     timers: list[dict[str, Any]] = field(default_factory=list)
     created_at: str = ""
     trace: list[dict[str, Any]] = field(default_factory=list)
+    #: DCD 裁定 20261006 §二 问题二：被截断丢掉的旧 trace 条数——"丢了 k 条"本身要可见（铁律 #5）
+    trace_dropped: int = 0
+    #: DCD 裁定 20261006 §二 问题一：跨段累计段数 / 步数。`run()` 里的 `steps` 是**段内**局部量，
+    #: 每段归零；`wait → do → wait` 那种经挂起点的环是合法 IR（静态扫描只给 WARNING），
+    #: 所以封顶必须记在实例上而不是段里，且这两个数要能随实例持久化往返。
+    segments: int = 0
+    steps: int = 0
+    #: 告警只在首次越档时发一次：否则 2000 段会刷出 1000 条 WARNING + 1000 条审计事件
+    cap_warned: bool = False
     #: v0.9.0 实例归属：创建/持有本实例的进程身份（owner_id()），恢复仲裁用
     owner: str = ""
 
@@ -120,6 +135,10 @@ class InstanceContext:
             "timers": self.timers,
             "created_at": self.created_at,
             "trace": self.trace,
+            "trace_dropped": self.trace_dropped,
+            "segments": self.segments,
+            "steps": self.steps,
+            "cap_warned": self.cap_warned,
             "owner": self.owner,
         }
 
@@ -154,6 +173,12 @@ class Instance:
         self.ctx.trace.append(
             {"node": node_id, "note": note, "state": self.ctx.state, "at": _utc_now_iso()}
         )
+        # 裁定 §二 问题二 B 档：保最近 N 条 + 把"被丢了 k 条"记进 trace_dropped。
+        # 不用 deque(maxlen)：那边 `del [0]` 会抛，且老记录直接不可追溯（裁定驳回了 A 档）。
+        overflow = len(self.ctx.trace) - MAX_TRACE_ENTRIES
+        if overflow > 0:
+            del self.ctx.trace[:overflow]
+            self.ctx.trace_dropped += overflow
 
     def to_dict(self) -> dict[str, Any]:
         """序列化自检：上下文必须可 JSON 序列化（防闭包 / Socket / 生成器混入）。

@@ -48,6 +48,8 @@ def _as_epoch(value: Any) -> float:
 KIND_SHADOW = "shadow"
 KIND_CANARY = "canary"
 KIND_CONFLICT = "conflict"
+#: DCD 裁定 20261006 §二 问题一：跨段累计越警戒档的常驻指示（不是运行失败，是"这个实例转得不对劲"）
+KIND_CAP = "cap"
 
 STATUS_VERIFIED = "verified"
 STATUS_FAILED = "failed"
@@ -101,6 +103,24 @@ class WatchAggregator:
                 del self._by_auto[oldest]
                 self._evicted_automations += 1
 
+    def record_cap_warning(
+        self, automation_id: str, segments: int, steps: int, trace_dropped: int, at: float
+    ) -> None:
+        """跨段累计越警戒档的常驻指示（DCD 裁定 20261006 §二 问题一）。
+
+        `status` 用 `"warning"` 而不是 `failed`：这一档**没动状态机**（到 2× 才 fail），把它记成失败
+        会让监护视图"生产验出过问题"那一栏替一个并不存在的失败背书。读数走 `kind`，所以它进
+        `cap_warnings` 那一列、不进 `failed_in_prod`。`at` 由调用方（执行器的 `TimeSource`）给，
+        这里不自己取钟——否则时间旅行测试就注不进这一事件。
+        """
+        self.record(
+            KIND_CAP,
+            automation_id,
+            "warning",
+            at,
+            {"segments": segments, "steps": steps, "trace_dropped": trace_dropped},
+        )
+
     def record(
         self,
         kind: str,
@@ -142,6 +162,8 @@ class WatchAggregator:
                     "shadow": sum(1 for e in evs if e.kind == KIND_SHADOW),
                     "canary": sum(1 for e in evs if e.kind == KIND_CANARY),
                     "conflict": conflict_count,
+                    # 常驻指示：跨段累计越警戒档的实例数（同实例只记一次，硬上限那档走 failed）
+                    "cap_warnings": sum(1 for e in evs if e.kind == KIND_CAP),
                 })
                 total_verified += len(verified)
                 total_failed += len(failed)
@@ -159,6 +181,7 @@ class WatchAggregator:
                     "automations_with_failed": sum(1 for a in autos if a["failed_in_prod"]),
                     "tracked_automations": len(autos),
                     "evicted_automations": self._evicted_automations,
+                    "automations_with_cap_warning": sum(1 for a in autos if a["cap_warnings"]),
                 },
             }
 
@@ -178,6 +201,13 @@ def record_canary(automation_id: str, status: str, at: float, detail: dict[str, 
 
 def record_conflict(automation_id: str, status: str, at: float, detail: dict[str, Any] | None = None) -> None:
     _default.record(KIND_CONFLICT, automation_id, status, at, detail)
+
+
+def record_cap_warning(
+    automation_id: str, segments: int, steps: int, trace_dropped: int, at: float
+) -> None:
+    """模块级入口（与 `record_shadow`/`record_canary` 同一族）：执行器不持聚合器实例。"""
+    _default.record_cap_warning(automation_id, segments, steps, trace_dropped, at)
 
 
 def verified_in_prod_partition() -> dict[str, Any]:

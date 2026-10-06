@@ -492,6 +492,8 @@ export interface EvidenceAutomation {
   shadow: number
   canary: number
   conflict: number
+  /** 跨段累计越警戒档的告警条数（S=1000 段 / T=20000 步，同实例只发一次） */
+  cap_warnings: number
 }
 
 export interface EvidenceSummary {
@@ -502,6 +504,7 @@ export interface EvidenceSummary {
   automations_with_failed: number
   tracked_automations: number
   evicted_automations: number
+  automations_with_cap_warning: number
 }
 
 export interface EvidenceProdResponse {

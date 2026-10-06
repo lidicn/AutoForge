@@ -59,6 +59,7 @@ const columns: DataTableColumns<EvidenceAutomation> = [
   { ...countCol('shadow', undefined), title: '影子' },
   { ...countCol('canary', undefined), title: '金丝雀' },
   { ...countCol('conflict', undefined), title: '冲突' },
+  { ...countCol('cap_warnings', 'warning'), title: '段间封顶告警' },
   {
     title: '最近一次验过',
     key: 'last_verified_at',
@@ -122,6 +123,8 @@ onMounted(load)
 
       <div class="stat-grid">
         <n-statistic label="冲突仲裁事件" :value="summary.total_conflict" />
+        <!-- 常驻指示：段间累计封顶告警不是"验出问题"，它是"这个实例转得不对劲"（裁定 20261006 §二） -->
+        <n-statistic label="段间封顶告警的自动化" :value="summary.automations_with_cap_warning" />
         <n-statistic label="有证据的自动化" :value="summary.tracked_automations" />
         <n-statistic label="其中验出过问题" :value="summary.automations_with_failed" />
       </div>

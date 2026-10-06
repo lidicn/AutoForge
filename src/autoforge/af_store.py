@@ -653,6 +653,10 @@ def restore_context(data: Mapping[str, Any]) -> InstanceContext:
         timers=list(data.get("timers") or []),
         created_at=str(data.get("created_at", "")),
         trace=list(data.get("trace") or []),
+        trace_dropped=int(data.get("trace_dropped", 0)),
+        segments=int(data.get("segments", 0)),
+        steps=int(data.get("steps", 0)),
+        cap_warned=bool(data.get("cap_warned", False)),
         owner=str(data.get("owner", "")),
     )
 

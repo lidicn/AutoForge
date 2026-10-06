@@ -4710,4 +4710,60 @@ M2 是本条最要紧的一格：**旧射程下这一站不是被判绿，是连
   不是"堵掉一处正在丢数据的事故"；
 - "绿行文案里的计数词与判据条数是否一致"这类**散文级**不一致仍靠人工（§二之五十三 的判据 ⑥ 只管 `echo` 里的反引号）。
 
+## 二之五十五、落地 DCD 20261006 §二：段间累计封顶 S=1000／T=20000 两档 + trace 截断留 `trace_dropped`
+
+**裁定来源**：`关键决策部/decisions/20261006-AF配对与段间封顶与DPP四件与MA三件-裁定.md` §二
+（问题一 **A+B 组合**、问题二 **B**）。阈值与硬倍数**由 DCD 定，AF 不自签**——所以这三个数被钉进测试
+（`test_thresholds_are_the_ones_dcd_signed`），下一批要调阈值必须先把裁定改掉。
+
+**原缺陷的形状**（裁定里那条实测：2000 段、4003 条 trace、2000 次真实下发、0 失败、0 审计事件）：
+`steps` 是 `run()` 的**局部量**，每段归零；`wait → do → wait` 这种经挂起点的环是**合法 IR**
+（`af_ir/models.py:373-376` `is_suspending` 只给 WARNING），所以段内封顶 `MAX_STEPS_PER_SEGMENT` 拦不住它。
+今天的计数落在实例上（`InstanceContext.segments` / `.steps`），且随 `to_dict()` 持久化往返。
+
+**两档**（`NodeExecutor._over_cap`，`af_executor.py`）：
+
+| 档 | 触发 | 动作 |
+|---|------|------|
+| 警戒 | `segments > 1000` **或** `steps > 20000` | `logger.warning` + 一条 `AuditEvent(type="instance_cumulative_cap_warning")` + 监护视图常驻指示；**每实例只发一次**（`ctx.cap_warned`），不动状态机 |
+| 硬 | 任一超过 **2×**（2000 段 / 40000 步） | `_fail(instance, "…超硬上限…疑似经挂起点的段间循环")` |
+
+闸在**段入口**和**每一步之前**都过一遍（段入口那一次覆盖"每段只走一步"的环——正是原缺陷的形态）。
+不是一越警戒档就杀的理由在裁定里：纯等待型自动化可以合法地转很多段，警戒档买的是"运维看得见"。
+
+**监护视图那一栏**：`af_watch` 加 `KIND_CAP` + `WatchAggregator.record_cap_warning(...)`，
+`verified_in_prod()` 每行出 `cap_warnings`、summary 出 `automations_with_cap_warning`；
+`ui/src/types/api.ts` 两个键 + `EvidenceView.vue` 加一列"段间封顶告警"和一枚汇总数。
+**`status` 用 `"warning"` 而不是 `failed`**：这一档没动状态机，记成失败会让"验出问题"那一栏替一个不存在的失败背书（铁律 #5）。
+`at` 由调用方的 `TimeSource` 给——聚合器不自己取钟，否则时间旅行测试注不进这一事件。
+
+**trace（问题二 · B 档）**：`MAX_TRACE_ENTRIES = 1000`，超出时 `del trace[:overflow]` 并把丢掉的条数累进
+`ctx.trace_dropped`（"被丢了 k 条"本身可见）。裁定驳回 A 档（`deque(maxlen)`）的理由之一是那边 `del [0]` 会抛，
+所以钉一条 `test_trace_is_a_list_not_a_deque_so_the_oldest_can_still_be_deleted` 把实现形状看住。
+`trace_id`／schema 那一问按裁定答复**不进 IR schema**（实例持久化载荷是运行时产物）。
+
+**本地读数**：
+- `python -m pytest tests/unit/test_dcd_20261006_segment_cap.py -q` ⇒ **13 passed** in 1.20s（新增 13 条腿）
+- `python -m pytest tests/unit -q -k "watch or supervision or trace or instance or persist"` ⇒ **87 passed, 3 skipped**
+- `python -m pytest tests/unit/test_wo_af_001_002.py -q`（同被改的执行器文件）⇒ 全绿
+- `ui/node_modules/.bin/vue-tsc --noEmit -p tsconfig.app.json` ⇒ **零输出**（新增两个键不引入类型错）
+- 真跑 2001 段那条腿当场复现了"跨段"这件事：`segments=2001 / steps=2000`（硬档那一段只加段数不加步数，
+  因为闸在段入口先于这一步）、`cap_warned=True`、`CAP_WARNING` 型审计事件**恰好 1 条**、`instances.fail` 被调 1 次。
+  这条腿第一次跑出来的是 `2001 == 1` 的红——数的是全部审计事件（每段挂起本身就留一条），改成按 `type` 过滤才是本意；
+  **记下来是因为这是一个"测试自己先错"的例子，不是产品缺陷**。
+
+**§二之五十四 的全链补记**（干净 worktree `git worktree add --detach /tmp/af_chain d07e531`）：
+`GATES_RC=0`、`PYTEST_RC=0`、`3171 passed, 53 skipped, 1 warning, 7 subtests passed in 368.05s (0:06:08)`
+——3165 + 本批那 6 条原子写新腿 = **3171**，逐条对上。远端那一格等下一次 CI run 读数补。
+
+**仍在门外 / 未做**（登记，不静默）：
+- **§一（配对 bootstrap B）本批未落地**：两个匿名端点 + `request` 6/min、`redeem` 10/min、超限锁该 IP 5 分钟
+  + 维持 8 位/300s/单次 + owner 侧"暂停接受配对请求"开关——这是下一批的第一件，属**新增对外面**，不是收尾活；
+- 2000 段那次是**测试内真跑**（mock 适配器），**未挂真机 HA**：所以本条的结论等级是"逻辑与留痕口径已验"，
+  不是"生产环境量过"。要在 NAS 上量到真读数得等 §5.3 第 1 件那个镜像窗；
+- `trace_dropped` 目前只在告警文案里出现一次（超警戒档时若已丢才印），**监护视图没有独立列**——
+  裁定只要求"被丢了 k 条本身可见"，可见性由审计事件 + 日志承担；要不要再加一栏是产品口径，不属本批自决；
+- 段间封顶的**可配性**没做（`S/T` 是常量）。裁定给的是定值、且明写"AF 不自签"，所以做成 env 反而会被读成
+  "AF 给了个能绕过的口子"——要放开得再走一次 DCD。
+
 —— AutoForge 开发 · 2026-10-06
