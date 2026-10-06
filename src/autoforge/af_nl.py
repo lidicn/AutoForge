@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
@@ -122,13 +124,26 @@ def _trigger_text(trig: Trigger) -> str:
     if trig.type == "event":  # v0.4.0 订阅侧
         return f"收到事件「{trig.event or '?'}」"
     if trig.type == "sun":
-        return f"{_SUN_TEXT.get(trig.event or '', trig.event or '')}时"
+        s = _SUN_TEXT.get(trig.event or "", trig.event or "") + "时"
+        off = trig.offset
+        if off:
+            om = re.fullmatch(r"\s*([+-]?)(\d+):(\d{1,2}):(\d{1,2})\s*", str(off))
+            if om:
+                sign = -1.0 if om.group(1) == "-" else 1.0
+                secs = sign * (int(om.group(2)) * 3600 + int(om.group(3)) * 60 + int(om.group(4)))
+                if secs:
+                    s += ("前" if secs < 0 else "后") + format_duration(abs(secs))
+        return s
     if trig.type == "time":
         return f"每天 {trig.at}"
     # state
     entity = trig.entity_id or "?"
-    if trig.to:
+    if trig.from_ and trig.to:
+        text = f"{entity} 从「{trig.from_}」变为「{trig.to}」"
+    elif trig.to:
         text = f"{entity} 变为「{trig.to}」"
+    elif trig.from_:
+        text = f"{entity} 从「{trig.from_}」变为其他"
     else:
         text = f"{entity} 发生变化"
     return text
@@ -167,6 +182,23 @@ def _expr_text(expr: Mapping[str, Any] | None) -> str:
     return f"未知算子 {op}"
 
 
+# 渲染时内联到动词与目标之间的数值型参数（保证 roundtrip 可重解析）
+_INLINE_NUMERIC = {
+    "climate.set_temperature": ("temperature",),
+    "climate.set_humidity": ("humidity",),
+    "media_player.volume_set": ("volume_level",),
+    "cover.set_cover_position": ("position",),
+    "light.turn_on": ("brightness",),
+}
+_UNIT_TEXT = {
+    "temperature": " 度",
+    "humidity": " %",
+    "volume_level": "",
+    "position": " %",
+    "brightness": "",
+}
+
+
 def _action_text(node: Node) -> str:
     action = node.action or "?"
     params = node.params or {}
@@ -179,7 +211,12 @@ def _action_text(node: Node) -> str:
 
     verb = _ACTION_VERBS.get(action)
     if verb and target_text:
-        return f"{verb} {target_text}"
+        extra = ""
+        for key in _INLINE_NUMERIC.get(action, ()):
+            if key in params and params[key] is not None:
+                extra = f" {params[key]}{_UNIT_TEXT.get(key, '')}"
+                break
+        return f"{verb}{extra} {target_text}"
     if verb:
         return verb
     if node.adapter == "http":
@@ -214,26 +251,6 @@ def render_automation(auto: Automation) -> NLResult:
 
     for entry in entries:
         _walk(auto, entry, lines, covered, set(), depth=0)
-
-    # v2.3/F9：group 容器节点渲染为复合段，子自动化逐一展开（覆盖率检查计入）
-    for gnode in auto.nodes.values():
-        if gnode.kind != "group":
-            continue
-        lines.append(
-            f"【组合 {gnode.name or gnode.id}】（{len(gnode.children)} 条子自动化 · "
-            f"{'依次按序下发' if (gnode.mode or 'sequence') == 'sequence' else '声明为互不依赖、可并行下发'} · "
-            "原子部署单元：任一条不过则整组不入队）"
-        )
-        covered.add(gnode.id)
-        for i, child in enumerate(gnode.children, 1):
-            res = render_automation(child)
-            child_lines = res.text.split("\n")
-            for j, ln in enumerate(child_lines):
-                prefix = f"  {i}. " if j == 0 else "     "
-                lines.append(prefix + ln)
-            covered |= {f"{gnode.id}:{child.id}:{n}" for n in res.covered}
-            warnings += [f"{gnode.id}:{w}" for w in res.warnings]
-
     # v1.2.0：后置条件断言必须写进 NL——「跑完应当如何」是给人签核的一部分
     # （同 emit 的理由：批准的与跑的必须一致）
     if auto.expects():
@@ -274,10 +291,16 @@ def _walk(
 
     covered.add(node.id)
     if node.kind == "group":
-        # 组合节点由下方【组合】段统一展开。这里只留一个指针：既保证覆盖率计入，
-        # 又不会出现"未知节点 group + 下面又完整展开一遍"的双重叙述。
-        lines.append(_indent(depth) + prefix
-                     + f"组合「{node.name or node.id}」（{len(node.children)} 条子自动化，见下方组合段）")
+        # 组合节点就地展开：声明 + 子自动化逐一内联（解析器通过「子自动化「name」」归集）
+        mode = node.mode or "sequence"
+        lines.append(_indent(depth) + prefix + f"编组（{mode}）")
+        for child in node.children:
+            lines.append(_indent(depth + 1) + f"子自动化「{child.name or child.id}」")
+            cres = render_automation(child)
+            covered |= {f"{node.id}:{child.id}:{n}" for n in cres.covered}
+            for cl in cres.text.split("\n")[2:]:
+                lines.append(_indent(depth + 1) + "  " + cl)
+        return
     else:
         lines.append(_indent(depth) + prefix + _node_text(auto, node))
 
@@ -340,9 +363,15 @@ def _node_text_base(auto: Automation, node: Node) -> str:
     if node.kind == "do":
         return _action_text(node)
     if node.kind == "ask":
-        room = f"（在 {node.room} 应答）" if node.room else ""
-        timeout = f"，{format_duration(parse_duration(node.timeout))}内没回应则按超时处理" if node.timeout else ""
-        return f"询问：“{node.prompt}”{room}{timeout}"
+        bits = []
+        if node.session:
+            bits.append(f"会话 {node.session}")
+        if node.room:
+            bits.append(f"在 {node.room} 应答")
+        if node.timeout:
+            bits.append(f"超时 {format_duration(parse_duration(node.timeout))}")
+        suffix = f"（{('，'.join(bits))}）" if bits else ""
+        return f"询问：“{node.prompt}”{suffix}"
     if node.kind == "wait":
         return f"等待 {format_duration(parse_duration(node.duration or '0s'))}"
     if node.kind == "set":
