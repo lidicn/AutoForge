@@ -4608,8 +4608,20 @@ ESCAPED_RC=0
   `3165 passed, 53 skipped, 1 warning, 7 subtests passed in 180.18s`，末行 `结论：门禁干净。…`。
   对账：上一批 `3159` + 本批新增 `6` 条腿 = `3165` ✓，一个数都不靠印象。测完 `git worktree remove`，
   `git worktree list` 只剩主树。
-- **远端口径**：本批新代码（`f318de2`）的远端读数在下一枚 run 上，不在这里过账。判据 ⑥ 管的是文案，
-  它自己在 CI 上的第一次响（绿行含"echo 文案 … 行无未转义反引号"）要在下一枚 run 的 `quality-gates` 日志里取。
+- **远端口径**：**run 99 = `3388c87`（含本批 `f318de2` 的判据 ⑥）的读数，闭合**（id=`37395494113`，
+  `status=completed conclusion=success event=push`）：六作业全 `completed/success`、`failed_steps` 全空
+  （`quality-gates` 112050358032、`layering-gates`、`pytest`、`ui-typecheck-build`、`adm-linkage-contracts`、
+  `ui-user-mimo-judgments`）⇒ **连续七枚绿（93–99）**。判据 ⑥ 在 runner 上第一次响的那两行（逐字取回）：
+
+  ```
+  2026-10-06T00:51:49.9881127Z ══ 计划表口径门（docs/plan 那份表的 ✅ 必须落在门的认领读数上）══
+  2026-10-06T00:51:52.6819786Z 门禁装配覆盖门干净（盘上 `check_*.py` 18 个，`gates.sh` 覆盖 17 个，工作流覆盖 1 个，
+                                独立作业豁免 1 格且两个锚点都核对得住——作业真引用了该脚本、路径真在盘上；echo 文案 61 行无未转义反引号）
+  ```
+
+  第一行就是**修复前后对照**的那一枚：同一句标题在 run 98 打出来是 `计划表口径门（ 那份表…）`（`docs/plan` 被
+  命令替换吃掉），在 run 99 打出来是 `计划表口径门（docs/plan 那份表…）`——**病灶在远端确认消失**，而第二行的
+  `echo 文案 61 行`与本机读数逐字相同 ⇒ 判据 ⑥ 不是"只在写它的那台机器上响过"。
 
 **仍在门外**：
 - `printf`／heredoc／`echo $var` 三种文案形状里的反引号不在射程（本门认的是 `echo "` 这一族行）；
