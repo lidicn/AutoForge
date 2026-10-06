@@ -37,6 +37,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Mapping
 
+from .af_adapters.http import guarded_open, host_of
+
 __all__ = [
     "RegistrySnapshot",
     "fetch_registries",
@@ -318,7 +320,15 @@ def rest_areas_fallback(
         url, method="GET", headers={"Authorization": f"Bearer {token}"}
     )
     try:
-        with (opener or urllib.request.urlopen)(req, timeout=timeout) as resp:
+        # F15（第十四轮审计 OUTB-01）：`(opener or urllib.request.urlopen)(...)` 这种写法
+        # bandit 的 B310 认不出来（被调者是布尔表达式），但它走的仍是默认 opener——
+        # 跟 3xx 且不重校验 Location。缺省档换成收口点，注入档（测试）保持不变。
+        resp_cm = (
+            opener(req, timeout=timeout)
+            if opener is not None
+            else guarded_open(req, allowed_hosts=(host_of(base_url),), timeout=timeout)
+        )
+        with resp_cm as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.HTTPError, urllib.error.URLError, ValueError, OSError):
         return {}

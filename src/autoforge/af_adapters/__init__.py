@@ -15,7 +15,7 @@ from .base import (
     is_destructive,
 )
 from .ha import DEFAULT_HA_URL, HAAdapter, HAStateProvider, HATransport
-from .http import HTTPAdapter, host_of
+from .http import HTTPAdapter, guarded_open, host_of
 from .mock import MockAdapter
 
 __all__ = [
@@ -36,6 +36,7 @@ __all__ = [
     "HATransport",
     "DEFAULT_HA_URL",
     "HTTPAdapter",
+    "guarded_open",
     "host_of",
     "MockAdapter",
 ]

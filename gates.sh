@@ -143,6 +143,17 @@ echo "══ 原子写站点门禁（固定名 .tmp 不许是新增形状）═�
 atomic_rc=$?
 
 echo
+echo "══ 出站护栏门禁（第一方出站不许直连 urlopen）══════════════════════"
+# 第十四轮审计 F15：白名单护栏本身是齐的（host_of() 判 netloc 的 @ 凭证注入，_WhitelistRedirector
+# 在跟 3xx 之前重校验 Location），问题是**有代码绕开它**——af_catalog / af_live / af_metrics /
+# af_registry 四处各自直连 urlopen，用的是默认 opener：跟 3xx 且不重校验。af_metrics 那一处带
+# Bearer 凭据，一次 3xx 就能把凭据转到白名单外的主机。bandit 的 B310 只报了 2/4：另两处是
+# (opener or urllib.request.urlopen)(...) 与 self._opener = opener or urlopen ——被调者是布尔
+# 表达式 / 函数对象被当值交出。本门按 AST 认这两种间接形状，注释里写 urlopen 不算命中。
+"$PYTHON" "$REPO/scripts/check_outbound_guard.py"
+outbound_rc=$?
+
+echo
 echo "══ 状态源 fail-closed 门禁（snapshot() 不许静默省略未知实体）══════"
 # 第七轮审计的 key_finding：`af_ir/expr.py` 的 `and`/`or` 走 all()/any() **短路**，没被求值的
 # 那一支永远不会去读快照 ⇒ "缺失留给运行时发现"在 fail-open 一侧根本不成立：仿真软失效不执行、
@@ -292,8 +303,17 @@ if [ $atomic_rc -eq 2 ]; then
   exit $atomic_rc
 fi
 if [ $atomic_rc -ne 0 ]; then
-  echo "结论：原子写站点门禁红（exit=$atomic_rc）。新增的 \`os.replace\` 站点要么走 \`af_store.atomic_write_text\`（随机 tmp 名 + fsync，P1-18 那条已经修过的路），要么进 \`.atomic-write-baseline.txt\` 并逐条写理由：固定名 \`x.tmp\` 遇上第二个写者就是互相截断，而 \`PersistStore\` 的租约设计**明确允许**两个进程先后驱动同一条实例——截断后的记录校验和不过，读侧直接跳过，等于那条实例静默消失。基线只减不增；确实要留这一站就地写 \`# fixed-tmp: exempt(理由)\`（理由为空也判红）。"
+  echo "结论：原子写站点门禁红（exit=$atomic_rc）。新增的 \`os.replace\` 站点要么走 \`af_atomic.atomic_write_text\`（随机 tmp 名 + fsync，P1-18 那条已经修过的路），要么进 \`.atomic-write-baseline.txt\` 并逐条写理由：固定名 \`x.tmp\` 遇上第二个写者就是互相截断，而 \`PersistStore\` 的租约设计**明确允许**两个进程先后驱动同一条实例——截断后的记录校验和不过，读侧直接跳过，等于那条实例静默消失。基线只减不增；确实要留这一站就地写 \`# fixed-tmp: exempt(理由)\`（理由为空也判红）。"
   exit $atomic_rc
+fi
+
+if [ $outbound_rc -eq 2 ]; then
+  echo "结论：出站护栏门禁读不出射程（exit=$outbound_rc）。三种情形：扫描目录不存在、某个 .py 解析失败、\`src/\` 下裸 urlopen / guarded_open / build_opener 三类站点一个都没扫到。最后一种不是干净——那说明出站整体换了库或收口点改了名，本门已经盯不住任何东西，报『干净』就是假绿。"
+  exit $outbound_rc
+fi
+if [ $outbound_rc -ne 0 ]; then
+  echo "结论：出站护栏门禁红（exit=$outbound_rc）。三种形状：① 直连 \`urlopen\`（含 bandit 认不出的 \`(opener or urllib.request.urlopen)(…)\` 与把 \`urlopen\` 当值交出的赋值）——默认 opener 跟 3xx 且不对 Location 重校验，带凭据那一处会把凭据转到白名单外；改走 \`af_adapters.http.guarded_open(req, allowed_hosts=(host_of(自己的 base_url),), timeout=…)\`。② 新建 \`build_opener()\` 却不挂 \`_WhitelistRedirector\`/\`_NoRedirectHandler\`。③ 调 \`guarded_open\` 没传 \`allowed_hosts=\`。确实要留一站就地写 \`# outbound-guard: exempt(理由)\`（理由为空也判红）。"
+  exit $outbound_rc
 fi
 
 if [ $snap_rc -eq 2 ]; then

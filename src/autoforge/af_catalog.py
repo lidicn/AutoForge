@@ -443,12 +443,19 @@ class DeviceCatalog:
         顶层 `last_changed`，供 build 闸判断触发源是否僵尸（长期无变化）。
         """
         import json as _json, urllib.request as _u
+
+        from .af_adapters.http import guarded_open, host_of
+
         req = _u.Request(
             f"{self.ha_url}/api/states",
             headers={"Authorization": f"Bearer {self.ha_token}"},
         )
         try:
-            with _u.urlopen(req, timeout=self.timeout) as resp:
+            # F15（第十四轮审计）：这里原来是裸 `_u.urlopen` —— 默认 opener 会跟 3xx 且不对
+            # Location 重校验。收口到 `guarded_open`，白名单取自己配置的那个 HA 主机。
+            with guarded_open(
+                req, allowed_hosts=(host_of(self.ha_url),), timeout=self.timeout
+            ) as resp:
                 payload = _json.loads(resp.read().decode("utf-8"))
         except Exception:
             return None

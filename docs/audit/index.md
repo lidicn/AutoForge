@@ -63,6 +63,7 @@ docs/audit/
 - AutoForge_第五轮审计报告.md
 - AutoForge_第六轮审计报告.md
 - AutoForge_第七轮审计报告.md
+- AutoForge_第十四轮审计报告.md（ADM-auditkit 体系，F15 出站盲跟 3xx：核实成立，已修 + 上门禁，见执行记录 §二之五十六）
 - 代码审计报告_20260918.md
 - AutoForge代码审计报告hy4.md
 - AutoForge代码审计与建设性建议byhy3.md
@@ -112,4 +113,7 @@ docs/audit/
 - ✅ audit 目录已清理：7 个 zip 删除、5 个重复解压子目录删除、已完成报告归档、非审计资料独立。
 - ✅ 顶层仅本索引文件（另有隐藏 `.gitkeep` 占位，无害）。
 - ⏳ **元宝新增 20 轮审计报告：全量代码核实与修复为独立大工程**，建议单独排期逐轮处理（不在本次整理范围内）。
+- ⏳ **顶层 `AutoForge_第十五轮审计报告.md`（ADM-auditkit 体系）待核实**：F15 已由 §二之五十六 收口；
+  该轮的 F16 在**依赖侧**（`homesdk/gates/scan.py` 三个自递归函数无深度预算），受害面是本仓 `gates.sh` 对
+  `python -m homesdk.gates` 的三处调用——AF 改不了别人仓的源码，本仓能自决的是"依赖门禁崩掉时不许读成 0"。
 - 🔗 关联：F12 联动（MA→AF 指标回灌）已于本会话闭环，见 `docs/handoff/_af_exec_append.md` §6.3（✅ 已闭环）。

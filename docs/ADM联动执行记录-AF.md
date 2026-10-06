@@ -4767,3 +4767,84 @@ M2 是本条最要紧的一格：**旧射程下这一站不是被判绿，是连
   "AF 给了个能绕过的口子"——要放开得再走一次 DCD。
 
 —— AutoForge 开发 · 2026-10-06
+
+## 二之五十六、收第十四轮 F15：把"默认 urlopen 盲跟 3xx"收成单一收口点 `guarded_open`，并让门禁认得 bandit 漏掉的那两种形状
+
+**缺陷来源**：`docs/audit/AutoForge_第十四轮审计报告.md`（OUTB-01 ×4 + bandit B310 ×2）。本轮审计给的静态命中是
+4 处直连出站，bandit 只报出其中 2 条——漏的正是**最危险的两条**：一条藏在 `opener or urllib.request.urlopen`
+的 `BoolOp` 里（被调者名字不在调用点，追不到），一条是**函数级豁免把整文件罩掉**造成的假绿。
+
+**复测（本机，HEAD=`9aa6499`）**：
+
+| 审计给的形状 | 实际在哪 | 复测结论 |
+|---|---|---|
+| `af_catalog.py` `_u.urlopen(...)` | `_default_fetch_all` 默认腿 | 成立，真发请求 |
+| `af_live.py` `opener or urllib.request.urlopen` | `HAEventStream._open` | 成立，且 bandit 判不出（`BoolOp`） |
+| `af_metrics.py` `urllib.request.urlopen(...)` | `_post` 默认腿 | 成立 |
+| `af_registry.py` `(opener or ...urlopen)(...)` | `rest_areas_fallback` | 成立，`BoolOp` 包在 `Call.func` 里 |
+
+四条的**共同危险**不是"连了外面"，而是"连了外面之后**还盲跟重定向**"：`urlopen` 用默认 opener，
+3xx 的 `Location` 不做任何再校验，于是白名单只对第一跳成立。仓里**早就有**正确的那套（`af_adapters/http.py:34`
+`_WhitelistRedirector`、`ha.py:56` `_NoRedirectHandler`），只是四条腿各写各的、没走它——所以这一族的修法
+不是新造护栏，而是**把已有护栏包成一个可替换 `urlopen` 的函数**，免得长出第二套口径不一致的白名单。
+
+**修法**（收口点 `src/autoforge/af_adapters/http.py:66` `guarded_open(req, *, allowed_hosts, timeout=None)`）：
+
+1. `host_of()` 返回空 ⇒ 拒（缺主机名或 netloc 含 `@` 的凭证注入形状）；
+2. 主机不在 `allowed_hosts` ⇒ 拒；
+3. 放行时用 `build_opener(_WhitelistRedirector(lambda u: host_of(u) in hosts))` 开——**每一跳都重新过白名单**；
+4. 拒绝时抛 `OutboundHostNotAllowed`，它**刻意继承 `urllib.error.URLError`**（⇒ `OSError`）：四处降级链 catch 的是
+   `URLError/OSError/裸 Exception`，若新建裸 `Exception` 子类，"被护栏拦下"会升级成未捕获异常往上冒——**那比旁路更难查**。
+
+调用点四条 + `HTTPAdapter.call` 一并改（`http.py:137`），删掉它自己那份 `build_opener` 内联复制：
+`af_catalog.py:456`、`af_live.py:259`、`af_metrics.py:202`、`af_registry.py:329`、`af_adapters/http.py:137`。
+每处的 `allowed_hosts` 取**自己那条已经配好的 base_url 的 host**（`host_of(ha_url / ma_url / base_url)`），
+所以第一跳行为与修复前完全一致——**唯一变化是 3xx 的 `Location` 不再盲信**。
+测试注入接缝（`opener=` 参数）全部保留，不改签名。
+
+**门禁 `scripts/check_outbound_guard.py`（四腿，AST 口径、名字哨兵不吃散文）**：
+
+| 腿 | 判据 | 本机读数（真 `src/`） |
+|---|---|---|
+| A 裸出站腿 | `urlopen` 的**调用脸**与**赋值脸**（`self._opener = opener or urlopen`）都判红，红点前移到赋值那一行 | 裸 urlopen **0** 处 |
+| B 重定向腿 | 每个 `build_opener(` 必须在调用子树或**所在函数**子树里出现 `_WhitelistRedirector`/`_NoRedirectHandler` | 自建 opener **2** 处，都挂了守卫 |
+| C 白名单腿 | 每个 `guarded_open(` 必须带 `allowed_hosts=` 关键字 | 走收口点 **5** 处，全部带 |
+| D 反空转腿 | 三类站点合计为 0 / 目录不存在 / 有 `.py` 解析失败 ⇒ **RC=2**（"没有发现"≠"判定干净"） | 扫描 100 个文件、射程 7 处 ⇒ 有射程 |
+
+**变异腿读数（本批改完码之后真跑，每个形状单独一棵临时树，RC 由 `$?` 实测）**：
+
+| 腿 | 喂进去的形状 | RC | 门禁原话（节选） |
+|---|---|---|---|
+| M1 | `urllib.request.urlopen(url)` | 1 | `[裸出站] af_bad.py:5 函数 fetch() 直连 urlopen` |
+| M2 | `build_opener()` 无守卫 | 1 | `[重定向腿] ... 新建 opener 却没挂重定向守卫` |
+| M3 | `guarded_open(req, timeout=5)` | 1 | `[白名单腿] ... 收口点在，白名单不在` |
+| M4 | `# outbound-guard: exempt()` 空理由 | 1 | `[豁免空转] ... 理由是空的——空着等于没豁免` |
+| M5 | 纯加法函数，无出站形状 | **2** | `三类站点一个都没扫到 ⇒ 本门失去射程（这不是干净）` |
+
+判据是**函数作用域**而非文件作用域——这条直接对着审计那一处假绿：`_scope()` 栈由 `visit_FunctionDef`/
+`visit_AsyncFunctionDef` 维护，模块级 opener（`ha.py:56` 那种）走模块腿判绿不误伤。
+
+**运行时判据**（`tests/unit/test_f15_outbound_guard.py`，25 条全过；静态门禁判不了"真的拦住没有"，所以补行为级）：
+白名单外主机被拒、netloc 含 `@` 被拒、`allowed_hosts` 为空集被拒；
+`issubclass(OutboundHostNotAllowed, urllib.error.URLError)` 与 `OSError` 各一条**钉死继承关系**（改了就会让降级链变崩溃）；
+三条 monkeypatch 默认腿，断言各站点实际交出的白名单是 `("ha",)` / `("ma",)`——**证明收口点真的被走到，而不是测试自己造的**。
+另有一条**不依赖门禁**的独立 AST 复算（`test_no_raw_urlopen_call_face_is_left_in_src`，断言 `faces == []`）：
+门禁和被检代码同仓同批，若两者一起写错就互相圆场，所以留一份独立口径。
+
+**同批顺手两处**：
+1. `af_metrics.py` 里并存 `_logger` 与 `logger` 两个同名模块的 logger（先 grep 确认无外部引用 `"autoforge.metrics"` 才合并）；
+2. `gates.sh` 原子写结论里的 helper 名从 `af_store.atomic_write_text` 改成真实的 `af_atomic.atomic_write_text`——
+   结论文案是给下一个读红的人看的指路牌，名字指错站等于把下一个人带到别的模块里去。
+
+**仍在门外（不冒充已修）**：
+- **白名单内容对不对，静态判不了**。本门只判"每一跳都过白名单"这个形状；`host_of(ha_url)` 本身配错成
+  `evil.com`，门禁读不出来——那是配置面/运行时面的事。
+- `ha.py` **没有主机白名单**，它用的是更严的 `_NoRedirectHandler`（拒绝跟随任何重定向）。本门认这一档为绿，
+  但要说清：它严在"不跟跳转"，不严在"随便哪个主机都能连"。
+- 第十四轮报告 §四 说 AF 侧 F1–F15 **全部 still_open**——那是审计跑 zip 快照的口径（见 `[[project-external-audit-source-ref]]`），
+  与本仓已入账的 §二之一~之五十五不是同一个东西；本条只主张 **F15 在 HEAD 上 closed**，其余以本仓台账为准。
+- **第十五轮 F16 不在本条射程**：缺陷在依赖里（`docker/homesdk/homesdk-0.3.1-py3-none-any.whl` 的
+  `homesdk/gates/scan.py` 三个自递归函数无深度预算），受害面是 AF 的 `gates.sh:38/51/259`。AF 改不了别人仓的源码，
+  本仓能做的是"**依赖门禁崩掉时不许读成 0**"——另条处理。
+
+—— AutoForge 开发 · 2026-10-07

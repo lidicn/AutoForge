@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 from .af_adapters import DEFAULT_HA_URL
+from .af_adapters.http import guarded_open, host_of
 from .af_atomic import atomic_write_text
 from .af_bus import BusEvent
 from .af_flock import FileLock, owner_id
@@ -218,7 +219,8 @@ class HAEventStream:
     """订阅 HA SSE `/api/stream`，产出 `BusEvent` 的迭代器。
 
     断流/异常后按 `backoff_s` 退避重连；`max_retries<0` 表示无限重连（默认）。
-    `opener` 可注入（测试用），否则复用 `urllib.request.urlopen`。
+    `opener` 可注入（测试用）；缺省走 `guarded_open`——SSE 是长连接，但首跳与它跟随的
+    任何 3xx 都仍然只允许落在 `base_url` 那一台主机上（F15）。
     """
 
     def __init__(
@@ -235,7 +237,8 @@ class HAEventStream:
         self.base_url = (base_url or DEFAULT_HA_URL).rstrip("/")
         self._cfg = cfg
         self.token = token or (cfg.get_ha_token() if cfg is not None else "")
-        self._opener = opener or urllib.request.urlopen
+        self._allowed_hosts = (host_of(self.base_url),)
+        self._opener = opener
         self.timeout = float(timeout)
         self.max_retries = max_retries
         self.backoff_s = float(backoff_s)
@@ -251,7 +254,9 @@ class HAEventStream:
             headers={"Authorization": f"Bearer {self.token}"},
         )
         # 长连接：不设短超时（读取逐行阻塞），仅在连接阶段用 timeout
-        return self._opener(req, timeout=self.timeout)
+        if self._opener is not None:
+            return self._opener(req, timeout=self.timeout)
+        return guarded_open(req, allowed_hosts=self._allowed_hosts, timeout=self.timeout)
 
     @staticmethod
     def _line_iter(resp: Any) -> Iterator[str]:

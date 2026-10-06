@@ -15,12 +15,11 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from .af_adapters.http import guarded_open, host_of
 from .af_atomic import atomic_write_text
 from .af_conf import decision_for
 
 _logger = logging.getLogger(__name__)
-
-logger = logging.getLogger("autoforge.metrics")
 
 __all__ = ["MetricsAggregator", "Ingester", "DEFAULT_BUFFER_DIR"]
 
@@ -200,7 +199,11 @@ class Ingester:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with guarded_open(
+            req, allowed_hosts=(host_of(ma_url),), timeout=10
+        ) as resp:
+            # F15：原来是裸 `urlopen`——MA 返回 3xx 时默认 opener 会跟着跳，而 Location 不再重校验，
+            # 等于凭据（Bearer token）可能被转发到白名单外的主机。首跳本来就是 ma_url，收紧没有副作用。
             if resp.status >= 400:
                 raise RuntimeError(f"MA ingest 返回 HTTP {resp.status}")
 
@@ -247,7 +250,7 @@ class Ingester:
                 metric = json.loads(line)
             except ValueError:
                 corrupt += 1
-                logger.warning("metrics 缓冲有坏行，跳过不阻断其余续传：%s", line[:120])
+                _logger.warning("metrics 缓冲有坏行，跳过不阻断其余续传：%s", line[:120])
                 continue
             try:
                 self._post_with_retry(metric, ma_url, token, http_post=http_post)
