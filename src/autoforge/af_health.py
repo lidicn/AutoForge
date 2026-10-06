@@ -456,6 +456,10 @@ class HealthEngine:
     history_max: int = 4096
     warnings: list[str] = field(default_factory=list)
     demote_errors: list[dict] = field(default_factory=list)
+    #: `demote_errors` 的条数上限。`_warn()` 里的 `warnings` 早有同样的封顶，
+    #: 这一处漏了：`_ENGINE` 是模块级单例，降级失败一次记一条 ⇒ 内存随进程寿命单调上涨
+    #: （新增审计 BUG-18）。
+    demote_errors_max: int = 200
     _history: dict[str, list[dict]] = field(default_factory=dict)
     _last_conf: dict[str, float] = field(default_factory=dict)
     _demotions: dict[str, dict] = field(default_factory=dict)
@@ -738,6 +742,8 @@ class HealthEngine:
             except Exception as exc:
                 self.demote_errors.append(
                     {"automation_id": aid, "at": now, "error": repr(exc)})
+                if len(self.demote_errors) > self.demote_errors_max:
+                    del self.demote_errors[: len(self.demote_errors) - self.demote_errors_max]
             if not already:
                 self._demotions[aid] = {
                     "at": now, "score": entry["score"],

@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .af_atomic import atomic_write_text
 from .af_draft import draft_intent, DraftError
 from .af_apply import apply
 from .af_spec import graph_to_raw
@@ -194,8 +195,9 @@ class TestChannel:
     def _save_report(self, batch_id: str, report: dict[str, Any]) -> None:
         """保存测试报告。"""
         report_path = self.reports_dir / f"{batch_id}.json"
-        with open(report_path, "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, indent=2)
+        # 走原子助手：报告是 WebUI 轮询读的，崩在半截会被读成「没有这份报告」
+        # （判据 E，审计 BUG-05）
+        atomic_write_text(report_path, json.dumps(report, ensure_ascii=False, indent=2))
 
     def get_report(self, batch_id: str) -> dict[str, Any]:
         """获取测试报告。"""

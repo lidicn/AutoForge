@@ -11,6 +11,7 @@ Agent 只传中文实体名 + 触发 + 动作，服务端负责：
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from typing import Any
@@ -132,14 +133,44 @@ def reset_compose_metrics() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# 实体解析（占位，实际接 af_catalog）
+# 实体解析（接 af_catalog，fail-closed）
 # ─────────────────────────────────────────────────────────────────────
+
+#: 已经是完整 entity_id 的形态：`域.实体`（`light.x` / `binary_sensor.door`）。
+_ENTITY_ID_RE = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z0-9_]+$")
 
 
 def _resolve_entity(name: str, catalog: Any = None) -> str:
-    """把中文名解析成 entity_id。实际应该查 catalog。"""
-    # TODO: 接 af_catalog 做真实解析
-    return name  # 暂时透传，后续接 catalog
+    """把中文名解析成 entity_id；**解析不出来绝不原样透传**。
+
+    原实现是恒等透传（`return name`），于是中文设备名既不会被 `bind_ir` 的
+    `?` 占位符闸门接管、又在 `resolved` 里被记成 `{'前门': '前门'}` —— 一个
+    看着"已解析"、实际编译成非法 entity_id 的假象（新增审计 BUG-16）。
+
+    现在的口径：
+      1. 已经是完整 `域.实体` ⇒ 直接用（不是设备名，不该进目录解析）；
+      2. 否则查目录（`af_catalog.resolve_best`），它**只在无歧义时**返回实体；
+      3. 查不到 / 有歧义 / 没给 catalog ⇒ 返回 `?名字`，交 `bind_ir` 的
+         unresolved 闸门 fail-closed（宁可编译不过，也不要猜一个实体下发）。
+    """
+    raw = str(name or "").strip()
+    if not raw:
+        return "?"  # 连名字都没有 ⇒ 交给 bind_ir 判 unresolved
+    if _ENTITY_ID_RE.match(raw):
+        return raw
+    if raw.startswith("?"):  # 已经是占位符，原样带下去
+        return raw
+    if catalog is not None:
+        resolver = getattr(catalog, "resolve_best", None)
+        if callable(resolver):
+            try:
+                hit = resolver(raw)
+            except Exception:  # 目录读失败不该把整条草稿带崩，按"未定"处理
+                return "?" + raw
+            if hit:
+                return str(hit)
+    # 没能确定 ⇒ 交给 bind_ir 判 unresolved（新增审计 BUG-16）
+    return "?" + raw
 
 
 # ─────────────────────────────────────────────────────────────────────

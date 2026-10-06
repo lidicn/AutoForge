@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
+from autoforge.af_atomic import atomic_write_text
 from autoforge.af_canary_supervisor import (
     DEFAULT_CANARY_SPEC, CanaryPolicy, CanarySupervisor,
     graph_canary_applier, graph_canary_stripper,
@@ -64,6 +65,7 @@ class ConfGrading:
     binding: ShadowBinding | None = None
     pretrigger: Any = None
     persist_dir: str | None = None
+    restore_corrupt: list[str] = field(default_factory=list)
 
     # ---- 生命周期 ------------------------------------------------------- #
 
@@ -87,8 +89,13 @@ class ConfGrading:
             ("canary_state.json", self.canary.dump()),
             ("proposals.json", self.proposals.dump()),
         ):
-            with open(os.path.join(self.persist_dir, name), "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False, indent=2)
+            # 走公共原子助手：随机 tmp + fsync + 目录 fsync。裸 `open(..., "w")` 先把目标截断，
+            # 崩在 `json.dump` 中间就留半截 JSON —— 而读侧今天按"解析失败当没有这份文件"处理，
+            # 半截的影子日志不是"读回上一版"而是"读回空"（新增审计 BUG-03，§二之五十六）。
+            atomic_write_text(
+                os.path.join(self.persist_dir, name),
+                json.dumps(payload, ensure_ascii=False, indent=2),
+            )
 
     def restore(self) -> None:
         """从 .forge/ 恢复。"""
@@ -99,8 +106,16 @@ class ConfGrading:
             path = os.path.join(self.persist_dir, name)
             if not os.path.exists(path):
                 return default
-            with open(path, "r", encoding="utf-8") as fh:
-                return json.load(fh)
+            # 降级 + 留痕：坏文件按"这份没有"继续起，但绝不静默——读侧一旦把半截 JSON 吞成
+            # "没有记录"，影子历史/提案队列就直接归零，而服务照旧起得来（新增审计 §四 P0 后半句）。
+            # 今天 persist() 已改走原子助手，正常路径不会再产出半截文件；这一档兜的是历史遗留与外部改动。
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    return json.load(fh)
+            except (ValueError, OSError, UnicodeDecodeError) as exc:
+                logger.warning("%s 读取失败，按『没有这份文件』继续起：%r（原因记进 restore_corrupt）", path, exc)
+                self.restore_corrupt.append(name)
+                return default
 
         self.shadow.log.load(_read("shadow_log.json", []))
         self.recorder.load(_read("feedback.json", {}).get("events", []))

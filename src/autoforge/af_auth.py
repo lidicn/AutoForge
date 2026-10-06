@@ -137,6 +137,13 @@ class TokenInfo:
 class TokenRegistry:
     """令牌注册表：env 静态配置 + 运行时撤销黑名单 + 落盘。"""
 
+    #: 运行时签发令牌的默认存活期（秒）。此前运行期签发的令牌**不带** `expires_at`，
+    #: 结构上永远无法过期，而 `/api/auth/login` 无鉴权依赖、每调一次追加一条 ⇒
+    #: 凭证库只增不减（新增审计 BUG-19）。给默认 TTL，令牌到期即失效并被清理。
+    ISSUED_TTL_S = 86400.0
+    #: 已签发令牌条数硬上限（兜底）：与同文件 `RateLimiter._MAX_KEYS` 同一纪律。
+    MAX_ISSUED = 10000
+
     def __init__(
         self,
         revoked_path: str | Path | None = None,
@@ -310,15 +317,49 @@ class TokenRegistry:
         agent_name: str,
         scopes: Iterable[str] = ("read", "write", "live"),
         token: str | None = None,
+        ttl_s: float | None = None,
     ) -> str:
         """运行时为 agent 签发 Bearer 令牌（配对成功后调用）。返回明文令牌。"""
         token = token or ("af_" + secrets.token_hex(20))
         scopes_set = {s for s in scopes if s in SCOPES} or {"read"}
+        # 运行期签发的令牌此前**不带 expires_at** ⇒ 结构上永远无法过期，
+        # 而 `/api/auth/login` 无鉴权依赖、每次调用都追加一条 ⇒ 凭证库单调增长
+        # （新增审计 BUG-19）。给一个默认 TTL，并加条数硬上限兜底。
+        ttl = self.ISSUED_TTL_S if ttl_s is None else float(ttl_s)
+        expires_at = (time.time() + ttl) if ttl > 0 else None
         with self._lock:
-            self._tokens[token] = TokenInfo(subject=agent_name, scopes=scopes_set)
+            self._tokens[token] = TokenInfo(
+                subject=agent_name, scopes=scopes_set, expires_at=expires_at
+            )
+            self._purge_expired_locked()
+            if len(self._tokens) > self.MAX_ISSUED:
+                self._evict_oldest_locked()
             if self._issued_path:
-                self._persist_issued(token, agent_name, sorted(scopes_set))
+                self._persist_issued(token, agent_name, sorted(scopes_set), expires_at)
         return token
+
+    def _purge_expired_locked(self) -> None:
+        """清掉已过期的已签发令牌（须持锁）。"""
+        now = time.time()
+        dead = [t for t, info in self._tokens.items()
+                if info.expires_at is not None and info.expires_at <= now]
+        for t in dead:
+            self._tokens.pop(t, None)
+
+    def _evict_oldest_locked(self) -> None:
+        """超过 `MAX_ISSUED` 时按过期时间淘汰最旧的（须持锁）。
+
+        淘汰顺序：先过期时间早的，没有过期时间的（永不过期）最后动。
+        """
+        overflow = len(self._tokens) - self.MAX_ISSUED
+        if overflow <= 0:
+            return
+        ordered = sorted(
+            self._tokens.items(),
+            key=lambda kv: (kv[1].expires_at is None, kv[1].expires_at or 0.0),
+        )
+        for tok, _info in ordered[:overflow]:
+            self._tokens.pop(tok, None)
 
     def revoke_by_subject(self, subject: str) -> int:
         """撤销某主体名下的全部已签发令牌；返回撤销数量。"""
@@ -354,16 +395,24 @@ class TokenRegistry:
         except (OSError, ValueError):
             return
         if isinstance(data, dict):
+            now = time.time()
             for tok, meta in data.items():
                 if tok in self._revoked:
                     continue
                 if isinstance(meta, dict) and "subject" in meta:
+                    # 过期条目直接不载入：否则重启后满盘都是过期令牌（新增审计 BUG-19）
+                    exp = meta.get("expires_at")
+                    if isinstance(exp, (int, float)) and exp <= now:
+                        continue
                     self._tokens[tok] = TokenInfo(
                         subject=meta["subject"],
                         scopes=set(meta.get("scopes", ["read"])),
+                        expires_at=float(exp) if isinstance(exp, (int, float)) else None,
                     )
 
-    def _persist_issued(self, token: str, subject: str, scopes: list[str]) -> None:
+    def _persist_issued(
+        self, token: str, subject: str, scopes: list[str], expires_at: float | None = None
+    ) -> None:
         if not self._issued_path:
             return
         p = Path(self._issued_path)
@@ -373,7 +422,20 @@ class TokenRegistry:
                 data = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 data = {}
-        data[token] = {"subject": subject, "scopes": scopes}
+        if not isinstance(data, dict):
+            data = {}
+        # 顺带把已过期的条目从落盘文件里剔掉：否则重启后 `_load_issued_file`
+        # 读回来的全是过期令牌，文件单调增长（新增审计 BUG-19）。
+        now = time.time()
+        for tok in list(data):
+            meta = data.get(tok)
+            exp = meta.get("expires_at") if isinstance(meta, dict) else None
+            if isinstance(exp, (int, float)) and exp <= now:
+                data.pop(tok, None)
+        entry: dict[str, Any] = {"subject": subject, "scopes": scopes}
+        if expires_at is not None:
+            entry["expires_at"] = expires_at
+        data[token] = entry
         _atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2))
 
     def _rewrite_issued(self, subject: str, new_name: str | None = None, drop: bool = False) -> None:
@@ -424,6 +486,26 @@ class PairCode:
     pushed: bool = False  # SSE 是否已推送给前端
 
 
+def _purge_expired_codes(codes: dict[str, Any]) -> int:
+    """从「码 → 记录」字典里剔除已过期条目，返回剔除条数。
+
+    两族码仓（`PairCodeStore` / `AuthCodeStore`）此前只在 `consume` 里判断过期并
+    `return None`，**从不删除**——过期码永远留在内存字典与落盘文件里，配合每次
+    `create` 都全量重写，文件单调增长（新增审计 BUG-19）。调用方须持锁。
+    """
+    now = time.time()
+    dead = [
+        code
+        for code, rec in codes.items()
+        if isinstance(rec, dict)
+        and isinstance(rec.get("expires_at"), (int, float))
+        and rec["expires_at"] <= now
+    ]
+    for code in dead:
+        codes.pop(code, None)
+    return len(dead)
+
+
 class PairCodeStore:
     """配对码存储：落盘 `.auth/pair_codes.json`，进程内读缓存 + 写时落盘。
 
@@ -446,9 +528,18 @@ class PairCodeStore:
         except (OSError, ValueError):
             return
         if isinstance(data, list):
+            now = time.time()
             for c in data:
                 if isinstance(c, dict) and "code" in c:
+                    # 过期码不载入：否则 pair_codes.json 只增不减，重启后满盘都是
+                    # 过期码（新增审计 BUG-19）
+                    exp = c.get("expires_at")
+                    if isinstance(exp, (int, float)) and exp <= now:
+                        continue
                     self._codes[c["code"]] = c
+
+    def _purge_expired(self) -> int:
+        return _purge_expired_codes(self._codes)
 
     def _persist(self) -> None:
         _atomic_write_text(
@@ -467,7 +558,12 @@ class PairCodeStore:
             "consumed": False,
             "pushed": False,
         }
+        # 跨进程同步：**写前必须重读**。`_persist` 是全量覆盖写，不重读就会用陈旧快照
+        # 把别的进程刚写入的码整片抹掉——用户看到弹窗里的 6 位码随即判无效，
+        # 配对流程走不通且日志无痕（新增审计 BUG-20，与 consume/get 的读侧对称）。
+        self._load()
         with self._lock:
+            self._purge_expired()  # 顺带清掉历史过期码，文件不再单调增长（BUG-19）
             self._codes[code] = rec
             self._persist()
         return PairCode(**rec)
@@ -506,6 +602,7 @@ class PairCodeStore:
         return out
 
     def mark_pushed(self, code: str) -> None:
+        self._load()  # 写前重读，同 create（BUG-20）
         with self._lock:
             rec = self._codes.get(code)
             if rec is not None:
@@ -557,9 +654,18 @@ class AuthCodeStore:
         except (OSError, ValueError):
             return
         if isinstance(data, list):
+            now = time.time()
             for c in data:
                 if isinstance(c, dict) and "code" in c:
+                    # 过期码不载入：同 PairCodeStore，auth_codes.json 也不能只增不减
+                    # （新增审计 BUG-19）
+                    exp = c.get("expires_at")
+                    if isinstance(exp, (int, float)) and exp <= now:
+                        continue
                     self._codes[c["code"]] = c
+
+    def _purge_expired(self) -> int:
+        return _purge_expired_codes(self._codes)
 
     def _persist(self) -> None:
         _atomic_write_text(
@@ -596,7 +702,11 @@ class AuthCodeStore:
             "failed_attempts": 0,
             "locked_until": None,
         }
+        # 写前重读：`_persist` 是全量覆盖写，不重读会用陈旧快照抹掉别的进程写入的码
+        # （新增审计 BUG-20——用户看到弹窗里的码随即被判无效，配对走不通且日志无痕）
+        self._load()
         with self._lock:
+            self._purge_expired()  # 同 PairCodeStore：清历史过期码（BUG-19）
             self._codes[rec["code"]] = rec
             self._persist()
         return AuthCode(**rec)
@@ -634,6 +744,7 @@ class AuthCodeStore:
             return out
 
     def revoke(self, code: str) -> bool:
+        self._load()  # 写前重读：全量覆盖写不重读会抹掉别的进程写入的码（BUG-20）
         with self._lock:
             rec = self._codes.get(code)
             if rec is None or rec.get("revoked"):
@@ -674,6 +785,7 @@ class AuthCodeStore:
 
         N-P0-sec 核心修复：授权码**必须 consume 才生效**，防止无限重试。
         """
+        self._load()  # 写前重读，同 create（BUG-20）
         with self._lock:
             rec = self._codes.get(code)
             if rec is None:
@@ -699,6 +811,7 @@ class AuthCodeStore:
         返回：True = 本次失败使**该码**进入锁定（调用方应提示用户稍后再试）。
         """
         now = time.time()
+        self._load()  # 写前重读，同 create（BUG-20）
         with self._lock:
             if now - self._window_start >= self.ATTEMPT_WINDOW_S:
                 self._window_start = now

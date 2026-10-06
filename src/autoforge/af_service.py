@@ -20,8 +20,10 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .af_adapters import DEFAULT_HA_URL, HAAdapter, HAStateProvider, HATransport
+from .af_atomic import atomic_write_text
 from .af_catalog import DeviceCatalog
 from .af_conf import AUTO_MIN, SHADOW_LOW, ConfidenceStore, decision_for
+from .af_env import env_int, env_number
 from .af_expect import (
     evaluate_graph_expects,
     is_indirect_effect_action,
@@ -1351,10 +1353,12 @@ def bootstrap_examples(store: GraphStore, examples_dir: str | Path) -> list[str]
 # ─────────────────────────────────────────────────────────────────────
 
 #: 会话存活上限（秒），可用环境变量覆盖
-SESSION_TTL_S = float(os.getenv("AUTOFORGE_SESSION_TTL_S", "3600"))
+#: 走 af_env 的 fail-safe 解析：裸 float()/int() 会让写错的 env 在 import 期抛，
+#: 整个包起不来（新增审计 BUG-10）。
+SESSION_TTL_S = env_number("AUTOFORGE_SESSION_TTL_S", 3600.0, lo=0.0)
 
 #: 在途会话硬上限。TTL 只管"活了多久"，这一条管"同时有多少份 Runtime 常驻"。
-SESSION_MAX = int(os.getenv("AUTOFORGE_SESSION_MAX", "128"))
+SESSION_MAX = env_int("AUTOFORGE_SESSION_MAX", 128, lo=1)
 
 _SESSIONS: dict[str, dict[str, Any]] = {}
 _SESSIONS_LOCK = threading.Lock()
@@ -2327,7 +2331,9 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
         pass
     # 写 IR 到临时文件
     tmp = Path(tempfile.mkdtemp(dir=str(root))) / "deployed_ir.json"
-    tmp.write_text(json.dumps(ir, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 走原子助手：这份 IR 随后被独立进程读取，崩在半截会让部署侧读到半个图
+    # （判据 E，审计 BUG-05）
+    atomic_write_text(tmp, json.dumps(ir, ensure_ascii=False, indent=2))
     # P1-19：令牌从 credentials.json 读出，经环境变量传递（不传 --ha-token argv）
     ha_token = ""
     cred = root / "credentials.json"

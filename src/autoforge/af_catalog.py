@@ -275,7 +275,9 @@ class DeviceCatalog:
             self._cache = None
             return {"version": CATALOG_VERSION, "freshness": "", "entities": {}}
         cached = self._cache
-        if cached is not None and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+        # 键用 st_mtime_ns（纳秒）而非 st_mtime（秒）：秒级键在快速连续写入下会碰撞，
+        # 让「文件没变」的误判成立（新增审计 BUG-08）。
+        if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
             return cached[2]
         try:
             parsed = json.loads(path.read_text(encoding="utf-8"))
@@ -286,7 +288,7 @@ class DeviceCatalog:
         parsed.setdefault("version", CATALOG_VERSION)
         parsed.setdefault("freshness", "")
         parsed.setdefault("entities", {})
-        self._cache = (stat.st_mtime, stat.st_size, parsed)
+        self._cache = (stat.st_mtime_ns, stat.st_size, parsed)
         return parsed
 
     def _save(self, payload: dict[str, Any]) -> None:
@@ -299,6 +301,11 @@ class DeviceCatalog:
         path = self.catalog_path
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
+        # 写盘即失效：否则「刷新/加别名后立刻 resolve」会命中旧缓存。
+        # 缓存键是 (st_mtime, st_size)，快速连续写入可能分辨不出（实测 16/30 读到陈旧），
+        # 所以正确性不能依赖 mtime 恰好变化——显式失效是最低成本且必然正确的做法。
+        # （新增审计 BUG-08）
+        self._cache = None
 
     def area_of(self, entity_id: str) -> str:
         """P0-7：查询实体所属区域（房间名）。供 DeviceGuardRegistry 的 area 规则匹配使用。
@@ -312,7 +319,6 @@ class DeviceCatalog:
         if not meta:
             return ""
         return _meta_area(meta)
-        self._cache = None
 
     # ── 1. 刷新（拉 HA 全量落缓存）──────────────────────────────────────
     def refresh(self, *, full: bool = True, domain: str = "", area: str = "") -> dict[str, Any]:

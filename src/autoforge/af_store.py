@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +29,8 @@ from .af_flock import FileLock, owner_id
 from .af_instance import Instance, InstanceContext
 from .af_ir import Graph, Node, load_graph
 from .af_ir.models import IRValidationError, validate_automation
+
+logger = logging.getLogger("autoforge.store")
 
 __all__ = [
     "GraphStore",
@@ -495,6 +499,64 @@ class GraphStore:
                     self._tags_path(), json.dumps(data, ensure_ascii=False, indent=2)
                 )
 
+    # ── overwrite 导入的可回滚让位（新增审计 BUG-11）────────────────────
+    def _stash_archive(self, name: str) -> Path | None:
+        """把旧归档（版本目录 + conf 边车）改名让位，返回备份目录；无归档返回 None。
+
+        `overwrite` 导入用它替代「先 `_delete_archive()` 再写」：删除不可逆，一旦
+        后续写新版本失败，旧归档就永久没了。改成 rename 让位后，失败可原样回滚。
+        调用前必须已通过 `assert_deletable()`（归属核对不能因为换实现而丢）。
+        """
+        directory = self._dir(name)
+        conf_path = self.root / f"{directory.name}.conf.json"
+        if not directory.is_dir() and not conf_path.exists():
+            return None
+        backup = self.root / f"{directory.name}.__ovbak__"
+        if backup.exists():  # 上一轮未清理干净的残留，先清掉再让位
+            shutil.rmtree(backup, ignore_errors=True)
+        backup.mkdir(parents=True, exist_ok=True)
+        moved = False
+        if directory.is_dir():
+            # fixed-tmp: exempt(overwrite 回滚用的归档「让位」，不是 tmp→正名的原子替换：目标名每次唯一且残留先清，崩溃只留可识别的备份目录，不会把正名写成半截)
+            directory.rename(backup / "versions")
+            moved = True
+        if conf_path.exists():
+            conf_path.rename(backup / "conf.json")
+            moved = True
+        if not moved:
+            shutil.rmtree(backup, ignore_errors=True)
+            return None
+        return backup
+
+    def _unstash_archive(self, name: str, backup: Path | None) -> None:
+        """写新失败：把备份改回原名，旧归档回到原位。"""
+        if backup is None or not backup.is_dir():
+            return
+        directory = self._dir(name)
+        conf_path = self.root / f"{directory.name}.conf.json"
+        try:
+            if (backup / "versions").is_dir():
+                if directory.exists():
+                    shutil.rmtree(directory, ignore_errors=True)
+                # fixed-tmp: exempt(回滚让位的逆操作，把备份改回正名；理由同 _stash_archive)
+                (backup / "versions").rename(directory)
+            if (backup / "conf.json").is_file():
+                if conf_path.exists():
+                    conf_path.unlink()
+                (backup / "conf.json").rename(conf_path)
+        except OSError:
+            # 恢复失败必须留痕：备份目录还在，可人工捞回
+            logger.error(
+                "overwrite 导入失败后恢复旧归档出错，备份仍保留在 %s：%s", backup, name, exc_info=True
+            )
+            return
+        shutil.rmtree(backup, ignore_errors=True)
+
+    def _drop_stash(self, backup: Path | None) -> None:
+        """写新成功：丢弃备份（此时旧归档已不再需要）。"""
+        if backup is not None and backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+
     def _unique_name(self, base: str) -> str:
         """为 rename 策略找一个未占用名字：`base_import` / `base_import2` …"""
         candidate = f"{base}_import"
@@ -557,20 +619,29 @@ class GraphStore:
                         {"name": target, "version": ver.get("version"), "error": str(exc)}
                     )
                     entry_has_error = True
-            # overwrite 策略：全部版本校验通过后才删除旧归档（避免校验失败时历史不可回滚）
+            # overwrite 策略：全部版本校验通过后才动旧归档，且**改名让位而非删除**——
+            # 写新版本中途失败时旧归档可原样回滚，不留下不可逆的空洞
+            # （新增审计 BUG-11；P1-17 的「先校验后删」只挡住了校验失败那一半）。
+            stash: Path | None = None
             if self.versions(name) and strategy == "overwrite" and not entry_has_error:
-                self._delete_archive(name)
-            # 合法版本仍然写入（非法版本已被跳过）
-            for ver, graph_dict in validated:
-                self.save_version_raw(
-                    target,
-                    graph_dict,
-                    int(ver.get("version", 1)),
-                    ver.get("saved_at", ""),
-                    ver.get("note", ""),
-                )
-            if entry.get("tags"):
-                self.set_tags(target, list(entry["tags"]))
+                self.assert_deletable(name)  # 归属核对不能因为换实现而丢
+                stash = self._stash_archive(name)
+            try:
+                # 合法版本仍然写入（非法版本已被跳过）
+                for ver, graph_dict in validated:
+                    self.save_version_raw(
+                        target,
+                        graph_dict,
+                        int(ver.get("version", 1)),
+                        ver.get("saved_at", ""),
+                        ver.get("note", ""),
+                    )
+                if entry.get("tags"):
+                    self.set_tags(target, list(entry["tags"]))
+            except Exception:
+                self._unstash_archive(name, stash)
+                raise
+            self._drop_stash(stash)
             report["imported"].append(target)
 
         # 置信度快照：跟随 rename 映射到新名字；skip 的归档不恢复其 conf

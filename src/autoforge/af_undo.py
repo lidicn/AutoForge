@@ -37,6 +37,7 @@ from typing import Any, Callable, Mapping, NamedTuple
 
 from .af_adapters import CallResult
 from .af_atomic import atomic_write_text
+from .af_env import env_int, env_number
 from .af_time import SystemTimeSource, TimeSource
 
 __all__ = [
@@ -50,12 +51,19 @@ __all__ = [
 
 logger = logging.getLogger("autoforge.undo")
 
-DEFAULT_WINDOW_S = float(os.getenv("AUTOFORGE_UNDO_WINDOW_S", "60"))
+# 数值型 env 走公共 fail-safe 路径：模块级求值若裸写 float()/int()，配置写错会让
+# `import autoforge.af_undo` 直接抛 ValueError ⇒ 整个包起不来（新增审计 BUG-10）。
 MAX_WINDOW_S = 300.0
+DEFAULT_WINDOW_S = env_number("AUTOFORGE_UNDO_WINDOW_S", 60.0, lo=0.0, hi=MAX_WINDOW_S)
 
 #: 快照条数硬上限。时间窗只管"一份快照活了多久"，这一条管"窗口内同时堆了多少份"：
 #: 一次部署一份，批量下发下 `undo_log.json` 仍会随部署数涨。与 `af_service._SESSIONS` 同口径。
-MAX_DEPLOYS = int(os.getenv("AUTOFORGE_UNDO_MAX_DEPLOYS", "200"))
+MAX_DEPLOYS = env_int("AUTOFORGE_UNDO_MAX_DEPLOYS", 200, lo=1)
+
+#: 时钟回拨容差（秒）。撤销窗口用墙上时钟算 age，若 age 为负（记录时间在未来），
+#: `age > window` 恒为 False ⇒ 记录永不过期、revert 永远放行。超过此容差即判时钟偏移，
+#: fail-closed 拒绝撤销（新增审计 BUG-09）。
+CLOCK_SKEW_TOLERANCE_S = 5.0
 
 #: 风险域：撤销需调用方显式 confirm（与下发同级审批带）
 RISK_DOMAINS = frozenset({"climate", "cover", "lock", "fan", "vacuum"})
@@ -286,6 +294,17 @@ class UndoStore:
     def _save(self) -> None:
         atomic_write_text(self.path, json.dumps(self._records, ensure_ascii=False, indent=2))
 
+    @staticmethod
+    def _age_of(rec: Mapping[str, Any], now_ts: float) -> tuple[float, bool]:
+        """返回 `(age_seconds, skewed)`。
+
+        `skewed=True` 表示 age 为负且超过容差——即记录时间落在「未来」，通常来自
+        墙上时钟回拨或 NTP 校正。此类记录不能当作"还很新"：否则撤销窗口永不过期。
+        （新增审计 BUG-09）
+        """
+        age = now_ts - float(rec.get("ts", 0))
+        return age, age < -CLOCK_SKEW_TOLERANCE_S
+
     def record(self, deploy_id: str, entities: Mapping[str, Mapping[str, Any]]) -> None:
         """记录本次部署的"动作前快照"（entity_id → {state, attributes}）。"""
         self._records[deploy_id] = {
@@ -349,8 +368,8 @@ class UndoStore:
         if rec is None:
             return {"exists": False, "deploy_id": deploy_id, "reason": "unknown_deploy_id"}
         entities = rec.get("entities", {})
-        age = self._clock.now().timestamp() - float(rec.get("ts", 0))
-        expired = self.window_s > 0 and age > self.window_s
+        age, skewed = self._age_of(rec, self._clock.now().timestamp())
+        expired = skewed or (self.window_s > 0 and age > self.window_s)
         risk = sorted(e for e in entities if e.split(".", 1)[0] in RISK_DOMAINS)
         mapped = sorted(e for e in entities if e.split(".", 1)[0] in DOMAIN_SETTER)
         return {
@@ -359,6 +378,7 @@ class UndoStore:
             "age_s": round(age, 3),
             "window_s": self.window_s,
             "expired": expired,
+            "clock_skew": skewed,
             "undoable": not expired,
             "entities": sorted(entities),
             "risk_entities": risk,
@@ -372,10 +392,11 @@ class UndoStore:
         """窗口内仍可撤销的部署清单（按时间倒序），供 UI 展示可撤销项。"""
         now = self._clock.now().timestamp()
         out = [
-            {"deploy_id": did, "age_s": round(now - float(rec.get("ts", 0)), 3),
+            {"deploy_id": did, "age_s": round(self._age_of(rec, now)[0], 3),
              "entities": sorted(rec.get("entities", {}))}
             for did, rec in self._records.items()
-            if self.window_s <= 0 or (now - float(rec.get("ts", 0))) <= self.window_s
+            if not self._age_of(rec, now)[1]
+            and (self.window_s <= 0 or (now - float(rec.get("ts", 0))) <= self.window_s)
         ]
         out.sort(key=lambda r: r["age_s"])
         return out
@@ -399,7 +420,21 @@ class UndoStore:
         rec = self._records.get(deploy_id)
         if rec is None:
             return {"ok": False, "reason": "unknown_deploy_id", "deploy_id": deploy_id}
-        if self.window_s > 0 and (self._clock.now().timestamp() - float(rec.get("ts", 0))) > self.window_s:
+        now_ts = self._clock.now().timestamp()
+        age, skewed = self._age_of(rec, now_ts)
+        if skewed:
+            # fail-closed：时间戳落在未来，窗口判定不可信 ⇒ 拒绝撤销而不是放行
+            logger.warning(
+                "撤销记录时间戳落在未来（age=%.3fs），判时钟偏移后拒绝：deploy_id=%s", age, deploy_id
+            )
+            return {
+                "ok": False,
+                "reason": "clock_skew",
+                "deploy_id": deploy_id,
+                "age_s": round(age, 3),
+                "message": "部署记录时间戳异常（系统时钟回拨），撤销已拒绝；请校准系统时钟后重试",
+            }
+        if self.window_s > 0 and age > self.window_s:
             return {
                 "ok": False,
                 "reason": "expired",
@@ -467,7 +502,9 @@ class UndoStore:
         before = len(self._records)
         self._records = {
             did: rec for did, rec in self._records.items()
-            if window <= 0 or (now - float(rec.get("ts", 0))) <= window
+            # skewed（时间戳落在未来）视为无效记录一并清掉，否则它们永远清不掉
+            if not self._age_of(rec, now)[1]
+            and (window <= 0 or (now - float(rec.get("ts", 0))) <= window)
         }
         removed = before - len(self._records)
         if removed:

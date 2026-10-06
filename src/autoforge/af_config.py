@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
+from .af_env import env_number
 from .af_secrets import load_secret
 
 __all__ = ["Config", "get_config"]
@@ -155,7 +156,8 @@ class Config:
 #: R-54：不再永久缓存——按 TTL 重读磁盘（默认 60s，env AUTOFORGE_CONFIG_TTL_S 可调，0=不过期）。
 _CONFIGS: dict[str, tuple[Config, float]] = {}
 _CONFIGS_LOCK = threading.Lock()
-_CONFIG_TTL_S = float(os.getenv("AUTOFORGE_CONFIG_TTL_S", "60"))
+# 走 af_env 的 fail-safe 解析：裸 float() 会让写错的 env 在 import 期抛（新增审计 BUG-10）
+_CONFIG_TTL_S = env_number("AUTOFORGE_CONFIG_TTL_S", 60.0, lo=0.0)
 
 
 def get_config(root: str | Path) -> Config:

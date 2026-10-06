@@ -120,10 +120,10 @@ _SUN_TEXT: dict[str, str] = dict(_SHARED_SUN_TEXT or {"sunset": "日落", "sunri
 # 动词 -> action 的反查：(动词, 实体 domain) -> action。
 # §0 明确「打开 light.x -> light.turn_on；switch.x -> switch.turn_off」这种
 # 「动词 + 目标实体 domain 前缀」的多对一反解，所以反查键必须带 domain。
-_REVERSE_ACTION: dict[tuple[str, str], str] = {}
+_REVERSE_ACTION: dict[tuple[str, str], str] = {}  # bounded-cache: exempt(静态反查表：键域是「动词 × 实体 domain」两张有限词表的笛卡尔积，import 期一次填满后再不增长)
 # 动词在整张表里唯一时，允许无实体直接落动作（notify / scene / script / alarm ...）
-_VERB_ONLY_ACTION: dict[str, str] = {}
-_by_verb: dict[str, set[str]] = {}
+_VERB_ONLY_ACTION: dict[str, str] = {}  # bounded-cache: exempt(静态反查表：键域是 ACTION_VERBS 的有限动词集，import 期一次填满后再不增长)
+_by_verb: dict[str, set[str]] = {}  # bounded-cache: exempt(静态反查表：键域同上，import 期一次填满后再不增长)
 for _action, _verb in ACTION_VERBS.items():
     _domain = _action.split(".", 1)[0]
     _REVERSE_ACTION[(_verb, _domain)] = _action
@@ -1026,10 +1026,12 @@ class _Ctx:
 
 class _Builder:
     def __init__(self, id_prefix: str = "n") -> None:
-        self.nodes: list[dict[str, Any]] = []
-        self.edges: list[dict[str, Any]] = []
+        # 下面三个是**单次解析**的累加器：规模由输入 NL 的行数封顶，builder 随 parse_automation
+        # 返回 IR 一起被回收，不跨请求存活——不是常驻增长容器。
+        self.nodes: list[dict[str, Any]] = []  # bounded-cache: exempt(单次解析累加器：上界=输入行数，随 parse 返回即回收)
+        self.edges: list[dict[str, Any]] = []  # bounded-cache: exempt(单次解析累加器：上界=输入行数，随 parse 返回即回收)
         self._stack: list[_Ctx] = [_Ctx(indent=-(10 ** 9))]
-        self._by_id: dict[str, dict[str, Any]] = {}
+        self._by_id: dict[str, dict[str, Any]] = {}  # bounded-cache: exempt(单次解析累加器：与 self.nodes 一一对应，上界=输入行数)
         self._counter = 0
         self._prefix = id_prefix
         self._prev: tuple[str, int] | None = None

@@ -454,17 +454,25 @@ class ConflictService:
             from af_conflict import KIND_DEGRADED, ConflictEvent
         import uuid as _uuid
 
-        self.auditor.record(
-            ConflictEvent(
-                event_id=_uuid.uuid4().hex[:12],
-                entity_id=entity_id,
-                kind=KIND_DEGRADED,
-                requester_id=automation_id,
-                holder_id=None,
-                timestamp=float(self.clock.monotonic()),
-                details={"phase": phase, "error": repr(exc), "fail_open": True},
+        # 记账本身不得抛出：本方法的调用点位于「故障优先 ALLOW」的 except 分支里，
+        # 若 record()/_persist() 写盘失败向外抛，「故障优先降级」就变成「故障优先报错」，
+        # 且原始异常被记账异常顶掉（新增审计 BUG-13）。
+        try:
+            self.auditor.record(
+                ConflictEvent(
+                    event_id=_uuid.uuid4().hex[:12],
+                    entity_id=entity_id,
+                    kind=KIND_DEGRADED,
+                    requester_id=automation_id,
+                    holder_id=None,
+                    timestamp=float(self.clock.monotonic()),
+                    details={"phase": phase, "error": repr(exc), "fail_open": True},
+                )
             )
-        )
+        except Exception:
+            logging.getLogger("autoforge.conflict").warning(
+                "降级记账失败（不影响 fail-open 决策）：phase=%s error=%r", phase, exc, exc_info=True
+            )
 
 
 # --------------------------------------------------------------------------- #

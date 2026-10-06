@@ -85,6 +85,18 @@ class ConfidenceStore:
 
     values: dict[str, float] = field(default_factory=dict)
     samples: dict[str, list[tuple[str, float]]] = field(default_factory=dict)
+    # 样本回灌历史上界：与 af_feedback.FeedbackStore 的 max_events 同一纪律。
+    # 无界会让常驻自动化无限涨内存，且 af_store 每次落盘都全量序列化它
+    # （新增审计 BUG-14）。
+    max_samples: int = 2000
+
+    def _append_sample(self, automation_id: str, kind: str, value: float) -> None:
+        """追加一条样本并按 `max_samples` 裁剪（丢最旧的）。"""
+        bucket = self.samples.setdefault(automation_id, [])
+        bucket.append((kind, value))
+        cap = max(0, int(self.max_samples))
+        if len(bucket) > cap:
+            del bucket[: len(bucket) - cap]
 
     def seed(self, graph: "Graph") -> "ConfidenceStore":
         """用 Graph 里声明的 confidence 初始化（缺省视为 1.0，即默认全自治）。"""
@@ -106,14 +118,14 @@ class ConfidenceStore:
     def record_positive(self, automation_id: str) -> None:
         """正样本：自动执行后被确认无误 → 缓慢提升。"""
         self.values[automation_id] = min(1.0, self.get(automation_id) + POSITIVE_LIFT)
-        self.samples.setdefault(automation_id, []).append(("positive", self.get(automation_id)))
+        self._append_sample(automation_id, "positive", self.get(automation_id))
 
     def record_negative(self, automation_id: str) -> None:
         """负样本：用户干预 / 手动修改 → 显著拉低。"""
         self.values[automation_id] = max(0.0, self.get(automation_id) - NEGATIVE_DROP)
-        self.samples.setdefault(automation_id, []).append(("negative", self.get(automation_id)))
+        self._append_sample(automation_id, "negative", self.get(automation_id))
 
     def promote(self, automation_id: str) -> None:
         """人工确认无误 → 直接拉满（可用于"手动转正"）。"""
         self.values[automation_id] = 1.0
-        self.samples.setdefault(automation_id, []).append(("promote", 1.0))
+        self._append_sample(automation_id, "promote", 1.0)

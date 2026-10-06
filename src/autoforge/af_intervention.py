@@ -141,6 +141,10 @@ class InterventionDetector:
     pending: dict[str, list[PendingAction]] = field(default_factory=dict)
     applied: dict[str, AppliedState] = field(default_factory=dict)
     records: list[InterventionRecord] = field(default_factory=list)
+    #: `records` 的条数上限。检测器随 `af_runtime_ext` 长驻、每次干预 append 一条，
+    #: 不裁剪就是随进程寿命单调上涨（新增审计 BUG-18）。真值走 audit 落盘，
+    #: 内存里这份只是最近若干条的窗口。
+    max_records: int = 1000
     managed: set[str] = field(default_factory=set)
 
     def __post_init__(self):
@@ -371,6 +375,8 @@ class InterventionDetector:
             timestamp=now, details=dict(details),
         )
         self.records.append(record)
+        if len(self.records) > self.max_records:
+            del self.records[: len(self.records) - self.max_records]
         audit_write(
             self.audit, at=now, kind="intervention", verdict=verdict.value,
             entity_id=entity_id, automation_id=automation_id,

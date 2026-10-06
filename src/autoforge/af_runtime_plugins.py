@@ -12,11 +12,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 __all__ = ["RuntimeExtensions", "install", "api_handlers", "install_api"]
+
+logger = logging.getLogger(__name__)
 
 _ENV_MASTER = "AUTOFORGE_RUNTIME_EXT"
 _ENV_CONF_GRADING = "AUTOFORGE_CONF_GRADING"
@@ -58,6 +61,27 @@ class RuntimeExtensions:
     persist_dir: str | None = None
     _tick_hooks: list[Callable[[], None]] = field(default_factory=list)
     _observe_hooks: list[Callable[[str, Any, Any, float | None], None]] = field(default_factory=list)
+    # 生命周期失败记账：persist/restore 失败绝不能静默——restore 静默失败会让服务
+    # 以空状态启动却以为已恢复（新增审计 BUG-07）。
+    lifecycle_errors: dict[str, str] = field(default_factory=dict)
+
+    def _record_lifecycle_error(self, op: str, exc: BaseException) -> None:
+        """记录 persist/restore 失败：日志 + 记账 + 审计条目，三处都留痕。"""
+        detail = f"{type(exc).__name__}: {exc}"
+        self.lifecycle_errors[op] = detail
+        logger.error("扩展模块 %s 失败：%s", op, detail)
+        audit = getattr(self.runtime, "audit", None)
+        append = getattr(audit, "append", None)
+        if callable(append):
+            try:
+                clock_now = getattr(getattr(self.runtime, "clock", None), "now", None)
+                append({
+                    "kind": f"runtime_ext_{op}_failed",
+                    "error": detail,
+                    "at": clock_now() if callable(clock_now) else None,
+                })
+            except Exception:  # 记账本身失败不得反过来打断调用方
+                logger.debug("扩展模块 %s 的审计记账也失败了", op, exc_info=True)
 
     # ── 生命周期 ──────────────────────────────────────────────────────
     def tick(self) -> None:
@@ -66,7 +90,7 @@ class RuntimeExtensions:
             try:
                 hook()
             except Exception:
-                pass  # 单个模块故障不阻塞其他模块
+                logger.debug("扩展模块 tick 钩子失败（不阻塞其他模块）", exc_info=True)
 
     def observe(
         self,
@@ -80,15 +104,15 @@ class RuntimeExtensions:
             try:
                 hook(entity_id, old_state, new_state, at)
             except Exception:
-                pass
+                logger.debug("扩展模块 observe 钩子失败（不阻塞其他模块）", exc_info=True)
 
     def persist(self) -> None:
         """统一持久化所有扩展模块状态到 .forge/。"""
         if self.grading is not None:
             try:
                 self.grading.persist()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._record_lifecycle_error("persist", exc)
         # ConflictAuditor 是 append-only JSONL，无需显式 persist
 
     def restore(self) -> None:
@@ -96,8 +120,9 @@ class RuntimeExtensions:
         if self.grading is not None:
             try:
                 self.grading.restore()
-            except Exception:
-                pass
+            except Exception as exc:
+                # 静默恢复失败 = 以空状态起服务却以为已恢复（新增审计 BUG-07）
+                self._record_lifecycle_error("restore", exc)
 
     # ── API ───────────────────────────────────────────────────────────
     def api_handlers(self) -> dict[tuple[str, str], Callable[..., Any]]:
@@ -108,7 +133,7 @@ class RuntimeExtensions:
                 from autoforge.af_runtime_ext import api_handlers as _conf_handlers
                 handlers.update(_conf_handlers(self.grading))
             except Exception:
-                pass
+                logger.warning("conf 分级引擎 API 端点注册失败（其余端点不受影响）", exc_info=True)
         if self.conflict is not None:
             try:
                 from autoforge.af_conflict_runtime import install_api as _conflict_install
@@ -116,7 +141,7 @@ class RuntimeExtensions:
                 # 这里返回一个标记，由 install_api() 统一处理
                 handlers[("__conflict__", "__conflict__")] = lambda: self.conflict
             except Exception:
-                pass
+                logger.warning("冲突仲裁器 API 端点注册失败（其余端点不受影响）", exc_info=True)
         return handlers
 
     @property

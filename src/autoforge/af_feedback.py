@@ -232,7 +232,8 @@ class FeedbackRecorder:
         after = clamp_conf(after, self.floor, self.ceiling)
 
         self.conf.values[automation_id] = after
-        self.conf.samples.setdefault(automation_id, []).append((kind.value, after))
+        # 走 ConfidenceStore 的裁剪helper，别绕过 max_samples（新增审计 BUG-14）
+        self.conf._append_sample(automation_id, kind.value, after)
 
         event = FeedbackEvent(
             automation_id=automation_id, kind=kind, timestamp=now,

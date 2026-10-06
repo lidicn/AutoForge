@@ -28,6 +28,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Optional
 logger = logging.getLogger(__name__)
 
 from .af_adapters import DEFAULT_HA_URL
+from .af_atomic import atomic_write_text
 from .af_bus import BusEvent
 from .af_flock import FileLock, owner_id
 from .af_tick_supervisor import TickSupervisor, SseReconnector, ExponentialBackoff, default_fault_policy
@@ -390,8 +391,11 @@ def start_ticker(
                     ),
                 })
             out = {"asks": asks, "ts": time.time()}
-            (sc_dir / "pending_asks.json").write_text(
-                json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8"
+            # 走原子助手：这份文件是 butler 轮询读的待答清单，崩在半截会被读侧
+            # 当成「没有待答」而静默丢弃这一轮提问（判据 E，审计 BUG-05）
+            atomic_write_text(
+                sc_dir / "pending_asks.json",
+                json.dumps(out, ensure_ascii=False, indent=2),
             )
         except Exception:
             pass

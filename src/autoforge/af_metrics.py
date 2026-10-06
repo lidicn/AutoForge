@@ -10,11 +10,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any, Callable
 
+from .af_atomic import atomic_write_text
 from .af_conf import decision_for
+
+logger = logging.getLogger("autoforge.metrics")
 
 __all__ = ["MetricsAggregator", "Ingester", "DEFAULT_BUFFER_DIR"]
 
@@ -209,24 +213,41 @@ class Ingester:
         token: str,
         http_post: Callable[[str, dict[str, Any], str], None] | None = None,
     ) -> dict[str, Any]:
-        """重发缓冲中所有待发指标；成功即删、失败保留。"""
+        """重发缓冲中所有待发指标；成功即删、失败保留、坏行跳过并计数。"""
         if not self.buffer_dir:
-            return {"flushed": 0, "remaining": 0}
+            return {"flushed": 0, "remaining": 0, "corrupt": 0}
         buf = self.buffer_dir / "metrics_buffer.jsonl"
         if not buf.exists():
-            return {"flushed": 0, "remaining": 0}
-        lines = [ln.strip() for ln in buf.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            return {"flushed": 0, "remaining": 0, "corrupt": 0}
+        # 坏行必须跳过而不是打断整条续传：本函数的语义是"错误恢复"，一旦一行解析不动就整体
+        # 抛出，剩余那 N 条**本来能发出去**的指标会永久滞留，且滞留的缓冲会被下一次截断继续
+        # 加重（新增审计 BUG-04）。`errors="replace"` 兜的是同一族的另一半——截断点在多字节
+        # 字符中间（指标载荷 `ensure_ascii=False`，中文设备名会走到这一档）时整份 `read_text`
+        # 会抛 UnicodeDecodeError，那一行换回来的是 U+FFFD、进的是下面的 corrupt 分支。
+        lines = [
+            ln.strip()
+            for ln in buf.read_bytes().decode("utf-8", errors="replace").splitlines()
+            if ln.strip()
+        ]
         remaining: list[str] = []
         flushed = 0
+        corrupt = 0
         for line in lines:
-            metric = json.loads(line)
+            try:
+                metric = json.loads(line)
+            except ValueError:
+                corrupt += 1
+                logger.warning("metrics 缓冲有坏行，跳过不阻断其余续传：%s", line[:120])
+                continue
             try:
                 self._post_with_retry(metric, ma_url, token, http_post=http_post)
                 flushed += 1
             except Exception:  # noqa: BLE001
                 remaining.append(line)
         if remaining:
-            buf.write_text("\n".join(remaining) + "\n", encoding="utf-8")
+            # 与 af_runtime_ext.persist() 同一条纪律：这里是"删旧写新"，裸 write_text 崩在中间
+            # 会把**还没发出去**的那批一起抹掉——比 BUG-03 更亏，因为这一侧删掉就再没有源头。
+            atomic_write_text(buf, "\n".join(remaining) + "\n")
         else:
             buf.unlink()
-        return {"flushed": flushed, "remaining": len(remaining)}
+        return {"flushed": flushed, "remaining": len(remaining), "corrupt": corrupt}

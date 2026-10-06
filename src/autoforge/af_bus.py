@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterable, Mapping
 
 from .af_audit import BREAKER_OPEN, BREAKER_RECOVER, AuditEvent, AuditLog, HANDLER_FAILED
+from .af_env import env_number as _env_number_shared
 from .af_time import TimeSource, SystemTimeSource
 
 logger = logging.getLogger(__name__)
@@ -29,22 +30,11 @@ def _env_number(
 
     P1-7 修复：原实现直接 `int(os.getenv(...))`，运维写错（如 "12s"、空串、超范围）
     会让 EventBus 构造即抛 ValueError，服务起不来。
+
+    实现已上提为公共路径 `af_env.env_number`（新增审计 BUG-10：模块级常量必须
+    也走这条），此处保留薄封装以兼容既有调用点。
     """
-    raw = os.getenv(name)
-    if raw is None or raw.strip() == "":
-        return default
-    try:
-        val = float(raw)
-    except (ValueError, TypeError):
-        logger.warning("%s 解析失败（值=%r），回落默认 %s", name, raw, default)
-        return default
-    if lo is not None and val < lo:
-        logger.warning("%s=%s 低于下限 %s，回落默认 %s", name, val, lo, default)
-        return default
-    if hi is not None and val > hi:
-        logger.warning("%s=%s 高于上限 %s，回落默认 %s", name, val, hi, default)
-        return default
-    return val
+    return _env_number_shared(name, default, lo=lo, hi=hi)
 
 __all__ = [
     "BusEvent",

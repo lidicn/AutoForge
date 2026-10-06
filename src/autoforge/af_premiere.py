@@ -206,6 +206,10 @@ class PremiereStore:
             return 0
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
+        # 顶层未必是 dict（截断写成 null、被别的工具写成数组、手工编辑）。启动期调用，
+        # 抛出去就是整个服务起不来 —— 形状不符当"没有这份文件"（新增审计 BUG-17）。
+        if not isinstance(data, dict):
+            return 0
         n = 0
         for c in data.get("codes", []):
             rec = PremiereCode.from_dict(c)
@@ -463,6 +467,8 @@ class TrialStore:
             return 0
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
+        if not isinstance(data, dict):  # 同上：形状不符当"没有这份文件"（新增审计 BUG-17）
+            return 0
         self._last_sha = data.get("last_sha")
         n = 0
         for t in data.get("trials", []):

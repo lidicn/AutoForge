@@ -549,6 +549,10 @@ class PreferenceModel:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
             return []
+        # 旧档顶层未必是 dict（截断写成 null、被别的工具写成数组、手工编辑等）。
+        # try 只护住了读+解析，结构使用在 try 之外 ⇒ 必须显式校验形状（新增审计 BUG-15）。
+        if not isinstance(data, dict):
+            return []
         recs = [r for r in (self._record_from_row(row) for row in data.get("records", []) if isinstance(row, dict)) if r is not None]
         self._min_samples = data.get("min_samples", self._min_samples)
         self._confidence_threshold = data.get("confidence_threshold", self._confidence_threshold)

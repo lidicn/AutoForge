@@ -251,6 +251,12 @@ def render_automation(auto: Automation) -> NLResult:
 
     for entry in entries:
         _walk(auto, entry, lines, covered, set(), depth=0)
+    # 没有 `on` 入口、或者 group 不在任何入口可达处的情形：把没被走到的 group 补渲染。
+    # （group 就地展开只发生在 `_walk` 里，而 `_walk` 从入口出发；一条"整条自动化就是
+    #  一个 group"的图没有入口，不补这一段就会渲染成空壳——覆盖率检查会报 missing。）
+    for gnode in auto.nodes.values():
+        if gnode.kind == "group" and gnode.id not in covered:
+            _expand_group(gnode, lines, covered, depth=0, prefix="")
     # v1.2.0：后置条件断言必须写进 NL——「跑完应当如何」是给人签核的一部分
     # （同 emit 的理由：批准的与跑的必须一致）
     if auto.expects():
@@ -263,6 +269,46 @@ def render_automation(auto: Automation) -> NLResult:
         warnings.append(f"{auto.id}：以下节点未出现在自然语言描述中（覆盖率检查失败）：{sorted(missing)}")
 
     return NLResult(text="\n".join(lines), covered=covered, missing=missing, warnings=warnings)
+
+
+#: group 的 mode 中文措辞。渲染成「编组（sequence · 依次按序下发）」这种双写形式：
+#: 括号里同时给机器可读的 `mode` 与人读的下发语义——解析器取 `mode`，
+#: 签核的人看措辞（`test_nl_renders_group_mode_wording` 钉的就是这两个词）。
+_GROUP_MODE_TEXT = {
+    "sequence": "依次按序下发",
+    "parallel": "声明为互不依赖、可并行下发",
+}
+
+
+def _expand_group(
+    node: Node,
+    lines: list[str],
+    covered: set[str],
+    *,
+    depth: int,
+    prefix: str,
+) -> None:
+    """把一个 group 节点就地展开成「声明 + 子自动化逐一内联」。
+
+    与解析器对齐：`编组（<mode> · <措辞>）` 声明，`子自动化「<name>」` 起一行，
+    其后是那条子自动化自己的正文（去掉它自己的【头行】与「· 触发策略」两行）。
+    """
+    mode = node.mode or "sequence"
+    wording = _GROUP_MODE_TEXT.get(mode, _GROUP_MODE_TEXT["sequence"])
+    covered.add(node.id)  # 两条调用路径（`_walk` 内联 / 无入口补渲染）都靠它计入覆盖率
+    # 名字放在 mode 之后：`_GROUP_RE` 是「先取 mode、再吃掉剩余」，名字插在 mode 前面
+    # 会让 parallel 被读成缺省 sequence（往返就错了）。
+    label = f"「{node.name or node.id}」" if (node.name or node.id) else ""
+    lines.append(_indent(depth) + prefix + f"编组（{mode} · {wording}）{label}")
+    for child in node.children:
+        lines.append(_indent(depth + 1) + f"子自动化「{child.name or child.id}」")
+        cres = render_automation(child)
+        covered |= {f"{node.id}:{child.id}:{n}" for n in cres.covered}
+        warnings = getattr(cres, "warnings", ())
+        for w in warnings:
+            lines.append(_indent(depth + 1) + f"  ⚠ {w}")
+        for cl in cres.text.split("\n")[2:]:
+            lines.append(_indent(depth + 1) + "  " + cl)
 
 
 def _walk(
@@ -292,15 +338,7 @@ def _walk(
     covered.add(node.id)
     if node.kind == "group":
         # 组合节点就地展开：声明 + 子自动化逐一内联（解析器通过「子自动化「name」」归集）
-        mode = node.mode or "sequence"
-        lines.append(_indent(depth) + prefix + f"编组（{mode}）")
-        for child in node.children:
-            lines.append(_indent(depth + 1) + f"子自动化「{child.name or child.id}」")
-            cres = render_automation(child)
-            covered |= {f"{node.id}:{child.id}:{n}" for n in cres.covered}
-            for cl in cres.text.split("\n")[2:]:
-                lines.append(_indent(depth + 1) + "  " + cl)
-        return
+        _expand_group(node, lines, covered, depth=depth, prefix=prefix)
     else:
         lines.append(_indent(depth) + prefix + _node_text(auto, node))
 

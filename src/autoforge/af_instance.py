@@ -428,8 +428,15 @@ class InstanceManager:
             raise IllegalTransition(f"实例 {instance.instance_id} 已处于终态 {current}，不能再迁移到 {target}")
         if target not in _ALLOWED[current]:
             raise IllegalTransition(f"非法状态迁移：{current} → {target}（实例 {instance.instance_id}）")
+        previous = instance.ctx.state
         instance.ctx.state = target
-        instance.to_dict()  # 序列化自检
+        try:
+            instance.to_dict()  # 序列化自检
+        except Exception:
+            # 自检失败必须回滚：否则实例停在“已迁移但没通过自检”的半迁移脏状态
+            # （新增审计 BUG-12：先改状态后自检）。
+            instance.ctx.state = previous
+            raise
         self._sync_timers(instance)
         self._notify(instance)
 

@@ -14,7 +14,7 @@
 不报错也不告警。`af_api._resave_graph_raw` 同理：两条并发启停算出同一个版本号、写同一个
 `v{N}.tmp`，丢一次更新。
 
-判据（三条）：
+判据（五条）：
   A. 函数体内出现"把临时文件挪成正名"的替换脸——`os.replace`/`os.rename`，或单位置参数的
      `X.replace(Y)`／`X.rename(Y)`（`Path` 那一张），而该函数体内**没有** `mkstemp` /
      `atomic_write_text` / `_atomic_write` ⇒ 该站点必须出现在基线里，否则判红。
@@ -22,7 +22,8 @@
      `with_suffix(".json.tmp")` + `tmp.replace(self.path)`，当时门只认 `os.replace`，
      于是它根本不进站点集合、照旧报"固定名形状 0 处"（§二之五十四）。
   B. 就地豁免标记 `# fixed-tmp: exempt(理由)` 的括号里必须有非空理由；空理由判红。
-     标记要写在替换脸那一行或函数体内任意一行（与基线二选一）。
+     标记要写在替换脸那一行或函数体内任意一行（与基线二选一）。**理由必须写在同一行**——
+     收集时是逐行扫的，跨行的理由匹配不上（今天就踩了这个坑）。
   C. 反空洞自证：扫不到任何 src 文件、或全仓替换脸站点数为 0 ⇒ **`exit 2`**。
      锚点被挪走时本门无从判定射程，报"干净"就是假绿。
   D. 授权面腿（DCD 裁定 20261004 §二，本批启动条件已到）：`.auth/` 那一族的落盘函数必须走
@@ -31,6 +32,17 @@
      裸 `write_text`/`write_bytes`/常量可写模式的 `open()` 判红，且**不接受基线与豁免**。
      这一腿自己读不成时同样 `exit 2`（`af_auth.py` 本体不在射程、一个落盘函数都扫不到、
      或叫得出名字的原子助手一处都扫不到 ⇒ 无从判定，不报干净）。
+  E. 状态落盘腿（新增审计 BUG-05 补的第三条腿）：A/D 都只审"已经在做原子替换"或
+     "`.auth` 那一族"，**第三种形状它们都看不见——压根没走原子写**。BUG-03/BUG-04 当年
+     就是这么活下来的：门禁报绿，而它们就躺在 `src/` 里。E 问的是另一个问题：
+     「这个状态文件**该不该**走原子写」。射程 = 整份覆盖写（`write_text`/`write_bytes`/
+     常量 w/x/+ 模式的 builtin `open`）且路径指向 `.forge/` 或 `*.json`/`*.jsonl`；
+     追加写（模式 `a`，如 `af_store.append_jsonl`）刻意不在射程——单行追加本就不撕裂，
+     塞进原子助手是错配。判红条件 = 该函数内既无 `mkstemp` 也无任何原子助手。
+     射程失效（一个状态落盘点都扫不到）同样 `exit 2`。
+     **锚点与红行解耦**：锚点只要求"文件里有状态提示 + 函数里有落盘动作"，不要求路径
+     字面量（仓库里多数落盘传的是 `self._tags_path()` 这类造路径表达式）；红行仍要求
+     路径字面量指认，否则装配函数里的无关裸写会被一起打红。
 
 基线（`.atomic-write-baseline.txt`）由 `--print-baseline` 从扫描生成、不手敲，**只减不增**：
 每修好一处，重跑一次生成器，条目数往下走。基线只对本仓 `src/` 生效（`argv[1]` 另给目录时
@@ -275,6 +287,11 @@ AUTH_FACE_BASENAME = "af_auth.py"
 #: 原因：A 腿的基线行为要靠挪 `SRC` 来测，两个开关共用会让 D 腿在临时目录里被误启动
 #: （临时树里没有 `af_auth.py` 本体 ⇒ 每次都是 exit 2），把 A 腿的测试全带崩。
 AUTH_LEG_ROOT = (Path(__file__).resolve().parent.parent / "src").resolve()
+#: E 腿（状态落盘）的射程边界**独立**成一个开关，不挂在 `AUTH_LEG_ROOT` 上。
+#: 门禁单测测 D 腿时会故意把 `AUTH_LEG_ROOT` 指到临时树；E 若跟着被启动，就会在
+#: 「临时树里一个状态落盘点都没有」上 exit 2，把 D 腿的读数一起带崩——与 `SRC` /
+#: `AUTH_LEG_ROOT` 那个耦合同构，今天已经踩过一次（三个开关必须各自独立）。
+STATE_LEG_ROOT = (Path(__file__).resolve().parent.parent / "src").resolve()
 #: 裸写整份文件的调用名——这一族的坏形状本身。
 PLAIN_WRITE = {"write_text", "write_bytes"}
 #: `open()` 只有常量可写模式（`w`/`a`/`x`/`+`）算落盘；模式是变量时不在今天的形状里，
@@ -449,7 +466,174 @@ def check_auth_face(root: Path) -> tuple[list[str], dict[str, int], list[str]]:
     return findings, counts, reasons
 
 
-def render(counts: dict[str, int], stale: list[str], auth: dict[str, int] | None = None) -> str:
+# ── 判据 E：状态落盘点必须走原子助手（新增审计 BUG-05 补的那条腿）─────
+#
+# A/D 两条腿都只审「已经在做原子替换」或「`.auth` 那一族」。第三种形状它们都看不见：
+# **压根没走原子写**——既没有 `os.replace`，也没有 mkstemp+rename。
+# BUG-03（`af_runtime_ext.persist()` 裸 `open("w")+json.dump`）与
+# BUG-04（`af_metrics.flush_buffer()` 裸 `write_text`）当时就是这么活下来的：
+# 门禁报绿，而它们就在 `src/` 里。
+#
+# E 腿与 A/D 的差别是**问的问题**不同：
+#   A 问「走了原子写的，写得对不对」；D 问「授权面有没有偷跑」；
+#   E 问「这个状态文件**该不该**走原子写」——没走的直接判红。
+#
+# 射程刻意收窄，遵循本门一贯的「宁缺勿假红」：
+#   · 只认**整份覆盖**的写（`write_text`/`write_bytes`/常量模式的 builtin `open`）；
+#     追加写（模式 `a`，如 `af_store.append_jsonl`）是另一种纪律——单行追加本就不撕裂，
+#     把它塞进原子助手反而是错配。
+#   · 路径要能看出指向 `.forge/` 或 `*.json`/`*.jsonl` 才算状态文件。
+#   · 助手实现本身（`af_atomic.py`）当然豁免——它就是那条路。
+STATE_HINTS = (".forge", ".json", ".jsonl")
+#: 判据 E 自己认的「已经修过的那条路」，与 A 腿的 SAFE_CALLS 同一组名字。
+E_SAFE_CALLS = {"mkstemp", "atomic_write_text", "_atomic_write", "_atomic_write_text"}
+#: 走助手的那条路本身也要能当锚点被看见（否则"全都改走助手"会让射程归零）。
+E_HELPER_WRITE_CALLS = {"atomic_write_text", "_atomic_write", "_atomic_write_text"}
+E_HELPER_MODULES = {"af_atomic.py"}
+#: 只认这些常量模式的整份覆盖写；`a`（追加）刻意不在其中。
+E_WHOLE_WRITE_MODES = "wx+"
+
+
+def _writes_state_path(node: ast.Call, text: str, func: ast.AST) -> bool:
+    """这条写用的路径看得出是状态文件吗（`.forge/` 或 `*.json`/`*.jsonl`）。"""
+    target = _write_path_arg(node)
+    if target is None:
+        return False
+    segments = [ast.get_source_segment(text, target) or ""]
+    if isinstance(target, ast.Name):
+        for assign in ast.walk(func):
+            if not isinstance(assign, ast.Assign):
+                continue
+            names = [t.id for t in assign.targets if isinstance(t, ast.Name)]
+            if target.id in names:
+                segments.append(ast.get_source_segment(text, assign.value) or "")
+    blob = " ".join(segments).lower()
+    return any(h in blob for h in STATE_HINTS)
+
+
+def _is_whole_file_write(node: ast.Call) -> bool:
+    """整份覆盖写：`write_text`/`write_bytes`，或 builtin `open` 的 w/x/+ 常量模式。"""
+    name = _call_name(node)
+    if name in PLAIN_WRITE:
+        return True
+    if name != "open" or not isinstance(node.func, ast.Name):
+        return False
+    mode: object = None
+    if len(node.args) >= 2:
+        second = node.args[1]
+        if not isinstance(second, ast.Constant):
+            return False  # 模式是变量 ⇒ 判不出来就不硬套
+        mode = second.value
+    for kw in node.keywords:
+        if kw.arg == "mode":
+            if not isinstance(kw.value, ast.Constant):
+                return False
+            mode = kw.value.value
+    return isinstance(mode, str) and any(ch in mode for ch in E_WHOLE_WRITE_MODES)
+
+
+def state_write_functions(root: Path) -> tuple[list[dict], int, list[str]]:
+    """扫出「整份覆盖写状态文件」的函数，含是否走原子助手的记账。
+
+    返回 (站点列表, 射程内整份覆盖写站点总数, 解析失败的文件)。**站点列表只含违规的**
+    （没走助手那些），但「总数」含走助手的——反空洞自证要看的是"射程还看不看得见"，
+    而不是"有没有违规"：修干净之后违规数为 0 是绿，不是射程失效。
+    """
+    out: list[dict] = []
+    broken: list[str] = []
+    in_scope = 0
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in path.parts or path.name in E_HELPER_MODULES:
+            continue
+        rel = path.relative_to(root).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8")
+            tree = ast.parse(text)
+        except (OSError, SyntaxError, UnicodeDecodeError) as exc:
+            broken.append(f"{rel}: {type(exc).__name__}")
+            continue
+        if not any(h in text for h in STATE_HINTS):
+            continue
+        for qual, func in _functions(tree):
+            # 锚点与红行**解耦**（各自解决一个不同问题）：
+            # · 锚点问「还看不看得见状态落盘」——所以裸写与走助手的都算，且**不要求**
+            #   路径字面量里出现 .json：仓库里大多数落盘传的是 `self._tags_path()` 这类
+            #   造路径的表达式，字面量判据看不见它们（今天就因此把 in_scope 判成 0，
+            #   把「全都改走助手了」误当成射程失效）。
+            # · 红行问「这一条裸写是不是在写状态文件」——这里保留精确的路径字面量判据，
+            #   否则 `build_app` 那种几百行装配函数里与状态无关的裸写会被一起打红。
+            plain_all: list[int] = []
+            helper_all: list[int] = []
+            for node in ast.walk(func):
+                if not isinstance(node, ast.Call):
+                    continue
+                if _is_whole_file_write(node):
+                    plain_all.append(node.lineno)
+                elif _call_name(node) in E_HELPER_WRITE_CALLS:
+                    helper_all.append(node.lineno)
+            if not plain_all and not helper_all:
+                continue
+            in_scope += len(plain_all) + len(helper_all)
+            names = [_call_name(n) for n in ast.walk(func) if isinstance(n, ast.Call)]
+            if any(n in E_SAFE_CALLS for n in names):
+                continue  # 走了原子助手（或自己 mkstemp）——这一站是绿的
+            red = [
+                node.lineno
+                for node in ast.walk(func)
+                if isinstance(node, ast.Call)
+                and _is_whole_file_write(node)
+                and _writes_state_path(node, text, func)
+            ]
+            if red:
+                out.append({"key": f"{rel}::{qual}", "file": rel, "lines": sorted(red)})
+    return out, in_scope, broken
+
+
+def check_state_writes(root: Path) -> tuple[list[str], dict[str, int], list[str]]:
+    """判据 E 的判定。返回 (红行列表, 读数, 射程失效原因)；原因非空 ⇒ 调用方 `exit 2`。"""
+    sites, in_scope, broken = state_write_functions(root)
+    # 嵌套函数里的写会同时算到外层 qualname 上（`_qualnames` 把内层挂到外层之下），
+    # 同一个 (文件, 行) 会被报两次。按 (文件, 行号) 去重，红行才对着实际站点。
+    seen: set[tuple[str, int]] = set()
+    deduped: list[dict] = []
+    for s in sites:
+        if any((s["file"], ln) in seen for ln in s["lines"]):
+            continue
+        for ln in s["lines"]:
+            seen.add((s["file"], ln))
+        deduped.append(s)
+    sites = deduped
+    plain = sum(len(s["lines"]) for s in sites)
+    counts = {
+        "in_scope": in_scope,
+        "state_sites": in_scope,
+        "safe": max(0, in_scope - plain),
+        "plain": plain,
+    }
+    findings = [
+        f"[状态落盘] {s['file']}:{'/'.join(str(n) for n in s['lines'])} 函数 "
+        f"`{s['key'].split('::', 1)[1]}` 整份覆盖写状态文件（`.forge/` 或 `*.json`/`*.jsonl`）"
+        f"却没走 `af_atomic.atomic_write_text`——崩在半截会让读侧把「损坏」读成「没有这份文件」，"
+        f"状态静默回空。走公共助手，或就地说明为何这条路径不可能被并发写/撕裂"
+        for s in sites
+    ]
+    reasons: list[str] = []
+    if broken:
+        reasons.append(f"{len(broken)} 个文件读不成（解析/编码失败）：{'; '.join(broken[:5])}")
+    if in_scope == 0:
+        reasons.append(
+            "状态落盘射程里一个整份覆盖写站点都没扫到 ⇒ 落盘形状整体换了名字，"
+            "这一腿此刻判不了任何东西（不许报干净）"
+        )
+    return findings, counts, reasons
+
+
+def render(
+    counts: dict[str, int],
+    stale: list[str],
+    auth: dict[str, int] | None = None,
+    state: dict[str, int] | None = None,
+) -> str:
     line = (
         f"✓ 原子写站点门禁干净（扫描 {counts['files']} 个文件、替换脸站点 {counts['replace_sites']} 处："
         f"走 mkstemp/公共助手 {counts['safe']} 处、固定名形状 {counts['fixed_name']} 处"
@@ -460,6 +644,11 @@ def render(counts: dict[str, int], stale: list[str], auth: dict[str, int] | None
             f"；授权面腿射程函数 {auth['in_scope']} 个、其中落盘 {auth['writers']} 个"
             f"（必经助手 {auth['named']} 个、自带 mkstemp {auth['mkstemp']} 个、"
             f"裸写 0 个——这一腿不接受基线与豁免）"
+        )
+    if state is not None:
+        line += (
+            f"；状态落盘腿整份覆盖写站点 {state['in_scope']} 处"
+            f"（走助手 {state['safe']} 处、裸写 {state['plain']} 处）"
         )
     line += "）"
     if stale:
@@ -498,6 +687,7 @@ def main(argv: list[str]) -> int:
         baseline_keys = []
     findings, counts, stale = check(root, baseline_keys)
     auth: dict[str, int] | None = None
+    state: dict[str, int] | None = None
     if root.resolve() == AUTH_LEG_ROOT:
         # 授权面腿只在扫本仓 `src/` 时判定：临时目录里没有 `af_auth.py` 本体，让它把 A 腿的
         # 读数一起打成"射程读不成"就丢了这条门真正要看的东西（射程边界写在绿行里）。
@@ -509,12 +699,23 @@ def main(argv: list[str]) -> int:
             print("[授权面腿] 射程读不成 ⇒ 不许报干净：" + "；".join(auth_reasons), file=sys.stderr)
             return 2
         auth = auth_counts
+    if root.resolve() == STATE_LEG_ROOT:
+        # 判据 E（状态落盘必须走原子助手）——新增审计 BUG-05 补的那条腿。
+        # 独立开关：只在本仓 src/ 上判定，且同样带反空洞自证。
+        state_findings, state_counts, state_reasons = check_state_writes(root)
+        findings += state_findings
+        if state_reasons:
+            for line in findings[:80]:
+                print(line)
+            print("[状态落盘腿] 射程读不成 ⇒ 不许报干净：" + "；".join(state_reasons), file=sys.stderr)
+            return 2
+        state = state_counts
     if findings:
         for line in findings[:80]:
             print(line)
         print(f"\n共 {len(findings)} 条。修法是走公共助手，不是给这一站加豁免。", file=sys.stderr)
         return 1
-    print(render(counts, stale, auth))
+    print(render(counts, stale, auth, state))
     return 0
 
 

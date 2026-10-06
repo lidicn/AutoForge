@@ -74,7 +74,9 @@ from .af_auth import (
     TokenInfo,
     TokenRegistry,
 )
+from .af_atomic import atomic_write_text
 from .af_ir import AskSpec, IRValidationError
+from .af_env import env_int
 from .af_store import ArchiveNameConflict, GraphStore
 
 __all__ = ["build_app"]
@@ -255,7 +257,8 @@ def build_app(
         issued_path=Path(store_root) / ".auth" / "issued_tokens.json",
     )
     limiter = RateLimiter(
-        per_minute=int(os.getenv("AUTOFORGE_RATE_LIMIT_PER_MIN", "1000"))
+        # fail-safe 解析：写错的 env 不应让 build_app() 抛（新增审计 BUG-10）
+        per_minute=env_int("AUTOFORGE_RATE_LIMIT_PER_MIN", 1000, lo=1)
     )
 
     # v1.9.0 用户 WebUI：配对码 / 授权码 文件存储（与 .auth/revoked.json 同目录）
@@ -846,7 +849,9 @@ def build_app(
             msg = f"{ask_id}|{text}|{room}|{answer_json}".encode("utf-8")
             body["sig"] = _hmac.new(key.encode("utf-8"), msg, _hashlib.sha256).hexdigest()
         fname = inbox / f"{int(time.time()*1000)}.json"
-        fname.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+        # 走原子助手：这是投给 butler 轮询读的作答文件，崩在半截会被读成
+        # 「没有这份作答」而丢掉这次回答（判据 E，审计 BUG-05）
+        atomic_write_text(fname, json.dumps(body, ensure_ascii=False))
         if not key:
             return {
                 "ok": False,
