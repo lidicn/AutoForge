@@ -13,12 +13,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+
+_logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_AGENT_LIMIT",
@@ -32,6 +35,11 @@ DEFAULT_AGENT_LIMIT = 20
 
 #: 待批条目最长存活（秒）——过期自动清理，避免僵尸条目占着 per-agent 名额（审计 Medium）
 DEFAULT_TTL_S = 7 * 24 * 3600
+
+#: R4-02：跨实例共享的待批锁（模块级），避免每次 `PendingStore(root)` 新建实例时
+#: 实例级 `threading.Lock()` 失效导致 per-agent 熔断被并发绕过。同进程有效；
+#: 跨进程彻底的互斥需改用 FileLock（磁盘队列），后续可替换。
+_PENDING_LOCK = threading.Lock()
 
 
 class PendingLimitExceeded(Exception):
@@ -70,7 +78,7 @@ class PendingStore:
         self.root = Path(root)
         self.pending_dir = self.root / "pending"
         self.max_per_agent = int(max_per_agent)
-        self._lock = threading.Lock()
+        self._lock = _PENDING_LOCK  # R4-02：跨实例共享同一把锁
 
     def _path(self, op_id: str) -> Path:
         return self.pending_dir / f"{op_id}.json"
@@ -90,10 +98,8 @@ class PendingStore:
                     pass
             os_replace(Path(tmp_path), path)
         finally:
-            try:
-                os.close(fd)  # 兜底关闭描述符：with 已关则吞 EBADF
-            except OSError:
-                pass
+            # R4-01 修复：os.fdopen 已接管 fd 所有权，with 块结束即关闭 fd；
+            # 此处严禁再次 os.close(fd)——并发下 fd 号被复用会误关他人文件描述符。
             if os.path.exists(tmp_path):
                 try:
                     os.unlink(tmp_path)
@@ -151,7 +157,9 @@ class PendingStore:
         for p in sorted(self.pending_dir.glob("*.json"), key=lambda x: x.stat().st_mtime):
             try:
                 d = json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+            except (OSError, ValueError) as exc:
+                _logger.warning("pending list: 跳过并隔离损坏条目 %s: %s", p, exc)
+                _quarantine_corrupt(p)
                 continue
             if agent is not None and d.get("agent") != agent:
                 continue
@@ -165,7 +173,9 @@ class PendingStore:
             return None
         try:
             return json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            _logger.warning("pending load: 条目损坏，隔离 %s: %s", p, exc)
+            _quarantine_corrupt(p)
             return None
 
     def delete(self, op_id: str) -> bool:
@@ -187,7 +197,9 @@ class PendingStore:
                 sub = datetime.fromisoformat(
                     json.loads(p.read_text(encoding="utf-8"))["submitted_at"].replace("Z", "+00:00")
                 ).timestamp()
-            except (OSError, ValueError, KeyError):
+            except (OSError, ValueError, KeyError) as exc:
+                _logger.warning("pending sweep: 损坏条目无法判定 TTL，隔离 %s: %s", p, exc)
+                _quarantine_corrupt(p)
                 continue
             if now - sub > max_age_s:
                 try:
@@ -209,3 +221,12 @@ def os_replace(src: Path, dst: Path) -> None:
 
     # fixed-tmp: exempt(这一站只是 os.replace 的跨平台包装，tmp 名由调用方给，本函数无临时文件构造)
     os.replace(src, dst)
+
+
+def _quarantine_corrupt(p: Path) -> None:
+    """把损坏的待批文件重命名为 .corrupt 隔离，避免反复静默失败、留下证据并解除僵尸。"""
+    # fixed-tmp: exempt(隔离损坏文件的重命名操作：源→.corrupt，非 tmp→正名的数据写入，同文件系统重命名是原子的)
+    try:
+        p.rename(p.with_suffix(".corrupt"))
+    except OSError:
+        pass

@@ -51,3 +51,44 @@ def test_get_config_singleton(tmp_path):
     a.update_credentials(ha_token="x")
     # 单例共享代数，热重载生效
     assert b.connection_revision == 1
+
+
+# ─────────────────────────────────────────────────────────────────────
+# R19-01：refresh() 代数永不回退 + 凭据损坏保留旧值
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_r19_refresh_revision_never_rolls_back(tmp_path):
+    """refresh() 读到坏 revision 文件时，代数不得从 1 降到 0。"""
+    cfg = Config(tmp_path)
+    cfg.update_credentials(ha_token="valid_token")
+    assert cfg.connection_revision == 1
+    # 模拟 revision 文件损坏
+    rev_path = tmp_path / "revision.json"
+    rev_path.write_text("{corrupted json", encoding="utf-8")
+    cfg.refresh()
+    assert cfg.connection_revision == 1  # 代数只增不减
+
+
+def test_r19_refresh_keeps_credentials_on_corrupt_file(tmp_path):
+    """refresh() 读到坏 credentials 文件时，内存中有效凭据不得被清空。"""
+    cfg = Config(tmp_path)
+    cfg.update_credentials(ha_token="valid_token_123")
+    assert cfg.get_ha_token() == "valid_token_123"
+    # 模拟 credentials 文件损坏
+    creds_path = tmp_path / "credentials.json"
+    creds_path.write_text("{corrupted", encoding="utf-8")
+    cfg.refresh()
+    assert cfg.get_ha_token() == "valid_token_123"  # 保留旧值
+
+
+def test_r19_refresh_picks_up_new_revision(tmp_path):
+    """refresh() 读到更高代数时应正常更新（正常路径不受影响）。"""
+    cfg = Config(tmp_path)
+    cfg.update_credentials(ha_token="old")
+    assert cfg.connection_revision == 1
+    # 外部进程写入更高代数
+    import json
+    (tmp_path / "revision.json").write_text(json.dumps({"revision": 5}), encoding="utf-8")
+    cfg.refresh()
+    assert cfg.connection_revision == 5

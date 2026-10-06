@@ -15,8 +15,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
+
+_logger = logging.getLogger(__name__)
 
 from .af_adapters import AdapterRegistry, CallResult
 from .af_audit import ACTION_FAILED, ENTITY_DRIFT, EVENT_EMITTED, AuditEvent, AuditLog
@@ -264,7 +267,27 @@ class NodeExecutor:
                     else:
                         self._feed_canary_evidence(instance, node, "verified")
             except Exception:
+                # MEDIUM-3（内核安全审计）：漂移检查异常不能静默降级为 verified（假绿）。
+                # 落 unmodeled 状态 + 审计事件，让可观测性看到这次检查没跑完。
                 logging.getLogger("autoforge.executor").exception("canary 漂移检查失败（已隔离，不阻断流程）")
+                try:
+                    self._feed_canary_evidence(instance, node, "unmodeled", {
+                        "reason": "canary 漂移检查抛异常，状态不可判（非 verified）",
+                    })
+                    self.audit.add(
+                        AuditEvent(
+                            type=ENTITY_DRIFT,
+                            at=self.clock.now(),
+                            message="canary 漂移检查异常，落 unmodeled（非 verified）",
+                            automation_id=instance.automation.id,
+                            instance_id=instance.instance_id,
+                            node_id=node.id,
+                        )
+                    )
+                except Exception:
+                    logging.getLogger("autoforge.executor").exception(
+                        "canary unmodeled 状态落盘也失败（双异常）"
+                    )
 
         edge = auto.pick_edge(node.id, {kind, "default"})
         if edge is None:
@@ -552,8 +575,13 @@ class NodeExecutor:
                 if dur_str:
                     try:
                         canary_duration = parse_duration(dur_str)
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as exc:
+                        # BUG-02 修复：canary 观察窗口配置解析失败不得静默降级，否则
+                        # 无观察期保护直接下发危险动作且不留痕；记录告警后按无观察期处理。
+                        _logger.warning(
+                            "canary.duration 解析失败，按无观察期处理（node=%s.%s, dur=%r）: %s",
+                            instance.automation.id, node.id, dur_str, exc,
+                        )
             if canary_duration and canary_duration > 0:
                 # 挂起观察：存可序列化元数据（P1-4 修复：原存 (wrapped, adapter) 对象不可序列化，
                 # 崩溃恢复后 default=str 静默字符串化 → 解包成字符 → 回滚静默失效）。恢复路径据此重建。

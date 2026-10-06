@@ -148,6 +148,8 @@ class GraphStore:
     def __init__(self, root: str | Path = DEFAULT_STORE_ROOT, lock_timeout: float = 10.0):
         self.root = Path(root)
         self.lock_timeout = float(lock_timeout)
+        #: R10-02：tags.json 损坏毒化标志——置位后 set_tags 拒写，避免 RMW 抹掉全部标签
+        self._tags_broken = False
 
     def _dir(self, name: str) -> Path:
         # P1-18 修复：白名单只允许字母数字、-、_，不允许 "."（防止 ../ 目录逃逸）
@@ -168,6 +170,26 @@ class GraphStore:
             return None
         owner = record.get("name") if isinstance(record, dict) else None
         return owner if isinstance(owner, str) else None
+
+    def _record_owner(self, name: str) -> str:
+        """该归档最新记录里的 `owner`（归档归属主体）；无记录或无字段时空串。
+
+        R20-01：与 af_service._existing_owner 同型，但在 store 层供 import_bundle
+        overwrite 校验用，避免服务层重复遍历 bundle entries。
+        """
+        latest = self.latest(name)
+        if latest is None:
+            return ""
+        try:
+            record = self.load_record(name, latest)
+        except (OSError, ValueError):
+            return ""
+        if not isinstance(record, dict):
+            return ""
+        if str(record.get("name", "")) != name:
+            return ""  # 目录里混了别人的记录，不归当前 name 管（assert_deletable 会拦）
+        owner = record.get("owner")
+        return owner if isinstance(owner, str) else ""
 
     def _assert_name_owns_dir(self, name: str) -> None:
         """写入前的归属核对：目录里最新记录若属于另一个名字，就是别名撞车，拒绝继续写。
@@ -341,10 +363,25 @@ class GraphStore:
         return self.root / "tags.json"
 
     def _read_tags(self) -> dict[str, list[str]]:
-        try:
-            return json.loads(self._tags_path().read_text(encoding="utf-8")) or {}
-        except (OSError, ValueError):
+        # 文件不存在是正常情况（第一次 set_tags 前），不置毒化标志
+        if not self._tags_path().is_file():
+            self._tags_broken = False
             return {}
+        try:
+            data = json.loads(self._tags_path().read_text(encoding="utf-8")) or {}
+        except (OSError, ValueError) as exc:
+            # R10-02：文件存在但损坏时不能静默返回空——set_tags 拿到空会抹掉全部标签。
+            # 置毒化标志，写路径拒写（fail-closed），直到文件被修复或隔离。
+            logger.error("TAGS_LOAD_FAILED path=%s err=%s —— 标签写入已拒写，避免 RMW 抹掉全部标签",
+                         self._tags_path(), exc)
+            self._tags_broken = True
+            return {}
+        if not isinstance(data, dict):
+            logger.error("TAGS_BAD_SHAPE path=%s type=%s —— 拒写", self._tags_path(), type(data).__name__)
+            self._tags_broken = True
+            return {}
+        self._tags_broken = False  # 读成功即清除毒化标志
+        return data
 
     def _write_tags(self, data: dict[str, list[str]]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -359,10 +396,15 @@ class GraphStore:
         """设置某归档名字的标签（覆盖式）；空列表 = 清空。
 
         v0.9.0：read-modify-write 整体在锁内完成（读在锁外会有丢失更新竞态）。
+        R10-02：tags.json 损坏时拒写——否则读空→写回会抹掉全部标签。
         """
         clean = sorted({str(t).strip() for t in (tags or []) if str(t).strip()})
+        if self._tags_broken:
+            raise ValueError("tags.json 已损坏，拒绝写入以保护已有标签；请修复或隔离该文件后重试")
         with FileLock(self.root / "tags.lock", timeout=self.lock_timeout):
             data = self._read_tags()
+            if self._tags_broken:
+                raise ValueError("tags.json 已损坏，拒绝写入以保护已有标签")
             if clean:
                 data[name] = clean
             else:
@@ -408,6 +450,7 @@ class GraphStore:
                         "version": rec["version"],
                         "saved_at": rec.get("saved_at", ""),
                         "note": rec.get("note", ""),
+                        "owner": rec.get("owner", ""),  # R20-01: 导出携带归档归属，备份恢复后隔离不失效
                         "graph": rec["graph"],
                     }
                 )
@@ -438,10 +481,12 @@ class GraphStore:
         version: int,
         saved_at: str,
         note: str,
+        owner: str = "",
     ) -> int:
         """直接写入某版本记录（不经 Graph round-trip，保证 raw 级一致）。
 
         P1-18 修复：写入在 FileLock 内完成，防止并发写同一归档时版本号冲突。
+        R20-01 修复：加 `owner` 形参并落盘——导入通道不再清零归档归属。
         """
         self._assert_name_owns_dir(name)
         directory = self._dir(name)
@@ -452,6 +497,7 @@ class GraphStore:
             "saved_at": saved_at,
             "note": note,
             "writer": owner_id(),
+            "owner": owner,  # R20-01: 归档归属（导入通道与 save() 对称）
             "graph": dict(graph_dict),
         }
         with FileLock(directory / ".lock", timeout=self.lock_timeout):
@@ -566,7 +612,12 @@ class GraphStore:
             candidate = f"{base}_import{i}"
         return candidate
 
-    def import_bundle(self, bundle: Mapping[str, Any], strategy: str = "skip") -> dict[str, Any]:
+    def import_bundle(
+        self,
+        bundle: Mapping[str, Any],
+        strategy: str = "skip",
+        owner: str = "",
+    ) -> dict[str, Any]:
         """导入 bundle（v0.7.0）。
 
         - 校验 `format == autoforge-bundle` 与 `checksum`（损坏即拒）；
@@ -575,6 +626,9 @@ class GraphStore:
             `skip`      ：跳过该归档（默认，最安全）；
             `overwrite` ：先删除已存在归档，再导入（版本号重置为原 v1…）；
             `rename`    ：导入到 `name_import` / `name_import2` … 新名字。
+        - `owner`（R20-01）：导入操作者的归属主体。overwrite 时若现有归档归属
+          与 `owner` 不同则拒绝（与 save_graph 的所有权隔离对称）；导入后新记录
+          的 owner 字段写此值。
         返回报告：{imported, skipped, renamed, errors}。
         """
         if not isinstance(bundle, dict) or bundle.get("format") != "autoforge-bundle":
@@ -622,9 +676,18 @@ class GraphStore:
             # overwrite 策略：全部版本校验通过后才动旧归档，且**改名让位而非删除**——
             # 写新版本中途失败时旧归档可原样回滚，不留下不可逆的空洞
             # （新增审计 BUG-11；P1-17 的「先校验后删」只挡住了校验失败那一半）。
+            # R20-01：所有权隔离——导入操作者不能覆盖他人归档（与 save_graph 对称）。
             stash: Path | None = None
             if self.versions(name) and strategy == "overwrite" and not entry_has_error:
-                self.assert_deletable(name)  # 归属核对不能因为换实现而丢
+                if owner:
+                    prev = self._record_owner(name)
+                    if prev and prev != owner:
+                        report["errors"].append({
+                            "name": name,
+                            "error": f"归档 {name!r} 归属 {prev!r}，当前主体 {owner!r} 无权覆盖（所有权隔离）",
+                        })
+                        continue
+                self.assert_deletable(name)  # 别名核对不能因为换实现而丢
                 stash = self._stash_archive(name)
             try:
                 # 合法版本仍然写入（非法版本已被跳过）
@@ -635,6 +698,7 @@ class GraphStore:
                         int(ver.get("version", 1)),
                         ver.get("saved_at", ""),
                         ver.get("note", ""),
+                        owner=owner,  # R20-01: 导入记录携带归属
                     )
                 if entry.get("tags"):
                     self.set_tags(target, list(entry["tags"]))
@@ -673,7 +737,14 @@ class GraphStore:
 
     def load_conf(self, name: str) -> ConfidenceStore:
         path = self.root / f"{self._dir(name).name}.conf.json"
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        # R14-02：裸读 json.loads 会让文件损坏/权限错误直接穿出（调用方通常只兜 FileNotFoundError）。
+        # 统一包成 ValueError，语义是"置信度快照不可用"，调用方可选择降级为空置信度。
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"置信度快照读取失败 {path}: {exc}") from exc
+        if not isinstance(payload, dict) or "conf" not in payload:
+            raise ValueError(f"置信度快照格式错误 {path}: 缺少 conf 字段")
         return load_confidence(payload["conf"])
 
 

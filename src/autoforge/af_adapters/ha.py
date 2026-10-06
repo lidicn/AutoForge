@@ -273,7 +273,7 @@ class HAAdapter:
                     self.undo_recorder(action, params, pre)
             except Exception:  # 快照捕获异常绝不阻断真实下发
                 logging.getLogger("autoforge.adapter").warning(
-                    "undo 快照捕获异常（已忽略，不下发）", exc_info=True
+                    "undo 快照捕获异常（已忽略，继续下发；本次动作无回滚把手）", exc_info=True
                 )
         return self.transport(action, params)
 

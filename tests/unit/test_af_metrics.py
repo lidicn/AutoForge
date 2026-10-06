@@ -82,6 +82,21 @@ def test_aggregator_overall():
     assert ov["audit_distribution"] == {"action_failed": 1}
 
 
+def test_aggregator_snapshot_groups_audit_by_automation():
+    """N-P3-2 回归：审计事件必须按 automation_id 正确归并到对应自动化，
+    不能因改为先分组而串桶（多自动化 × 多事件）。"""
+    rt = _Runtime()
+    rt.audit = _Audit([
+        AuditEvent(type="shadow_hit", at=datetime(2026, 9, 15, 8, 0, 0), automation_id="a1", message="x"),
+        AuditEvent(type="shadow_hit", at=datetime(2026, 9, 15, 8, 5, 0), automation_id="a1", message="x"),
+        AuditEvent(type="action_failed", at=datetime(2026, 9, 15, 9, 0, 0), automation_id="a2", message="y"),
+    ])
+    snap = MetricsAggregator(rt).snapshot()
+    assert snap["automations"]["a1"]["audit_distribution"] == {"shadow_hit": 2}
+    assert snap["automations"]["a2"]["audit_distribution"] == {"action_failed": 1}
+    assert snap["automations"]["a2"]["last_event_at"] == "2026-09-15T09:00:00"
+
+
 # ── Ingester：推送 / 退避 / 离线缓冲 ────────────────────────────────────
 
 def _snapshot() -> dict:

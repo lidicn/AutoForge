@@ -760,7 +760,11 @@ class AuthCodeStore:
         "仅查询"不含窗口阈值读数：超限后一律 False（含真实有效码），失败方向是回落人审队列，
         不是放开快速通道。调用方须在同一条失败分支上 `record_failure`，否则该面不受窗口保护
         ——两面（MCP / HTTP）的接线由 `tests/unit/test_v0_8_auth.py` 钉住。
+
+        R17-01：读前重载盘——长驻单例（MCP 进程）必须能看到其他进程（API/管理员）的撤销/消耗，
+        否则已撤销的码在重启前持续有效。
         """
+        self._load()
         with self._lock:
             now = time.time()
             if (
@@ -863,6 +867,11 @@ class RateLimiter:
             # P0-10：超过最大 key 数时触发全量清理
             if len(self._hits) >= self._MAX_KEYS:
                 self._cleanup_expired(now)
+            # R7-02：清理后若仍超限（所有 key 都未过期），淘汰最旧的 key（FIFO），
+            # 把软上限变成硬上限，防止 _hits 涨至 3×。
+            if len(self._hits) >= self._MAX_KEYS:
+                oldest = min(self._hits, key=lambda k: self._hits[k][0] if self._hits[k] else 0)
+                del self._hits[oldest]
             hits = self._hits.setdefault(key, [])
             cutoff = now - self.window_s
             if hits and hits[0] <= cutoff:

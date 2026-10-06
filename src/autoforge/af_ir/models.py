@@ -145,12 +145,16 @@ class Trigger:
             sources=tuple(cls.from_dict(s) for s in data.get("sources", ())),
         )
 
-    def entity_ids(self) -> set[str]:
+    def entity_ids(self, _depth: int = 0) -> set[str]:
         """该触发源引用的全部实体（含 group 递归）。
 
         v0.4.0：`event` 类型不是实体，但在总线中的主体为 `event.<name>`，
         一并返回——这样跨自动化依赖矩阵与 `EMIT_SELF_LOOP` 环检测能覆盖**事件边**。
+
+        F6 修复：group 嵌套加深度限制，与 leaf_triggers 同口径。
         """
+        if _depth > 32:
+            raise ValueError(f"Trigger group 嵌套超过 32 层，拒绝展开 entity_ids")
         out: set[str] = set()
         if self.type == "event" and self.event:
             from ..af_bus import EVENT_ENTITY_PREFIX  # 局部导入：避免 af_ir 模块级依赖 af_bus
@@ -159,14 +163,20 @@ class Trigger:
         if self.entity_id:
             out.add(self.entity_id)
         for sub in self.sources:
-            out |= sub.entity_ids()
+            out |= sub.entity_ids(_depth + 1)
         return out
 
-    def leaf_triggers(self) -> Iterator["Trigger"]:
-        """展开 group，yield 出所有叶子触发源。"""
+    def leaf_triggers(self, _depth: int = 0) -> Iterator["Trigger"]:
+        """展开 group，yield 出所有叶子触发源。
+
+        F6 修复：group 嵌套无深度上限，恶意/手工构造的深嵌套 group 会递归崩溃。
+        加深度限制（默认 32 层），超限抛 ValueError（fail-closed，不静默截断）。
+        """
+        if _depth > 32:
+            raise ValueError(f"Trigger group 嵌套超过 32 层（可能是循环引用或异常构造），拒绝展开")
         if self.type == "group":
             for sub in self.sources:
-                yield from sub.leaf_triggers()
+                yield from sub.leaf_triggers(_depth + 1)
         else:
             yield self
 

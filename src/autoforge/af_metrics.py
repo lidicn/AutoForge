@@ -18,6 +18,8 @@ from typing import Any, Callable
 from .af_atomic import atomic_write_text
 from .af_conf import decision_for
 
+_logger = logging.getLogger(__name__)
+
 logger = logging.getLogger("autoforge.metrics")
 
 __all__ = ["MetricsAggregator", "Ingester", "DEFAULT_BUFFER_DIR"]
@@ -35,17 +37,21 @@ class MetricsAggregator:
         exec_stats = self.runtime.exec_stats
         audit = self.runtime.audit
         conf = self.runtime.conf
+        # N-P3-2 修复：先按 automation_id 分组审计事件（O(M) 一次），再按自动化取用，
+        # 避免外层遍历自动化 × 内层全量审计的 O(N×M) 退化（审计随运行累积，快照变慢）。
+        by_aid: dict[Any, list] = {}
+        for ev in audit:
+            by_aid.setdefault(ev.automation_id, []).append(ev)
         per_auto: dict[str, Any] = {}
         for auto in self.runtime.graph:
             aid = auto.id
             es = exec_stats.get(aid, {"runs": 0, "success": 0, "failed": 0})
             total = es["success"] + es["failed"]
             sr = round(es["success"] / total, 4) if total else None
+            evs = by_aid.get(aid, ())
             dist: dict[str, int] = {}
             last_at = None
-            for ev in audit:
-                if ev.automation_id != aid:
-                    continue
+            for ev in evs:
                 dist[ev.type] = dist.get(ev.type, 0) + 1
                 if last_at is None or ev.at > last_at:
                     last_at = ev.at
@@ -203,8 +209,12 @@ class Ingester:
             return
         self.buffer_dir.mkdir(parents=True, exist_ok=True)
         buf = self.buffer_dir / "metrics_buffer.jsonl"
-        with buf.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(metric, ensure_ascii=False) + "\n")
+        try:
+            with buf.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(metric, ensure_ascii=False) + "\n")
+        except (OSError, TypeError, ValueError) as exc:
+            # R12-01 修复：缓冲写入失败必须留痕，不能静默丢弃指标
+            _logger.warning("metrics 缓冲写入失败: %s", exc)
 
     def flush_buffer(
         self,

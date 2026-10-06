@@ -177,11 +177,13 @@ def _t_export(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _t_import(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
+    owner = (current or {}).get("subject", "") or ""  # R20-01: 导入操作者归属
     return svc.import_store(
         store,
         args["bundle"],
         args.get("strategy", "skip"),
         allow_bulk=bool(args.get("allow_bulk", False)),
+        owner=owner,
     )
 
 
@@ -205,7 +207,16 @@ def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | N
         acs = _MCP_AUTH_STORE or AuthCodeStore(Path(store.root) / ".auth" / "auth_codes.json")
         if acs.validate(auth_code):
             # 路径 A：持有效授权码 → 先一次性 consume（防重放），直接部署
-            acs.consume(auth_code)
+            # R17-01：必须检查 consume 返回值——validate/consume 是两步，中间可能被其他进程抢走；
+            # consume 失败（已被消耗/已撤销）则回落待批队列，不能静默继续直部署。
+            if not acs.consume(auth_code):
+                acs.record_failure(auth_code)
+                pending = svc.submit_pending(
+                    store, "af_save", payload,
+                    submitted_by=owner or "mcp", authenticated_subject=owner or None,
+                )
+                pending["warning"] = "auth_code 在 consume 阶段失效（可能被并发消耗），已转为待人工审批"
+                return pending
             res = svc.submit_pending(
                 store, "af_save", payload,
                 submitted_by=owner or "mcp", authenticated_subject=owner or None,

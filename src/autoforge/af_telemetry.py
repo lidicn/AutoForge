@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -44,6 +45,7 @@ _USAGE_READ_CAP = 20000
 #: 每追加这么多条做一次过期清理（避免每条都全文件重读）。
 _PRUNE_EVERY = 500
 _PRUNE_COUNTER: dict[str, int] = {}
+_PRUNE_COUNTER_LOCK = threading.Lock()  # BUG-05：read-modify-write 竞态，需加锁
 
 
 def estimate_tokens(*texts: str) -> int:
@@ -166,9 +168,13 @@ class TelemetryStore:
         append_jsonl(self.path, entry)
         # 审计发现：只增不减会让 usage.jsonl 无限增长（retention_days 曾是死变量）
         key = str(self.path)
-        _PRUNE_COUNTER[key] = _PRUNE_COUNTER.get(key, 0) + 1
-        if _PRUNE_COUNTER[key] >= _PRUNE_EVERY:
-            _PRUNE_COUNTER[key] = 0
+        # BUG-05：_PRUNE_COUNTER 是模块级共享 dict，read-modify-write 需持锁
+        with _PRUNE_COUNTER_LOCK:
+            _PRUNE_COUNTER[key] = _PRUNE_COUNTER.get(key, 0) + 1
+            should_prune = _PRUNE_COUNTER[key] >= _PRUNE_EVERY
+            if should_prune:
+                _PRUNE_COUNTER[key] = 0
+        if should_prune:
             self.prune()
         return entry
 

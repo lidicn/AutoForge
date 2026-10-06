@@ -172,4 +172,67 @@ AF 代码全绿但镜像未烤——**这是 AF 唯一的硬阻塞**，且与 DB
 
 ---
 
+## 六、下一阶段：更紧密联动（DCD 2026-10-06）
+
+> 依据：`关键决策部/decisions/20261006-ADM下一阶段联动路线图-裁定.md`；契约 v2.0 见 `homesdk/doc/ADM联动主题注册表与消息契约.md` §七。
+> 核心：三组联动端到端跑通 + 失败统一降级/错误码（`ADM_ERR_*`）。
+
+| # | 任务 | 验收 | 前置 |
+|---|------|------|------|
+| 1 | 合并窗：镜像重烤 + 窗后四项验收 | `/api/health` 200、`mosquitto_sub` 抓 `af/automation/fired`、`adm/autoforge/status` retained、MQTT 桥起来 | 合并窗 |
+| 2 | `adm/autoforge/status` 发 **JSON**（契约 v2.0 §7.1，不再发字面量 `online`） | status = `{state,ts,degraded,reasons,version}` | 1 |
+| 3 | MQTT 断连/凭据缺失 → status `degraded` + `ADM_ERR_BROKER_UNREACHABLE`（降级三档 §7.3） | 断 broker → status 转 degraded + reasons 带码 | 1 |
+| 4 | 订阅 `ma/insights` 端到端（AF↔MA 硬读数） | MA 发 insights（带 `insight_id`）→ AF 落 `insight_proposals/pending/*.json` → 人批 → `af_draft` 造图 | 1 |
+| 5 | MCP 面统一 `ADM_ERR_*` + `channel_error`（DB↔AF 硬读数） | DB 调 draft→dry_run→save 全链；AF 不可达 → DB 收 `channel_error` + 停止标已答 | 无 |
+| 6 | 跑 `verify_adm_linkage`（homesdk `scripts/`）三组全绿 | 探针 rc=0（缺一组即红） | 1-5 |
+
+**本仓失败语义**：写面（未授权写 / MCP default-deny）fail-closed + 码；读面（洞察失败、对端离线）degrade-flag + 码；纯提示 fail-open。**禁止静默丢弃。**
+
+### 契约对齐规范 v2.0（逐字版 · DCD 20261006）
+
+> 唯一真源 = `E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`。本节是其**逐字快照**，供本仓执行，不再回查其它仓；两者冲突以契约表为准并提 DCD 复议。
+
+**A. `adm/*/status` 统一 JSON**（取代字面量 `online`/`offline`）：
+
+```json
+{"state":"online|offline|degraded","ts":1760000000,"degraded":false,"reasons":[],"version":"<计划号>"}
+```
+
+- `reasons` 非空 ⇒ `degraded=true`，元素 = `ADM_ERR_*`；`version` = 计划号（AF **2.6** / MA 1.4 / DB 2.7）；
+- 消费端**兼容旧字面量**：非 JSON 的 `online`/`offline` → 按 `{"state":"online|offline"}` 解析，**不得丢弃**。
+
+**B. 统一错误码**：
+
+| 码 | 含义 |
+|---|---|
+| `ADM_ERR_BROKER_UNREACHABLE` | MQTT broker 连不上 |
+| `ADM_ERR_PEER_OFFLINE` | 对端 presence 不在线 |
+| `ADM_ERR_PAYLOAD_INVALID` | 载荷 schema/校验失败 |
+| `ADM_ERR_AUTH_REQUIRED` | 缺令牌 / 过期 / 越权 |
+| `ADM_ERR_UPSTREAM_TIMEOUT` | 调对端超时 |
+| `ADM_ERR_INTERNAL` | 未分类兜底 |
+
+落点：status `reasons[]` ／ MCP·HTTP 响应 `{ok:false, code, message}` ／ `inbox_events` 审计。**联动失败必须带码，禁止静默丢弃。**
+
+**C. 降级三档**：fail-closed（写面/不可逆：拒+码+审计）｜degrade-flag（读面/可重试：继续+`degraded`+码）｜fail-open（纯提示：放行+日志）。
+
+**D. 事件载荷（逐字）**：
+- `ma/insights` `{trace_id, ts, insight_id, kind, persons[], room?, summary, evidence[], snapshot_url?, conf?, intent?}`（`conf?` 可选封顶 0.59；`intent?` 可选；**AF 去重/回灌用 `insight_id`，不用 `trace_id`**）
+- `ma/presence` `{trace_id, ts, members:[{name, member_id, room, via, confidence, last_seen, trigger}], total}`（retained；member 子键**不含 `via_raw`**）
+- `ma/device-health` `{trace_id, ts, device_id, status, entity_id, from, to, stable_id}`（**`stable_id` 必须非空**；迁移类带 `from`→`to`）
+- `af/automation/fired` `{trace_id, ts, automation_id, ref}`（**不 retained**，AF 发布）
+- `af/automation/failed` `{trace_id, ts, automation_id, ref, error}`（**不 retained**，AF 发布）
+
+**E. 收件箱 schema（对齐后权威版，DB 码必须按此）**：
+- `butler/inbox/speak` `{trace_id, ts, text, role?, priority?, expires_at?}`，text ≤500，trace_id 必填
+- `butler/inbox/notify` `{trace_id, ts, title, body, channel?, priority?}`，title ≤80 / body ≤500，trace_id 必填
+- `butler/inbox/tv` `{trace_id, ts, content, duration_s?}`，content ≤500，trace_id 必填
+- **无 `source` 字段**；按通道读 `text`/`title+body`/`content`；DB fail-closed + `inbox_events` 审计。
+
+**F. MCP 面实名**：AF = `af_draft` + `af_apply(stage∈check|simulate|dry_run|save)`（**无 `verify`/`deploy` 别名**）；ask `GET /api/asks/pending`（read 令牌）+ `POST /api/asks/answer`（write 令牌 + INBOX_KEY，回报 `channel_error`）。
+
+**G. 端到端探针**：`verify_adm_linkage`（homesdk `scripts/`），三组各一条硬读数，缺一 `rc=1`。
+
+---
+
 —— 关键决策部 · DCD

@@ -1667,22 +1667,34 @@ def fix_cycle(ctx: FixContext) -> FixOutcome:
         graph[e["from"]].append(e)
     stack, onstack, found = [], set(), []
 
-    def dfs(u):
-        stack.append(u)
-        onstack.add(u)
-        for e in graph.get(u, []):
+    # R3-03 修复：递归 DFS 改迭代——大图递归深度超限会 RecursionError 崩溃，
+    # 自治修复环检测直接挂掉。迭代版本无递归深度限制。
+    def dfs_iter(start: str) -> bool:
+        nonlocal found
+        call_stack: list[tuple[str, object]] = [(start, iter(graph.get(start, [])))]
+        stack.append(start)
+        onstack.add(start)
+        while call_stack:
+            u, edges = call_stack[-1]
+            try:
+                e = next(edges)
+            except StopIteration:
+                stack.pop()
+                onstack.discard(u)
+                call_stack.pop()
+                continue
             v = e["to"]
             if v in onstack:
                 found.append(list(stack[stack.index(v):]) + [v])
                 return True
-            if v not in onstack and dfs(v):
-                return True
-        stack.pop()
-        onstack.discard(u)
+            if v not in onstack:
+                stack.append(v)
+                onstack.add(v)
+                call_stack.append((v, iter(graph.get(v, []))))
         return False
 
     for n in ir.get("nodes", []):
-        if n["id"] not in onstack and dfs(n["id"]):
+        if n["id"] not in onstack and dfs_iter(n["id"]):
             break
     if not found:
         return FixOutcome(False, "未检测到环")

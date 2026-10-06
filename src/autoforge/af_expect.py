@@ -83,18 +83,28 @@ def resolve_var(name: str, namespace: Mapping[str, Any]) -> Any:
 
 
 def _apply_op(op: str, actual: Any, expected: Any) -> bool | None:
-    """比较运算。返回 `None` 表示「无法比较」（→ unverified，而非判失败）。"""
+    """比较运算。返回 `None` 表示「无法比较」（→ unverified，而非判失败）。
+
+    R5-01 修复：eq/ne 不再纯字符串比较——先尝试数值比较（两边都能转 float 时），
+    否则回退字符串比较。否则 "20.0" eq "20" 会判 False（数值相等但字符串不等），
+    与 gt/lt 的数值语义不一致，同一组算子两套语义。
+    """
+    # 先尝试数值比较（eq/ne/gt/lt 统一数值语义）
+    try:
+        left, right = float(actual), float(expected)
+        is_numeric = True
+    except (TypeError, ValueError):
+        is_numeric = False
+
     if op == "eq":
-        if isinstance(actual, str) or isinstance(expected, str):
-            return str(actual) == str(expected)
-        return actual == expected
+        if is_numeric:
+            return left == right
+        return str(actual) == str(expected)
     if op == "ne":
         inner = _apply_op("eq", actual, expected)
         return None if inner is None else (not inner)
-    try:
-        left, right = float(actual), float(expected)
-    except (TypeError, ValueError):
-        return None
+    if not is_numeric:
+        return None  # gt/lt 无法比较 → unverified
     if op == "lt":
         return left < right
     if op == "lte":

@@ -14,11 +14,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
 from pathlib import Path
 from typing import Any, Mapping
+
+_logger = logging.getLogger(__name__)
 
 from .af_env import env_number
 from .af_secrets import load_secret
@@ -53,8 +56,11 @@ class Config:
     def _load_credentials(self) -> dict[str, Any]:
         try:
             return json.loads(self._creds_path().read_text(encoding="utf-8")) or {}
-        except (OSError, ValueError):
-            return {}
+        except (OSError, ValueError) as exc:
+            # R9-01/R13-02/R19-01：凭据文件损坏**不能静默清空**，否则 HOME_ASSISTANT_TOKEN 等
+            # 回退默认 host；保留内存中现有凭据并告警（首次加载无内存凭据时退化为空）。
+            _logger.warning("credentials.json 损坏，保留内存凭据: %s", exc)
+            return dict(getattr(self, "_creds", {}) or {})
 
     def _load_revision(self) -> int:
         try:
@@ -138,10 +144,16 @@ class Config:
     # ── 外部改盘后自愈（R-54）──────────────────────────────────────
     def refresh(self) -> None:
         """从磁盘重读凭据与代数：外部进程改了 credentials.json/revision.json
-        后，本进程缓存的 Config 不再永久过期。"""
+        后，本进程缓存的 Config 不再永久过期。
+
+        R19-01：读失败保留旧值——用空的覆盖有效凭据等于把"读不出来"当"没有"。
+        代数永不回退（单调递增的连接版本，降到 0 会让下游代数比对异常）。
+        """
         with self._lock:
-            self._creds = self._load_credentials()
-            self.connection_revision = self._load_revision()
+            self._creds = self._load_credentials()  # _load_credentials 失败时已保留旧值
+            rev = self._load_revision()
+            if rev > self.connection_revision:
+                self.connection_revision = rev  # 代数只增不减
 
     # ── 自检（只掩码 + 长度）────────────────────────────────────────
     def describe(self) -> dict[str, Any]:

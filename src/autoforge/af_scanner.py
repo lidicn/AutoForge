@@ -1055,55 +1055,76 @@ def _reachable(auto: Automation, start: str) -> list[Node]:
 
 
 def _find_cycles(auto: Automation) -> list[list[str]]:
-    """找图里的环（DFS 回边，三色标记）。"""
+    """找图里的环（DFS 回边，三色标记）。
+
+    R3-01 修复：递归 DFS 改迭代——合法大图（≳950 节点链）会让递归深度超过
+    Python 默认限制（1000），静态扫描器直接 RecursionError 崩溃，无法归档。
+    迭代版本无递归深度限制。
+    """
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {n: WHITE for n in auto.nodes}
     cycles: list[list[str]] = []
-    path: list[str] = []
 
-    def dfs(node_id: str) -> None:
-        color[node_id] = GRAY
-        path.append(node_id)
-        for edge in auto.outgoing(node_id):
+    for start in auto.nodes:
+        if color[start] != WHITE:
+            continue
+        color[start] = GRAY
+        path: list[str] = [start]
+        # 迭代栈：(node_id, outgoing_edges_iterator)
+        stack: list[tuple[str, object]] = [(start, iter(auto.outgoing(start)))]
+        while stack:
+            node, edges = stack[-1]
+            try:
+                edge = next(edges)
+            except StopIteration:
+                path.pop()
+                color[node] = BLACK
+                stack.pop()
+                continue
             nxt = edge.to
             if nxt not in color:
                 continue
             if color[nxt] == GRAY:
-                cycles.append(path[path.index(nxt) :] + [nxt])
+                cycles.append(path[path.index(nxt):] + [nxt])
             elif color[nxt] == WHITE:
-                dfs(nxt)
-        path.pop()
-        color[node_id] = BLACK
-
-    for node_id in auto.nodes:
-        if color[node_id] == WHITE:
-            dfs(node_id)
+                color[nxt] = GRAY
+                path.append(nxt)
+                stack.append((nxt, iter(auto.outgoing(nxt))))
     return cycles
 
 
 def _cycles_in(deps: Mapping[str, set[str]]) -> list[list[str]]:
-    """通用有向图环检测（返回环路径列表）。"""
+    """通用有向图环检测（返回环路径列表）。
+
+    R3-02 修复：递归 DFS 改迭代，防大图 RecursionError 崩溃（同 R3-01）。
+    """
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {n: WHITE for n in deps}
     cycles: list[list[str]] = []
-    path: list[str] = []
 
-    def dfs(node: str) -> None:
-        color[node] = GRAY
-        path.append(node)
-        for nxt in sorted(deps.get(node, ())):
+    for start in deps:
+        if color[start] != WHITE:
+            continue
+        color[start] = GRAY
+        path: list[str] = [start]
+        stack: list[tuple[str, object]] = [(start, iter(sorted(deps.get(start, ()))))]
+        while stack:
+            node, neighbors = stack[-1]
+            try:
+                nxt = next(neighbors)
+            except StopIteration:
+                path.pop()
+                color[node] = BLACK
+                stack.pop()
+                continue
             if nxt not in color:
                 continue
             if color[nxt] == GRAY:
-                cycles.append(path[path.index(nxt) :] + [nxt])
+                cycles.append(path[path.index(nxt):] + [nxt])
             elif color[nxt] == WHITE:
-                dfs(nxt)
-        path.pop()
-        color[node] = BLACK
-
-    for node in deps:
-        if color[node] == WHITE:
-            dfs(node)
+                color[nxt] = GRAY
+                path.append(nxt)
+                stack.append((nxt, iter(sorted(deps.get(nxt, ())))))
     return cycles
 
 

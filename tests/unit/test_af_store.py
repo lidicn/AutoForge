@@ -262,3 +262,99 @@ def test_cli_store_save_and_log(tmp_path, examples_dir):
     log = CliRunner().invoke(app, ["store", "log", "--root", root])
     assert log.exit_code == 0, log.output
     assert "study v1" in log.output
+
+
+# ─────────────────────────────────────────────────────────────────────
+# R20-01：导入/导出通道所有权隔离回归
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _minimal_graph(name: str = "demo"):
+    """构造一个最小合法 Graph 对象（供 R20 回归测试用）。"""
+    return load_graph({
+        "ir_version": "0.2.1",
+        "id": name,
+        "name": name,
+        "version": 1,
+        "mode": "single",
+        "nodes": [
+            {"id": "o", "kind": "on", "trigger": {"type": "state", "entity_id": "binary_sensor.m", "to": "on"}},
+            {"id": "p", "kind": "pass"},
+        ],
+        "edges": [{"from": "o", "to": "p", "kind": "then"}],
+    })
+
+
+def test_r20_export_bundle_carries_owner(tmp_path):
+    """导出 bundle 必须携带 owner 字段（备份恢复后隔离不失效）。"""
+    store = GraphStore(str(tmp_path / "forge"))
+    store.save(_minimal_graph("shared"), "shared", owner="alice")
+    bundle = store.export_bundle()
+    versions = bundle["entries"][0]["versions"]
+    assert versions[0].get("owner") == "alice"
+
+
+def test_r20_import_overwrite_rejects_other_owner(tmp_path):
+    """bob 用 import overwrite 覆盖 alice 的归档 → 拒绝（与 save_graph 对称）。"""
+    store = GraphStore(str(tmp_path / "forge"))
+    store.save(_minimal_graph("shared"), "shared", owner="alice")
+    bundle = store.export_bundle()
+
+    store2 = GraphStore(str(tmp_path / "forge2"))
+    store2.save(_minimal_graph("shared"), "shared", owner="alice")  # 目标已有 alice 的归档
+    report = store2.import_bundle(bundle, strategy="overwrite", owner="bob")
+
+    assert "shared" not in report["imported"]
+    assert any(e.get("name") == "shared" and "无权覆盖" in e.get("error", "") for e in report["errors"])
+    # alice 的归档应完好
+    assert store2._record_owner("shared") == "alice"
+
+
+def test_r20_import_overwrite_allows_same_owner(tmp_path):
+    """同一 owner overwrite 自己的归档 → 允许。"""
+    store = GraphStore(str(tmp_path / "forge"))
+    store.save(_minimal_graph("shared"), "shared", owner="alice")
+    bundle = store.export_bundle()
+
+    report = store.import_bundle(bundle, strategy="overwrite", owner="alice")
+    assert "shared" in report["imported"]
+    assert store._record_owner("shared") == "alice"
+
+
+def test_r20_import_preserves_owner_roundtrip(tmp_path):
+    """导出 → 导入到新 store → 导入操作者成为新归属（不再清零）。"""
+    store = GraphStore(str(tmp_path / "forge"))
+    store.save(_minimal_graph("a1"), "a1", owner="alice")
+    store.save(_minimal_graph("b1"), "b1", owner="bob")
+    bundle = store.export_bundle()
+
+    store2 = GraphStore(str(tmp_path / "forge2"))
+    report = store2.import_bundle(bundle, strategy="skip", owner="charlie")
+    assert "a1" in report["imported"] and "b1" in report["imported"]
+    # skip 策略下，导入操作者 charlie 成为新归属（与 save 语义一致）
+    assert store2._record_owner("a1") == "charlie"
+    assert store2._record_owner("b1") == "charlie"
+
+
+def test_r20_import_skip_unaffected(tmp_path):
+    """skip 策略正常路径不受 owner 校验影响。"""
+    store = GraphStore(str(tmp_path / "forge"))
+    store.save(_minimal_graph("shared"), "shared", owner="alice")
+    bundle = store.export_bundle()
+
+    store2 = GraphStore(str(tmp_path / "forge2"))
+    store2.save(_minimal_graph("shared"), "shared", owner="alice")
+    report = store2.import_bundle(bundle, strategy="skip", owner="bob")
+    assert "shared" in report["skipped"]
+
+
+def test_r20_import_no_owner_backward_compatible(tmp_path):
+    """无 owner（旧调用方/CLI）时 overwrite 不做归属校验（向后兼容）。"""
+    store = GraphStore(str(tmp_path / "forge"))
+    store.save(_minimal_graph("shared"), "shared", owner="alice")
+    bundle = store.export_bundle()
+
+    report = store.import_bundle(bundle, strategy="overwrite")  # owner 默认 ""
+    assert "shared" in report["imported"]
+    # 无 owner 导入后记录 owner 为空（公共），这是 CLI 场景的预期行为
+    assert store._record_owner("shared") == ""

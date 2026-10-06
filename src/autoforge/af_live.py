@@ -23,7 +23,10 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Mapping, Optional
+from typing import Any, Callable, Iterable, Iterator, Mapping, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .af_config import Config  # BUG-07：前向引用需可被 get_type_hints() 解析
 
 logger = logging.getLogger(__name__)
 
@@ -397,8 +400,9 @@ def start_ticker(
                 sc_dir / "pending_asks.json",
                 json.dumps(out, ensure_ascii=False, indent=2),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            # R14-01/R14-03 修复：写失败不得静默吞掉，否则 butler 永远读不到待答而静默丢失提问
+            logger.warning("pending_asks 原子写入失败（已落原子临时文件，下次 tick 会重试）: %s", exc)
 
     # mimo TickSupervisor: fault classification + backoff + health + SAFE HALT
     global _tick_supervisor

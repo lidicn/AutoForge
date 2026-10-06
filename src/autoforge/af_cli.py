@@ -786,6 +786,15 @@ def store_save(
 ):
     """保存一个 Graph 版本 + 置信度快照。"""
     graph = _load(path)
+    # R15-01 修复：CLI 归档同样过静态扫描闸（Tier-0 设备保护），与 MCP/HTTP/审批同源
+    from .af_scanner import StaticScanner
+
+    _scan_res = StaticScanner(graph).scan()
+    if _scan_res.errors:
+        typer.echo("[静态扫描未通过] 拒绝归档（Tier-0 设备保护等）：", err=True)
+        for _e in _scan_res.errors:
+            typer.echo(f"  - {_e}", err=True)
+        raise typer.Exit(code=EXIT_IR_ERROR)
     store = GraphStore(root)
     key = name or path.stem
     version = store.save(graph, key, note)
@@ -874,6 +883,15 @@ def svc_enable_disable(store: GraphStore, names: list[str], enabled: bool) -> li
     与 `af_service.enable_by_tag` 同源逻辑；CLI 这里已展开为具体名字列表，
     逐个保存新版本（API 层按标签入口走 `svc.enable_by_tag`）。
     """
+    # R18-01 修复：CLI 批量启停同样受爆炸半径约束，避免 `forge store enable/disable` 绕过护栏
+    from .af_service import _check_blast, ServiceError
+
+    if names:
+        try:
+            _check_blast(len(names), "批量启用/禁用自动化")
+        except ServiceError as exc:
+            typer.echo(f"[爆炸半径超限] {exc}", err=True)
+            raise typer.Exit(code=EXIT_IR_ERROR)
     affected: list[dict[str, Any]] = []
     for name in names:
         try:

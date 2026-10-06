@@ -53,7 +53,7 @@ import shutil
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-import json, time
+import json, time, uuid
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -848,7 +848,9 @@ def build_app(
         if key:
             msg = f"{ask_id}|{text}|{room}|{answer_json}".encode("utf-8")
             body["sig"] = _hmac.new(key.encode("utf-8"), msg, _hashlib.sha256).hexdigest()
-        fname = inbox / f"{int(time.time()*1000)}.json"
+        # R14-03：毫秒时间戳作文件名，同毫秒两条应答后者覆盖前者。
+        # 加 uuid 后缀保证唯一性（时间戳保留排序语义）。
+        fname = inbox / f"{int(time.time()*1000)}-{uuid.uuid4().hex[:8]}.json"
         # 走原子助手：这是投给 butler 轮询读的作答文件，崩在半截会被读成
         # 「没有这份作答」而丢掉这次回答（判据 E，审计 BUG-05）
         atomic_write_text(fname, json.dumps(body, ensure_ascii=False))

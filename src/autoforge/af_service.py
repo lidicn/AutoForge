@@ -590,9 +590,13 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
     reviewer 硬编码 `"human"`（服务层约束：agent 不能自批）；HTTP 层传令牌主体。
     """
     ps = PendingStore(store.root)
-    op = ps.load(op_id)
-    if op is None:
-        raise ServiceError(f"未找到待批操作 {op_id!r}", status=404)
+    # R4-03 修复：load 与 delete 之间无排他会导致并发重复批准同一待批；
+    # 持锁先删除待批，确保同一 op_id 只会被批准一次（持锁区间尽量短，save_graph 在锁外）。
+    with ps._lock:
+        op = ps.load(op_id)
+        if op is None:
+            raise ServiceError(f"未找到待批操作 {op_id!r}", status=404)
+        ps.delete(op_id)
     # P0-13：禁止自批（提交人不能批准自己提交的操作）
     # ADM B-11：submitted_by 为空时（无鉴权原型模式）不阻止，但标注 unverified
     submitter = str(op.get("submitted_by") or "")
@@ -615,7 +619,6 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
         owner=payload.get("owner", ""),
         allow_bulk=bool(payload.get("allow_bulk", False)),
     )
-    ps.delete(op_id)
     result["approved_by"] = reviewer
     result["pending"] = op_id
     if self_check:
@@ -671,7 +674,7 @@ DEVICE_ACL_FILENAME = "device_acl.json"
 #: 进程级缓存 `{catalog_path: (mtime, size, health_map)}`。
 #: 审计发现：原先**每次** build/save_graph/submit_pending 都 new 一个 DeviceCatalog
 #: 并全量解析目录（NAS 上约 2888 实体，数 MB JSON），而实例级 mtime 缓存跨请求完全不命中。
-_ENTITY_HEALTH_CACHE: dict[str, tuple[float, int, dict[str, Any]]] = {}
+_ENTITY_HEALTH_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
 _ENTITY_HEALTH_LOCK = threading.Lock()
 
 
@@ -679,7 +682,8 @@ def load_entity_health(store: GraphStore | None) -> dict[str, Any]:
     """v1.6.0 P2 联动验证闸：从设备目录取「此刻可用性」视图。
 
     目录为空 / 读取异常 → 空 dict（离线编写 IR 场景**零误报**；核心能力不受损）。
-    按目录文件的 `(mtime, size)` 做**进程级缓存**，命中即复用，避免每次扫描全量重解析。
+    按目录文件的 `(mtime_ns, size)` 做**进程级缓存**，命中即复用，避免每次扫描全量重解析。
+    （R19-02：秒级 mtime 在快速连续写入下会碰撞，改用纳秒精度。）
     """
     if store is None:
         return {}
@@ -692,11 +696,11 @@ def load_entity_health(store: GraphStore | None) -> dict[str, Any]:
         key = str(path)
         with _ENTITY_HEALTH_LOCK:
             cached = _ENTITY_HEALTH_CACHE.get(key)
-        if cached is not None and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+        if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
             return cached[2]
         data = DeviceCatalog(store.root).health_map()
         with _ENTITY_HEALTH_LOCK:
-            _ENTITY_HEALTH_CACHE[key] = (stat.st_mtime, stat.st_size, data)
+            _ENTITY_HEALTH_CACHE[key] = (stat.st_mtime_ns, stat.st_size, data)
         return data
     except (OSError, ValueError, KeyError, AttributeError):
         logger.debug("ENTITY_HEALTH_MAP_SKIPPED", exc_info=True)
@@ -1066,11 +1070,19 @@ DEFAULT_BLAST_RADIUS = 8
 
 
 def blast_radius_limit() -> int:
-    """当前爆炸半径上限（可用 `AUTOFORGE_BLAST_RADIUS` 覆盖；`0` = 不限）。"""
+    """当前爆炸半径上限（可用 `AUTOFORGE_BLAST_RADIUS` 覆盖；`0` = 不限）。
+
+    R9-02 修复：配负数时 clamp 到 0（=不限）并记 warning——负数与 0 等价但文档只说"0=不限"，
+    用户配 -1 会以为护栏生效实际已失效，属于静默 fail-open。
+    """
     try:
-        return int(os.getenv("AUTOFORGE_BLAST_RADIUS", str(DEFAULT_BLAST_RADIUS)))
+        val = int(os.getenv("AUTOFORGE_BLAST_RADIUS", str(DEFAULT_BLAST_RADIUS)))
     except (TypeError, ValueError):
         return DEFAULT_BLAST_RADIUS
+    if val < 0:
+        logger.warning("AUTOFORGE_BLAST_RADIUS=%s 为负数，clamp 到 0（=不限）；如需限制请设正数", val)
+        return 0
+    return val
 
 
 def _existing_owner(store: GraphStore, name: str) -> str:
@@ -1934,6 +1946,7 @@ def import_store(
     bundle: Mapping[str, Any],
     strategy: str = "skip",
     allow_bulk: bool = False,
+    owner: str = "",
 ) -> dict[str, Any]:
     """导入 bundle（v0.7.0）。冲突策略 skip/overwrite/rename，见 GraphStore.import_bundle。
 
@@ -1941,6 +1954,9 @@ def import_store(
 
     v1.3.0：默认受**爆炸半径**约束。导入天然是批量动作，故**常见做法是显式传
     `allow_bulk=True`**——但默认关着，能让「误导入整个 bundle」这类事故先被拦一下。
+
+    R20-01：加 `owner` 参数并下传 store.import_bundle——overwrite 时与 save_graph
+    对称做所有权隔离校验，导入后记录携带归属主体。
     """
     count = _bundle_automation_count(bundle)
     clobbered = 0
@@ -1954,7 +1970,7 @@ def import_store(
     if not allow_bulk:
         note = f"（含覆盖销毁存量 {clobbered} 条）" if clobbered else ""
         _check_blast(affected, f"本次导入含约 {affected} 条自动化{note}")
-    report = store.import_bundle(bundle, strategy)
+    report = store.import_bundle(bundle, strategy, owner=owner)
     if isinstance(report, dict):
         report.setdefault("blast_radius", {
             "affected": affected, "incoming": count, "clobbered": clobbered,

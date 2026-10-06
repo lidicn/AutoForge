@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -37,6 +38,8 @@ from .af_affordance import affordance_for, domain_of
 from .af_flock import FileLock
 from .af_atomic import atomic_write_text
 from .af_store import DEFAULT_STORE_ROOT
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "DeviceCatalog",
@@ -259,6 +262,9 @@ class DeviceCatalog:
         )
         #: `(mtime, size) -> parsed catalog`，防止 O(N) 次调用重复读盘解析
         self._cache: tuple[float, int, dict[str, Any]] | None = None
+        #: R16-01：aliases.json 损坏毒化标志——置位后 set_alias/remove_alias 拒写，
+        #: 避免一次正常操作抹掉全部已有别名（RMW-on-silent-empty 第 3 次出现）。
+        self._aliases_broken = False
 
     # ── 路径与读盘（带 mtime/size 缓存）────────────────────────────────
     @property
@@ -281,9 +287,15 @@ class DeviceCatalog:
             return cached[2]
         try:
             parsed = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            # R16-02：损坏时不能静默返回空——收窄刷新依赖 old 做"保留未匹配条目"，
+            # old 为空会让保护失效，一次正常的"只刷书房"把全屋清空。
+            logger.error("CATALOG_LOAD_FAILED path=%s err=%s —— 收窄刷新将强制全量，避免 RMW 丢实体",
+                         path, exc)
             return {"version": CATALOG_VERSION, "freshness": "", "entities": {}}
         if not isinstance(parsed, dict):
+            logger.error("CATALOG_BAD_SHAPE path=%s type=%s —— 收窄刷新将强制全量",
+                         path, type(parsed).__name__)
             return {"version": CATALOG_VERSION, "freshness": "", "entities": {}}
         parsed.setdefault("version", CATALOG_VERSION)
         parsed.setdefault("freshness", "")
@@ -339,6 +351,12 @@ class DeviceCatalog:
         old = self._load().get("entities", {})
         #: 收窄过滤（domain/area 非空）时**保留未匹配的旧条目**，避免「只刷书房」把全屋清空
         narrow = bool(domain or area)
+        # R16-02：收窄模式下若 old 为空但 catalog 文件存在，说明文件可能损坏（_load 静默返回空），
+        # 此时"保留旧条目"的保护失效——强制走全量替换（不信任空 old），避免只刷一半把全屋清空。
+        if narrow and not old and self.catalog_path.is_file():
+            logger.warning("CATALOG_NARROW_EMPTY_OLD path=%s —— 收窄刷新但旧目录为空，强制全量替换",
+                           self.catalog_path)
+            narrow = False
         entities: dict[str, dict[str, Any]] = {} if (full and not narrow) else dict(old)
 
         #: v1.6.0 P0：websocket 注册表（可选能力）。失败仅降级为本组为空，**永不抛**。
@@ -551,12 +569,25 @@ class DeviceCatalog:
         return self.root / ".catalog" / "aliases.json"
 
     def _load_aliases(self) -> dict[str, str]:
+        # 文件不存在是正常情况（第一次 set_alias 前），不置毒化标志
+        if not self.alias_path.is_file():
+            self._aliases_broken = False
+            return {}
         try:
             data = json.loads(self.alias_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            # R16-01：文件存在但损坏时不能静默返回空——set_alias 拿到空会抹掉全部已有别名。
+            # 置毒化标志，写路径拒写（fail-closed），直到文件被修复或隔离。
+            logger.error("ALIASES_LOAD_FAILED path=%s err=%s —— 别名写入已拒写，避免 RMW 抹掉全部别名",
+                         self.alias_path, exc)
+            self._aliases_broken = True
             return {}
         if not isinstance(data, dict):
+            logger.error("ALIASES_BAD_SHAPE path=%s type=%s —— 期望 dict，拒写",
+                         self.alias_path, type(data).__name__)
+            self._aliases_broken = True
             return {}
+        self._aliases_broken = False  # 读成功即清除毒化标志
         return {str(k): str(v) for k, v in data.items()}
 
     def list_aliases(self) -> dict[str, Any]:
@@ -573,9 +604,14 @@ class DeviceCatalog:
         entities = self._load().get("entities", {})
         if eid not in entities:
             return {"ok": False, "error": f"entity_id {eid!r} 不在目录中，请先刷新目录。"}
+        # R16-01：aliases.json 损坏时拒写——否则读空→写回会抹掉全部已有别名
+        if self._aliases_broken:
+            return {"ok": False, "error": "aliases.json 已损坏，拒绝写入以保护已有别名；请修复或隔离该文件后重试"}
         # 与 `_record_bucket` 一致：读-改-写持锁，防并发丢失更新
         with FileLock(str(self.alias_path) + ".lock", timeout=10.0):
             aliases = self._load_aliases()
+            if self._aliases_broken:
+                return {"ok": False, "error": "aliases.json 已损坏，拒绝写入以保护已有别名"}
             aliases[q] = eid
             self.alias_path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_text(
@@ -584,8 +620,13 @@ class DeviceCatalog:
         return {"ok": True, "alias": q, "entity_id": eid, "total": len(aliases)}
 
     def remove_alias(self, name: str) -> dict[str, Any]:
+        # R16-01：损坏时拒写（与 set_alias 对称）
+        if self._aliases_broken:
+            return {"ok": False, "error": "aliases.json 已损坏，拒绝写入以保护已有别名；请修复或隔离该文件后重试"}
         with FileLock(str(self.alias_path) + ".lock", timeout=10.0):
             aliases = self._load_aliases()
+            if self._aliases_broken:
+                return {"ok": False, "error": "aliases.json 已损坏，拒绝写入以保护已有别名"}
             if name not in aliases:
                 return {"ok": False, "error": f"未找到别名 {name!r}"}
             aliases.pop(name)
@@ -717,13 +758,13 @@ class DeviceCatalog:
         except OSError:
             return {}
         cached = getattr(self, "_exp_cache", None)
-        if cached is not None and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+        if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
             return cached[2]
         try:
             counts = store.entity_counts()
         except Exception:
             counts = {}
-        self._exp_cache = (stat.st_mtime, stat.st_size, counts)
+        self._exp_cache = (stat.st_mtime_ns, stat.st_size, counts)
         return counts
 
     def resolve(
