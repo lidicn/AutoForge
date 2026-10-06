@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, NamedTuple
 
 from .af_adapters import CallResult
+from .af_atomic import atomic_write_text
 from .af_time import SystemTimeSource, TimeSource
 
 __all__ = [
@@ -283,9 +284,7 @@ class UndoStore:
                 self._records = {}
 
     def _save(self) -> None:
-        tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(self._records, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(self.path)  # 原子替换，避免半写
+        atomic_write_text(self.path, json.dumps(self._records, ensure_ascii=False, indent=2))
 
     def record(self, deploy_id: str, entities: Mapping[str, Mapping[str, Any]]) -> None:
         """记录本次部署的"动作前快照"（entity_id → {state, attributes}）。"""

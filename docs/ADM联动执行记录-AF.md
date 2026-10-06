@@ -4633,4 +4633,81 @@ ESCAPED_RC=0
 
 ---
 
+## 二之五十四、原子写门禁的射程从一张脸扩到两张——本批的猎物是**审计点名的那一站根本不在射程里**
+
+**来源**：`docs/audit` 那份安全审计里"固定名 `.tmp`"那一族的最后一站，`src/autoforge/af_undo.py:285-288`：
+
+```python
+def _save(self) -> None:
+    tmp = self.path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(self._records, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(self.path)  # 原子替换，避免半写
+```
+
+**它为什么一直躲着门**（不是"门判它是绿的"，是**门没看见过它**）：`scripts/check_atomic_write_sites.py`
+判据 A 的锚点原本只有一张脸——`os.replace(`，且被删掉的那个 `_is_os` 注释自己写着
+"`shutil.move`／`path.replace` 不在这族的形状里"。这一站写的是 `Path.replace`，于是它连"站点"都不算，
+门当场报的是：
+
+```
+✓ 原子写站点门禁干净（扫描 99 个文件、`os.replace` 站点 5 处：走 mkstemp/公共助手 3 处、
+固定名形状 0 处（其中基线冻结 0 站、就地豁免 2 站）…）      RC=0
+```
+
+"固定名形状 **0** 处"——而盘上就有一处，且是审计点名的那一处。**这是"该红的不红"族里最糟的一档**：
+红/绿都还是可判定的，看不见则是射程谎报，绿行连带着把"扫过 99 个文件"这件事一起说成可信的。
+
+**先把门扩开、再动代码**（顺序是有意的：反过来就只剩"我修了一处"，量不出门原本瞎）：
+`_is_os` 换成 `_replacement_faces()`，射程两张脸——① `os.replace`／`os.rename`（模块属性那一张）；
+② **恰好一个位置参数、无关键字**的 `X.replace(Y)`／`X.rename(Y)`（`Path` 那一张）。
+按"单个位置参数"划界是因为同名的另外两张脸必然长得不一样：`str.replace(old, new)` 给两个位置参数、
+`datetime.replace(tzinfo=…)` 带关键字。仓里现成的两个反例：`af_persist.py:51` 的时区归一、
+`af_draft.py:402` 的 `action_name.replace('.', '_')`。
+
+**扩完射程、还没改代码时的读数**（这一步的红就是上一段那个"0 处"的反证）：
+
+```
+[原子写] autoforge/af_undo.py:288 函数 `UndoStore._save` 里的替换脸…是固定名 tmp（并发写会互相截断），
+且既没登记进基线也没就地豁免：走 `af_atomic.atomic_write_text`（随机 tmp + fsync + 目录 fsync）…
+共 1 条。修法是走公共助手，不是给这一站加豁免。                RC=1
+```
+
+**变异腿（当场跑的，不碰盘：in-memory 换掉 `_replacement_faces`，临时目录里喂同一份 prey）**：
+
+| 档 | 形状 | RC | 读数 |
+|---|------|----|------|
+| M1 | 扩射程后 + 固定名 `tmp.replace()` | **1** | `af_undoish.py:8 … 固定名 tmp（并发写会互相截断）` ⇒ 判红 |
+| M2 | 把射程改回旧的一张脸（只认 `os.replace`），**prey 文件一字未动** | **2** | `一个替换脸站点都没扫到 ⇒ …本门此刻无从判定射程——报『干净』就是假绿` |
+| CONTROL | 随机 tmp + `Path.rename`（正路） | **0** | `替换脸站点 1 处` ⇒ 扩射程没把正路打红 |
+
+M2 是本条最要紧的一格：**旧射程下这一站不是被判绿，是连计数都不进**（`rc=2` 而非 `rc=0` 是今天的行为，
+因为反空洞档 §判据 C 会把"零站点"报成读不成——这条腿是 2026-10-04 立门时加的，今天正好接住了这次射程谎报）。
+若当时 src 里还有别的 `os.replace` 站点在，同一份 prey 在旧射程下就是**安静的 `rc=0`**。
+
+**代码那一半**：`_save()` 改成 `atomic_write_text(self.path, json.dumps(…))` + `from .af_atomic import atomic_write_text`。
+`import os` 保留（`:52`/`:57` 两个 env 读数还在用）。撤销快照的语义没变，变的是"半写窗口"：
+旧写法两个进程会写同一个 `undo_log.json.tmp` 互相截断，读侧 `_load()` 把 `ValueError` 吞成
+"undo_log 读取失败，重置为空" ⇒ **可撤销清单静默变空**（和 `af_persist` 那族同一种"丢数据不报错"）。
+
+**绿行文案跟着射程改名**：`os.replace` 站点 → **替换脸站点**，判据 A/C 与 `exit 2` 文案同批改。
+读数名字不跟着射程走，绿行自己就是下一处误导。
+
+**本地读数**：
+- `python scripts/check_atomic_write_sites.py` ⇒ `✓ 原子写站点门禁干净（扫描 99 个文件、替换脸站点 5 处：走 mkstemp/公共助手 3 处、固定名形状 0 处（其中基线冻结 0 站、就地豁免 2 站）；授权面腿射程函数 46 个、其中落盘 6 个（必经助手 5 个、自带 mkstemp 1 个、裸写 0 个——这一腿不接受基线与豁免））` **RC=0**
+- `python -m pytest tests/unit/test_atomic_write_gate.py tests/unit/test_dcd_20261004_atomic_write_nine_sites.py tests/unit/test_atomic_write_sites_fixes.py tests/unit/test_af_undo_http.py tests/unit/test_undo_policy_unified.py -q` ⇒ **95 passed, 2 skipped** in 15.24s
+- 新增 6 条腿（`test_atomic_write_gate.py`）：第二张脸的 prey 判红、`os.rename` 同判、随机 tmp + `Path.rename` 判绿、
+  `str`/`datetime` 的 `replace` 不算脸（落到 `exit 2` 证明真没进射程）、真仓 `af_undo` 不再拼 `.json.tmp` 且走公共助手、
+  `UndoStore` 落盘可读回且目录里零 tmp 残留。
+- `git diff --numstat`：`scripts/check_atomic_write_sites.py` 44/20、`src/autoforge/af_undo.py` 2/3、
+  `tests/unit/test_atomic_write_gate.py` 111/0——**没有整份重写**（行尾保持 LF）。
+- 全链（干净 worktree，`gates.sh` + `pytest` 全量）：见本节末"全链"补记。
+
+**仍在门外**（登记，不自裁）：
+- `shutil.move`／`os.link`＋`unlink` 这两类"挪成正名"的形状**仍不在射程**——今天 src 里零命中，
+  等第一条真命中出现再扩，扩的理由写在同一份 docstring 里；
+- 门判的仍是**调用图形状**，不是"这个文件到底有没有第二个写者"。`UndoStore` 这一站值语义上确实只有一条
+  写路径（进程内），它值得修的代价是 fsync 而不是防并发截断——所以本批的定性是**收审计点名 + 修门的射程谎报**，
+  不是"堵掉一处正在丢数据的事故"；
+- "绿行文案里的计数词与判据条数是否一致"这类**散文级**不一致仍靠人工（§二之五十三 的判据 ⑥ 只管 `echo` 里的反引号）。
+
 —— AutoForge 开发 · 2026-10-06

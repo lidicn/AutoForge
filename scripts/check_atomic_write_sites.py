@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""原子写站点门禁：`os.replace` 的临时名不能是固定名，除非同一函数里有 `mkstemp`/公共助手。
+"""原子写站点门禁：把临时文件挪成正名的那张"替换脸"不能配固定临时名，除非同一函数里有 `mkstemp`/公共助手。
 
 起因（2026-10-04，安全审计那份 zip 的 out_of_scope 14 个单元里优先级最高的两族）：
 `af_atomic.atomic_write_text`（P1-18 那次的修法原本写在 `af_store._atomic_write` 的 docstring 里，
@@ -15,11 +15,15 @@
 `v{N}.tmp`，丢一次更新。
 
 判据（三条）：
-  A. 函数体内出现 `os.replace(`，而该函数体内**没有** `mkstemp` / `atomic_write_text` /
-     `_atomic_write` ⇒ 该站点必须出现在基线里，否则判红。
+  A. 函数体内出现"把临时文件挪成正名"的替换脸——`os.replace`/`os.rename`，或单位置参数的
+     `X.replace(Y)`／`X.rename(Y)`（`Path` 那一张），而该函数体内**没有** `mkstemp` /
+     `atomic_write_text` / `_atomic_write` ⇒ 该站点必须出现在基线里，否则判红。
+     第二张脸是 2026-10-06 补进射程的：`af_undo.UndoStore._save` 写的是固定名
+     `with_suffix(".json.tmp")` + `tmp.replace(self.path)`，当时门只认 `os.replace`，
+     于是它根本不进站点集合、照旧报"固定名形状 0 处"（§二之五十四）。
   B. 就地豁免标记 `# fixed-tmp: exempt(理由)` 的括号里必须有非空理由；空理由判红。
-     标记要写在 `os.replace` 那一行或函数体内任意一行（与基线二选一）。
-  C. 反空洞自证：扫不到任何 src 文件、或全仓 `os.replace` 站点数为 0 ⇒ **`exit 2`**。
+     标记要写在替换脸那一行或函数体内任意一行（与基线二选一）。
+  C. 反空洞自证：扫不到任何 src 文件、或全仓替换脸站点数为 0 ⇒ **`exit 2`**。
      锚点被挪走时本门无从判定射程，报"干净"就是假绿。
   D. 授权面腿（DCD 裁定 20261004 §二，本批启动条件已到）：`.auth/` 那一族的落盘函数必须走
      原子助手。射程 = `af_auth.py` 全部函数 ∪ 别的文件里**这一条写的作用路径**看得出指向 `.auth`
@@ -116,12 +120,7 @@ def collect(root: Path) -> tuple[list[dict], list[str], list[tuple[str, int]]]:
             if EXEMPT.search(line):
                 exempts.append((rel, lineno))
         for qual, func in _functions(tree):
-            replaces = [
-                node.lineno
-                for node in ast.walk(func)
-                if isinstance(node, ast.Call) and _call_name(node) == "replace"
-                and _is_os(node)
-            ]
+            replaces = _replacement_faces(func)
             if not replaces:
                 continue
             safe = any(
@@ -143,10 +142,34 @@ def collect(root: Path) -> tuple[list[dict], list[str], list[tuple[str, int]]]:
     return sites, broken, exempts
 
 
-def _is_os(node: ast.Call) -> bool:
-    """只认 `os.replace(...)`（`shutil.move`/`path.replace` 不在这族的形状里）。"""
-    func = node.func
-    return isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "os"
+def _replacement_faces(func: ast.AST) -> list[int]:
+    """函数体内每一张"把临时文件挪成正名"的替换脸的行号（判据 A 的射程）。
+
+    原本是**一张**：只有 `os.replace(...)`，而 `_is_os` 的注释自己写着"`shutil.move`／`path.replace`
+    不在这族的形状里"。代价今天量出来了：`af_undo.UndoStore._save` 写的是
+    `tmp = self.path.with_suffix(".json.tmp")` + `tmp.replace(self.path)`——固定名 + 第二张脸，
+    于是它**根本不进站点集合**，门照旧报"固定名形状 0 处"，而审计点名的正是这一站
+    （§二之五十四：一条"该红的不红"的门，红的前提是它在射程里）。
+
+    现在是**两张**：`os.replace`／`os.rename`（模块属性那一张），以及 `X.replace(Y)`／`X.rename(Y)`
+    这种**恰好一个位置参数、无关键字**的方法调用（`Path` 那一张）。按"单个位置参数"划是因为
+    `str.replace(old, new)` 必然给两个位置参数、`datetime.replace(tzinfo=…)` 带关键字——
+    `af_persist.py:51` 那种时区归一不会被算成替换脸，`af_draft.py:402` 的 `action_name.replace('.', '_')`
+    同理。真出现两参数不带关键字的 `X.replace(a)` 之外的形状时，本门会漏判而不是误伤：漏判由
+    "站点数为 0 ⇒ `exit 2`"那条反空洞档兜住口径漂移。
+    """
+    faces: set[int] = set()
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in ("replace", "rename"):
+            continue
+        receiver_is_os = (isinstance(node.func.value, ast.Name) and node.func.value.id == "os")
+        if receiver_is_os:
+            faces.add(node.lineno)
+        elif len(node.args) == 1 and not node.keywords:
+            faces.add(node.lineno)
+    return sorted(faces)
 
 
 def _has_fixed_tmp_name(func: ast.AST) -> bool:
@@ -211,10 +234,11 @@ def check(root: Path, baseline_keys: list[str]) -> tuple[list[str], dict[str, in
             counts["baselined"] += 1
             continue
         lines = "/".join(str(n) for n in site["lines"])
-        shape = "固定名 tmp（并发写会互相截断）" if site["fixed"] else "裸 os.replace（无 mkstemp、无 fsync）"
+        shape = "固定名 tmp（并发写会互相截断）" if site["fixed"] else "裸替换脸（无 mkstemp、无 fsync）"
         findings.append(
-            f"[原子写] {site['file']}:{lines} 函数 `{site['key'].split('::', 1)[1]}` 里的 `os.replace` "
-            f"是{shape}，且既没登记进基线也没就地豁免：走 `af_atomic.atomic_write_text`"
+            f"[原子写] {site['file']}:{lines} 函数 `{site['key'].split('::', 1)[1]}` 里的替换脸"
+            f"（`os.replace` 那一张，或 `tmp.replace(正名)`／`tmp.rename(正名)` 那一张）是{shape}，"
+            f"且既没登记进基线也没就地豁免：走 `af_atomic.atomic_write_text`"
             f"（随机 tmp + fsync + 目录 fsync），或把这一站写进基线并给理由"
         )
     stale = [k for k in baseline_keys if k not in {s["key"] for s in sites}]
@@ -427,7 +451,7 @@ def check_auth_face(root: Path) -> tuple[list[str], dict[str, int], list[str]]:
 
 def render(counts: dict[str, int], stale: list[str], auth: dict[str, int] | None = None) -> str:
     line = (
-        f"✓ 原子写站点门禁干净（扫描 {counts['files']} 个文件、`os.replace` 站点 {counts['replace_sites']} 处："
+        f"✓ 原子写站点门禁干净（扫描 {counts['files']} 个文件、替换脸站点 {counts['replace_sites']} 处："
         f"走 mkstemp/公共助手 {counts['safe']} 处、固定名形状 {counts['fixed_name']} 处"
         f"（其中基线冻结 {counts['baselined']} 站、就地豁免 {counts['exempt']} 站）"
     )
@@ -464,7 +488,7 @@ def main(argv: list[str]) -> int:
     replace_sites = sum(len(s["lines"]) for s in sites)
     if not sites or replace_sites == 0:
         print(
-            "[射程] 一个 `os.replace` 站点都没扫到 ⇒ 锚点形状变了（改名？挪包？装饰方式换了？），"
+            "[射程] 一个替换脸站点都没扫到 ⇒ 锚点形状变了（改名？挪包？装饰方式换了？），"
             "本门此刻无从判定射程——报『干净』就是假绿",
             file=sys.stderr,
         )

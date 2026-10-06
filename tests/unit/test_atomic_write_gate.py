@@ -178,7 +178,118 @@ def test_exempt_with_empty_reason_is_red(tmp_path):
     assert "没写理由" in out
 
 
+# ── 射程第二张脸：`X.replace(Y)` / `X.rename(Y)`（2026-10-06）────────────
+#
+# 立门时这张脸不在射程里（只认 `os.replace`），而 `af_undo.UndoStore._save` 写的正是
+# `self.path.with_suffix(".json.tmp")` + `tmp.replace(self.path)`——固定名 + 第二张脸，
+# 于是审计点名的这一站**根本不进站点集合**，门照旧报"固定名形状 0 处"。
+# 下面四条腿把这张脸钉进门里：prey 会红、走 mkstemp 的那张脸绿、`str`/`datetime` 的
+# 同名方法不算脸、真仓 `af_undo` 不再构造固定名。
+
+PATH_FIXED_NAME = '''
+from pathlib import Path
+
+
+def _save(path):
+    tmp = Path(path).with_suffix(".json.tmp")
+    tmp.write_text("{}", encoding="utf-8")
+    tmp.replace(Path(path))
+'''
+
+OS_RENAME_FIXED_NAME = '''
+import os
+
+
+def _save(path):
+    tmp = f"{path}.json.tmp"
+    open(tmp, "w").write("{}")
+    os.rename(tmp, path)
+'''
+
+PATH_RENAME_WITH_MKSTEMP = '''
+import os
+import tempfile
+from pathlib import Path
+
+
+def _save(path):
+    fd, tmp = tempfile.mkstemp(dir=str(Path(path).parent), suffix=".tmp")
+    os.close(fd)
+    Path(tmp).rename(Path(path))
+'''
+
+NOT_REPLACEMENT_FACES = '''
+from datetime import timezone
+
+
+def _norm(action_name):
+    return action_name.replace(".", "_")
+
+
+def _as_utc(ts):
+    return ts.replace(tzinfo=timezone.utc)
+'''
+
+
+def test_path_replace_face_is_red_without_a_helper(tmp_path):
+    """第二张脸的 prey：固定名 + `tmp.replace(正名)` 必须判红（这条在扩射程前会漏）。"""
+    root = _src(tmp_path, {"af_undish.py": PATH_FIXED_NAME})
+    rc, out = _run(_module(), root)
+    assert rc == 1, out
+    assert "固定名 tmp（并发写会互相截断）" in out
+    assert "af_undish.py" in out
+
+
+def test_os_rename_face_counts_as_a_replacement_face(tmp_path):
+    root = _src(tmp_path, {"af_moved.py": OS_RENAME_FIXED_NAME})
+    rc, out = _run(_module(), root)
+    assert rc == 1, out
+    assert "固定名 tmp" in out
+
+
+def test_path_rename_through_mkstemp_is_green(tmp_path):
+    """扩射程不能把正路打红：随机 tmp + `Path.rename` 仍是原子的，只数站点不判红。"""
+    root = _src(tmp_path, {"af_ok.py": PATH_RENAME_WITH_MKSTEMP})
+    rc, out = _run(_module(), root)
+    assert rc == 0, out
+    assert "替换脸站点 1 处" in out, out
+
+
+def test_str_and_datetime_replace_are_not_replacement_faces(tmp_path):
+    """反例腿：两个位置参数是 `str.replace`、带关键字是 `datetime.replace`，都不该算替换脸。
+
+    它们要是被算进来，全仓那些归一化/时区调用会把门变成噪音源，下一个真固定名站点就淹在噪音里。
+    零站点 ⇒ 判据 C 的 `exit 2`（"无从判定射程"），正好证明这一族真没进射程。
+    """
+    root = _src(tmp_path, {"af_strings.py": NOT_REPLACEMENT_FACES})
+    rc, out = _run(_module(), root)
+    assert rc == 2, out
+    assert "替换脸站点都没扫到" in out
+
+
+def test_real_undo_store_save_goes_through_the_shared_helper():
+    """prey 的本体收口：`af_undo` 不再自己搭固定名 tmp，改写走 `af_atomic`。"""
+    text = (ROOT / "src" / "autoforge" / "af_undo.py").read_text(encoding="utf-8")
+    assert ".json.tmp" not in text, "UndoStore 又在拼固定名 tmp"
+    assert "atomic_write_text(" in text
+    assert "from .af_atomic import atomic_write_text" in text
+
+
+def test_undo_store_writes_no_tmp_residue_and_reads_back(tmp_path):
+    """值语义那一半：改走助手之后撤销快照真的落盘、能读回，且目录里没有 tmp 残留。"""
+    from autoforge.af_undo import UndoStore
+
+    store_root = tmp_path / ".forge"
+    store = UndoStore(store_root=str(store_root), window_s=120)
+    store.record("d1", {"light.a": {"state": "on", "attributes": {"brightness": 10}}})
+    reloaded = UndoStore(store_root=str(store_root), window_s=120)
+    assert "d1" in reloaded._records, reloaded._records
+    assert reloaded._records["d1"]["entities"]["light.a"]["state"] == "on"
+    assert [p.name for p in store_root.glob("*.tmp")] == [], list(store_root.iterdir())
+
+
 # ── 判据 C：射程读不成时不许报"干净" ──────────────────────────────────
+
 
 def test_zero_replace_sites_is_range_failure_not_clean(tmp_path):
     root = _src(tmp_path, {"af_none.py": "def f():\n    return 1\n"})
