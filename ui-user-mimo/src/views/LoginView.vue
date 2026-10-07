@@ -3,9 +3,11 @@ import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NButton, NInput } from 'naive-ui'
 import UiIcon from '../components/UiIcon.vue'
+import { USE_MOCK } from '../api/env.ts'
 import { useMainStore } from '../stores/main.ts'
 import { errorMessage } from '../logic/format.ts'
 
+const mockMode = USE_MOCK
 const store = useMainStore()
 const route = useRoute()
 const router = useRouter()
@@ -68,7 +70,10 @@ async function submit () {
 
       <footer class="foot">
         <span class="wordmark">ForgeSight</span>
-        <span class="hint">mock 模式：任意非空用户名与密码即可进入（与后端轻量登录同语义，无用户表）</span>
+        <!-- 这句话以前无条件写「mock 模式」，交付构建（VITE_USE_MOCK=false，走真后端）也照显示：
+             界面自报一种没在跑的数据来源，与「假部署」同一族。按 env.ts 的同一个开关分支。 -->
+        <span v-if="mockMode" class="hint">mock 构建：数据来自内置假后端，不发请求</span>
+        <span v-else class="hint">后端为轻量单 owner 登录（无用户表）：任意非空用户名与密码即可进入</span>
       </footer>
     </section>
   </main>

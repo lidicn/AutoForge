@@ -11,8 +11,9 @@
 而是"每一个走者都引同一个真值源"。
 
 反例族（铁律 #8）：CONTROL（浅嵌套逐个走者结果照常正确）、边界（== 预算通过、+1 拒）、
-六根腿各自超限都抛具名异常而**不是** RecursionError、反 Hollow 自证（把守卫摘掉一根腿，
-那一条腿确实变回 RecursionError）、单一真值源（预算常数只定义一次、消费者引而不抄）。
+五根遍历腿各自超限都抛具名异常而**不是** RecursionError、再往上一层 `scan()` 必须把坏
+触发源落成 `TRIGGER_INVALID` 而不是换掉整次调用、反 Hollow 自证（把守卫摘掉一根腿，那一条腿
+确实变回 RecursionError）、单一真值源（预算常数只定义一次、消费者引而不抄）。
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from types import SimpleNamespace
 import pytest
 
 from autoforge.af_fidelity import _trigger_to_dict
-from autoforge.af_ir import Graph
+from autoforge.af_ir import Graph, load_automation
 from autoforge.af_ir.models import (
     MAX_TRIGGER_DEPTH,
     Trigger,
@@ -32,7 +33,7 @@ from autoforge.af_ir.models import (
 )
 from autoforge.af_nl import _trigger_text
 from autoforge.af_scheduler import Scheduler
-from autoforge.af_scanner import ScanResult, StaticScanner
+from autoforge.af_scanner import StaticScanner
 
 LEAF_ENTITY = "binary_sensor.motion"
 LEAF_TEXT = f"{LEAF_ENTITY} 变为「on」"
@@ -140,20 +141,20 @@ def test_control_budget_boundary_is_exactly_the_numbered_depth():
         Trigger.from_dict(_nested_dict(MAX_TRIGGER_DEPTH + 1))
 
 
-# ── 2. 六根腿：超限都必须抛具名异常，而不是把 RecursionError 漏出去 ──────────
+# ── 2. 五根遍历腿：超限都必须抛具名异常，而不是把 RecursionError 漏出去 ────────
+#
+# 第二十轮 F2 把判据往上又提了一层（见 §4 那个新测试）：`scan()` 对调用方承诺的是
+# `ScanResult`，所以扫描器里那根腿现在是"**落诊断、不抛**"，不再属于这张"必须抛"的表。
 
 
 def _legs(trig: Trigger) -> dict:
     sched = _scheduler()
-    scanner = StaticScanner(Graph([]), trigger_stale_after_s=3600)
-    cyclic_auto = SimpleNamespace(entry_nodes=lambda: [SimpleNamespace(trigger=trig)])
     return {
         "entity_ids": lambda: trig.entity_ids(),
         "leaf_triggers": lambda: list(trig.leaf_triggers()),
         "trigger_to_dict": lambda: _trigger_to_dict(trig),
         "trigger_text": lambda: _trigger_text(trig),
         "scheduler._satisfied": lambda: sched._satisfied(trig, _event(LEAF_ENTITY)),
-        "scanner._check_trigger_stale": lambda: scanner._check_trigger_stale(cyclic_auto, ScanResult()),
     }
 
 
@@ -205,5 +206,63 @@ def test_guard_removal_reverts_the_leg_to_recursion_crash(monkeypatch):
     try:
         with pytest.raises(RecursionError):
             _trigger_to_dict(_cyclic_trigger())
+    finally:
+        sys.setrecursionlimit(1000)
+
+
+# ── 4. 再往上一层：`scan()` 对调用方承诺 ScanResult，坏触发源必须落成诊断 ──────
+#
+# 第十七轮的判据止步于"这根腿抛具名异常"，于是 `StaticScanner.scan()` 整次调用仍然会
+# 被 `auto.reads()` / 僵尸触发源腿换掉——第二十轮 F2 量到的正是这一层。
+
+_SCAN_IR = {
+    "ir_version": "0.2.1",
+    "id": "trigger_depth_probe",
+    "name": "深触发源",
+    "version": 1,
+    "mode": "single",
+    "nodes": [
+        {"id": "a1", "kind": "on", "trigger": {"type": "state", "entity_id": LEAF_ENTITY, "to": "on"}},
+        {"id": "p1", "kind": "pass"},
+    ],
+    "edges": [{"from": "a1", "to": "p1", "kind": "then"}],
+}
+
+
+def _auto_with_trigger(trig: Trigger):
+    auto = load_automation(_SCAN_IR)
+    # 载入之后再注入（`Trigger.from_dict` 这道闸本就拒收这种形状）：模拟存量库里的坏 IR。
+    object.__setattr__(auto.nodes["a1"], "trigger", trig)
+    return auto
+
+
+@pytest.mark.parametrize("shape", ["deep", "cyclic"])
+def test_scan_lands_trigger_invalid_instead_of_raising(shape):
+    trig = _nested_group(MAX_TRIGGER_DEPTH + 8) if shape == "deep" else _cyclic_trigger()
+    result = StaticScanner(Graph([_auto_with_trigger(trig)]), trigger_stale_after_s=3600).scan()
+    assert "TRIGGER_INVALID" in result.codes(), f"{shape} 触发源必须落成 TRIGGER_INVALID"
+    assert not result.ok, "坏 IR 不许被扫描器判绿"
+
+
+def test_scan_control_trigger_is_not_reported_as_invalid():
+    """CONTROL：预算内的触发源不该多出这一个码（护栏不许把自己变成噪声源）。"""
+    result = StaticScanner(Graph([_auto_with_trigger(_nested_group(3))]), trigger_stale_after_s=3600).scan()
+    assert "TRIGGER_INVALID" not in result.codes()
+
+
+def test_scan_still_crashes_if_the_scanner_loses_its_own_guard(monkeypatch):
+    """反 Hollow：摘掉扫描器那根腿的守卫 ⇒ `scan()` 必须重新 RecursionError。
+
+    上一条只断言"不抛 TriggerDepthError"，单靠它分不清"守卫在"和"取样没进递归"。
+    `except TriggerDepthError` 抓不住 RecursionError，所以守卫一掉这里就红。
+    """
+    import autoforge.af_scanner as m_scan
+
+    monkeypatch.setattr(m_scan, "check_trigger_depth", lambda depth, where: None)
+    old = sys.getrecursionlimit()
+    sys.setrecursionlimit(400)
+    try:
+        with pytest.raises(RecursionError):
+            StaticScanner(Graph([_auto_with_trigger(_cyclic_trigger())]), trigger_stale_after_s=3600).scan()
     finally:
         sys.setrecursionlimit(1000)

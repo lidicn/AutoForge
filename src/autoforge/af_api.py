@@ -251,11 +251,18 @@ def _scope_ok(scope: str, scopes) -> bool:
 #: 带 write 的第三方服务令牌（`AUTOFORGE_TOKENS` 里自定 subject）不是 owner ⇒ 只给掩码。
 _OWNER_SUBJECTS = frozenset({"owner", "shared"})
 
+#: 用户端 SPA 的挂载前缀（唯一真源）。三处必须与它同字：`ui-user-mimo/vite.config.ts` 的
+#: `base`、`docker/docker-compose.api.yml` 的卷挂载点与 `--ui-user-dir` 值、这里的常量。
+#: 不同步的形状是"/mimo 出页面、资源全 404"或"深链刷出开发面板"，两档都不报错，
+#: 所以由 `tests/unit/test_ui_user_mount.py` 直接拿 vite 那份字符串对账，而不是靠人记。
+UI_USER_PREFIX = "mimo"
+
 
 def build_app(
     store_root: str = ".forge",
     examples_dir: str | None = None,
     ui_dir: str | None = None,
+    ui_user_dir: str | None = None,
     readonly: bool = False,
 ) -> FastAPI:
     """构造 FastAPI 应用。
@@ -265,6 +272,10 @@ def build_app(
     `ui_dir`：非空且为已存在的目录时，把前端构建产物（dist）一并托管，
         支持 SPA fallback（HTML5 history 模式深链刷新返回 index.html）。
         前端同源访问 `/api`，无需额外 CORS / 反向代理。
+    `ui_user_dir`：用户端（`ui-user-mimo`）的 dist，托管在 `/{UI_USER_PREFIX}/` 之下，
+        与开发面板共用同一个同源 `/api`（两棵树、一个后端，不再要求调用方另起反代）。
+        参数顺序与 NAS 在跑的那份实现保持一致，免得两棵树对同一个 `build_app(...)` 调用
+        解释出不同的第 4 位实参。
     """
     store = GraphStore(store_root)
     if examples_dir:
@@ -456,7 +467,19 @@ def build_app(
 
     @app.get("/api/health")
     def api_health() -> dict[str, Any]:
-        return svc.health(store)
+        # 裁定 20261007 §二 丁A：契约 §7.3 的 degrade-flag 档（「MQTT 断连 → health 报 degraded」）
+        # 此前在本面**没有通道**——`serve` 的顺序是 build_app → start_from_env，桥在 app 装配完之后
+        # 才存在，所以只能每次请求回读注册表，装配期抓引用会永远抓到 None。
+        # 桥读不到（未 attach / homesdk 或 paho 不在盘上）如实报 `linkage.state="unwired"`，
+        # 不报成健康：这一格的存在是为了让"联动面我没看"变成可见事实，而不是伪装成看过。
+        presence = None
+        try:
+            from . import af_mqtt_bridge
+        except ImportError:
+            pass
+        else:
+            presence = af_mqtt_bridge.current_bridge()
+        return svc.health(store, presence=presence)
 
     # ── v1.4.0 治理面：待批队列（部署前写操作先入队，人审后回放）──
     # 注意：approve / reject **只在服务层**（此处 + CLI），MCP 面绝不注册。
@@ -1338,19 +1361,63 @@ def build_app(
 
     # ── 可选：前端静态托管（SPA fallback）──────────────────────────────
     # 必须放在所有 /api 显式路由之后，否则 catch-all 会抢先吞掉 GET /api/*。
-    # 仅当显式传入已存在的 ui_dir 时挂载；默认不托管，保持只读 API 纯净。
-    if ui_dir and Path(ui_dir).is_dir():
-        dist = Path(ui_dir).resolve()
+    # 两脸各自可选：只传 --ui-user-dir（只部署用户端）也要能挂上；两个都不传时
+    # **不注册 catch-all**，保持只读 API 纯净（老判据：未知路径必须 404 不是 index.html）。
+    dist = Path(ui_dir).resolve() if (ui_dir and Path(ui_dir).is_dir()) else None
+    #: 用户端（`ui-user-mimo` 那棵树）的 dist。传了但盘上没有 ⇒ `mimo_dist=None`，
+    #: 下面那一档会**如实 503**，而不是让它掉进开发面板的 index.html——
+    #: "打开 /mimo 看到的却是工程控制台"这种假部署，比 404 难查得多（本机实测踩过：
+    #: compose 已写 `--ui-user-dir` 而镜像里的 `forge serve` 还不认这个参数时，
+    #: `/mimo/` 返回 200 + 开发面板的 index.html，`curl -o /dev/null -w %{http_code}` 全绿）。
+    #: 传了 `--ui-user-dir` 就注册 catch-all，正是为了让这一档有地方说话。
+    requested_mimo = bool(ui_user_dir)
+    mimo_dist = (
+        Path(ui_user_dir).resolve()
+        if requested_mimo and Path(ui_user_dir).is_dir()
+        else None
+    )
+
+    if dist is not None or requested_mimo:
 
         @app.get("/{full_path:path}")
         def spa_fallback(full_path: str) -> FileResponse:
             # /api/* 由上方显式路由处理；未知 /api 路径应 404 而非回 index.html
             if full_path.startswith("api/") or full_path in ("docs", "openapi.json"):
                 raise HTTPException(status_code=404, detail="Not Found")
-            candidate = (dist / full_path).resolve()
-            # 防目录穿越：只服务 dist 内的真实文件
-            if full_path and candidate.is_file() and str(candidate).startswith(str(dist)):
+            if full_path == UI_USER_PREFIX or full_path.startswith(f"{UI_USER_PREFIX}/"):
+                if not requested_mimo:
+                    # 没请求用户端 ⇒ /mimo 不是"资源找不到"，而是"这一面压根没部署"：
+                    # 404 落在这里，别把开发面板的 index.html 递过去充当已部署。
+                    raise HTTPException(status_code=404, detail="Not Found")
+                if mimo_dist is None:
+                    raise HTTPException(
+                        status_code=503,
+                        detail=(
+                            f"用户端未挂载：--ui-user-dir 指向的 {ui_user_dir!r} 不是目录。"
+                            "先构建 `ui-user-mimo`（npm run build）并确认卷挂上，再看这里"
+                        ),
+                    )
+                rel = full_path[len(UI_USER_PREFIX) + 1 :] if "/" in full_path else ""
+                root = mimo_dist
+            else:
+                if dist is None:
+                    raise HTTPException(status_code=404, detail="Not Found")
+                rel = full_path
+                root = dist
+            candidate = (root / rel).resolve()
+            # 防目录穿越：只服务各自 dist **树内**的真实文件。
+            # 判据取 `is_relative_to` 而不是 `str(...).startswith(str(root))`：后者把
+            # `root=/mimo` 与兄弟目录 `/mimo-secret` 当成同一棵树（字符串前缀相同），
+            # 于是 `../mimo-secret/x` 解析出树外路径仍被放行。
+            if rel and candidate.is_file() and candidate.is_relative_to(root):
                 return FileResponse(str(candidate))
-            return FileResponse(str(dist / "index.html"))
+            if not (root / "index.html").is_file():
+                # dist 挂了但里面没有 index.html（构建产物空/卷挂错目录）：这是 503 而不是
+                # FileResponse 抛的 500 —— 部署面缺文件要让运维一眼看见，别伪装成程序崩溃。
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"{UI_USER_PREFIX if root is mimo_dist else 'ui'} 的 dist 里没有 index.html：{str(root)}",
+                )
+            return FileResponse(str(root / "index.html"))
 
     return app

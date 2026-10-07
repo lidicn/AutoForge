@@ -5095,3 +5095,172 @@ CONTROL 浅树七条腿都出正确结果、恰好到界不报、参数化六腿
    变异脚本按"锚点必须唯一"拒绝写入并保留原文件——**这正是它该有的行为**；改用两行唯一锚点（带下一行注释）后 RC=1。
 
 —— AutoForge 开发 · 2026-10-07
+
+## 二之六十、落地 DCD 20261007 §二 的 AF 半边（丁A `/health` 桥读数、戊A MCP 异常路径 JSON 信封），并把用户视角 UI 挂进同源服务层
+
+裁定原文：`关键决策部/decisions/20261007-DB凭据与AF降级面-裁定.md` §二。五件里 **甲A/乙A/丙A 要动契约或库**
+（随 homesdk 0.3.3 / 契约 v2.1），**丁A/戊A 是 AF 现在就能做的两件**——本批收这两件，另收用户视角 UI 的对接。
+
+### 一、丁A：`/api/health` 有了到联动桥的通道，读不到如实报 `unwired`
+
+机制事实决定了实现形状，不是"顺手加个字段"：`serve` 的顺序是 `build_app(...)` → `start_from_env()`，
+**桥在 app 装配完之后才存在**，所以装配期抓引用会永远抓到 `None` ⇒ 只能每次请求回读注册表
+（`af_mqtt_bridge.current_bridge()`）。
+
+- `af_service.health(store, *, presence=None)` 新增 `linkage` 格；`presence is None` ⇒
+  `{"wired": False, "state": "unwired", "degraded": False, "reasons": []}`。
+  **`unwired` 故意不是契约 §7.3 三态里的一档**：这一格存在的意义是让"联动面我没看"成为可见事实，
+  写成 `online` 或 `degraded` 都是伪装成看过。没桥时也不 import `af_mqtt_bridge`（它要 homesdk）。
+- MCP 面 `_t_health` 同轴递 `presence`：**两脸一面有桥、一面没桥，就是本仓反复登记的"多张调用脸对不上"形状**。
+
+### 二、戊A：四条异常路径统一进机器可读的 JSON 信封
+
+裁定授权原话是"异常路径也是 MCP 响应体，不该例外"。此前工具**主动拒**已经带 `code`，而
+未知工具 / 未声明参数 / `_guard`+`ServiceError` / 服务层与未捕获异常这四条走的是散文，
+`isError` 只有一个布尔，对端分不出"请求格式错 / 没权限 / AF 自己的病"。
+
+- 新增 `af_mcp._failure_payload(code, message)` ⇒ `{"ok": False, "code": …, "message": …}`；散文照旧进 `message`，信息不丢。
+- 落码：未知工具与未声明参数 ⇒ `ADM_ERR_PAYLOAD_INVALID`；`_guard` 两条拒绝 ⇒ `ADM_ERR_AUTH_REQUIRED`
+  （对端正确动作就是取/换令牌）；`svc.ServiceError` 与未捕获异常 ⇒ `ADM_ERR_INTERNAL`。
+  **丙A 的 PAUSED 档没往这儿塞**——owner 策略性暂停不是鉴权问题，库里还没那一档，等 0.3.3。
+- ⚠️ 读数口径变化（已随交接单同步，不是本面偷偷改的）：`READONLY_DEGRADED:` 前缀原来在整段 text 的开头，
+  现在在 `message` **这个字符串值的开头**。DB 侧若按整段前缀判别会读不到，见
+  `docs/handoff/交接卡_MCP异常路径JSON信封_读数变化_20261008.md`。
+
+### 三、用户视角 UI（`ui-user-mimo`）挂进同源服务层的 `/mimo`
+
+后端参数与前端 `base` 必须同字，否则页面 200 而资源全 404（白屏），两档都不报错：
+
+- `af_api.UI_USER_PREFIX = "mimo"` 是**唯一真源**；`ui-user-mimo/vite.config.ts` 的 `base`（原 `/ui-user/`）、
+  `docker/docker-compose.api.yml` 的卷挂载点与 `--ui-user-dir` 值、`af_cli.serve --ui-user-dir` 四处由
+  `tests/unit/test_ui_user_mount.py` 拿 vite 那份字符串当场对账，不靠人记。
+- 三档"没挂上"分开报，防止**假部署**：没请求 `/mimo` ⇒ 404（不把开发面板的 index.html 递过去充当已部署）；
+  请求了但目录不在 ⇒ 503 并写明先构建；dist 里缺 `index.html` ⇒ 503 而不是 `FileResponse` 抛的 500
+  （部署面缺文件要让运维一眼看见，别伪装成程序崩溃）。本机实测过这条洞：compose 已写 `--ui-user-dir`
+  而镜像里的 `forge serve` 还认不出这个参数时，`/mimo/` 返回 200 + 开发面板的 index.html，`curl -w %{http_code}` 全绿。
+- 目录穿越判据从 `str(candidate).startswith(str(root))` 换成 `candidate.is_relative_to(root)`：
+  字符串前缀把 `root=/mimo` 与兄弟目录 `/mimo-secret` 当成同一棵树，`../mimo-secret/x` 解析出树外路径仍被放行。
+  测试里那条 `fixture 形状失效：兄弟目录不再是前缀对` 的断言就是为了让判据不能被空跑。
+- `LoginView.vue` 的 footer 原来**无条件**写"mock 模式"，交付构建（`VITE_USE_MOCK=false`）也照显示——
+  界面自报一种没在跑的数据来源，与"假部署"同族；改成按 `api/env.ts` 的同一个开关分支。
+
+### 四、本批读数
+
+| 项 | 读数 |
+|---|---|
+| `tests/unit/test_ui_user_mount.py` | **17 collected**（两棵树各挂 / 只挂用户端 / 都不挂 / 503 三档 / 穿越 / vite 同源对账），全绿 |
+| `tests/unit/test_dcd_20261007_mcp_failure_envelope.py` | **9 collected**，全绿 |
+| 三个 UI/健康/MCP 文件合跑 | `35 passed`，`PIPES_EXIT=0` |
+| 本机浏览器黄金路径 | `/mimo/` 出用户端 index、`assets`/`sw.js`/`manifest` 200 且 mime 正确、深链刷新落用户端 index、`/` 仍是开发控制台、`/api/health` 读 `linkage.state="unwired"`（本机无桥 ⇒ 如实） |
+| NAS 侧 | ⏳ **未做**：镜像重烘（`Dockerfile.api` COPY src，`--ui-user-dir` 在旧镜像里会 typer exit 2 ⇒ 崩溃循环把 :8787 连带开发面板一起拉下水）与容器重启待用户点头 |
+
+—— AutoForge 开发 · 2026-10-08
+
+## 二之六十一、收第二十轮 F2/F1：18 处实测崩溃站点接上单一真源预算（腿清单 20 条）；闸门侧补 `params`；`scan()` 的契约改成"落诊断，不落异常"
+
+第二十轮（`docs/audit/AutoForge_第二十轮审计报告_最终轮.md`）的总结是"16 项全部 still_open 且全部有实测证据"，
+台账 F2（条件/参数表达式遍历无深度预算）在 AF 侧**核实成立**：预算常量早就存在（`MAX_EXPR_DEPTH = 32`），
+**缺的不是预算本身，是遍历路径没接上**。本轮把站点盘全、逐条接线，并顺手补了闸门缺的那一档。
+
+### 一、先量现场：改造前的 RecursionError 深度（recursionlimit=1000，Python 3.13）
+
+`json.loads` 能稳定送达 ≥1000 层嵌套，而下面这些腿在 496–997 层就崩——**中间那一段是真实可达面**，
+不是理论攻击。数字都写在对应函数的 docstring/注释里，判据可复算：
+
+| 站点 | 改造前 crash 深度 |
+|---|---|
+| `af_ir/expr._walk` | 992 |
+| `af_ir/condition_norm._nnf` | 496 |
+| `af_ir/condition_norm._to_cnf` | 996 |
+| `af_nl._expr_text` | 996 |
+| `af_orchestrator._iter_expr_nodes` | 992 |
+| `af_orchestrator.describe_condition` | 497 |
+| `af_closedloop/detectors.expr_nodes` | 990–1200 带（990 层仍不崩，落在带内） |
+| `af_conflict_runtime.extract_entity_ids` | 993 / 994 |
+| `af_evo._canon` | 498 |
+| `af_orchestrator.iter_strings` | 993 |
+| `af_orchestrator.walk_dicts` | 992 |
+| `af_orchestrator.normalize_var_paths` | 993 |
+| `af_version._jsonable` | 996 / 997 |
+| `af_draft._resolve_expr` | 997 |
+| `af_nl_parse._build` | 992 |
+| `af_nl_parse._assert_no_runtime_fields` | 994 |
+| `af_nl_parse._iter_nodes` | 997 |
+| `af_nl_parse._expr_atom` | 995 |
+
+接线后每一站都引同一份预算：表达式腿 ⇒ `check_expr_depth`/`ExprError`，触发源腿 ⇒ `check_trigger_depth`/
+`TriggerDepthError`，泛容器腿 ⇒ `check_param_depth`/`ParamDepthError`，CNF 归一 ⇒ `MAX_CNF_CLAUSES = 1024`/
+`CNFBudgetExceeded`。三类自定义异常都在 `ValueError` 族里，调用方按一层就能接住。
+
+### 二、闸门侧补一档：`assert_param_budget`
+
+F2 的口径缺口不止遍历腿：**预算原本只装在遍历腿上，校验闸门没装**。所以在 `af_ir/models.py` 新增
+`assert_param_budget(obj, where)`（`__all__` 与 `af_ir/__init__` 同步导出），`StaticScanner` 每个节点调一次。
+自引用不需要 `visited`——环每绕一圈深度就 +1，必然撞上限。
+
+实测闸门与遍历腿**同档拒绝**（不是严于，也不是宽于）：容器层数 64 放行 / 65 拒 / 66 拒，
+`assert_param_budget` 与 `version._jsonable` 在 `(1, 9, MAX-1, MAX, MAX+1, MAX+40)` 六档读数逐一相等；
+`examples/ir` 存量最深 9 层 ⇒ 不会拒合法 IR。这条测试是为了防"护栏严于闸门把合法存量拒掉"那一族回归。
+
+表达式侧另有一档关系要记：`check_expr` 对 `and`/`not` 链**比 `_walk` 早一层**拒（实测
+`collect_var_refs(deep_expr(30/31))` 放行、`(32)` 抛 `ExprError`）⇒ 遍历腿守卫不会严于闸门，
+这条由测试固定住而不是靠推理。
+
+### 三、`StaticScanner.scan()` 的契约：坏但可载入的 IR 落成诊断，不把异常抛给调用方
+
+**顺带收掉台账 F1（high/P0，第一轮确证，站点 `af_scanner.py:348`）**：F1 的原话是"扫描器校验顺序倒置，护栏排在遍历之后"，
+现读 HEAD 坐实：`_check_vars`（它调 `collect_var_refs` 递归走表达式）排在 `_check_expr` **之前**，
+护栏确实晚于遍历。本批把站序改成 `_check_expr` → `_check_trigger_depth` → `_check_param_budget` → `_check_vars`，
+并给 `_check_vars` 自己加 `except ExprError`（超限已在上一站记成 `EXPR_INVALID`，这里重复走只会抛出）。
+F1 与 F2 是同一根因的两侧：F2 是腿没接预算，F1 是接了预算的那一站排在腿后面。
+
+这是本轮的**真产品发现**，不是测试缺陷：注入超深表达式后 `scan()` 直接抛穿
+（`_check_entities → auto.reads()` 抛 `ExprError`；修完这一站又换 `_check_nl_coverage → nl._expr_text` 抛；
+再换触发源 `entity_ids` 抛）。扫描器的产物是 `ScanResult.diagnostics`，抛穿等于把"这条 IR 哪里坏"变成运维看不见的一坨栈。
+
+落法：**深度检查站在实体依赖腿之前**（后面每一站都要展开实体集，先拒才有地方说话）：
+- `_check_expr`（已有）之后新增 `_check_trigger_depth` ⇒ 超预算/自引用触发源落 `TRIGGER_INVALID`；
+- 新增 `_check_param_budget` ⇒ 参数容器超限落 `PARAMS_TOO_DEEP`；
+- `_entity_refs` / `_trigger_refs` 两个容错单点：读侧超限 ⇒ 该腿空集而不是抛出，
+  `_check_entities` / `_check_expect` / `_check_trigger_stale` / `_check_nl_coverage` / `_scan_cross_automation`
+  全部经这两点或自带 `except TriggerDepthError`；写侧（`writes()`）不受读侧被拒影响——这条有专门判据。
+- `CHECKS`/`CODE_HINT` 各加两格；文案里**不手抄数字**（"9 层"那种读数已从提示里删掉，避免第二份真源）。
+
+### 四、判据与四条"探针自己的洞"（都被自证抓出来，不是事后补的）
+
+- 新增 `tests/unit/test_ir_expr_depth_budget_walkers.py`：**41 passed，EXIT=0**。含 20 站点腿清单
+  （`LEGS` 与实测站点做集合相等断言，不一致直接红）、CONTROL 浅树、边界档、闸门==遍历腿同档、
+  单一真源门（`MAX_PARAM_DEPTH` 不出现在 scanner 里、scanner 引 `assert_param_budget`）、
+  扫描器四形状落诊断 + 干净 IR 不带预算诊断 + 同一份 IR 的裸访问器仍必须抛（证明不是护栏被拆了）、
+  摘掉守卫就重新 `RecursionError` 的反空洞腿。
+- `tests/unit/test_ir_trigger_depth_budget.py` 13 → **16 passed**：F6 那两条"断言 scanner 的 `_check_trigger_stale` 会抛"的腿
+  与新分层契约矛盾，改成上一层判据（`scan()` 落 `TRIGGER_INVALID`）+ `scan()` 级别的摘守卫自证；
+  `_legs` 收成 5 条纯遍历腿（`scanner._check_trigger_stale` 那条现在**故意不抛**，留着就是假判据）。
+- 本轮自己踩到的四个探针侧洞，记下来当判据族：
+  1. CNF 结构断言 `len(cnf) == 6` 实测得 1 —— 夹具复用同一片叶子，frozenset 折叠掉了子句 ⇒ **结构判据假红**；
+     改法是按 `leaf_at(i)` 造互异叶子，并删掉 `normalize_condition(x) == normalize_condition(x)` 这条永真式。
+  2. `deep_container(MAX_PARAM_DEPTH)` 被拒 —— 夹具语义是"wrap 次数"，而最内层容器的标量孩子也吃一层 ⇒
+     **边界判据差一层假红**；夹具改成"恰好 `levels` 层容器"，口径差写进 docstring。
+  3. `_silently` 返回 `"拒:ParamDepthError"`，`cyclic == "拒"` 永假 ⇒ 判据改 `.startswith("拒")`。
+  4. `KNOWN` 里误含 `light.typo` ⇒ `ENTITY_NOT_FOUND` 永远不响，写侧幸存那条腿是空的；剔除并写明"故意不在名单里"。
+
+### 五、仍未收口的两格（如实记账，不伪装成已修）
+
+- **`af_conflict_runtime.dispatch()` 的 fail-open**：内省包在 `except Exception` ⇒ `_audit_degraded("introspect", …)`
+  ⇒ `return original(instance, node)`，也就是 `extract_entity_ids` 一失败就**绕过冲突锁**（F12 同族）。
+  本批新增的 `PARAMS_TOO_DEEP` 编译期闸门让这条路更难到达，但**政策本身（拒绝执行 vs 降级放行）不是 AF 能自决的** ⇒ 已列为 DCD 新候选。
+- **`af_nl_parse` 至今没有产品侧调用方**：那四条腿是潜伏面，接上调用链时才真活。
+- 第十八轮 F12 的联动项、第十九轮的确证读数都在 `docs/audit/index.md` §四 对账。
+
+### 六、本批读数
+
+| 项 | 读数 |
+|---|---|
+| `pytest -q`（全量） | **3402 passed, 53 skipped, 1 warning, 65 subtests passed in 206.12s**，`PYTEST_EXIT=0`（上一登记为 3358 passed；本批 +44 = 新文件 41 条 + trigger 文件 3 条） |
+| `test_ir_expr_depth_budget_walkers.py` | 41 passed，EXIT=0 |
+| `test_ir_trigger_depth_budget.py` | 16 passed |
+| `GATES_PYTHON=$PY bash gates.sh` | `GATES_RC=0`，结论「门禁干净」（import 冒烟解释器 Python 3.13.2；`check_*.py` 盘上 19 个、`gates.sh` 覆盖 18、工作流 1、豁免 1 格两锚点核对得住） |
+| 行尾自证 | `af_scanner.py` 1300 行 / CR 1300、`af_ir/models.py` 795 / 795、`af_ir/__init__.py` 88 / 88（CRLF 未破）；三文件 `ast.parse` OK |
+| 扫描器形状复测 | `EXPR_OVER: scan OK codes=[… 'EXPR_INVALID' …]`、`TRIGGER_OVER/TRIGGER_CYCLIC: … 'TRIGGER_INVALID'`、`PARAMS_OVER: scan OK`；闸门档 `容器层数=64 放行 / 65 拒 / 66 拒` |
+
+—— AutoForge 开发 · 2026-10-08

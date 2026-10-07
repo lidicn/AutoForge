@@ -10,15 +10,22 @@ from .graphops import (ASK_WHENS, DO_WHENS, EDGE_WHENS, IF_WHENS, WAIT_WHENS,
 from .runtime import load_module
 
 
-def expr_nodes(expr, path=()):
-    """与原 _iter_expr_nodes 同一 path 约定：args 走 ("args", i)，left/right/value 走 (k,)。"""
+def expr_nodes(expr, path=(), _depth=0):
+    """与原 _iter_expr_nodes 同一 path 约定：args 走 ("args", i)，left/right/value 走 (k,)。
+
+    深度预算借 af_orchestrator 那份 `check_expr_depth`（第二十轮 F2：实测 990 层仍不崩、
+    1200 层 RecursionError，而 json 能送达 ≥1000 层，中间那段可达）。走 load_module
+    而不是顶层 import，保留本包"导入时不拉编排器"的懒加载约定。
+    """
+    A = load_module()
+    A.check_expr_depth(_depth, "closedloop.detectors.expr_nodes")
     if isinstance(expr, Mapping):
         yield path, expr
         for i, a in enumerate(expr.get("args") or []):
-            yield from expr_nodes(a, path + ("args", i))
+            yield from expr_nodes(a, path + ("args", i), _depth + 1)
         for k in ("left", "right", "value"):
             if isinstance(expr.get(k), Mapping):
-                yield from expr_nodes(expr[k], path + (k,))
+                yield from expr_nodes(expr[k], path + (k,), _depth + 1)
 
 
 def _issue(code, node, message, **kw):

@@ -44,6 +44,8 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
+from .af_ir import check_param_depth
+
 __all__ = [
     "AUTO_MIN", "SHADOW_LOW",
     "EvoStrategy", "EvoStatus", "EvoProposal", "EvoPolicy", "SimOutcome",
@@ -153,18 +155,19 @@ def _as_seq(value: Any) -> list[Any]:
     return [value]
 
 
-def _canon(value: Any) -> Any:
+def _canon(value: Any, _depth: int = 0) -> Any:
     """可哈希的规范形，用于指纹 / 去重 / 相似度。"""
+    check_param_depth(_depth, "evo._canon")
     if value is None or isinstance(value, (bool, str)):
         return value
     if isinstance(value, (int, float)):
         return round(float(value), 3)
     if isinstance(value, Mapping):
-        return tuple(sorted((str(k), _canon(v)) for k, v in value.items()))
+        return tuple(sorted((str(k), _canon(v, _depth + 1)) for k, v in value.items()))
     if isinstance(value, (list, tuple)):
-        return tuple(_canon(v) for v in value)
+        return tuple(_canon(v, _depth + 1) for v in value)
     if isinstance(value, (set, frozenset)):
-        return tuple(sorted(repr(_canon(v)) for v in value))
+        return tuple(sorted(repr(_canon(v, _depth + 1)) for v in value))
     return repr(value)
 
 
@@ -698,7 +701,8 @@ def _invoke_sim(simulator: Callable[..., Any], proposal: EvoProposal) -> Any:
     return simulator(*args, **kwargs)
 
 
-def _interpret(result: Any, policy: EvoPolicy) -> tuple[bool, str, str]:
+def _interpret(result: Any, policy: EvoPolicy, _depth: int = 0) -> tuple[bool, str, str]:
+    check_param_depth(_depth, "evo._interpret")
     if result is None:
         return (policy.sim_none_is_pass, "simulator 返回 None", "none")
     if isinstance(result, bool):
@@ -722,7 +726,7 @@ def _interpret(result: Any, policy: EvoPolicy) -> tuple[bool, str, str]:
             return (empty, f"simulator errors={errors!r}", "mapping")
         return (policy.sim_unknown_is_pass, "simulator 结果无法解读（mapping）", "unknown")
     if isinstance(result, (tuple, list)) and result:
-        ok, reason, _mode = _interpret(result[0], policy)
+        ok, reason, _mode = _interpret(result[0], policy, _depth + 1)
         extra = result[1] if len(result) > 1 and isinstance(result[1], str) else ""
         return (ok, str(extra) or reason, "sequence")
     for key in ("ok", "passed", "success", "valid"):

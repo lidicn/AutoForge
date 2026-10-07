@@ -30,10 +30,12 @@ try:  # 包内加载 / 单文件加载两种方式都可用
     from .af_conflict import ConflictArbiter, RequestDecision, SystemTimeSource
     from .af_conflict_audit import ConflictAuditor, event_to_dict
     from .af_conf import PASSIVE_BANDS, CONFIRM_REQUIRED_BANDS
+    from .af_ir import check_param_depth
 except ImportError:  # pragma: no cover
     from af_conflict import ConflictArbiter, RequestDecision, SystemTimeSource
     from af_conflict_audit import ConflictAuditor, event_to_dict
     from af_conf import PASSIVE_BANDS, CONFIRM_REQUIRED_BANDS
+    from af_ir import check_param_depth
 
 if TYPE_CHECKING:  # 仅类型标注，运行时零依赖
     from .af_conf import ConfidenceStore
@@ -136,7 +138,11 @@ def extract_entity_ids(params: Mapping[str, Any] | None) -> list[str]:
     """从 node.params 提取 entity_id（str / list[str] / target 嵌套均可）。"""
     out: list[str] = []
 
-    def _walk(container: Any) -> None:
+    def _walk(container: Any, _depth: int = 0) -> None:
+        # 第二十轮 F2：深容器实测 994 层才 RecursionError，这里接预算改抛 ParamDepthError。
+        # 注意 dispatch() 的 `except Exception` 把任何 introspect 失败都变成「降级放行」，
+        # 所以本函数受控失败后并不会自动锁住该节点——降级面另案登记。
+        check_param_depth(_depth, "conflict_runtime.extract_entity_ids")
         if not isinstance(container, Mapping):
             return
         for key in ("entity_id", "entity_ids", "entityId", "target", "targets"):
@@ -146,13 +152,13 @@ def extract_entity_ids(params: Mapping[str, Any] | None) -> list[str]:
             if isinstance(val, str):
                 out.append(val)
             elif isinstance(val, Mapping):
-                _walk(val)
+                _walk(val, _depth + 1)
             elif isinstance(val, (list, tuple, set)):
                 for item in val:
                     if isinstance(item, str):
                         out.append(item)
                     elif isinstance(item, Mapping):
-                        _walk(item)
+                        _walk(item, _depth + 1)
 
     _walk(params or {})
     seen: list[str] = []

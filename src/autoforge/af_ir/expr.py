@@ -34,6 +34,7 @@ __all__ = [
     "FUNCTIONS",
     "evaluate",
     "check_expr",
+    "check_expr_depth",
     "collect_entity_refs",
     "collect_var_refs",
 ]
@@ -81,6 +82,18 @@ class _Budget:
 
     def leave(self) -> None:
         self.depth -= 1
+
+
+def check_expr_depth(depth: int, where: str) -> None:
+    """遍历路径的深度闸门——与求值/编译期用同一份预算（`MAX_EXPR_DEPTH`，单一真值源）。
+
+    第二十轮 F2 的实测口径：预算常量一直都在，缺的是**遍历路径没接上**。
+    `check_expr` 在 33 层就受控失败，而引用收集要 ~990 层才 RecursionError；
+    json 能稳定送达 ≥1000 层嵌套，所以中间那段是真实可达面。
+    接上后合法 IR（经 `check_expr` ≤32 层）行为不变。
+    """
+    if depth > MAX_EXPR_DEPTH:
+        raise ExprError(f"表达式嵌套深度超过上限 {MAX_EXPR_DEPTH}（{where}）")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -252,29 +265,31 @@ def call_function(name: str, args: list[Any]) -> Any:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _walk(node: Mapping[str, Any]):
+def _walk(node: Mapping[str, Any], _depth: int = 0):
     """遍历表达式树，yield 所有 operand（含 var/const/fn 调用）。"""
     if not isinstance(node, Mapping):
         return
+    check_expr_depth(_depth, "expr._walk")
     op = node.get("op")
     if op in _LOGIC_OPS:
         for arg in node.get("args", ()):
-            yield from _walk(arg)
+            yield from _walk(arg, _depth + 1)
     elif op in _CMP_OPS:
-        yield from _walk_operand(node.get("left"))
-        yield from _walk_operand(node.get("right"))
+        yield from _walk_operand(node.get("left"), _depth + 1)
+        yield from _walk_operand(node.get("right"), _depth + 1)
     elif op in _UNARY_OPS:
-        yield from _walk_operand(node.get("value"))
+        yield from _walk_operand(node.get("value"), _depth + 1)
 
 
-def _walk_operand(operand: Any):
+def _walk_operand(operand: Any, _depth: int = 0):
     """遍历 operand（fn 形态要深入 args，函数参数里的 var 引用不漏）。"""
     if not isinstance(operand, Mapping):
         return
+    check_expr_depth(_depth, "expr._walk_operand")
     yield operand
     if "fn" in operand:
         for arg in operand.get("args", ()):
-            yield from _walk_operand(arg)
+            yield from _walk_operand(arg, _depth + 1)
 
 
 def collect_var_refs(expr: Mapping[str, Any]) -> set[str]:

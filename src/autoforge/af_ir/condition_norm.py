@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
+from .expr import MAX_EXPR_DEPTH
+
 __all__ = [
     "normalize_condition",
     "condition_equivalent",
@@ -42,28 +44,46 @@ def _leaf_key(expr: Mapping[str, Any]) -> str:
     return json.dumps(expr, sort_keys=True, ensure_ascii=False)
 
 
-def _nnf(expr: Mapping[str, Any], neg: bool) -> tuple:
-    """否定范式：not 下推到叶子、双重否定抵消。返回 ("lit"|"not"|"and"|"or"|"empty", ...)。"""
+def _nnf(expr: Mapping[str, Any], neg: bool, _depth: int = 0) -> tuple:
+    """否定范式：not 下推到叶子、双重否定抵消。返回 ("lit"|"not"|"and"|"or"|"empty", ...)。
+
+    深度预算取 `MAX_EXPR_DEPTH`（与求值/编译期同一份真值源）：`MAX_CNF_CLAUSES` 管的是
+    **宽度**（分配律展开出的子句数），管不住一条 500 层的 and/or/not 链——那种形状
+    先在归一化之前 RecursionError（第二十轮 F2：改造前实测 crash_depth=496）。
+    """
+    if _depth > MAX_EXPR_DEPTH:
+        raise CNFBudgetExceeded(
+            f"condition 归一化超预算：嵌套深度超过上限 {MAX_EXPR_DEPTH}（_nnf）"
+        )
     op = expr.get("op")
     if op == "not":
         args = expr.get("args", ())
-        return _nnf(args[0], not neg) if args else ("lit", _leaf_key(expr))
+        return _nnf(args[0], not neg, _depth + 1) if args else ("lit", _leaf_key(expr))
     if op in _BINARY:
         eff = _FLIP[op] if neg else op
-        children = tuple(_nnf(a, neg) for a in expr.get("args", ()))
+        children = tuple(_nnf(a, neg, _depth + 1) for a in expr.get("args", ()))
         if not children:
             return ("empty",)
         return (eff, children)
     return ("not" if neg else "lit", _leaf_key(expr))
 
 
-def _to_cnf(node: tuple, budget: list[int]) -> list[frozenset[str]]:
+def _to_cnf(node: tuple, budget: list[int], _depth: int = 0) -> list[frozenset[str]]:
     """NNF -> CNF（子句=文字 frozenset；结果=子句列表，合取语义）。文字带 `!` 前缀表否定。
 
     `budget` 是单元素列表形式的**剩余额度**计数器（递归共享）。之所以在乘起来
     *之前* 判额度：笛卡尔积一旦分配出去，OOM 发生了再报已经太晚
     （新增审计 BUG-06）。
+
+    深度另走 `MAX_EXPR_DEPTH`（第二十轮 F2 同形状横向传播）：改造前实测本函数单独喂
+    深 NNF 树时 crash_depth=996（and 与 or 两种形态同值）。接上 `_nnf` 的预算后，
+    经 `normalize_condition` 进来的树本来就 ≤33 层，这条守卫是**第二道**——它防的是
+    以后有人绕过 `_nnf` 直接喂树（同 `expr._walk` 与 `check_expr` 的关系）。
     """
+    if _depth > MAX_EXPR_DEPTH:
+        raise CNFBudgetExceeded(
+            f"condition 归一化超预算：CNF 递归深度超过上限 {MAX_EXPR_DEPTH}（_to_cnf）"
+        )
     tag = node[0]
     if tag == "lit":
         return [frozenset({node[1]})]
@@ -74,7 +94,7 @@ def _to_cnf(node: tuple, budget: list[int]) -> list[frozenset[str]]:
     if tag == "and":
         out: list[frozenset[str]] = []
         for child in node[1]:
-            out.extend(_to_cnf(child, budget))
+            out.extend(_to_cnf(child, budget, _depth + 1))
         budget[0] -= len(out)
         if budget[0] < 0:
             raise CNFBudgetExceeded(
@@ -84,7 +104,7 @@ def _to_cnf(node: tuple, budget: list[int]) -> list[frozenset[str]]:
     # or：分配律——各子 CNF 各取一子句并集，笛卡尔积
     merged: list[frozenset[str]] = [frozenset()]
     for child in node[1]:
-        child_clauses = _to_cnf(child, budget)
+        child_clauses = _to_cnf(child, budget, _depth + 1)
         # 先判乘积规模，再决定要不要真的分配
         if merged and child_clauses and len(merged) * len(child_clauses) > budget[0]:
             raise CNFBudgetExceeded(

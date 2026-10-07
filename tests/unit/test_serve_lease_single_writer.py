@@ -10,8 +10,10 @@
 - **只把真机写纳入**：`live_run` 受约，`af_store`/`af_persist` 的既有锁不顺带动；
 - **只 check 不 acquire**：`held_by_other()` 探测不抢锁、不改持有者诊断（盖 sidecar 就把 serve
   的持有者信息覆盖成了自己，事后无法归因）；
-- **MCP 文本以固定前缀 `READONLY_DEGRADED:` 开头**：下游（DB）靠这个前缀判别降级态，
-  前缀必须在文本开头，套上"工具执行出错："那层壳就等于没有前缀。
+- **MCP 文本以固定前缀 `READONLY_DEGRADED:` 开头**：下游（DB）靠这个前缀判别降级态。
+  裁定 20261007 §二 戊A 把 MCP 的异常路径从散文改成 JSON 信封 `{ok, code, message}` 之后，
+  前缀的位置从"整段文本开头"挪到"`message` 开头"——套上信封壳等于没有前缀这一条**不变**，
+  变的只是判别点；挪动本身已写成给 DB 的读数变化说明（docs/handoff/）。
 
 持锁方必须是**真子进程**：flock/`msvcrt.locking` 挂在"打开文件描述"上，同进程第二条句柄会被
 自己挡住——所以 `af_flock._LOCAL_HELD` 认出"是本进程"这一条也得钉住，否则 serve 自己的每次
@@ -20,6 +22,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -30,6 +33,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+# 码不手抄：契约 §7.2 那六枚的唯一真源是 homesdk.adm.errors。
+from homesdk.adm.errors import ADM_ERR_INTERNAL
+
 from autoforge.af_auth import SCOPES as _ALL_SCOPES
 
 # 裁定 20261004 §一 Q2=B：MCP 面「无身份」改成默认拒绝，本文件的调用点因此逐条显式给身份；
@@ -233,13 +239,23 @@ def test_http_face_returns_503(tmp_path, gate):
 
 
 def test_mcp_face_text_starts_with_the_prefix(tmp_path, gate):
-    """MCP 面：前缀必须在文本**开头**——DB 侧按 `startswith` 判别，中间出现等于判别不上。"""
+    """MCP 面：前缀必须在 `message` 字段的**开头**（裁定 20261007 §二 戊A 改了信封形状）。
+
+    戊A 之前 MCP 的异常路径是散文，DB 按整段文本 `startswith` 判别；现在异常路径统一成
+    JSON `{ok:false, code, message}`，判别点随之挪进 `message`。**这条挪动本身要交给 DB
+    一份读数变化说明**（见 docs/handoff/20261008-AF-MCP异常路径改JSON信封-读数变化说明.md）：
+    对端若还按老口径判整段文本，`{"ok": false…` 永远不匹配前缀 ⇒ 降级态静默读成"没降级"。
+    """
     store = GraphStore(tmp_path)
     with _other_process_holding(tmp_path):
         content, is_error = dispatch("af_live_run", ARGS, store, _ALL)
 
     assert is_error is True
-    assert content[0]["text"].startswith(PREFIX), content[0]["text"]
+    text = content[0]["text"]
+    payload = json.loads(text)  # 整段仍是 JSON：老口径那条断言在这里就该红
+    assert payload["ok"] is False
+    assert payload["code"] == ADM_ERR_INTERNAL, payload
+    assert payload["message"].startswith(PREFIX), text
     assert gate == []
 
 

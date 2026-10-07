@@ -35,8 +35,12 @@ __all__ = [
     "VAR_TYPES",
     "IRValidationError",
     "MAX_TRIGGER_DEPTH",
+    "MAX_PARAM_DEPTH",
     "TriggerDepthError",
+    "ParamDepthError",
     "check_trigger_depth",
+    "check_param_depth",
+    "assert_param_budget",
     "EmitDecl",
     "AskSpec",
     "AskAnswer",
@@ -128,6 +132,50 @@ def check_trigger_depth(depth: int, where: str) -> None:
             f"trigger group 嵌套超过预算 {MAX_TRIGGER_DEPTH}（{where}）——"
             f"拒绝继续递归（手工构造的深嵌套或自引用都会走到这里，RecursionError 不是兜底）"
         )
+
+
+#: params / 泛容器（dict·list 值、快照、版本投影）的嵌套深度上限。
+#: 表达式侧有 `MAX_EXPR_DEPTH`、trigger 侧有 `MAX_TRIGGER_DEPTH`，剩下这类"结构不限定形状"
+#: 的容器此前两条腿都没预算：实测 json 能稳定送达 ≥1000 层嵌套，而泛容器递归走者在
+#: 993 层 RecursionError（第二十轮 F2）。仓内 17 份样例 IR 整篇容器嵌套最大 9 层（当场实测），
+#: 取 64 既给真实数据留量又远低于解释器栈上限；深度超限与自引用是同一条判据（环必然一路加深），
+#: 所以宁可抛具名异常，也不让 RecursionError 漏出去。
+MAX_PARAM_DEPTH = 64
+
+
+class ParamDepthError(ValueError):
+    """params / 泛容器嵌套超预算或自引用（第二十轮 F2）。"""
+
+
+def check_param_depth(depth: int, where: str) -> None:
+    if depth > MAX_PARAM_DEPTH:
+        raise ParamDepthError(
+            f"参数容器嵌套超过预算 {MAX_PARAM_DEPTH}（{where}）——"
+            f"拒绝继续递归（深嵌套 JSON 或自引用容器都会走到这里）"
+        )
+
+
+def assert_param_budget(obj: Any, where: str) -> None:
+    """校验闸用的深度探针：只验形状、不产出结构，走的仍是 `MAX_PARAM_DEPTH` 这一份预算。
+
+    第二十轮 F2 的口径补齐：预算原本只装在**遍历腿**上（版本投影、冲突内省、NL 渲染…），
+    闸门却没有这一项 —— 于是"build 放行、运行期每次内省都失败"的 IR 能进库；而冲突内省
+    失败会被 `af_conflict_runtime.dispatch` 的 `except Exception` 变成降级放行（冲突锁旁路）。
+    把同一份预算也装到闸门口，坏形状在编译期就红。
+
+    自引用不需要 visited：环每绕一圈深度就 +1，必然撞上限。
+    """
+
+    def _walk(node: Any, _depth: int) -> None:
+        check_param_depth(_depth, where)
+        if isinstance(node, Mapping):
+            for value in node.values():
+                _walk(value, _depth + 1)
+        elif isinstance(node, (list, tuple, set, frozenset)):
+            for value in node:
+                _walk(value, _depth + 1)
+
+    _walk(obj, 0)
 
 
 # ─────────────────────────────────────────────────────────────────────

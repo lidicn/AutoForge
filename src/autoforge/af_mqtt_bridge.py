@@ -29,7 +29,7 @@ from homesdk.adm.errors import (
     ADM_ERR_INTERNAL,
     ADM_ERR_PAYLOAD_INVALID,
 )
-from homesdk.adm.status import STATE_DEGRADED, encode_status
+from homesdk.adm.status import STATE_DEGRADED, STATE_OFFLINE, STATE_ONLINE, encode_status
 from homesdk.config import MissingEnv
 
 from .af_time import SystemTimeSource, TimeSource, to_house_iso
@@ -49,6 +49,8 @@ __all__ = [
     "make_client",
     "preflight",
     "start_from_env",
+    "current_bridge",
+    "linkage_status",
 ]
 
 logger = logging.getLogger("autoforge.mqtt")
@@ -623,6 +625,40 @@ def attach(bridge: AfMqttBridge) -> None:
     """让每个新 Runtime 的终态都流向这座桥（等价于"自动化一落地就吱一声"）。"""
     if bridge not in _BRIDGES:  # 按桥本体去重：bound method 每次取都是新对象
         _BRIDGES.append(bridge)
+
+
+def current_bridge() -> AfMqttBridge | None:
+    """健康面取桥用（裁定 20261007 §二 丁A）。
+
+    取**最后** attach 的一座：`serve` 的顺序是 `build_app` → `_start_linkage_bridge`，
+    桥在 app 装配完之后才存在，所以调用方只能在**每次请求时**回读这里，不能在装配期抓引用
+    ——装配期抓到的一直是 None，`/health` 就会永远回答"没接线"。
+    """
+    return _BRIDGES[-1] if _BRIDGES else None
+
+
+def linkage_status(bridge: "AfMqttBridge") -> dict[str, Any]:
+    """健康面读数（契约 §7.3 degrade-flag 档，裁定 20261007 §二 丁A）。
+
+    状态词汇取自 `homesdk.adm.status` 的三个常量——AF 不在这里抄第四套说法
+    （0.3.2 规格 §三.1「删手写 ADM 常量/状态 schema」）。降级码就是 retained status
+    载荷里那份 `reasons`，两处读到的必须同一来源，否则会出现"对端看到 degraded、
+    本机 `/health` 说一切正常"这种自相矛盾的读数。
+    """
+    reasons = list(bridge.degraded)
+    if not bridge.started:
+        state = STATE_OFFLINE  # 桥对象在但没跑起来（connect 失败或已 stop）——不等于在线
+    elif reasons:
+        state = STATE_DEGRADED
+    else:
+        state = STATE_ONLINE
+    return {
+        "wired": True,
+        "state": state,
+        "degraded": bool(reasons),
+        "reasons": reasons,
+        "publish_errors": bridge.counts.get("publish_errors"),
+    }
 
 
 def detach(bridge: AfMqttBridge) -> None:

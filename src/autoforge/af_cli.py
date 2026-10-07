@@ -1398,11 +1398,13 @@ def serve(
     store_root: str = typer.Option(DEFAULT_STORE_ROOT, "--store-root", help="G6 归档目录"),
     examples: str = typer.Option("", "--examples", help="启动时把样例 IR 幂等灌入归档的目录（缺省 examples/ir）"),
     ui_dir: str = typer.Option("", "--ui-dir", help="前端构建产物 dist 目录；提供后一并托管 UI（SPA fallback，同源 /api）"),
+    ui_user_dir: str = typer.Option("", "--ui-user-dir", help="用户视角 UI（ui-user-mimo）dist 目录；提供后挂到 /mimo 前缀下"),
 ):
     """启动**只读** HTTP 服务层（FastAPI，对齐 UI 开工令附录 A 契约）。
 
     端点见 `GET /docs`（Swagger UI）或 `GET /openapi.json`。
     传 --ui-dir 可把前端构建产物（dist）一并托管，单进程同时提供 API 与 UI。
+    传 --ui-user-dir 把用户视角 UI 一并挂到 `/mimo`（两套 UI 同源共用 /api）。
     """
     try:
         import uvicorn
@@ -1425,10 +1427,22 @@ def serve(
         typer.echo(f"· 取得单写者锁（owner={owner_id()}）")
 
     examples_path = examples or ("examples/ir" if Path("examples/ir").is_dir() else "")
-    app_ = build_app(store_root, examples_path or None, ui_dir or None, readonly=readonly)
+    app_ = build_app(store_root, examples_path or None, ui_dir or None, ui_user_dir or None, readonly=readonly)
     typer.echo(f"· AutoForge 只读服务层：http://{host}:{port}（文档 /docs，store={store_root}）")
     if ui_dir and Path(ui_dir).is_dir():
         typer.echo(f"· 前端静态托管：http://{host}:{port}/（dist={ui_dir}）")
+    # 只 echo「传了参数」不够：参数指向的目录不存在时，请求面上会读到 503（af_api 的
+    # requested-but-unmounted 分支）。这里就把两种情况分开报出来，别让启动日志假装挂上了。
+    if ui_user_dir:
+        from .af_api import UI_USER_PREFIX
+
+        if Path(ui_user_dir).is_dir():
+            typer.echo(f"· 用户端静态托管：http://{host}:{port}/{UI_USER_PREFIX}/（dist={ui_user_dir}）")
+        else:
+            typer.echo(
+                f"⚠️ --ui-user-dir 指向的 {ui_user_dir!r} 不是目录 ⇒ /{UI_USER_PREFIX} 将返回 503（先构建 ui-user-mimo）",
+                err=True,
+            )
     bridge = _start_linkage_bridge(store_root=store_root)
     install_access_log_token_mask()
     try:

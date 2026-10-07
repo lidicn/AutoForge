@@ -3,8 +3,10 @@ import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-  // 部署在 NAS 反代的 /ui-user/ 子路径下（同源反代 /api，免 CORS）
-  base: '/ui-user/',
+  // 部署在同源服务层的 /mimo/ 子路径下（`forge serve --ui-user-dir`，见 af_api.UI_USER_PREFIX）。
+  // base / start_url / scope 三处必须与那个常量同值：对不上时页面 200 但资源 404（白屏）。
+  // 这条同源由 tests/unit/test_ui_user_mount.py 当场核对。
+  base: '/mimo/',
   plugins: [
     vue(),
     VitePWA({
@@ -19,8 +21,8 @@ export default defineConfig({
         background_color: '#14120F',
         display: 'standalone',
         orientation: 'portrait',
-        start_url: '/ui-user/',
-        scope: '/ui-user/',
+        start_url: '/mimo/',
+        scope: '/mimo/',
         icons: [
           { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
           { src: '/icon-maskable.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },

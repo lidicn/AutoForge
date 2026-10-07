@@ -16,7 +16,16 @@ from typing import Any, Iterable, Mapping
 from .af_adapters import POLICY_PARAMS, classify_action, is_destructive, host_of
 from .af_affordance import domain_of, possible_states
 from .af_bus import EVENT_ENTITY_PREFIX
-from .af_ir import Automation, Graph, Node, Trigger, check_trigger_depth
+from .af_ir import (
+    Automation,
+    Graph,
+    Node,
+    ParamDepthError,
+    Trigger,
+    TriggerDepthError,
+    assert_param_budget,
+    check_trigger_depth,
+)
 from .af_ir.expr import ExprError, check_expr, collect_var_refs
 from .af_nl import render_automation
 
@@ -54,6 +63,8 @@ CHECKS: dict[str, str] = {
     "RESERVED_NOT_IMPLEMENTED": "G1 保留字段未实现（fn）",
     # ── v1.0.0 表达力收口 ──
     "EXPR_INVALID": "表达式校验失败（未知算子/函数、参数个数、深度/节点上限）",
+    "TRIGGER_INVALID": "触发源校验失败（group 嵌套超预算或自引用，实体集无法展开）",
+    "PARAMS_TOO_DEEP": "动作参数容器嵌套超预算或自引用（运行期遍历腿必然失败，编译期先拒）",
     "UNDECLARED_VAR": "引用了未声明的实例变量",
     "NL_COVERAGE": "⑬ NL 覆盖率检查：有节点没出现在自然语言描述里",
     # ── v0.3.0 跨自动化事件·发布侧（IR §4.3）──
@@ -105,6 +116,8 @@ CODE_HINT: dict[str, str] = {
     "NON_IDEMPOTENT_CONCURRENT": "非幂等动作不要配 `restart`/`parallel`（会重复执行）。",
     "RESERVED_NOT_IMPLEMENTED": "`fn` 仍为保留位；把自定义逻辑改写成内置表达式或拆成多个节点。",
     "EXPR_INVALID": "检查算子名/函数名拼写、参数个数，以及嵌套深度（上限 32）/节点数（上限 256）。",
+    "TRIGGER_INVALID": "把 group 触发源改平（一层 `or`/`and` 列出全部条件），别让 group 套 group，也别自引用。",
+    "PARAMS_TOO_DEEP": "把参数摊平成正常层级；嵌套到这种深度，通常是引用写错成了自引用。",
     "UNDECLARED_VAR": "在 `vars` 里声明该变量，或改用已有变量名。",
     "NL_COVERAGE": "该节点未出现在自然语言描述里——补 `name` 字段，让渲染器能叙述到它。",
     "EMIT_SELF_LOOP": "纯事件环、无设备回灌，运行时安全；当前为放行告警（不阻断编译），如需消除可改名或加条件避免自触发。",
@@ -345,9 +358,19 @@ class StaticScanner:
             self._check_high_risk_after_suspend(auto, node, out)
             self._check_cancel_branch(auto, node, out)
             self._check_duplicate_edges(auto, node, out)
-            self._check_vars(auto, node, declared | assigned, out)
             self._check_expr(auto, node, out)
+            self._check_trigger_depth(auto, node, out)
+            # 参数容器是**闸门口径**：运行期的泛容器遍历腿（版本投影 / 冲突内省 / NL 渲染）
+            # 都接了同一份预算，但闸门原本不查，于是"build 放行、运行期内省必失败"的 IR
+            # 能进库；而冲突内省失败会被 dispatch 的 `except Exception` 变成降级放行。
+            self._check_param_budget(auto, node, out)
+            self._check_vars(auto, node, declared | assigned, out)
 
+        # `_check_expr` / `_check_trigger_depth` 两站是后面所有"实体依赖腿"的**前提**：
+        # `auto.reads()` / `trigger_entities()` 会再走一遍 expr 与 trigger 的递归，超预算时
+        # 它们抛的是具名异常，而 scan() 的对外契约是"返回诊断"——那些 IR 已经在上面的站落过
+        # ERROR 了，下游只许跳过分析，不许把异常换成整次扫描的崩溃（第二十轮 F2 补的接缝，
+        # 与 F6 同族：预算装在腿上、没装在 scan() 的每一根腿上）。
         self._check_snapshot(auto, out)
         self._check_shadow(auto, out)
         self._check_low_confidence(auto, out)
@@ -567,7 +590,13 @@ class StaticScanner:
     def _check_vars(self, auto: Automation, node: Node, known: set[str], out: ScanResult) -> None:
         if node.expr is None:
             return
-        for ref in collect_var_refs(node.expr):
+        try:
+            refs = collect_var_refs(node.expr)
+        except ExprError:
+            # 深度/规模预算在 _check_expr 那一站已经记成 EXPR_INVALID；这里重复走只会
+            # 把同一个坏表达式再遍历一遍。顺序（_check_expr 先跑）是这条分支的前提。
+            return
+        for ref in refs:
             if not ref.startswith("vars."):
                 continue
             name = ref[len("vars.") :]
@@ -608,6 +637,58 @@ class StaticScanner:
                     node.id,
                 )
             )
+
+    # trigger group 深度 / 自引用（与 `_check_expr` 同一族：诊断在此落，下游只许跳过）
+    def _check_trigger_depth(self, auto: Automation, node: Node, out: ScanResult) -> None:
+        tr = node.trigger
+        if tr is None:
+            return
+        try:
+            tr.entity_ids()
+        except TriggerDepthError as exc:
+            out.diagnostics.append(
+                Diagnostic(
+                    "TRIGGER_INVALID",
+                    ERROR,
+                    f"触发源校验失败：{exc}",
+                    auto.id,
+                    node.id,
+                )
+            )
+
+    # ① b params 容器预算（闸门侧，见 `_scan_automation` 里的说明）
+    def _check_param_budget(self, auto: Automation, node: Node, out: ScanResult) -> None:
+        if not node.params:
+            return
+        try:
+            assert_param_budget(node.params, "scanner.node.params")
+        except ParamDepthError as exc:
+            out.diagnostics.append(
+                Diagnostic(
+                    "PARAMS_TOO_DEEP",
+                    ERROR,
+                    f"节点 {node.id} 的动作参数容器超限：{exc}",
+                    auto.id,
+                    node.id,
+                )
+            )
+
+    # 坏 IR（超预算表达式 / 触发源）的诊断已由上面两站各落一次 ERROR。
+    # `reads()` 会下钻 expr 与 trigger，分析不动时按"这条腿看不到实体"处理，
+    # `writes()` 不碰那两条腿、照常分析——把异常抛出去等于整次扫描换成崩溃，
+    # 而 scan() 的对外契约是"返回 ScanResult"。
+    def _entity_refs(self, auto: Automation) -> tuple[set[str], set[str]]:
+        try:
+            reads = auto.reads()
+        except (ExprError, TriggerDepthError):
+            reads = set()
+        return reads, auto.writes()
+
+    def _trigger_refs(self, auto: Automation) -> set[str]:
+        try:
+            return auto.trigger_entities()
+        except TriggerDepthError:
+            return set()
 
     # ⑩ snapshot=false + 多条件 AND
     def _check_snapshot(self, auto: Automation, out: ScanResult) -> None:
@@ -694,7 +775,13 @@ class StaticScanner:
                 yield tr.entity_id
 
         for node in auto.entry_nodes():
-            for entity_id in _triggers(node):
+            try:
+                # 生成器要在这里才被真正耗尽：超预算/自引用的 group 在这条腿上受控失败，
+                # 诊断已由 `_check_trigger_depth` 落过（TRIGGER_INVALID），本腿只跳过。
+                entity_ids = list(_triggers(node))
+            except TriggerDepthError:
+                continue
+            for entity_id in entity_ids:
                 health = self._health.get(entity_id)
                 if not isinstance(health, Mapping):
                     continue
@@ -740,7 +827,8 @@ class StaticScanner:
 
     # ⑫ 实体存在性 + ① 设备保护分级（v1.4.0 tier 模型）
     def _check_entities(self, auto: Automation, out: ScanResult) -> None:
-        refs = auto.reads() | auto.writes()
+        reads, writes = self._entity_refs(auto)
+        refs = reads | writes
 
         if self._known is not None:
             for entity_id in sorted(refs):
@@ -777,7 +865,7 @@ class StaticScanner:
 
         if self._guard is None:
             return
-        for entity_id in sorted(auto.reads()):
+        for entity_id in sorted(reads):
             if self._guard.match_tier(entity_id) == 0:
                 out.diagnostics.append(
                     Diagnostic(
@@ -833,7 +921,8 @@ class StaticScanner:
             )
             return
 
-        reachable = auto.reads() | auto.writes()
+        reads, writes = self._entity_refs(auto)
+        reachable = reads | writes
         for item in expects:
             entity_id = item.get("entity_id")
             if entity_id and str(entity_id) not in reachable:
@@ -899,7 +988,13 @@ class StaticScanner:
 
     # ⑬ NL 覆盖率
     def _check_nl_coverage(self, auto: Automation, out: ScanResult) -> None:
-        result = render_automation(auto)
+        try:
+            result = render_automation(auto)
+        except (ExprError, TriggerDepthError):
+            # 渲染器走的是同一份 expr/trigger 递归，超预算时它给不出句子；这种 IR 已经被
+            # `_check_expr` / `_check_trigger_depth` 判红，这里不再补一条重复诊断，
+            # 也不许把异常抛出去（那会让整次扫描变成崩溃）。
+            return
         if result.missing:
             out.diagnostics.append(
                 Diagnostic(
@@ -951,6 +1046,10 @@ class StaticScanner:
 
     def _scan_cross_automation(self, out: ScanResult) -> None:
         autos = list(self.graph)
+        # 触发源实体先按自动化各算一次：既省掉重复递归，又让超预算的 trigger 只让**它自己**
+        # 那一条依赖边看不见，而不是把整次跨自动化分析换成异常（`_check_trigger_depth`
+        # 已经给坏 IR 落过 TRIGGER_INVALID）。
+        trig_refs = {a.id: self._trigger_refs(a) for a in autos}
         # A 写 X 且 B 读 X → A→B 依赖边
         deps: dict[str, set[str]] = {a.id: set() for a in autos}
         for a in autos:
@@ -959,7 +1058,7 @@ class StaticScanner:
                 continue
             for b in autos:
                 # 只看**触发源**依赖：A 写 X 且 B 由 X 触发 → A→B（含自环，自环是真死循环）
-                if writes & b.trigger_entities():
+                if writes & trig_refs[b.id]:
                     deps[a.id].add(b.id)
 
         # v0.3.0 发布侧：emit 事件成环——A 发出 `event.X`，B 由 `event.X` 触发 → A→B（含自环）
@@ -969,7 +1068,7 @@ class StaticScanner:
             if not emitted:
                 continue
             for b in autos:
-                if emitted & b.trigger_entities():
+                if emitted & trig_refs[b.id]:
                     emit_deps[a.id].add(b.id)
         # P1-4 收口：实体依赖与事件依赖 union 后统一查环，避免跨图环漏检
         # （A 写实体+emit -> B 触发 -> B 写同一实体，在两张图里各自都不是环，但 union 后是环）

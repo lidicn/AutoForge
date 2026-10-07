@@ -26,6 +26,8 @@ from .af_ir import (
     GROUP_IR_VERSION,
     GROUP_MODES,
     GROUP_MODE_SEQUENCE,
+    check_expr_depth,
+    check_param_depth,
 )
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -380,25 +382,27 @@ def entity_like(s: Any) -> bool:
     return bool(m and m.group("dom") in KNOWN_DOMAINS)
 
 
-def iter_strings(obj: Any) -> Iterable[str]:
+def iter_strings(obj: Any, _depth: int = 0) -> Iterable[str]:
+    check_param_depth(_depth, "orchestrator.iter_strings")
     if isinstance(obj, str):
         yield obj
     elif isinstance(obj, Mapping):
         for v in obj.values():
-            yield from iter_strings(v)
+            yield from iter_strings(v, _depth + 1)
     elif isinstance(obj, (list, tuple)):
         for v in obj:
-            yield from iter_strings(v)
+            yield from iter_strings(v, _depth + 1)
 
 
-def walk_dicts(obj: Any, path: tuple = ()) -> Iterable[tuple]:
+def walk_dicts(obj: Any, path: tuple = (), _depth: int = 0) -> Iterable[tuple]:
+    check_param_depth(_depth, "orchestrator.walk_dicts")
     if isinstance(obj, Mapping):
         yield obj, path
         for k, v in obj.items():
-            yield from walk_dicts(v, path + (k,))
+            yield from walk_dicts(v, path + (k,), _depth + 1)
     elif isinstance(obj, list):
         for i, v in enumerate(obj):
-            yield from walk_dicts(v, path + (i,))
+            yield from walk_dicts(v, path + (i,), _depth + 1)
 
 
 def find_entities(obj: Any) -> list:
@@ -421,7 +425,8 @@ def find_refs(obj: Any) -> list:
     return out
 
 
-def substitute_refs(obj: Any, resolved: Mapping[str, str]) -> Any:
+def substitute_refs(obj: Any, resolved: Mapping[str, str], _depth: int = 0) -> Any:
+    check_param_depth(_depth, "orchestrator.substitute_refs")
     if isinstance(obj, str):
         def _rep(m):
             key = "@" + m.group(1)
@@ -431,9 +436,9 @@ def substitute_refs(obj: Any, resolved: Mapping[str, str]) -> Any:
             return rid
         return REF_TOKEN_RE.sub(_rep, obj)
     if isinstance(obj, list):
-        return [substitute_refs(x, resolved) for x in obj]
+        return [substitute_refs(x, resolved, _depth + 1) for x in obj]
     if isinstance(obj, Mapping):
-        return {k: substitute_refs(v, resolved) for k, v in obj.items()}
+        return {k: substitute_refs(v, resolved, _depth + 1) for k, v in obj.items()}
     return obj
 
 
@@ -548,16 +553,17 @@ def describe_trigger(t: Mapping[str, Any], labels: Mapping[str, str]) -> str:
     return "触发"
 
 
-def describe_condition(expr: Any, labels: Mapping[str, str]) -> str:
+def describe_condition(expr: Any, labels: Mapping[str, str], _depth: int = 0) -> str:
+    check_expr_depth(_depth, "orchestrator.describe_condition")
     if not isinstance(expr, Mapping):
         return "?"
     op = expr.get("op")
     if op == "and":
-        return "(" + " 且 ".join(describe_condition(a, labels) for a in expr.get("args", [])) + ")"
+        return "(" + " 且 ".join(describe_condition(a, labels, _depth + 1) for a in expr.get("args", [])) + ")"
     if op == "or":
-        return "(" + " 或 ".join(describe_condition(a, labels) for a in expr.get("args", [])) + ")"
+        return "(" + " 或 ".join(describe_condition(a, labels, _depth + 1) for a in expr.get("args", [])) + ")"
     if op == "not":
-        return "非 " + describe_condition((expr.get("args") or [{}])[0], labels)
+        return "非 " + describe_condition((expr.get("args") or [{}])[0], labels, _depth + 1)
     if op in ("is_on", "is_off"):
         v = (expr.get("value") or {}).get("var")
         return f"{_label_of_var(v, labels)} {'开启' if op == 'is_on' else '关闭'}"
@@ -1089,18 +1095,19 @@ class IntentParser:
 # =====================================================================
 # 8. 草稿合并 / 缺口检测
 # =====================================================================
-def normalize_var_paths(obj: Any) -> Any:
+def normalize_var_paths(obj: Any, _depth: int = 0) -> Any:
     """把 {"var": "@temp"} 规范成 {"var": "entity.@temp"}。"""
+    check_param_depth(_depth, "orchestrator.normalize_var_paths")
     if isinstance(obj, Mapping):
         out = {}
         for k, v in obj.items():
             if k == "var" and isinstance(v, str) and v.startswith("@"):
                 out[k] = "entity." + v
             else:
-                out[k] = normalize_var_paths(v)
+                out[k] = normalize_var_paths(v, _depth + 1)
         return out
     if isinstance(obj, list):
-        return [normalize_var_paths(x) for x in obj]
+        return [normalize_var_paths(x, _depth + 1) for x in obj]
     return obj
 
 
@@ -1225,15 +1232,16 @@ def _apply_defaults(draft: AutomationDraft) -> None:
 
 
 # ---- 缺口检测 --------------------------------------------------------
-def _iter_expr_nodes(expr: Any, path: tuple = ()):
+def _iter_expr_nodes(expr: Any, path: tuple = (), _depth: int = 0):
+    check_expr_depth(_depth, "orchestrator._iter_expr_nodes")
     if isinstance(expr, Mapping):
         yield expr, path
         for k in ("args",):
             for i, a in enumerate(expr.get(k) or []):
-                yield from _iter_expr_nodes(a, path + (k, i))
+                yield from _iter_expr_nodes(a, path + (k, i), _depth + 1)
         for k in ("left", "right", "value"):
             if isinstance(expr.get(k), Mapping):
-                yield from _iter_expr_nodes(expr[k], path + (k,))
+                yield from _iter_expr_nodes(expr[k], path + (k,), _depth + 1)
 
 
 def detect_gaps(draft: AutomationDraft, catalog: Sequence[Mapping[str, Any]] = ()) -> list:
@@ -1759,13 +1767,14 @@ def fix_entity_not_found(ctx: FixContext) -> FixOutcome:
                                       question=f"「{bad}」不在设备目录里，你要的是哪个？",
                                       options=[{"label": f"{i + 1}. {c}", "value": c} for i, c in enumerate(guess)],
                                       priority=9, kind="entity", reason="build: ENTITY_NOT_FOUND"))
-    def _rep(obj):
+    def _rep(obj, _depth: int = 0):
+        check_param_depth(_depth, "orchestrator._rep")
         if isinstance(obj, str):
             return new if obj == bad else obj
         if isinstance(obj, Mapping):
-            return {k: _rep(v) for k, v in obj.items()}
+            return {k: _rep(v, _depth + 1) for k, v in obj.items()}
         if isinstance(obj, list):
-            return [_rep(x) for x in obj]
+            return [_rep(x, _depth + 1) for x in obj]
         return obj
     node_id = node["id"]
     for n in ir["nodes"]:
@@ -1880,22 +1889,23 @@ def _ent(var: str | None) -> str:
     return (var or "").split("entity.", 1)[-1]
 
 
-def _probe_expr(expr: Any, states: dict, satisfy: bool) -> None:
+def _probe_expr(expr: Any, states: dict, satisfy: bool, _depth: int = 0) -> None:
+    check_expr_depth(_depth, "orchestrator._probe_expr")
     if not isinstance(expr, Mapping):
         return
     op = expr.get("op")
     args = expr.get("args") or []
     if op == "and":
         for i, a in enumerate(args):
-            _probe_expr(a, states, satisfy if satisfy else (i != 0))
+            _probe_expr(a, states, satisfy if satisfy else (i != 0), _depth + 1)
         return
     if op == "or":
         for i, a in enumerate(args):
-            _probe_expr(a, states, (i == 0) if satisfy else False)
+            _probe_expr(a, states, (i == 0) if satisfy else False, _depth + 1)
         return
     if op == "not":
         if args:
-            _probe_expr(args[0], states, not satisfy)
+            _probe_expr(args[0], states, not satisfy, _depth + 1)
         return
     if op in ("is_on", "is_off"):
         want_on = (op == "is_on") == satisfy
@@ -2026,11 +2036,12 @@ class QualityScorer:
         return clamp(s), viol
 
     @staticmethod
-    def _cond_depth(expr) -> int:
+    def _cond_depth(expr, _depth: int = 0) -> int:
+        check_expr_depth(_depth, "orchestrator.QualityScorer._cond_depth")
         if not isinstance(expr, Mapping):
             return 0
         args = expr.get("args") or []
-        return 1 + max((QualityScorer._cond_depth(a) for a in args), default=0)
+        return 1 + max((QualityScorer._cond_depth(a, _depth + 1) for a in args), default=0)
 
     def _robustness(self, ir, expect_ok: bool | None):
         viol = []

@@ -16,7 +16,7 @@ import time
 import uuid
 from typing import Any
 
-from .af_ir import IR_VERSION, load_graph
+from .af_ir import IR_VERSION, MAX_EXPR_DEPTH, load_graph
 from .af_spec import SpecError
 
 __all__ = [
@@ -375,12 +375,20 @@ def _resolve_trigger(when: dict[str, Any], resolved: dict[str, str], catalog: An
     return trigger
 
 
-def _resolve_expr(expr: dict[str, Any], resolved: dict[str, str], catalog: Any) -> dict[str, Any]:
-    """解析条件表达式，支持 and/or 嵌套。"""
+def _resolve_expr(
+    expr: dict[str, Any], resolved: dict[str, str], catalog: Any, _depth: int = 0
+) -> dict[str, Any]:
+    """解析条件表达式，支持 and/or 嵌套。
+
+    深度用 `MAX_EXPR_DEPTH` 那份单一真值源，超限抛本模块声明的 DraftError
+    （第二十轮 F2：改造前 `{"and": [...]}` 嵌套实测 997 层才 RecursionError）。
+    """
+    if _depth > MAX_EXPR_DEPTH:
+        raise DraftError("E_INVALID_EXPR", f"条件表达式嵌套超过上限 {MAX_EXPR_DEPTH}")
     # and/or 组合
     for op in ("and", "or"):
         if op in expr and isinstance(expr[op], list):
-            args = [_resolve_expr(sub, resolved, catalog) for sub in expr[op]]
+            args = [_resolve_expr(sub, resolved, catalog, _depth + 1) for sub in expr[op]]
             return {"op": op, "args": args}
     # 单条件：{"lt": {"var": "xxx", "const": 200}}
     for op, val in expr.items():

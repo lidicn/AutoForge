@@ -188,11 +188,30 @@ def _entities_of(graph: Graph) -> set[str]:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def health(store: "GraphStore | None" = None) -> dict[str, Any]:
+def _linkage_health(presence: Any) -> dict[str, Any]:
+    """/health 的联动面读数（契约 §7.3 degrade-flag 档，裁定 20261007 §二 丁A）。
+
+    没桥时**不** import `af_mqtt_bridge`（它要 homesdk），也不把"读不到"写成 online
+    或 degraded——`unwired` 故意不是契约三态里的一档，就是为了防止被误读成其中任一档。
+    """
+    if presence is None:
+        return {"wired": False, "state": "unwired", "degraded": False, "reasons": []}
+    from .af_mqtt_bridge import linkage_status
+
+    return linkage_status(presence)
+
+
+def health(store: "GraphStore | None" = None, *, presence: Any = None) -> dict[str, Any]:
     """WO-AF-004 打回 4：ok 由真实探测决定，不再硬编码 True。
 
     探 store 可读（list 归档历史）；store 为 None（测试/离线场景）时 ok=True
     保持向后兼容。readonly 仍是硬编码字面量（v1.x 只读服务层身份声明）。
+
+    `presence`（裁定 20261007 §二 丁A）是联动桥本体，由调用面**每次请求时**取来递进来：
+    契约 §7.3 的 degrade-flag 档明写「MQTT 断连 → health 报 degraded」，而此前 `/health`
+    根本没有到桥的通道（`build_app` 早于 `start_from_env`），那一档只落在
+    `counts.publish_errors` 一个本机计数器上——读 `/health` 的人看不见。
+    没递桥 ⇒ `linkage.wired=False` 且状态读成 `unwired`，**不许读成健康**。
     """
     ok = True
     store_ok = None
@@ -226,6 +245,7 @@ def health(store: "GraphStore | None" = None) -> dict[str, Any]:
         "milestones": list(MILESTONES),
         "readonly": True,
         "store_ok": store_ok,
+        "linkage": _linkage_health(presence),
         "tick_health": tick_health,
         "ticker_alive": ticker_alive,
         "tick_exit_reason": tick_exit_reason,

@@ -133,7 +133,11 @@ class ServiceError(Exception):
 def _t_health(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     # 真机/Agent 面的 health 读数必须探自己服务的那个 store：不递就是 `store_ok: null`，
     # 等于告诉调用方"存储层我没看"（HTTP 面 af_api 早已递 store，两面对不上）。
-    return svc.health(store)
+    # 联动面同理（裁定 20261007 §二 丁A）：Agent 问 health 时必须和 HTTP 面读到同一份
+    # `linkage`——两脸一面有桥、一面没桥，就是本仓反复登记的"多张调用脸对不上"形状。
+    from . import af_mqtt_bridge
+
+    return svc.health(store, presence=af_mqtt_bridge.current_bridge())
 
 
 def _t_build(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
@@ -905,6 +909,18 @@ def _undeclared_args(schema: dict[str, Any], args: Any) -> list[str]:
     return sorted(str(k) for k in args if k not in props)
 
 
+def _failure_payload(code: str, message: str) -> dict[str, Any]:
+    """失败响应体的形状（契约 §7.2 落点② + 裁定 20261007 §二 戊A）。
+
+    戊A 授权的原话是"异常路径也是 MCP 响应体，不该例外"：此前工具**主动拒**已经带 `code`，
+    而 `_guard`/`ServiceError`/未捕获异常这几条走的是散文（`"未知工具：…"`、
+    `"工具执行出错：KeyError: …"`）——对端只能按人类语言猜档，`isError` 又只有一个布尔，
+    分不出"请求格式错 / 没权限 / AF 自己的病"。散文照旧进 `message`（信息不丢），
+    但外面必须有能被机器读的 `code`。
+    """
+    return {"ok": False, "code": code, "message": message}
+
+
 def dispatch(
     name: str,
     args: dict[str, Any],
@@ -914,7 +930,17 @@ def dispatch(
     """执行一个工具，返回 (content, is_error)。is_error=True 时 content 为错误说明。"""
     tool = next((t for t in TOOLS if t[0] == name), None)
     if tool is None:
-        return [_text(f"未知工具：{name!r}（可用：{', '.join(t[0] for t in TOOLS)}）")], True
+        return [
+            _text(
+                json.dumps(
+                    _failure_payload(
+                        ADM_ERR_PAYLOAD_INVALID,
+                        f"未知工具：{name!r}（可用：{', '.join(t[0] for t in TOOLS)}）",
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+        ], True
     _name, _desc, _schema, fn, scope = tool
     try:
         _guard(scope, current)
@@ -927,8 +953,14 @@ def dispatch(
             declared = ", ".join(sorted((_schema.get("properties") or {}).keys())) or "（该工具无参数）"
             return [
                 _text(
-                    f"参数未声明，已拒绝：{', '.join(unexpected)}｜"
-                    f"{_name} 声明的参数：{declared}"
+                    json.dumps(
+                        _failure_payload(
+                            ADM_ERR_PAYLOAD_INVALID,
+                            f"参数未声明，已拒绝：{', '.join(unexpected)}｜"
+                            f"{_name} 声明的参数：{declared}",
+                        ),
+                        ensure_ascii=False,
+                    )
                 )
             ], True
         if fn in _TOOLS_WITH_CONTEXT:
@@ -939,17 +971,49 @@ def dispatch(
             _text(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         ], False
     except ServiceError as exc:
-        return [_text(_annotate_failure(store, name, str(exc)))], True
+        # `_guard` 的两条拒绝（无令牌身份 / 令牌缺该 scope）⇒ 对端的正确动作就是取令牌/换令牌，
+        # 所以落 AUTH_REQUIRED。丙A 新增的 PAUSED 档另说（owner 策略性暂停不是鉴权问题，
+        # 库里还没有那一档，等 0.3.3）。
+        return [
+            _text(
+                json.dumps(
+                    _failure_payload(
+                        ADM_ERR_AUTH_REQUIRED,
+                        _annotate_failure(store, name, str(exc)),
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+        ], True
     except svc.ServiceError as exc:
         # 服务层的拒绝**原样**回传：`_single_writer_check` 那条靠固定前缀
         # `READONLY_DEGRADED:` 让 DB 判别（裁定 20261004 §一 1 A），套上"工具执行出错："
         # 那层壳，前缀就不在文本开头了。
-        return [_text(_annotate_failure(store, name, str(exc)))], True
-    except Exception as exc:  # 业务异常（ServiceError/IRValidationError/KeyError 等）转 isError
+        # 裁定 20261007 §二 戊A 之后：前缀现在位于 `message` 这个**字符串值的开头**，
+        # 不再位于整段 text 的开头——DB 侧读数口径的变化随交接单同步，不是本面偷偷改的。
+        return [
+            _text(
+                json.dumps(
+                    _failure_payload(
+                        ADM_ERR_INTERNAL,
+                        _annotate_failure(store, name, str(exc)),
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+        ], True
+    except Exception as exc:  # 业务异常（IRValidationError/KeyError 等）转 isError
         # R-57：完整 traceback 只落服务端日志，不回传 MCP 客户端（防文件路径/行号/堆栈外泄）
         logger.exception("MCP tool %s failed", name)
         msg = f"工具执行出错：{type(exc).__name__}: {exc}"
-        return [_text(_annotate_failure(store, name, msg))], True
+        return [
+            _text(
+                json.dumps(
+                    _failure_payload(ADM_ERR_INTERNAL, _annotate_failure(store, name, msg)),
+                    ensure_ascii=False,
+                )
+            )
+        ], True
 
 
 def _annotate_failure(store: GraphStore, tool: str, message: str) -> str:

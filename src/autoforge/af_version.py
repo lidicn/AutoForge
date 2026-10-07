@@ -35,6 +35,7 @@ from typing import Any, Callable, Sequence
 from uuid import uuid4
 
 from .af_atomic import atomic_write_text
+from .af_ir import check_param_depth
 
 try:  # 与 af_feedback 的时钟 / 审计口径对齐；极简环境下本地降级（不构成硬依赖）
     from autoforge.af_feedback import audit_write as _af_audit_write
@@ -124,25 +125,35 @@ class Version:
 
 
 # --------------------------------------------------------------------------- #
-# IR 形态归一（duck typing；不 import af_ir / af_store 内部）
+# IR 形态归一（duck typing：不依赖 af_ir / af_store 的类型，只借那份深度预算）
 # --------------------------------------------------------------------------- #
 
-def _jsonable(obj: Any) -> Any:
-    """把任意 IR 形态（dict / list / af_ir dataclass / 带 to_json 的对象）转成可 JSON 结构。"""
+def _jsonable(obj: Any, _depth: int = 0) -> Any:
+    """把任意 IR 形态（dict / list / af_ir dataclass / 带 to_json 的对象）转成可 JSON 结构。
+
+    第二十轮 F2：快照/差异路径的容器深度实测 997 层才 RecursionError，
+    而 json.loads 能稳定送达 ≥1000 层，中间那段是真实可达面。接 `MAX_PARAM_DEPTH`
+    受控失败（`ParamDepthError`，ValueError 族）而不是让栈耗尽漏进 API。
+    """
+    check_param_depth(_depth, "version._jsonable")
     if obj is None or isinstance(obj, (bool, int, float, str)):
         return obj
     if isinstance(obj, Mapping):
-        return {str(k): _jsonable(v) for k, v in obj.items()}
+        return {str(k): _jsonable(v, _depth + 1) for k, v in obj.items()}
     if isinstance(obj, (list, tuple, set, frozenset)):
-        return [_jsonable(v) for v in obj]
+        return [_jsonable(v, _depth + 1) for v in obj]
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        return {f.name: _jsonable(getattr(obj, f.name)) for f in dataclasses.fields(obj)}
+        return {f.name: _jsonable(getattr(obj, f.name), _depth + 1) for f in dataclasses.fields(obj)}
     to_json = getattr(obj, "to_json", None)
     if callable(to_json):
-        return _jsonable(to_json())
+        return _jsonable(to_json(), _depth + 1)
     attrs = getattr(obj, "__dict__", None)
     if isinstance(attrs, Mapping):
-        return {str(k): _jsonable(v) for k, v in attrs.items() if not str(k).startswith("_")}
+        return {
+            str(k): _jsonable(v, _depth + 1)
+            for k, v in attrs.items()
+            if not str(k).startswith("_")
+        }
     return str(obj)
 
 

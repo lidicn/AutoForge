@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
-from .af_ir import Automation, Graph, Node, Trigger, check_trigger_depth
+from .af_ir import Automation, Graph, Node, Trigger, check_expr_depth, check_trigger_depth
 from .af_irreversible import nl_runtime_note
 from .af_time import format_duration, parse_duration
 
@@ -162,17 +162,20 @@ def _operand_text(operand: Mapping[str, Any]) -> str:
     return name
 
 
-def _expr_text(expr: Mapping[str, Any] | None) -> str:
+def _expr_text(expr: Mapping[str, Any] | None, _depth: int = 0) -> str:
+    # 与 `_trigger_text` 同形状的另一条腿：渲染是只读面，但也必须走同一份预算，
+    # 否则超深 condition 会把 RecursionError 漏给 API（500 且无原因）。
+    check_expr_depth(_depth, "nl._expr_text")
     if not expr:
         return "（无条件）"
     op = expr.get("op")
     if op in ("and", "or"):
         joiner = " 且 " if op == "and" else " 或 "
-        parts = [_expr_text(a) for a in expr.get("args", ())]
+        parts = [_expr_text(a, _depth + 1) for a in expr.get("args", ())]
         return "（" + joiner.join(parts) + "）" if len(parts) > 1 else "".join(parts)
     if op == "not":
         args = expr.get("args", ())
-        return "非 " + (_expr_text(args[0]) if args else "?")
+        return "非 " + (_expr_text(args[0], _depth + 1) if args else "?")
     if op in _CMP_SYMBOL:
         return f"{_operand_text(expr['left'])} {_CMP_SYMBOL[op]} {_operand_text(expr['right'])}"
     if op in ("is_on", "is_home"):

@@ -17,10 +17,14 @@ services:
       - "8787:8787"
     # 前端静态托管：把构建产物 dist 以卷挂入 /ui，由 serve --ui-dir 启用同源 SPA fallback（/api 无需跨域）
     # 前端已并入主仓库（原独立仓库 autoforge-ui → 现 e:/NAS/AutoForge/ui），dist 由该目录构建产出。
-    command: ["forge", "serve", "--host", "0.0.0.0", "--port", "8787", "--store-root", "/data", "--examples", "/app/examples/ir", "--ui-dir", "/ui"]
+    # 用户视角 UI（ui-user-mimo，DCD 20261005 §一 交付面认定 B）挂 /mimo：其 vite base 必须与
+    # `af_api.UI_USER_PREFIX` 同值，否则 dist 里的资源绝对路径 /mimo/assets/* 与挂载前缀对不上，
+    # 页面会 200 但白屏。这条同源由 tests/unit/test_ui_user_mount.py 当场核对。
+    command: ["forge", "serve", "--host", "0.0.0.0", "--port", "8787", "--store-root", "/data", "--examples", "/app/examples/ir", "--ui-dir", "/ui", "--ui-user-dir", "/mimo"]
     volumes:
       - /vol1/1000/docker/autoforge-store:/data
       - /vol1/1000/docker/autoforge/ui/dist:/ui
+      - /vol1/1000/docker/autoforge/ui-user-mimo/dist:/mimo
       # 基线收口（v2.0.1/0.1-d）：镜像已烘入 src（Dockerfile.api COPY src），运行时不再挂宿主源码，
       # 避免「镜像基线」与「实际运行」分叉。后端变更须经 `docker compose build` 重烘镜像。
       # 仅本地热改后端免重建时，可临时取消下行注释（开发期，勿入生产）：

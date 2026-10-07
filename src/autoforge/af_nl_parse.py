@@ -29,7 +29,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-from .af_ir import GROUP_IR_VERSION, IR_VERSION, validate_automation
+from .af_ir import (
+    GROUP_IR_VERSION,
+    IR_VERSION,
+    MAX_EXPR_DEPTH,
+    MAX_PARAM_DEPTH,
+    MAX_TRIGGER_DEPTH,
+    validate_automation,
+)
 from .af_irreversible import (
     NL_RUNTIME_PLACEHOLDER,
     NON_REVERSIBLE_KEY,
@@ -626,7 +633,9 @@ def _infer_types(left: dict[str, Any], right: dict[str, Any]) -> None:
                 a["type"] = "string"
 
 
-def _expr_atom(text: str) -> dict[str, Any] | None:
+def _expr_atom(text: str, _depth: int = 0) -> dict[str, Any] | None:
+    if _depth > MAX_EXPR_DEPTH:  # 第二十轮 F2：改造前 995 层「非」前缀才 RecursionError
+        raise ParseError(f"条件表达式嵌套超过上限 {MAX_EXPR_DEPTH}")
     t = text.strip().rstrip("。；;")
     if not t:
         return None
@@ -653,7 +662,7 @@ def _expr_atom(text: str) -> dict[str, Any] | None:
             return {"op": op, "left": left, "right": right}
     m = re.match(r"^(?:并非|不是|非|没有)\s*[（(]?(?P<rest>.+?)[）)]?$", t)
     if m:
-        inner = _expr_atom(m.group("rest"))
+        inner = _expr_atom(m.group("rest"), _depth + 1)
         if inner is not None:
             return {"op": "not", "args": [inner]}
     bare = _parse_operand(t)
@@ -1186,8 +1195,12 @@ class _ChildCounter:
 
 
 def _build(
-    stmts: Sequence[_Stmt], counter: _ChildCounter | None = None
+    stmts: Sequence[_Stmt],
+    counter: _ChildCounter | None = None,
+    _depth: int = 0,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if _depth > MAX_TRIGGER_DEPTH:  # 第二十轮 F2：改造前 992 层嵌套 group 才 RecursionError
+        raise ParseError(f"group 嵌套深度超过上限 {MAX_TRIGGER_DEPTH}")
     counter = counter or _ChildCounter()
     builder = _Builder()
     i = 0
@@ -1219,7 +1232,7 @@ def _build(
             for name, body in children:
                 if not body:
                     continue
-                nodes, edges = _build(body, counter)
+                nodes, edges = _build(body, counter, _depth + 1)
                 if not nodes:
                     continue
                 node["children"].append(
@@ -1263,15 +1276,17 @@ def _slugify(name: str) -> str:
     return s
 
 
-def _assert_no_runtime_fields(obj: Any, path: str = "$") -> None:
+def _assert_no_runtime_fields(obj: Any, path: str = "$", _depth: int = 0) -> None:
+    if _depth > MAX_PARAM_DEPTH:  # 第二十轮 F2：改造前 994 层容器才 RecursionError
+        raise ParseError(f"运行时字段扫描深度超过上限 {MAX_PARAM_DEPTH}（{path}）")
     if isinstance(obj, Mapping):
         for key, val in obj.items():
             if key in RUNTIME_ONLY_FIELDS:
                 raise ParseError(f"parser 禁止写入运行时字段 {key}（{path}）")
-            _assert_no_runtime_fields(val, f"{path}.{key}")
+            _assert_no_runtime_fields(val, f"{path}.{key}", _depth + 1)
     elif isinstance(obj, list):
         for idx, item in enumerate(obj):
-            _assert_no_runtime_fields(item, f"{path}[{idx}]")
+            _assert_no_runtime_fields(item, f"{path}[{idx}]", _depth + 1)
 
 
 def _carry_runtime(source: Mapping[str, Any], target: Mapping[str, Any]) -> None:
@@ -1354,11 +1369,15 @@ def parse_automation(
     return ir
 
 
-def _iter_nodes(nodes: Sequence[Mapping[str, Any]]):
+def _iter_nodes(
+    nodes: Sequence[Mapping[str, Any]], _depth: int = 0
+):
+    if _depth > MAX_TRIGGER_DEPTH:  # 第二十轮 F2：改造前 997 层嵌套 group 才 RecursionError
+        raise ParseError(f"group 嵌套深度超过上限 {MAX_TRIGGER_DEPTH}")
     for node in nodes:
         yield node
         for child in node.get("children") or ():
-            yield from _iter_nodes(child.get("nodes") or ())
+            yield from _iter_nodes(child.get("nodes") or (), _depth + 1)
 
 
 def parse_graph(nl: str, **kwargs: Any) -> list[dict[str, Any]]:
