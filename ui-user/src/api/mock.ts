@@ -3,6 +3,8 @@ import type {
   AuthCode,
   Automation,
   AutomationGroup,
+  PairAccepting,
+  PairAcceptingState,
   PairEvent,
   PendingItem,
 } from '../types/api'
@@ -18,6 +20,8 @@ const agents: Agent[] = [
 let authCodes: AuthCode[] = [
   { code: '729104', kind: 'long', created_at: Date.now() / 1000 - 86400, expires_at: null, revoked: false },
 ]
+
+let pairAccepting = true
 
 const mk = (
   id: string,
@@ -188,8 +192,18 @@ export const mockApi: Api = {
 
   openPairStream: (onEvent: (d: PairEvent) => void): { close: () => void } => {
     const timer = setTimeout(() => {
-      onEvent({ code: '482913', agent_name_hint: '新 Agent', expires_at: Date.now() / 1000 + 300 })
+      onEvent({ code: '48291307', agent_name_hint: '新 Agent', expires_at: Date.now() / 1000 + 300 })
     }, 4500)
     return { close: () => clearTimeout(timer) }
+  },
+
+  getPairAccepting: async (): Promise<PairAcceptingState> => {
+    await delay()
+    return { accepting: pairAccepting }
+  },
+  setPairAccepting: async (accepting: boolean): Promise<PairAccepting> => {
+    await delay()
+    pairAccepting = accepting
+    return { ok: pairAccepting === accepting, accepting }
   },
 }

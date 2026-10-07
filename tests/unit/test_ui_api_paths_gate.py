@@ -455,8 +455,8 @@ def test_real_ui_and_src_are_clean_and_counted():
     assert len(live) == 53 and len(sites) - len(live) == 1   # +1 = `api/client.ts` 的 `fetch` 包装
     mounted = sum(1 for r in routes if r["how"] == "add_api_route")
     assert mounted == 5                              # af_conflict_runtime._ROUTES
-    assert len(routes) - mounted + len(excluded) == 81   # == grep -c "@app." src/autoforge/af_api.py
-    assert len(routes) == 84                          # 79 装饰器 + 5 挂载表
+    assert len(routes) - mounted + len(excluded) == 85   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（85 对 85；旧锚点 `grep -c "@app."` 把 @app.exception_handler 那行也数进来，HEAD 上就偏 1）
+    assert len(routes) == 88                          # 83 装饰器路由 + 5 挂载表（af_api 的装饰器行共 85＝83＋被排除的 /mcp 与 /{full_path:path}）
     assert boundary == ["src/autoforge/af_runtime_plugins.py"]
     assert sum(1 for s in sites if s["exempt"]) == 0
 
@@ -630,11 +630,11 @@ def test_all_trees_of_this_repo_are_in_scope_and_green(capsys):
     mod = _module()
     assert mod.main(["check_ui_api_paths.py", "--all"]) == 0
     out = capsys.readouterr().out
-    for name in ("ui 53", "ui-user 17", "ui-user-mimo 20"):
+    for name in ("ui 53", "ui-user 19", "ui-user-mimo 20"):
         assert name in out, out
     assert "传输层包装 3 处" in out, out
     assert "SSE 建流 2 处" in out, out
-    assert "跨 3 棵树仍未被调用 13 条" in out, out
+    assert "跨 3 棵树仍未被调用 15 条" in out, out
 
 
 # ── 第四张调用脸：视图里直接 `fetch(`${base}/watch/start`)`（前缀是变量）──────
@@ -738,7 +738,7 @@ def test_transport_wrappers_are_pinned_to_the_api_layer():
     for t in mod._registry_trees():
         sites, _ = mod.collect_ui_sites(t["root"], t["name"])
         got += [f"{s['rel']}:{s['line']}" for s in sites if "transport" in s["kinds"]]
-    assert sorted(got) == ["ui-user-mimo/src/api/http.ts:92", "ui-user/src/api/client.ts:27",
+    assert sorted(got) == ["ui-user-mimo/src/api/http.ts:92", "ui-user/src/api/client.ts:36",
                            "ui/src/api/client.ts:28"], got
 
 
@@ -754,17 +754,17 @@ def test_helper_names_have_one_source():
 def test_reverse_reading_of_this_repo_is_a_named_list(capsys):
     """`--list-uncalled` 逐条打到盘上：一个总数定不了"还剩谁在用"这件事，只能逐条定性。
 
-    13 这个数是棘轮——删一条活接口、或给某条补上前端调用点，都要在这里留名。
+    15 这个数是棘轮——删一条活接口、或给某条补上前端调用点，都要在这里留名。
     """
     mod = _module()
     assert mod.main(["check_ui_api_paths.py", "--list-uncalled"]) == 0
     out = capsys.readouterr().out
     lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("—")]
-    assert len(lines) == 13, out
+    assert len(lines) == 15, out
     assert "/api/watch/start" not in out and "/api/watch/stop" not in out   # 已被 fetch 那张脸认领
     assert "pair-request" not in out                                       # 已被 SSE 那张脸认领
-    assert "反向读数 13 条" in out, out
-    # 整个集合逐条钉住（不是只钉总数）：这 13 条的定性写在执行记录 §二之四十四，
+    assert "反向读数 15 条" in out, out
+    # 整个集合逐条钉住（不是只钉总数）：这 15 条的定性写在执行记录 §二之四十四，
     # 谁给某条补上前端调用点、或删掉某条路由，都必须同时动这张表和这段名单——
     # 只数数不记名的话，下一批又会把"门读不出"当成"接口没人用"。
     assert {ln.split()[0] + " " + ln.split()[1] for ln in lines} == {
@@ -775,6 +775,8 @@ def test_reverse_reading_of_this_repo_is_a_named_list(capsys):
         "DELETE /api/conflicts/locks/{entity_id}",
         "POST /api/conflicts/{automation_id}/reset",
         "GET /api/experience/export",                                       # 经验导出：消费走 CLI `forge experience export`（同函数，不经 HTTP）
+        "POST /api/mcp/pair/redeem",                                        # 配对 bootstrap 两条：消费面是 agent 自己的 HTTP 客户端（裁定 20261006 §一=B），第一方 UI 天生不调它——读不出≠没人用
+        "POST /api/mcp/pair/request",
         "GET /api/sessions",                                                # 会话管理面 6 条：只有 `POST .../answer` 被 ui 调
         "POST /api/sessions",
         "GET /api/sessions/{session_id}",
@@ -793,7 +795,7 @@ def build_app():
         return {}
 '''
 
-# 两棵用户端树各自的真实形状（抄自 `ui-user/src/api/client.ts:72-73`、`ui-user-mimo/src/api/http.ts:41-42`）
+# 两棵用户端树各自的真实形状（抄自 `ui-user/src/api/client.ts:81-82`、`ui-user-mimo/src/api/http.ts:41-42`）
 SSE_CLIENT = '''
 export function openPairStream(token: string) {
   const BASE = import.meta.env.VITE_API_BASE || '/api'

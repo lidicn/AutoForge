@@ -19,7 +19,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from .af_ir import Automation, Trigger
+from .af_ir import Automation, Trigger, check_trigger_depth
 from .af_ir.condition_norm import normalize_condition
 from .af_nl import render_automation
 
@@ -30,8 +30,13 @@ def _canon(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
-def _trigger_to_dict(t: Trigger) -> dict[str, Any]:
-    """从结构化 Trigger 回写 IR dict（不读 raw）——投影即真值检验。"""
+def _trigger_to_dict(t: Trigger, _depth: int = 0) -> dict[str, Any]:
+    """从结构化 Trigger 回写 IR dict（不读 raw）——投影即真值检验。
+
+    F6：group 递归走者之一（第十七轮实测的 cyclic_crash 站点）。预算取 `MAX_TRIGGER_DEPTH`
+    那份单一真值源，超限抛 `TriggerDepthError` 而不是把 RecursionError 漏给调用方。
+    """
+    check_trigger_depth(_depth, "fidelity._trigger_to_dict")
     out: dict[str, Any] = {"type": t.type}
     if t.entity_id is not None:
         out["entity_id"] = t.entity_id
@@ -48,7 +53,7 @@ def _trigger_to_dict(t: Trigger) -> dict[str, Any]:
     if t.op is not None:
         out["op"] = t.op
     if t.sources:
-        out["sources"] = [_trigger_to_dict(s) for s in t.sources]
+        out["sources"] = [_trigger_to_dict(s, _depth + 1) for s in t.sources]
     return out
 
 

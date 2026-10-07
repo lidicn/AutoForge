@@ -27,8 +27,21 @@ import sys
 import traceback
 from typing import Any, Callable
 
+from homesdk.adm.errors import (
+    ADM_ERR_AUTH_REQUIRED,
+    ADM_ERR_INTERNAL,
+    ADM_ERR_PAYLOAD_INVALID,
+)
+
 from . import af_service as svc
-from .af_auth import AuthCodeStore, PairCodeStore, TokenExpired, TokenRegistry
+from .af_auth import (
+    AuthCodeStore,
+    PairCodeStore,
+    TokenExpired,
+    TokenRegistry,
+    redeem_pair_code,
+    request_pair_code,
+)
 from .af_store import DEFAULT_STORE_ROOT, GraphStore
 from .af_telemetry import record_failure
 
@@ -133,6 +146,9 @@ def _t_compile(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     if not text.strip():
         return {
             "ok": False,
+            # 契约 §7.2 落点②：`code` 是联动口径的码（顶层，对端按它分档）；
+            # `error.code` 是 AF 自己的细粒度子码——两个键各管一层，不许合并成一个。
+            "code": ADM_ERR_PAYLOAD_INVALID,
             "ir": None,
             "nl": "",
             "diagnostics": [],
@@ -256,8 +272,17 @@ def _t_request_pair(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 
     码只回显给用户（不返回给 agent），agent 等待用户口述码后调 `af_pair` 兑换令牌。
     """
-    hint = (args.get("agent_name_hint") or "").strip() or "未知 agent"
-    pc = _pair_store(store).create(hint)
+    if not _pair_store(store).is_accepting():
+        # owner 按了"暂停接受配对请求"（裁定 20261006 §一）。这一档 MCP 面与匿名 HTTP 面必须
+        # 同一个口径，否则用户在弹窗里止血只停了一半。
+        # 码按契约 §7.2 的口径落：这一条发生在"agent 还没有令牌"的边界上 ⇒ AUTH_REQUIRED，
+        # 精确原因留在 `error` 里（六个注册码里没有"owner 策略性暂停"这一档，已提 DCD 复议）。
+        return {
+            "ok": False,
+            "code": ADM_ERR_AUTH_REQUIRED,
+            "error": "用户已暂停接受配对请求（ForgeSight 里恢复后重试）",
+        }
+    pc = request_pair_code(_pair_store(store), args.get("agent_name_hint") or "")
     return {
         "ok": True,
         "expires_at": pc.expires_at,
@@ -267,20 +292,19 @@ def _t_request_pair(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 
 def _t_pair(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     """agent 用配对码兑换运行时签发的 Bearer 令牌（subject=agent_name）。"""
-    code = (args.get("code") or "").strip()
-    if not code:
-        return {"ok": False, "error": "缺少 code 参数"}
-    pc = _pair_store(store).consume(code)
-    if pc is None:
-        return {"ok": False, "error": "配对码无效、已使用或已过期"}
-    agent_name = (args.get("agent_name") or "").strip() or pc.agent_name_hint or "agent"
-    if _MCP_REGISTRY is None:
-        return {"ok": False, "error": "服务未就绪（令牌注册表不可用）"}
-    token = _MCP_REGISTRY.issue_for_agent(agent_name)
+    status, token, subject = redeem_pair_code(
+        _pair_store(store), _MCP_REGISTRY, args.get("code") or "", args.get("agent_name") or ""
+    )
+    if status == "no_code":
+        return {"ok": False, "code": ADM_ERR_PAYLOAD_INVALID, "error": "缺少 code 参数"}
+    if status == "invalid":
+        return {"ok": False, "code": ADM_ERR_AUTH_REQUIRED, "error": "配对码无效、已使用或已过期"}
+    if status == "not_ready":
+        return {"ok": False, "code": ADM_ERR_INTERNAL, "error": "服务未就绪（令牌注册表不可用）"}
     return {
         "ok": True,
         "token": token,
-        "subject": agent_name,
+        "subject": subject,
         "message": "配对成功：请将 token 作为 Bearer 调用 AutoForge API",
     }
 
@@ -344,7 +368,13 @@ def _t_draft(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     try:
         return draft_intent(args["intent"], session_id=args.get("session_id"))
     except DraftError as e:
-        return {"ok": False, "error": {"code": e.code, "message": str(e), "fix": e.fix}}
+        # 意图是 DB/MA 递过来的载荷，被拒就是"载荷校验失败"这一档（契约 §7.2）；
+        # `error.code` 保留 AF 自己的细粒度子码，对端两级都能读。
+        return {
+            "ok": False,
+            "code": ADM_ERR_PAYLOAD_INVALID,
+            "error": {"code": e.code, "message": str(e), "fix": e.fix},
+        }
 
 
 def _t_apply(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:

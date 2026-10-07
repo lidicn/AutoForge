@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import pathlib
 import re
 import zipfile
@@ -153,4 +154,25 @@ def test_installed_homesdk_is_the_version_the_image_installs():
         homesdk.__file__,
         getattr(homesdk, "__version__", None),
         pinned.group(1),
+    )
+
+
+#: DCD 20261007 §六 Q2 登记的权威摘要（`E:\NAS\homesdk\dist\VERSIONS.txt` 0.3.2 段）。
+#: 那次裁定明写"这就是权威值"，理由是 0.3.1 吃过"首投 sha 作废"的亏——0.3.2 只构建过一次、
+#: 源码已入库。改这个值只有一条路：新的 DCD 裁定。
+AUTHORITATIVE_WHEEL_SHA256 = "19bc83a67a96931c4556caec52f29c190aaa03a0a7036e0b41c242a533fb5505"
+
+
+def test_vendored_wheel_is_the_exact_bytes_dcd_registered():
+    """钉**字节**而不是钉版本号：同名不同内容的 wheel 会让"仓里写着 0.3.2"与"跑的真是那枚 0.3.2"脱钩。
+
+    文件名与 `__version__` 都能自述 0.3.2，而 metadata 是打包时写进去的字符串——它证明不了内容。
+    交付面（`Dockerfile.api`/`Dockerfile.test`/`ci.yml`×3）全部按文件名装这一枚，所以这枚字节错了
+    就是四处一起装错，且 CI 照样绿。
+    """
+    path = _wheel()
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert digest == AUTHORITATIVE_WHEEL_SHA256, (
+        f"{path.relative_to(ROOT)} 的 sha256 与 DCD 登记的权威值不符：{digest}",
+        "要么是有人换了 wheel 没走裁定，要么是这条判据的期望值被顺手改过——两者都要停下核对 VERSIONS.txt",
     )

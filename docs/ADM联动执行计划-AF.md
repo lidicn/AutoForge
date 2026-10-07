@@ -186,6 +186,22 @@ AF 代码全绿但镜像未烤——**这是 AF 唯一的硬阻塞**，且与 DB
 | 5 | MCP 面统一 `ADM_ERR_*` + `channel_error`（DB↔AF 硬读数） | DB 调 draft→dry_run→save 全链；AF 不可达 → DB 收 `channel_error` + 停止标已答 | 无 |
 | 6 | 跑 `verify_adm_linkage`（homesdk `scripts/`）三组全绿 | 探针 rc=0（缺一组即红） | 1-5 |
 
+**交付状态（2026-10-07，执行记录 §二之五十八）**：
+
+- **第 2 项 ✅**：`status` 载荷出自 `homesdk.adm.status.encode_status`，AF 不再手写 schema（规格 §三.1）；
+  测试按合同判定（`decode_status` + `state` + `retain is True`），不比字面量——这一格定性由裁定
+  `20261007…-裁定.md` §六 Q2 落笔为**预期变更**，homesdk 规格 §三.4/§四 已由 DCD 当场更正。
+- **第 3 项 ✅（AF 半边）**：发布失败即 `mark_degraded(ADM_ERR_BROKER_UNREACHABLE)` + retained status 转
+  `degraded`，传输恢复即复位并重发同一份 caps。7 条变异腿逐条真红、逐字节还原。**未自决的一格**：
+  `presence.advertise` 没有 `degraded=`/`reasons=`，主题名只能抄库的私有 `_topic` ⇒ 已提 DCD 请 0.3.3 给公开出口。
+- **第 5 项 ✅（AF 半边）**：MCP/HTTP 的 dict 形拒绝全部带顶层 `ADM_ERR_*`，收件面 `_reject` 三处同码。
+  **未自决的两格**：异常路径仍是散文（改形状等于改 DB 的解析口径）、六个码里没有"owner 策略性暂停"档
+  （现落 `AUTH_REQUIRED`，会引导对端往"重登"方向重试）⇒ 同批 DCD 申请。
+- **第 1/4/6 项 ⏳ 窗内验收**：需要合并窗（镜像重烤 + 真 broker + MA 真发洞察）。仓侧已就位：
+  vendored wheel 已换 0.3.2 并按 DCD 登记的权威 sha256 `19bc83a6…fb5505` **钉字节**（不只是钉版本号），
+  `ci.yml`×3 + 两份 Dockerfile + `pyproject` 四处引用同步，全量 `gates.sh` RC=0、`pytest` 3312 passed。
+- 前置依赖第 1 项的两格（`fired|failed` 事件载荷要不要带 `code`）属契约变更，未擅改。
+
 **本仓失败语义**：写面（未授权写 / MCP default-deny）fail-closed + 码；读面（洞察失败、对端离线）degrade-flag + 码；纯提示 fail-open。**禁止静默丢弃。**
 
 ### 契约对齐规范 v2.0（逐字版 · DCD 20261006）

@@ -22,9 +22,9 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 
-# WO-AF-005：homesdk 0.1.1 烘进测试镜像，文件名钉死（与 Dockerfile.api:21-23 同构，不通配）
-COPY docker/homesdk/homesdk-0.3.1-py3-none-any.whl /tmp/homesdk/
-RUN pip install --no-cache-dir /tmp/homesdk/homesdk-0.3.1-py3-none-any.whl
+# WO-AF-005：homesdk 0.3.2 烘进测试镜像，文件名钉死（与 Dockerfile.api:21-23 同构，不通配）
+COPY docker/homesdk/homesdk-0.3.2-py3-none-any.whl /tmp/homesdk/
+RUN pip install --no-cache-dir /tmp/homesdk/homesdk-0.3.2-py3-none-any.whl
 
 RUN pip install --no-cache-dir -e ".[dev]"
 

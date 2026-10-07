@@ -21,7 +21,7 @@ from .af_audit import INSTANCE_DEBOUNCED, INSTANCE_REJECTED, QUOTA_EXCEEDED, Aud
 from .af_bus import EVENT_ENTITY_PREFIX, BusEvent
 from .af_executor import EMIT_TIMER_KIND, NodeExecutor
 from .af_instance import Instance, InstanceManager
-from .af_ir import Automation, Graph, Node, Trigger
+from .af_ir import Automation, Graph, Node, Trigger, check_trigger_depth
 from .af_state import StateProvider
 from .af_time import TimeSource, SystemTimeSource, parse_duration
 from .af_fire_recorder import FireRecorder
@@ -252,7 +252,9 @@ class Scheduler:
     # ─────────────────────────────────────────────────────────────────
     # 触发匹配
     # ─────────────────────────────────────────────────────────────────
-    def _satisfied(self, trig: Trigger, event: BusEvent) -> bool:
+    def _satisfied(self, trig: Trigger, event: BusEvent, _depth: int = 0) -> bool:
+        # F6：这是**每个事件都走一次**的运行期路径，暴露面比保存时校验更宽（第十七轮实测）。
+        check_trigger_depth(_depth, "scheduler._satisfied")
         trig = _normalize(trig)
         if trig.type == "group":
             # P1-6：group and 基于状态快照判定（窗口默认 0，严格同时）。
@@ -262,7 +264,7 @@ class Scheduler:
             if trig.op == "and":
                 return all(self._group_sub_satisfied(sub, event) for sub in trig.sources)
             # or 保持原逻辑：任一子 trigger 匹配当前事件即成立
-            results = [self._satisfied(sub, event) for sub in trig.sources]
+            results = [self._satisfied(sub, event, _depth + 1) for sub in trig.sources]
             return any(results)
         if trig.type == "event":
             # v0.4.0 订阅侧：只按事件名**精确**匹配（不支持通配符，KICKOFF §4.1）

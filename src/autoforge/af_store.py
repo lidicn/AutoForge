@@ -37,6 +37,7 @@ __all__ = [
     "GraphDiff",
     "WriteConflictError",
     "ArchiveNameConflict",
+    "ArchiveOwnerUnknown",
     "diff_graphs",
     "find_node",
     "dump_confidence",
@@ -104,6 +105,27 @@ def _alias_conflict(name: str, owner: str, dir_name: str) -> str:
     )
 
 
+class ArchiveOwnerUnknown(Exception):
+    """F12（第十八轮端到端确证）：目录里**有**版本记录，却读不出它属于谁 ⇒ 写/删前无法核对别名。
+
+    旧处置是"读不出 ⇒ 返回 None ⇒ 放行"，理由是"编造一个主人会让写检查假红"。那个理由只
+    否定了「误报撞车」这一半，却没有给另一半定默认值：**归属未知时继续写**，落到别名共享的
+    同一目录里就是覆盖别人的归档。第十八轮的 `poc_failopen` 把整条链路跑完了——损坏
+    `v1.json` ⇒ `_dir_owner` 返回 None ⇒ 守卫放行 ⇒ `save("a_b")` 真的产出 v2。所以后果不是
+    "守卫放行"，是**另一条归档被真覆盖**（第五轮只验到前半截）。
+    ⇒ 正确的默认值是"不放行"，同时仍然不编造主人：本异常既不声称撞车（那是 `ArchiveNameConflict`
+    的语义），也不假装目录干净。
+    """
+
+
+def _owner_unknown(name: str, dir_name: str, version: object, why: str) -> str:
+    return (
+        f"归档名 {name!r} 的目录 {dir_name!r} 里最新记录 v{version}.json {why}，"
+        f"归属无法核对；拒绝写入/删除——`_dir` 的字符白名单是多对一映射，"
+        f"归属未知时继续动盘就可能覆盖另一条归档。请先修复或移走该记录再重试"
+    )
+
+
 def append_jsonl(path: Path, obj: Any) -> None:
     """append-only 追加一行 JSON（单行写入不撕裂，供 telemetry/error_knowledge 复用）。"""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -157,7 +179,12 @@ class GraphStore:
         return self.root / safe
 
     def _dir_owner(self, name: str) -> str | None:
-        """该归档目录**最新**记录里的 `name`；目录不存在或没有记录时 None。"""
+        """该归档目录**最新**记录里的 `name`；目录不存在或**没有任何版本记录**时 None。
+
+        None 只表示一种事实：「目录里没有版本记录」——没有主人可核对，也没有主人的东西可覆盖。
+        有记录却读不出归属**不再返回 None**，改抛 `ArchiveOwnerUnknown`（F12：归属未知不等于
+        归属无约束）。仍然不回退到更早的可读记录去"编造"一个主人，那种误报会让写检查假红。
+        """
         directory = self._dir(name)
         if not directory.is_dir():
             return None
@@ -166,10 +193,16 @@ class GraphStore:
             return None
         try:
             record = json.loads((directory / f"v{target}.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
+        except (OSError, ValueError) as exc:
+            raise ArchiveOwnerUnknown(
+                _owner_unknown(name, directory.name, target, "读不出/不可解析")
+            ) from exc
         owner = record.get("name") if isinstance(record, dict) else None
-        return owner if isinstance(owner, str) else None
+        if isinstance(owner, str) and owner:
+            return owner
+        raise ArchiveOwnerUnknown(
+            _owner_unknown(name, directory.name, target, "没有可用的 name 字段")
+        )
 
     def _record_owner(self, name: str) -> str:
         """该归档最新记录里的 `owner`（归档归属主体）；无记录或无字段时空串。
@@ -196,6 +229,9 @@ class GraphStore:
 
         只读**最新那一条**记录（一次 `json.loads`），不扫全目录——按版本数线性放大读是另一条账
         （第五轮审计判的正是"只增不减"那一族）。别名一旦出现，最新记录必然带着上一个主人的名字。
+
+        两条拒绝分开：撞车 ⇒ `ArchiveNameConflict`；有记录但归属读不出 ⇒ `_dir_owner` 直接抛
+        `ArchiveOwnerUnknown`（F12——这条不再走到"放行"那一支）。
         """
         owner = self._dir_owner(name)
         if owner is not None and owner != name:
@@ -207,6 +243,10 @@ class GraphStore:
         比写入那条严格（写入只看最新一条）：删除是不可逆的，而 `DELETE /api/automations/{name}`
         与 `overwrite` 导入会 `rmtree`/逐条 unlink 整个目录——只要目录里混进过别人的版本记录，
         删下去就是连带销毁另一条归档。
+
+        F12 边缘实例：坏记录旧形状是 `continue`（"由加载路径各自处置"）。在删除这一侧那个默认值
+        正好反了——读不出归属的那条**可能正是别人的归档**，跳过它等于"看不见就当不存在"。
+        归属读不出 ⇒ 抛 `ArchiveOwnerUnknown`，不放行删除。
         """
         directory = self._dir(name)
         if not directory.is_dir():
@@ -214,13 +254,21 @@ class GraphStore:
         for path in sorted(directory.glob("v*.json")):
             try:
                 record = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue  # 坏记录由加载路径各自处置，这里不为它放行别名
-            if isinstance(record, dict) and isinstance(record.get("name"), str) \
-                    and record["name"] != name:
+            except (OSError, ValueError) as exc:
+                raise ArchiveOwnerUnknown(
+                    f"归档目录 {directory.name!r} 里的 {path.name} 读不出归属，"
+                    f"拒绝按 {name!r} 删除（删除不可逆，归属未知的那条可能正是别人的归档）"
+                ) from exc
+            owner = record.get("name") if isinstance(record, dict) else None
+            if isinstance(owner, str) and owner != name:
                 raise ArchiveNameConflict(
-                    f"归档目录 {directory.name!r} 里混有 {record['name']!r} 的版本记录，"
+                    f"归档目录 {directory.name!r} 里混有 {owner!r} 的版本记录，"
                     f"拒绝按 {name!r} 删除（删除不可逆，会连带销毁对方整条归档）"
+                )
+            if not isinstance(owner, str):
+                raise ArchiveOwnerUnknown(
+                    f"归档目录 {directory.name!r} 里的 {path.name} 没有可用的 name 字段，"
+                    f"无法确认它属于 {name!r}，拒绝删除"
                 )
 
     @property
@@ -315,6 +363,12 @@ class GraphStore:
             owner = rec.get("name")
             if isinstance(owner, str) and owner != name:
                 raise ArchiveNameConflict(_alias_conflict(name, owner, directory.name))
+            if not isinstance(owner, str):
+                # F12 同形态：这一支复用已读记录、不额外读盘，但"读不出归属"绝不能等于"无约束"——
+                # 它紧接着要落一条新版本，别名共享目录时那就是覆盖别人的归档。
+                raise ArchiveOwnerUnknown(
+                    _owner_unknown(name, directory.name, rec.get("version"), "（锁内复用）没有可用的 name 字段")
+                )
             mutate(rec.setdefault("graph", {}))
             version = (self.latest(name) or 0) + 1
             rec["version"] = version

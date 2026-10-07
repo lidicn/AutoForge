@@ -59,3 +59,13 @@ export interface PairEvent {
   agent_name_hint: string
   expires_at: number
 }
+
+/** GET 现值：只读盘点不回 `ok`（后端 AST 门禁 fake-ok-const 的仓内口径）。 */
+export interface PairAcceptingState {
+  accepting: boolean
+}
+
+/** POST 新值：`ok` 是「写入后回读 == 请求」这一实际校验的读数。 */
+export interface PairAccepting extends PairAcceptingState {
+  ok: boolean
+}

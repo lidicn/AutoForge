@@ -16,7 +16,7 @@ from typing import Any, Iterable, Mapping
 from .af_adapters import POLICY_PARAMS, classify_action, is_destructive, host_of
 from .af_affordance import domain_of, possible_states
 from .af_bus import EVENT_ENTITY_PREFIX
-from .af_ir import Automation, Graph, Node, Trigger
+from .af_ir import Automation, Graph, Node, Trigger, check_trigger_depth
 from .af_ir.expr import ExprError, check_expr, collect_var_refs
 from .af_nl import render_automation
 
@@ -675,22 +675,21 @@ class StaticScanner:
         now = _dt.datetime.now(_dt.timezone.utc)
 
         def _triggers(node):
+            # 直接交给 _triggers_node：旧形状在这里抄了一份 group 分支，
+            # 两处各自递归 ⇒ F6 的预算只能装在一条腿上。
             tr = node.trigger
             if tr is None:
                 return
-            if getattr(tr, "type", "") == "group":
-                for sub in (tr.sources or []):
-                    yield from _triggers_node(sub)
-            else:
-                if getattr(tr, "entity_id", ""):
-                    yield tr.entity_id
+            yield from _triggers_node(tr, 0)
 
-        def _triggers_node(tr):
+        def _triggers_node(tr, _depth: int = 0):
+            # F6：group 递归走者之一（第十七轮实测的 cyclic_crash 站点），预算与 IR 层同源。
             if tr is None:
                 return
+            check_trigger_depth(_depth, "scanner._triggers_node")
             if getattr(tr, "type", "") == "group":
                 for sub in (tr.sources or []):
-                    yield from _triggers_node(sub)
+                    yield from _triggers_node(sub, _depth + 1)
             elif getattr(tr, "entity_id", ""):
                 yield tr.entity_id
 

@@ -11,6 +11,12 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+from homesdk.adm.errors import (
+    ADM_ERR_BROKER_UNREACHABLE,
+    ADM_ERR_INTERNAL,
+    ADM_ERR_PAYLOAD_INVALID,
+)
+from homesdk.adm.status import STATE_DEGRADED, STATE_OFFLINE, STATE_ONLINE, decode_status
 
 from autoforge import af_mqtt_bridge
 from autoforge.af_audit import AuditLog
@@ -23,6 +29,7 @@ from autoforge.af_mqtt_bridge import (
     MAX_ERROR_CHARS,
     NO_FAILURE_REASON,
     PRESENCE_CAPS_VERSION,
+    STATUS_TOPIC,
     AfMqttBridge,
     BridgeUnavailable,
     TRANSPORT_EVIDENCE_PREVIEW,
@@ -45,15 +52,17 @@ from autoforge.af_time import VirtualTimeSource, load_tz
 class FakeClient:
     """鸭子类型的 paho client：只记录调用，不联网。"""
 
-    def __init__(self, *, explode_on_publish: bool = False) -> None:
+    def __init__(self, *, explode_on_publish: bool = False, fail_on: tuple[str, ...] = ()) -> None:
         self.published: list[dict] = []
         self.subscribed: list[str] = []
         self.will: dict | None = None
         self.on_message = None
         self.explode_on_publish = explode_on_publish
+        #: 只让某些主题失败——降级播报必须能在"事件发不出去、status 还发得出去"的窗口里被读到。
+        self.fail_on = tuple(fail_on)
 
     def publish(self, topic, payload, qos=0, retain=False):
-        if self.explode_on_publish:
+        if self.explode_on_publish or topic in self.fail_on:
             raise OSError("broker 掉了")
         self.published.append({"topic": topic, "payload": payload, "qos": qos, "retain": retain})
         return SimpleNamespace(rc=0)
@@ -84,13 +93,26 @@ class RecordingSink:
 
 # ── 出向：presence（第 2 步）────────────────────────────────────────────
 def test_start_publishes_retained_online_and_sets_lwt():
+    """homesdk 0.3.2 起 `adm/*/status` 是 JSON 文档，不再是裸字面量。
+
+    字段表从 `homesdk.adm.status` 读，不在这里抄第二份；本条只锁 AF 真正负责的三件事：
+    retained 标志、AF 传进去的 `caps.version` 有没有 round-trip 进 status 文档、
+    LWT 与显式 offline 是不是同一个编码器产的。
+    """
     client = FakeClient()
     _bridge(client).start(caps=caps_payload(tools=["af_draft"], version="2.5"))
 
     status = [p for p in client.published if p["topic"] == "adm/autoforge/status"]
-    assert len(status) == 1 and status[0]["retain"] is True and status[0]["payload"] == "online"
+    assert len(status) == 1 and status[0]["retain"] is True
+    # 反空洞：decode_status 认 legacy 字面量，所以光"解得出 online"不足以证明升级发生——载荷必须真是文档
+    assert json.loads(status[0]["payload"]), status[0]["payload"]
+    st = decode_status(status[0]["payload"])
+    assert st["state"] == STATE_ONLINE and st["version"] == "2.5", st
     # LWT：进程被 kill -9 时由 broker 代发 offline，否则对端永远以为 AF 在线
-    assert client.will == {"topic": "adm/autoforge/status", "payload": "offline", "qos": 1, "retain": True}
+    will = client.will
+    assert will["topic"] == "adm/autoforge/status" and will["qos"] == 1 and will["retain"] is True
+    assert json.loads(will["payload"]), will["payload"]
+    assert decode_status(will["payload"])["state"] == STATE_OFFLINE, will
     caps = json.loads([p for p in client.published if p["topic"] == "adm/autoforge/caps"][0]["payload"])
     assert caps == {"mcp": True, "tools": ["af_draft"], "version": "2.5"}
 
@@ -101,8 +123,90 @@ def test_stop_publishes_retained_offline():
     bridge.start()
     bridge.stop()
     last = [p for p in client.published if p["topic"] == "adm/autoforge/status"][-1]
-    assert last["payload"] == "offline" and last["retain"] is True
+    assert last["retain"] is True
+    assert json.loads(last["payload"]), last["payload"]
+    assert decode_status(last["payload"])["state"] == STATE_OFFLINE
     assert bridge.started is False
+
+
+def test_plan_caps_version_is_the_number_the_contract_assigns_to_af():
+    """契约 v2.0 §7.1（计划 §六 逐字快照第 201 行）写死「AF 2.6 / MA 1.4 / DB 2.7」。
+
+    这条钉的是**常量的值**：`caps.version` 与 `status.version` 都由它供给（后者由
+    `presence.advertise` 从 caps 回退取值），值写错不会有任何其它测试变红——只有对端查账时才看得见。
+    生产路径把常量带进 retained 载荷那一跳由 `test_start_from_env_publishes_the_plan_caps_version` 钉。
+    """
+    assert PRESENCE_CAPS_VERSION == "2.6"
+
+
+def _status_docs(client):
+    return [decode_status(p["payload"]) for p in client.published if p["topic"] == STATUS_TOPIC]
+
+
+def test_event_publish_failure_flips_retained_status_to_degraded_with_a_code():
+    """计划 §六 第 3 项：发不出去事件 ⇒ retained status 转 `degraded` 且 `reasons` 带 `ADM_ERR_*`。
+
+    窗口是"事件这条腿掉了、status 还发得出去"（broker 半死 / 主题被 ACL 拒）。此时最坏的
+    读法是 status 仍写着 online——对端会照着"AF 一切正常"去等它不会发出来的 fired。
+    """
+    client = FakeClient(fail_on=(FIRED_TOPIC,))
+    bridge = _bridge(client)
+    bridge.start(caps=caps_payload(tools=["af_draft"]))
+    assert _status_docs(client)[-1]["state"] == STATE_ONLINE
+
+    out = bridge.publish_fired(automation_id="a-1", instance_id="i-1")
+    assert out["published"] is False
+    st = _status_docs(client)[-1]
+    assert st["state"] == STATE_DEGRADED and st["degraded"] is True, st
+    assert st["reasons"] == [ADM_ERR_BROKER_UNREACHABLE], st
+    assert st["version"] == "2.6", st
+    last = [p for p in client.published if p["topic"] == STATUS_TOPIC][-1]
+    assert last["retain"] is True and last["qos"] == 1, last
+
+
+def test_degraded_status_clears_when_the_transport_returns():
+    """降级位不复位＝让对端永远读着一张旧病历。"""
+    client = FakeClient(fail_on=(FIRED_TOPIC,))
+    bridge = _bridge(client)
+    bridge.start(caps=caps_payload(tools=["af_draft"]))
+    bridge.publish_fired(automation_id="a-1", instance_id="i-1")
+    assert _status_docs(client)[-1]["state"] == STATE_DEGRADED
+
+    client.fail_on = ()
+    assert bridge.publish_fired(automation_id="a-1", instance_id="i-1")["published"] is True
+    st = _status_docs(client)[-1]
+    assert st["state"] == STATE_ONLINE and not st.get("reasons"), st
+    assert bridge.degraded == []
+    # 复位时 caps 不能丢：对端读到的应当是同一份能力清单，不是"在线了但工具没了"
+    caps = json.loads([p for p in client.published if p["topic"] == "adm/autoforge/caps"][-1]["payload"])
+    assert caps["tools"] == ["af_draft"], caps
+
+
+def test_degraded_announcement_that_also_fails_does_not_reach_the_execution_chain():
+    """broker 全掉时连降级播报都发不出去——这条必须只计数、不抛（否则自动化跟着陪葬）。"""
+    client = FakeClient(explode_on_publish=True)
+    bridge = _bridge(client)
+    out = bridge.publish_failed(automation_id="a-1", instance_id="i-1", error="boom")
+    assert out["published"] is False
+    assert bridge.degraded == [ADM_ERR_BROKER_UNREACHABLE]  # 位仍然记着，等传输回来再播报
+    assert bridge.counts["publish_errors"] == 2, bridge.counts  # 事件 + 降级播报各一次
+
+
+def test_inbound_reject_carries_an_adm_err_code():
+    """契约 §7.2 纪律：联动失败必须带码，禁止"只记一句不带码的日志"。"""
+    bridge = _bridge(FakeClient(), proposal_sink=RecordingSink())
+    msg = SimpleNamespace(topic=INSIGHTS_TOPIC, payload=b"{not json")
+    out = bridge.handle_message(None, None, msg)
+    assert out["handled"] is False and out["code"] == ADM_ERR_PAYLOAD_INVALID, out
+    assert bridge.rejected[-1]["code"] == ADM_ERR_PAYLOAD_INVALID, bridge.rejected
+
+
+def test_af_side_wiring_gap_is_not_blamed_on_the_peer():
+    """`no_proposal_sink_wired` 是 AF 自己没接落点，用兜底码——发件方（MA）不该被读成"载荷有问题"。"""
+    bridge = _bridge(FakeClient())  # proposal_sink=None
+    msg = SimpleNamespace(topic=INSIGHTS_TOPIC, payload=json.dumps({"insight_id": "i-1", "summary": "x"}).encode())
+    out = bridge.handle_message(None, None, msg)
+    assert out["code"] == ADM_ERR_INTERNAL, out
 
 
 def test_start_from_env_publishes_the_plan_caps_version(monkeypatch):
@@ -274,11 +378,15 @@ def test_failed_event_error_is_bounded():
 
 
 def test_publish_error_is_recorded_not_raised():
-    """broker 抖动不许把自动化执行链带崩，但必须留下可见的账。"""
+    """broker 抖动不许把自动化执行链带崩，但必须留下可见的账。
+
+    一次事件失败会顺带触发 degraded 快照播报（契约 §7.3 degrade-flag 档），broker 全掉时那条也发不出去
+    ⇒ 同一次故障记 2 次写失败。计数从 1 抬到 2 是这次改动的**读数变化**，不是把判据放宽。
+    """
     bridge = _bridge(FakeClient(explode_on_publish=True))
     result = bridge.publish_fired(automation_id="auto_a", instance_id="i1")
     assert result["published"] is False
-    assert bridge.counts["publish_errors"] == 1
+    assert bridge.counts["publish_errors"] == 2
     assert bridge.stats()["recent_errors"]
 
 

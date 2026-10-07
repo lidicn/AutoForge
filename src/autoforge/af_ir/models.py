@@ -34,6 +34,9 @@ __all__ = [
     "EDGE_PRIORITY",
     "VAR_TYPES",
     "IRValidationError",
+    "MAX_TRIGGER_DEPTH",
+    "TriggerDepthError",
+    "check_trigger_depth",
     "EmitDecl",
     "AskSpec",
     "AskAnswer",
@@ -105,6 +108,28 @@ class IRValidationError(Exception):
         self.errors = list(errors)
 
 
+#: trigger group 嵌套深度上限（F6）——**单一真值源**：`Trigger` 的每一个递归走者都引这个常数。
+#: 与 `expr.MAX_EXPR_DEPTH` / `condition_norm.MAX_CNF_CLAUSES` 同口径；condition 侧有预算、
+#: trigger 侧一个都没有，正是第十七轮实测确证的那道缺口。
+MAX_TRIGGER_DEPTH = 32
+
+
+class TriggerDepthError(ValueError):
+    """trigger group 嵌套超预算或自引用（F6）。
+
+    基类选 `ValueError`：`entity_ids` / `leaf_triggers` 这两条腿历史上抛的就是裸 ValueError，
+    调用方按 ValueError 兜底的不能因为换成具名异常而漏接（换名是为了能判据，不是为了改契约）。
+    """
+
+
+def check_trigger_depth(depth: int, where: str) -> None:
+    if depth > MAX_TRIGGER_DEPTH:
+        raise TriggerDepthError(
+            f"trigger group 嵌套超过预算 {MAX_TRIGGER_DEPTH}（{where}）——"
+            f"拒绝继续递归（手工构造的深嵌套或自引用都会走到这里，RecursionError 不是兜底）"
+        )
+
+
 # ─────────────────────────────────────────────────────────────────────
 # 组件
 # ─────────────────────────────────────────────────────────────────────
@@ -132,7 +157,10 @@ class Trigger:
     sources: tuple["Trigger", ...] = ()
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Trigger":
+    def from_dict(cls, data: Mapping[str, Any], _depth: int = 0) -> "Trigger":
+        # F6：反序列化边界也要有预算。第十七轮实测的是 depth 1000/3000 崩在下游走者身上，
+        # 但真正该拦的第一站是这里——深嵌套的 dict 一旦在这里展开成对象树，后面每一站都得再崩一次。
+        check_trigger_depth(_depth, "from_dict")
         return cls(
             type=data["type"],
             entity_id=data.get("entity_id"),
@@ -142,7 +170,9 @@ class Trigger:
             offset=data.get("offset"),
             at=data.get("at"),
             op=data.get("op"),
-            sources=tuple(cls.from_dict(s) for s in data.get("sources", ())),
+            sources=tuple(
+                cls.from_dict(s, _depth=_depth + 1) for s in data.get("sources", ())
+            ),
         )
 
     def entity_ids(self, _depth: int = 0) -> set[str]:
@@ -153,8 +183,7 @@ class Trigger:
 
         F6 修复：group 嵌套加深度限制，与 leaf_triggers 同口径。
         """
-        if _depth > 32:
-            raise ValueError(f"Trigger group 嵌套超过 32 层，拒绝展开 entity_ids")
+        check_trigger_depth(_depth, "entity_ids")
         out: set[str] = set()
         if self.type == "event" and self.event:
             from ..af_bus import EVENT_ENTITY_PREFIX  # 局部导入：避免 af_ir 模块级依赖 af_bus
@@ -170,10 +199,10 @@ class Trigger:
         """展开 group，yield 出所有叶子触发源。
 
         F6 修复：group 嵌套无深度上限，恶意/手工构造的深嵌套 group 会递归崩溃。
-        加深度限制（默认 32 层），超限抛 ValueError（fail-closed，不静默截断）。
+        预算取 `MAX_TRIGGER_DEPTH`（单一真值源，超限抛 `TriggerDepthError`，
+        fail-closed，不静默截断）。
         """
-        if _depth > 32:
-            raise ValueError(f"Trigger group 嵌套超过 32 层（可能是循环引用或异常构造），拒绝展开")
+        check_trigger_depth(_depth, "leaf_triggers")
         if self.type == "group":
             for sub in self.sources:
                 yield from sub.leaf_triggers(_depth + 1)

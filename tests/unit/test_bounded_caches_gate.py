@@ -550,7 +550,7 @@ def test_real_repo_is_green(tmp_path):
 
 
 def test_real_repo_measurements_are_pinned():
-    """钉住本批实测：注册表 2 / 固定键 2 / 扫到 122 / 基线 114。
+    """钉住本批实测：注册表 3 / 固定键 3 / 扫到 125 / 基线 114。
 
     数字变了只有两种可能：新增了一个容器（那要走登记或豁免），或者有人动了基线。两者都不该
     悄悄发生——第六轮审计那句"四处现状已是两条腿"就是靠这种核对才没被本门照抄成假账。
@@ -565,7 +565,24 @@ def test_real_repo_measurements_are_pinned():
     已由 BUG-14/18 加 count 上限（有界）；其余多为随实例生命周期回收的诊断/状态容器。它们按
     DCD 裁定逐个转 `BOUNDED_CACHES`（补 TTL 腿 + 测试）或就地豁免，基线只减不增。
 
-    工作树里若躺着未提交的 WIP 模块，扫到数会比 122 更大而基线仍是 114——那种红的意思是
+    注册表 2 → 3（裁定 20261006 §一 B 的匿名配对面把 `RateLimiter._blocked` 从"只随窗口滑动"
+    改成"超限即锁定"，锁定表是新增容器）：它按 DCD 裁定走两条腿——`lock_s` 给 TTL、
+    `LOCK_MAX_KEYS` 给硬上限、`_prune_blocked` 回收，测试是
+    `tests/unit/test_dcd_20261006_pairing_bootstrap.py::test_blocked_map_is_pruned_without_any_read`。
+
+    固定键 2 → 3、扫到 123 → 125（20261007，计划 §六 第 3 项的联动降级面）：`af_mqtt_bridge.py`
+    新增两个容器，各按自己的形状登记，**没有一条是靠挪数字抹平的**——
+    - `AfMqttBridge.caps`：整体替换的 caps 快照（唯一写入口 `advertise()` 每次 `dict(caps)` 覆盖，
+      键集 = `caps_payload()` 的 mcp/tools/version 三键）⇒ 进 `FIXED_KEY_CACHES`，理由同时写在
+      被豁免那一行；判据 D 会核对两处口径，删掉注释就让表项判红。
+    - `AfMqttBridge.degraded`：降级码环形清单（`mark_degraded()` 去重 + `_keep()` 按 `MAX_HISTORY`
+      裁剪、传输恢复即清空）。它**不进** `BOUNDED_CACHES`：那条 `ttl` 腿写不出诚实的值——broker
+      没回来时降级码不该自行过期成"健康"，给一条不存在的腿盖章正是注册表 docstring 拒绝的那种假账。
+      所以走就地豁免，理由写在声明行；那条封顶腿由
+      `tests/unit/test_diagnostic_ring_bounds.py::test_bridge_degraded_ring_is_capped_without_reads`
+      钉住（同一批：`_keep` 此前在全仓没有任何"纯写不读也被回收"的测试）。
+
+    工作树里若躺着未提交的 WIP 模块，扫到数会比 125 更大而基线仍是 114——那种红的意思是
     "新容器没登记"，不是这行数字错了，登记处置归那一批自己，不许靠挪动这里的数字把它抹平。
     """
     gate = _gate()
@@ -573,8 +590,8 @@ def test_real_repo_measurements_are_pinned():
     bounded, fixed, errs = gate.read_registry(src)
     containers, _lines, scan_errs = gate.scan(src)
     assert errs == [] and scan_errs == []
-    assert len(bounded) == 2 and len(fixed) == 2
-    assert len(containers) == 122 and len(gate.BASELINE) == 114
+    assert len(bounded) == 3 and len(fixed) == 3
+    assert len(containers) == 125 and len(gate.BASELINE) == 114
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"

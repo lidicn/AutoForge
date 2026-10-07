@@ -4937,3 +4937,161 @@ AssertionError: ('E:\\NAS\\homesdk\\src\\homesdk\\__init__.py', '0.3.2', '0.3.1'
 ③ F16 的库侧深度预算排期（A 库侧修／B 授权 AF 临时绕行并显式报范围损失），并问一句 MA/DB 的 CI 是否同炸。
 
 —— AutoForge 开发 · 2026-10-07
+
+---
+
+## 二之五十八、落地 homesdk 0.3.2 消费侧 + 计划 §六 第 3/5 项：降级有码、MCP 有码、wheel 钉字节
+
+裁定 `20261007-MA五件与AF一件-裁定.md` §六 把 AF 三件都落了笔（Q1 bump 窗口=A、Q2 presence 载荷定性=预期变更、
+Q3 F16=A 库侧修）。本批按那份裁定做完 AF 半边，并把上一批 §二之五十七 记下的"未修读数"（仓里钉 0.3.1）消掉。
+
+### 一、0.3.2 消费面（裁定 §六 Q1，A 案）
+
+| 引用点 | 现值 | 核对方式 |
+|---|---|---|
+| `docker/homesdk/` | 只剩 `homesdk-0.3.2-py3-none-any.whl`（0.3.1 那枚删除） | `ls` + `sha256sum` |
+| `.github/workflows/ci.yml:25/42/63` | 三处 `pip install …/homesdk-0.3.2-…whl` | grep 全仓 `homesdk-0.3.1` 已零命中（docs 除外） |
+| `docker/Dockerfile.api:26-27`、`Dockerfile.test:26-27` | COPY + pip install 同一枚 0.3.2 | 同上 |
+| `pyproject.toml:61` | `homesdk>=0.3.2` | 现读 |
+
+**字节级 pin 新增一格**：裁定登记的权威 sha256 是 `19bc83a67a96931c4556caec52f29c190aaa03a0a7036e0b41c242a533fb5505`，
+本机 vendored 那份实测逐字相同。新增
+`tests/unit/test_mqtt_compose_env.py::test_vendored_wheel_is_the_exact_bytes_dcd_registered`——
+原先这条同源门只核**版本号**（`__version__` 与 wheel 文件名），而 metadata 里的版本号是打包时写的字符串，
+**证明不了内容**；文件名相同、内容不同的另一枚 wheel 会让四处交付面一起装错而 CI 照样绿。
+变异腿：把期望值改成 `deadbeef9…` ⇒ 实测 `1 failed`（红消息当场打出真实摘要），还原后 `7 passed`。
+
+### 二、计划 §六 第 3 项：MQTT 断连不再只是"发不出去"，而是带码的降级
+
+契约 §7.3 的 degrade-flag 档（「MQTT 断连 → health 报 degraded」）此前在 AF 只落到 `counts.publish_errors`
+一个计数器上——**对端读不到**。现在：
+
+- `_publish()` 失败分支：`mark_degraded(ADM_ERR_BROKER_UNREACHABLE)` + `publish_degraded()`；
+- `publish_degraded()` 的载荷出自 `homesdk.adm.status.encode_status(STATE_DEGRADED, version=…, degraded=True, reasons=[…])`，
+  经 `_mqtt.publish(STATUS_TOPIC, …, qos=1, retain=True)` 发出——**没有**走 `presence.advertise`（它发不出 degraded，见下面第四条）；
+- 成功分支：`if self.degraded: clear() + advertise(caps=self.caps or None)`。不复位就是让对端永远读一张旧病历；
+  重发 caps 是因为 AF 记下了 `self.caps`，否则降级后再上线会呈现"在线但 caps 空了"这种比降级更难读的状态。
+
+**反直觉的一格**：`_publish` 失败时 `publish_errors` 从 1 变 2（事件那条 + 降级播报那条）。这不是判据变松——
+broker 掉了以后播报同样发不出去，计数如实反映两次写失败。旧读数 1 是在"失败只发一条"的旧行为下量出来的。
+
+### 三、计划 §六 第 5 项 + 规格 §三.1/§三.2：AF 不再手抄状态与错误码
+
+- `af_mqtt_bridge.py` 与 `af_mcp.py` 的错误码全部 import 自 `homesdk.adm.errors`，状态常量 import 自
+  `homesdk.adm.status`（规格 §三.1「删手写 ADM 常量/状态 schema/probe base」）。
+- `_reject()` 增加 `code` 形参（缺省 `ADM_ERR_PAYLOAD_INVALID`），拒绝记录、返回值、日志三处同码——
+  契约 §7.2 的纪律是「凡是联动失败，必须带码，禁止静默丢弃」，落点③（inbox 拒绝审计）此前只有自由文本。
+- AF 侧的接线缺口不再甩锅对端：`ingest_insight` 没接审批落点时，报的是 `ADM_ERR_INTERNAL`（AF 自己的病），
+  而不是 `PAYLOAD_INVALID`（MA 的病）。
+- MCP 面四类拒绝（`af_request_pair` 暂停档、`af_pair` 三档、`af_compile` 缺参、`af_draft` DraftError）补顶层
+  `code`；`error.code` 那层 AF 自己的细码**保留不合并**——两个键各管一层，合并就丢信息。
+
+### 四、本批实测读数（全绿，且每条腿都被真拆过一次）
+
+| 项 | 读数 |
+|---|---|
+| `GATES_PYTHON=$PY bash gates.sh` | `GATES_RC=0`，结论「门禁干净」 |
+| `pytest -q`（全量） | **3312 passed, 53 skipped, 65 subtests passed, RC=0**（228.59s） |
+| 有界缓存门 | 注册表 3 / 固定键 3 / 扫到 125 / 基线 114 / 就地豁免标记 12 / 死写 0 |
+| 变异腿（降级面 7 条） | 摘掉播报调用、摘掉恢复复位、`_reject` 不带码、版本退回 2.5、去掉去重、拆掉 `_keep` 裁剪、摘掉 MCP 暂停码 ⇒ **7/7 RC=1**；每条跑前 `compile()` 自检语法，跑完逐字节还原（sha256 前后一致） |
+| CONTROL 腿 | 未变异树上同一批测试全绿（上面那行 RC=0） |
+
+**量出来的一个门盲区（不是猜的）**：就地豁免的容器**拆掉裁剪腿后，有界缓存门仍 RC=0**——判据 E 数的是"有没有人读"，
+判据 C 数的是"有没有登记"，没有一条数"裁剪腿还在不在"。所以 `AfMqttBridge.degraded` 的豁免理由里那句
+"经 `_keep()` 按 `MAX_HISTORY` 裁剪"必须**由测试存在**：新增
+`tests/unit/test_diagnostic_ring_bounds.py` 三条（封顶逐出、同码去重、写入口接线）。
+顺带一条旧账：`_keep()` 这条四个环形清单共用的裁剪腿，本批之前**全仓零测试**
+（`grep -rn "MAX_HISTORY\|_keep(" tests/` 零命中）。
+
+**登记口径为何不进 `BOUNDED_CACHES`**：那条 `ttl` 腿写不出诚实的值——broker 没回来时降级码不该自行过期成"健康"。
+注册表 docstring 明写不许"给一条不存在的腿盖章"，所以走就地豁免 + 固定键表（`caps` 是整体替换的三键快照）。
+`test_real_repo_measurements_are_pinned` 的数字按上面实测重钉（固定键 2→3、扫到 123→125），并写明每一格是谁带进来的。
+
+### 五、待窗 / 未修（如实挂着）
+
+| 项 | 状态 |
+|---|---|
+| NAS 侧 wheel 副本 `//192.168.2.200/docker/libs/homesdk/` + 镜像重烤 | **窗口项**（裁定 §六 Q1 ③：不单独开窗，随下一次既有变更窗） |
+| 计划 §六 第 1/4/6 项（HA 侧、insights E2E、`verify_adm_linkage` 三组全绿） | 依赖真 broker / 真机运行面，本机不可验收；探针脚本已随本批改读数口径 |
+| F16（`homesdk/gates/scan.py` 三处自递归无深度预算） | 裁 A 库侧修，排 0.3.3；**AF 未做绕行** |
+| 第十六轮审计 | 「本轮没有新增缺陷」——AF 侧核对成立：F1–F16 的"still_open"是 zip 快照口径（本仓 F8~F16 已在 `9aa6499`/`79d1c3e`/`608cdf1` 落地），报告 §一~§三 的动作项全在 ADM-auditkit 自己仓里 |
+| 降级面四格契约缺口 + 0.3.3 两处库能力 | 已投 DCD：`关键决策部/inbox/20261007-AF-降级面契约缺口四格与0.3.3库能力请求-决策申请.md`（① `advertise` 发不出 degraded、主题名只能手抄私有 `_topic`；② `af/automation/failed` 载荷没有 `code` 格；③ 六个码里没有"owner 策略性暂停"档，现落 `AUTH_REQUIRED` 会引导错误重试；④ `/health` 拿不到桥实例；⑤ MCP 异常路径仍是散文）。**裁定已到**：`关键决策部/decisions/20261007-DB凭据与AF降级面-裁定.md` §二＝甲A/乙A/丙A/丁A/戊A 全"补契约/补库"，其中 **丁A（`/health` 加桥）与戊A（MCP 异常路径改 JSON 带码）是 AF 侧现在就能做的两件**，甲A/乙A/丙A 随 0.3.3 与契约 v2.1——详见 §二之六十 |
+
+—— AutoForge 开发 · 2026-10-07
+
+## 二之五十九、收第十七/十八轮：F6 的深度预算收成单一真源（七条递归腿共用），F12 的"归属未知"不再读成"放行"
+
+> **命名空间消歧**：本节的 F12 是**审计台账**（ADM-auditkit F1–F16）里的 F12＝归档别名共享目录覆盖，
+> 与计划 §六 的"F12 联动（MA→AF 指标回灌，§二之五十 已闭环）"**同号不同事**。今后引用必须带"台账/计划"限定词。
+
+### 一、第十八轮 `poc_failopen`：F12 从"守卫放行"升级为"覆盖真的发生"，且 HEAD 上两个洞都还在
+
+第十八轮的 PoC 把整条链路跑完了：损坏的 `v1.json` ⇒ `_dir_owner` 读不出归属 ⇒ 守卫**放行** ⇒
+`save("a_b")` 真的产出 v2 —— 也就是别名共享目录时**别人的归档被覆盖**，不只是"本该拦住却没拦住"。
+
+**报告 §四 那句"补丁｜`af_store.assert_deletable` 的 `continue` 改为 fail-closed（写入路径 `_dir_owner` 早前已修）"是补丁副本/zip 快照口径，不是本仓 HEAD**：
+现读 HEAD 两处都还是 fail-open——`_dir_owner` 的解析失败支返回 `None`（＝"没有主人"＝放行），
+`assert_deletable` 对读不出的记录直接 `continue`。按项目记忆"外部审计跑的是快照不是 HEAD"复测后成立，故本批在 AF 侧真落码。
+
+修法的关键是**不把另一个方向写错**：归属读不出 ≠ 无主。既不编造主人（否则错误消息里出现别名名，
+把"我不知道是谁"伪装成"我知道是谁"），也不假设无主（否则就是放行）。因此新增 `ArchiveOwnerUnknown`：
+
+| 落点 | 之前 | 现在 |
+|---|---|---|
+| `_dir_owner`（写路径） | 解析失败/无 `name` ⇒ `return None` ⇒ 守卫放行 | 抛 `ArchiveOwnerUnknown`；"目录不存在/没有版本记录"仍返回 `None`（CONTROL 腿钉住） |
+| `assert_deletable`（删路径） | 读不出的记录 `continue` | 抛（删除不可逆，归属未知的那条可能正是别人的归档） |
+| `resave_raw` 锁内复用支 | 复用已读记录、不额外读盘，`owner` 非 str 时静默当无约束 | 抛（这一支紧接着要落新版本，别名共享时就是覆盖别人） |
+| HTTP 面 | 未捕获 ⇒ 500 | `@exception_handler` 双装饰 ⇒ **409**（500 会让调用方以为请求格式有问题，实际要先修盘上那条记录） |
+
+两条拒绝分开：撞车 ⇒ `ArchiveNameConflict`；有记录但归属读不出 ⇒ `ArchiveOwnerUnknown`。
+`import_bundle` 的接缝确认安全——它先 `assert_deletable` 再 `_stash_archive`，不存在"先挪走再发现读不出"。
+
+**旧测试钉的是错的一半**：`test_broken_records_do_not_leak_a_false_conflict` 只断言"别把坏记录报成撞车"，
+顺带把"坏记录 ⇒ 放行"钉成了预期行为。本批改写并在文件头写明它当初错在哪，另立 7 条：
+写入拒绝、无 `name` 也拒、删除拒绝、部分损坏不放宽、无 `name` 记录拒绝删除、HTTP 409、
+外加两条 CONTROL（无记录仍放行 / 健康归档能写能删）——CONTROL 是防"把守卫修成永远拒"。
+
+### 二、第十七轮递归 PoC：F6 十五轮来第一次被自动实测确证，本批把预算收成一处
+
+F6 自第二轮提出（trigger group 全程无深度上限：`expr` 有 `MAX_EXPR_DEPTH`、`condition_norm` 有
+`MAX_CNF_CLAUSES`，trigger 侧一个都没有），十四轮都停在"静态命中＋人工推理"，因为探针构造不出 `Trigger`。
+本轮探针拿到 9 个 `unavailable` → 全变可判定，其中 4 个确证崩溃。
+
+本批把"预算"从**两条腿上各手抄一个 32** 改成一个真源：`af_ir.models.MAX_TRIGGER_DEPTH = 32`
+＋ `check_trigger_depth(depth, where)` ＋ `TriggerDepthError(ValueError)`（选 `ValueError` 为基类：
+调用方已有的 `except ValueError` 降级路径不用改），经 `af_ir/__init__` 导出。
+
+七个递归点共用同一守卫：`Trigger.from_dict` / `entity_ids` / `leaf_triggers` /
+`af_fidelity._trigger_to_dict` / `af_nl._trigger_text` / `af_scheduler._satisfied` / `af_scanner._triggers_node`。
+两处细节值得记：
+
+- `_satisfied` 是**每个事件都走一次**的运行期路径，暴露面比保存时校验更宽（第十七轮实测），
+  所以它必须有守卫；而 `_group_sub_satisfied` 经现读确认只处理 state/event 叶子（非递归），不加假守卫。
+- `af_scanner` 里原本抄了一份 group 分支的两个 walkor，本批让外层委托内层，重复的 group 分支消失——
+  少一处"两份实现只改一份"的下一步缺陷。
+
+新增 `tests/unit/test_ir_trigger_depth_budget.py`（13 条）：单一真源门（models 里 `MAX_TRIGGER_DEPTH = ` 只出现一次、
+每个消费方含 `check_trigger_depth` 且不留 `"> 32"` 字面量）、`MAX_TRIGGER_DEPTH == MAX_EXPR_DEPTH == 32`、
+CONTROL 浅树七条腿都出正确结果、恰好到界不报、参数化六腿超界逐一拒绝、自引用触发拒绝、
+`from_dict` 界与循环 dict、反空洞腿（把 `af_fidelity.check_trigger_depth` 打桩成 no-op + `setrecursionlimit(400)`
+⇒ 实测 `RecursionError`，证明守卫确实在拦而不是消息好看）。
+
+### 三、本批实测读数（全绿，且每条腿都被真拆过一次）
+
+| 项 | 读数 |
+|---|---|
+| `GATES_PYTHON=$PY bash gates.sh` | `GATES_RC=0`，结论「门禁干净」 |
+| `pytest -q`（全量，加删侧测试后重跑） | **3332 passed, 53 skipped, 65 subtests passed, PYTEST_RC=0**（1084.68s ≈ 18:04）；前一轮（未加该测试）为 3331 passed |
+| 有界缓存门 | 注册表 3 / 固定键 3 / 扫到 125 / 基线 114 / 就地豁免标记 12 / 死写 0（与 §二之五十八 同读数，本批未增删有界容器） |
+| 变异腿（F12+F6 共 12 条） | **12/12 RC=1**，跑前 `compile()` 自检、跑完逐字节还原（sha256 前后一致）；变异树与工作树隔离 |
+| 归档目录 | `docs/audit/归档/` 70 份（第十七/十八轮报告本批转入），audit 顶层只剩 `index.md` + 三个子目录 |
+
+**两条"腿没响"的实录，都记下来当判据**：
+
+1. **腿 L 第一次跑是绿的（RC=0）**——删侧"合法 JSON 但没有 `name` 字段"那一支没有任何测试覆盖。
+   不是脚本坏了，是判据有洞。补 `test_delete_refuses_record_without_name_field` 后重跑腿 L ⇒ RC=1。
+   这正是本仓反复登记的第二类失效：**探针/测试自身的覆盖缺口**。
+2. **腿 C 的锚点命中 2 次**（`if not isinstance(owner, str):` 在 `assert_deletable` 与 `resave_raw` 各一份），
+   变异脚本按"锚点必须唯一"拒绝写入并保留原文件——**这正是它该有的行为**；改用两行唯一锚点（带下一行注释）后 RC=1。
+
+—— AutoForge 开发 · 2026-10-07

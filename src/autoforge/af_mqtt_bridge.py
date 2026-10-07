@@ -24,6 +24,12 @@ from uuid import uuid4
 
 from homesdk import mqtt as _mqtt
 from homesdk import presence as _presence
+from homesdk.adm.errors import (
+    ADM_ERR_BROKER_UNREACHABLE,
+    ADM_ERR_INTERNAL,
+    ADM_ERR_PAYLOAD_INVALID,
+)
+from homesdk.adm.status import STATE_DEGRADED, encode_status
 from homesdk.config import MissingEnv
 
 from .af_time import SystemTimeSource, TimeSource, to_house_iso
@@ -36,6 +42,7 @@ __all__ = [
     "FORBIDDEN_SUBSCRIPTIONS",
     "INSIGHT_CONF_CAP",
     "PRESENCE_NAME",
+    "STATUS_TOPIC",
     "caps_payload",
     "env_enabled",
     "make_ask_sink",
@@ -52,6 +59,10 @@ PRESENCE_NAME = "autoforge"
 FIRED_TOPIC = "af/automation/fired"
 FAILED_TOPIC = "af/automation/failed"
 INSIGHTS_TOPIC = "ma/insights"
+#: `presence` 没有公开的主题拼装口（`_topic` 是私有的），所以本仓自己拼这一条。
+#: 它**不**复制进 `scripts/verify_adm_window.py`——那条是外部探针，共用常量就成了"读应用自己的
+#: 常数去验应用"的自证，探针就再也读不出"AF 发错了主题"。
+STATUS_TOPIC = f"adm/{PRESENCE_NAME}/status"
 
 #: 绝不订阅的主题族。inbox 的所有权与校验权在 DB（homesdk.presence.INBOX_TOPICS 就是那份白名单）。
 FORBIDDEN_SUBSCRIPTIONS: tuple[str, ...] = tuple(sorted(_presence.INBOX_TOPICS)) + (
@@ -77,8 +88,10 @@ MAX_ERROR_CHARS = 500
 #: 这个字段携带的信息量是零，而 DB 侧正是拿它向用户解释"为什么失败"。
 NO_FAILURE_REASON = "未记录失败原因（执行链未写入 fail_reason）"
 
-#: `adm/autoforge/caps` 里对外声明的联动版本（ADM v2.5 联动，不是 AF 的发布号）。
-PRESENCE_CAPS_VERSION = "2.5"
+#: `adm/autoforge/{caps,status}` 里对外声明的**计划号**（不是 AF 的发布号）：契约 v2.0 §7.1 逐字
+#: 给三仓定的口径是「AF 2.6 / MA 1.4 / DB 2.7」，而本仓正在跑的就是 §六 那批 v2.6 联动任务。
+#: 由 2.5 升上来是跟着这张表走的——`status.version` 与 `caps.version` 同口径（同一枚常量）。
+PRESENCE_CAPS_VERSION = "2.6"
 
 
 def env_enabled() -> bool:
@@ -304,6 +317,9 @@ class AfMqttBridge:
         self.published: list[dict[str, Any]] = []
         self.rejected: list[dict[str, str]] = []
         self.errors: list[str] = []
+        #: 当前生效的联动降级码（契约 §7.2 的 `ADM_ERR_*`，非空 ⇒ retained status 转 degraded）。
+        self.degraded: list[str] = []  # bounded-cache: exempt(降级码环形清单：唯一写入口 `mark_degraded()` 经 `_keep()` 按 MAX_HISTORY 裁剪并去重，传输恢复即清空。没有 TTL 腿——broker 没回来就不该自行过期成"健康"，所以它不进 BOUNDED_CACHES 给一条不存在的腿盖章)
+        self.caps: dict[str, Any] = {}  # bounded-cache: exempt(整体替换的 caps 快照：唯一写入口 `advertise()` 每次 `dict(caps)` 覆盖，键集 = `caps_payload()` 的 mcp/tools/version 三键，不做增量增长)
         self.counts: dict[str, int] = {
             "fired": 0,
             "failed": 0,
@@ -315,8 +331,42 @@ class AfMqttBridge:
 
     # ── 出向：presence + 事件 ─────────────────────────────────────────
     def advertise(self, *, caps: Mapping[str, Any] | None = None, offline: bool = False) -> None:
-        """发布 `adm/autoforge/status`（retained）+ LWT；`offline=True` 用于优雅退出。"""
+        """发布 `adm/autoforge/status`（retained JSON）+ LWT；`offline=True` 用于优雅退出。
+
+        传过的 `caps` 记在桥上：降级之后传输恢复要靠它重发同一份 caps，否则对端会看到
+        "在线了，但 caps 空了"这种比降级更难读的状态。
+        """
+        if caps is not None:
+            self.caps = dict(caps)
         _presence.advertise(self.client, PRESENCE_NAME, caps=dict(caps) if caps else None, offline=offline)
+
+    def mark_degraded(self, code: str) -> None:
+        """登记一条联动降级码（同码只留一份，队列有界）。"""
+        if code not in self.degraded:
+            self._keep(self.degraded, code)
+
+    def publish_degraded(self) -> dict[str, Any]:
+        """把 retained status 转成 `degraded` + `reasons` 带码（计划 §六 第 3 项，契约 §7.1/§7.3）。
+
+        载荷出自 `homesdk.adm.status.encode_status`——AF 不手写 status schema（0.3.2 规格 §三.1）。
+        broker 都不可达时这条同样发不出去：失败照旧计数、不抛，对端拿到的仍是 LWT 的 offline，
+        而不是"AF 假装自己一切正常"。
+        """
+        text = encode_status(
+            STATE_DEGRADED,
+            version=str(self.caps.get("version") or PRESENCE_CAPS_VERSION),
+            degraded=True,
+            reasons=list(self.degraded),
+        )
+        try:
+            _mqtt.publish(self.client, STATUS_TOPIC, text, qos=1, retain=True)
+        except Exception as exc:  # noqa: BLE001 —— 降级播报失败不能把执行链拖崩，也不能反循环
+            self.counts["publish_errors"] += 1
+            self._keep(self.errors, f"{STATUS_TOPIC}: {type(exc).__name__}: {exc}")
+            logger.warning("[mqtt] degraded 快照发布失败（已计入 publish_errors）：%r", exc)
+            return {"published": False, "topic": STATUS_TOPIC, "error": repr(exc)}
+        self._keep(self.published, {"topic": STATUS_TOPIC, "payload": text})
+        return {"published": True, "topic": STATUS_TOPIC, "payload": text}
 
     def _publish(self, topic: str, payload: dict[str, Any]) -> dict[str, Any]:
         """发一条不 retained 的事件。发布失败**不冒到执行链**，但必须留痕（假绿即缺陷）。"""
@@ -326,8 +376,14 @@ class AfMqttBridge:
             self.counts["publish_errors"] += 1
             self._keep(self.errors, f"{topic}: {type(exc).__name__}: {exc}")
             logger.warning("[mqtt] 发布 %s 失败（已计入 publish_errors）：%r", topic, exc)
+            self.mark_degraded(ADM_ERR_BROKER_UNREACHABLE)
+            self.publish_degraded()
             return {"published": False, "topic": topic, "error": repr(exc)}
         self._keep(self.published, {"topic": topic, "payload": payload})
+        if self.degraded:
+            # 发得出去＝这条腿真回来了。不清降级位就等于让对端永远读着一张旧病历。
+            self.degraded.clear()
+            self.advertise(caps=self.caps or None)
         return {"published": True, "topic": topic, "payload": payload}
 
     @staticmethod
@@ -438,11 +494,14 @@ class AfMqttBridge:
         self.counts["insights_in"] += 1
         return self.ingest_insight(payload)
 
-    def _reject(self, reason: str, detail: str = "") -> dict[str, Any]:
+    def _reject(
+        self, reason: str, detail: str = "", code: str = ADM_ERR_PAYLOAD_INVALID
+    ) -> dict[str, Any]:
+        """收件面 fail-closed：拒绝必须带 `ADM_ERR_*` 码并留痕（契约 §7.2 纪律「禁止静默丢弃」）。"""
         self.counts["insights_rejected"] += 1
-        self._keep(self.rejected, {"reason": reason, "detail": detail})
-        logger.warning("[mqtt] 丢弃 ma/insights：%s %s", reason, detail)
-        return {"handled": False, "reason": reason, "detail": detail}
+        self._keep(self.rejected, {"reason": reason, "detail": detail, "code": code})
+        logger.warning("[mqtt] 丢弃 ma/insights：%s %s（code=%s）", reason, detail, code)
+        return {"handled": False, "reason": reason, "detail": detail, "code": code}
 
     def ingest_insight(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         """洞察 → 候选 IR（有 intent 时经 `af_draft` 编译）→ 审批队列。永远只到 ask 档。
@@ -473,7 +532,10 @@ class AfMqttBridge:
         if conf is None:
             return self._reject("conf_out_of_range", str(payload.get("conf") or payload.get("confidence")))
         if self.proposal_sink is None:
-            return self._reject("no_proposal_sink_wired")
+            # 这不是对端的载荷有问题，是 AF 自己没接住——兜底码，别让 DB 以为是它发错了东西。
+            return self._reject(
+                "no_proposal_sink_wired", "AF 侧没接审批落点", code=ADM_ERR_INTERNAL
+            )
         transport = _transport_of(
             payload,
             id_key=(

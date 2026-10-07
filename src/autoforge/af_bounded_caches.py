@@ -7,7 +7,7 @@
 三项约定的落点：
 - `BOUNDED_CACHES` 每一项给出**两条腿的出处**（模块里的常量名 / 裁剪方法名）与一条真实测试 id。
   门禁脚本按名字回到模块源码里核对：写不出那条腿就不许登记（不允许用注册表给一个说法盖章）。
-- `FIXED_KEY_CACHES` 是"看着像增长容器、其实键空间封闭"的两处，逐条带理由。它们的理由同时以
+- `FIXED_KEY_CACHES` 是"看着像增长容器、其实键空间封闭"的那几处，逐条带理由。它们的理由同时以
   `# bounded-cache: exempt(理由)` 出现在被豁免那一行——门禁按行核对，两处口径必须一致。
 - 其余存量增长容器**不在这个文件里**，冻结在门禁脚本的基线名单（§一 3 B 的"基线冻结、新增必须
   登记"）。新增一个容器要么进这张表（两条腿 + 测试），要么就地带理由豁免，否则判红。
@@ -46,6 +46,16 @@ BOUNDED_CACHES: list[dict[str, str]] = [
         "trim": "_trim",
         "test": "tests/unit/test_reclaim_callers_wired.py::test_undo_snapshot_count_is_capped_without_reads",
     },
+    {
+        # 裁定 20261006 §一 的超限锁定表：`check()` 只删被挡到的那一条，换源 IP 刷的写入侧
+        # 必须自己回收，否则这张表跟着扫描器的 IP 数长。
+        "module": "af_auth",
+        "attr": "RateLimiter._blocked",
+        "cap": "LOCK_MAX_KEYS",
+        "ttl": "lock_s",
+        "trim": "_prune_blocked",
+        "test": "tests/unit/test_dcd_20261006_pairing_bootstrap.py::test_blocked_map_is_pruned_without_any_read",
+    },
 ]
 
 FIXED_KEY_CACHES: list[dict[str, str]] = [
@@ -58,5 +68,11 @@ FIXED_KEY_CACHES: list[dict[str, str]] = [
         "module": "af_vhass/device_sm",
         "attr": "DeviceSM.attributes",
         "reason": "键集由 domain 属性词表决定（每实体 ≤ 十来个键），且 reset() 整体替换字典",
+    },
+    {
+        # 计划 §六 第 3 项（降级播报）带进来的那份 caps 快照：重发要靠它，键集来自唯一写入口。
+        "module": "af_mqtt_bridge",
+        "attr": "AfMqttBridge.caps",
+        "reason": "整体替换的 caps 快照：唯一写入口 advertise() 每次 dict(caps) 覆盖，键集 = caps_payload() 的 mcp/tools/version 三键，不做增量增长",
     },
 ]

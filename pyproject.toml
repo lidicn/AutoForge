@@ -58,7 +58,7 @@ mqtt = [
 #   pip install docker/homesdk/*.whl
 # 安装。将其列为可选依赖仅用于声明，不进核心依赖（保持内核零依赖承诺）。
 homesdk = [
-    "homesdk>=0.3.1",
+    "homesdk>=0.3.2",
 ]
 
 [project.scripts]

@@ -10,14 +10,8 @@ src/autoforge/af_conflict_runtime.py#except-pass-broad#ConflictService.attach._u
 src/autoforge/af_conflict_runtime.py#except-pass-broad#ConflictService.detach
 src/autoforge/af_expect.py#except-pass-broad#_read_attribute
 src/autoforge/af_health.py#except-pass-broad#HealthEngine._band
-src/autoforge/af_live.py#except-pass-broad#start_ticker._write_asks
 src/autoforge/af_orchestrator.py#except-pass-broad#IntentParser.parse
 src/autoforge/af_orchestrator.py#except-pass-broad#_extract_json
-src/autoforge/af_runtime_plugins.py#except-pass-broad#RuntimeExtensions.api_handlers
-src/autoforge/af_runtime_plugins.py#except-pass-broad#RuntimeExtensions.observe
-src/autoforge/af_runtime_plugins.py#except-pass-broad#RuntimeExtensions.persist
-src/autoforge/af_runtime_plugins.py#except-pass-broad#RuntimeExtensions.restore
-src/autoforge/af_runtime_plugins.py#except-pass-broad#RuntimeExtensions.tick
 src/autoforge/af_runtime_plugins.py#except-pass-broad#install._tick_conflict
 src/autoforge/af_runtime_plugins.py#except-pass-broad#install_api
 src/autoforge/af_service.py#except-pass-broad#health

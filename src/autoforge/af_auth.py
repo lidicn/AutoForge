@@ -506,6 +506,14 @@ def _purge_expired_codes(codes: dict[str, Any]) -> int:
     return len(dead)
 
 
+#: ── 配对 bootstrap 匿名端点的参数（裁定 20261006 §一 钉死，AF 不自签）──
+#: 数值来自 `关键决策部/decisions/20261006-AF配对与段间封顶与DPP四件与MA三件-裁定.md` §一 追问两答；
+#: 要改这三个数，先把裁定改掉（测试里有钉值的那一条会红）。
+BOOTSTRAP_REQUEST_PER_MIN = 6    # 每 IP 每分钟 ≤6 次配对请求
+BOOTSTRAP_REDEEM_PER_MIN = 10    # redeem 放宽到 10 次：裁定明写"要容忍用户口述打错一次"
+BOOTSTRAP_LOCK_S = 300           # 超限即锁该 IP 于**该端点** 5 分钟
+
+
 class PairCodeStore:
     """配对码存储：落盘 `.auth/pair_codes.json`，进程内读缓存 + 写时落盘。
 
@@ -514,8 +522,16 @@ class PairCodeStore:
     `af_pair(code)` 兑换运行时签发的 Bearer 令牌。
     """
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, pause_path: str | Path | None = None) -> None:
         self._path = Path(path)
+        #: owner 侧"暂停接受配对请求"开关的落盘位置（裁定 20261006 §一）。默认与码文件同目录，
+        #: 但**独立成文件**：`pair_codes.json` 现在是"活的配对码"的集合，往里塞一个标量会把
+        #: 那份 list 的形状改成 dict，牵连 `_load` 与 BUG-19 的过期剔除口径。
+        self._pause_path = (
+            Path(pause_path)
+            if pause_path is not None
+            else self._path.parent / "pair_accepting.json"
+        )
         self._lock = threading.Lock()
         self._codes: dict[str, dict[str, Any]] = {}
         self._load()
@@ -608,6 +624,76 @@ class PairCodeStore:
             if rec is not None:
                 rec["pushed"] = True
                 self._persist()
+
+    # ── owner 侧"暂停接受配对请求"开关（裁定 20261006 §一）────────────
+    def pause(self) -> None:
+        self._write_paused(True)
+
+    def resume(self) -> None:
+        self._write_paused(False)
+
+    def _write_paused(self, paused: bool) -> None:
+        _atomic_write_text(
+            self._pause_path,
+            json.dumps({"accepting": not paused, "updated_at": time.time()}),
+        )
+
+    def is_accepting(self) -> bool:
+        """每次现读磁盘：开关由 HTTP 面写、由 MCP 面与匿名 bootstrap 端点读，跨进程不许拿进程缓存。
+
+        三档读数，**缺一档就会出事**：
+        - 文件不存在 ⇒ True。这是出厂默认（用户从没按过暂停）。把它也读成"暂停"，
+          新装的 AF 会连一次配对都走不通——功能被自己的 fail-closed 口径打死；
+        - 文件在但读不出/形状不对 ⇒ False（fail-closed）。这道开关是用户对"弹窗骚扰"唯一的
+          止血手段，一份损坏的开关文件若被读成"仍在接受"，用户按下暂停却照旧被打扰，且无处留痕；
+        - 其余按 `accepting` 字段，**只有 `True` 才算接受**（缺键/`null`/字符串都不算）。
+        """
+        if not self._pause_path.is_file():
+            return True
+        try:
+            data = json.loads(self._pause_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        if not isinstance(data, dict):
+            return False
+        return data.get("accepting") is True
+
+
+def request_pair_code(pair_store: PairCodeStore, agent_name_hint: str) -> PairCode:
+    """配对第 1 步的**唯一实现**：MCP 工具 `af_request_pair` 与匿名 HTTP bootstrap 端点共用。
+
+    写两份的原因不会缺席这里——两份各自漂移之后，"码只显示给用户"这条不变量就会在其中一份里失效。
+    """
+    hint = (agent_name_hint or "").strip() or "未知 agent"
+    return pair_store.create(hint)
+
+
+def redeem_pair_code(
+    pair_store: PairCodeStore,
+    registry: TokenRegistry | None,
+    code: str,
+    agent_name: str = "",
+) -> tuple[str, str | None, str | None]:
+    """配对第 2 步的唯一实现：消费配对码并签发 Bearer。
+
+    返回 `(状态, 令牌, 主体)`；状态 ∈ {`ok`,`no_code`,`invalid`,`not_ready`}——调用方决定
+    把它翻成 MCP 的 `{ok:false,error}` 还是 HTTP 的 4xx，语义分层留在各自的面里，
+    但"consume 之后才签发"这一条顺序只有一份。
+
+    `not_ready` 只在**注册表对象都没有**时给（`registry is None`）。不要在"没配置任何令牌"时
+    也拒绝：那档下全站本来就是公开的（`TokenRegistry.enabled` 的口径），此时拒发配对令牌
+    只会把开发档的配对流程打断，换不到任何安全收益。
+    """
+    trimmed = (code or "").strip()
+    if not trimmed:
+        return "no_code", None, None
+    pc = pair_store.consume(trimmed)
+    if pc is None:
+        return "invalid", None, None
+    subject = (agent_name or "").strip() or pc.agent_name_hint or "agent"
+    if registry is None:
+        return "not_ready", None, None
+    return "ok", registry.issue_for_agent(subject), subject
 
 
 @dataclass
@@ -845,12 +931,34 @@ class RateLimiter:
 
     #: 最大保留的 key 数量（P0-10：防止 _hits 无界增长导致内存泄漏）
     _MAX_KEYS = 10000
+    #: `_blocked` 的硬上限（与 `_MAX_KEYS` 同量级、独立命名：两棵树的生命周期不同，
+    #: 一个键可以从 `_hits` 被清掉却仍在 `_blocked` 里锁着）。
+    LOCK_MAX_KEYS = 10000
 
-    def __init__(self, per_minute: int = 1000, window_s: int = 60) -> None:
+    def __init__(self, per_minute: int = 1000, window_s: int = 60, lock_s: int = 0) -> None:
         self.per_minute = per_minute
         self.window_s = window_s
+        #: 超限后的**锁定**时长（0 = 不锁定，只按窗口滑动）。裁定 20261006 §一 给配对 bootstrap
+        #: 要的是"超限即锁该 IP 于**该端点** 5 分钟"——窗口限速单独存在时，攻击者等窗口滚过
+        #: 就能继续按 6 次/分钟的速度刷，那不是"锁"。这一枚同时是 `_blocked` 的 TTL 腿。
+        self.lock_s = lock_s
         self._hits: dict[str, list[float]] = {}
+        self._blocked: dict[str, float] = {}
         self._lock = threading.Lock()
+
+    def _prune_blocked(self, now: float) -> int:
+        """回收 `_blocked`：先按 TTL 清到期项，再按硬上限淘汰"最早解锁"的项。返回清掉的到期条数。
+
+        为什么不能只靠 `check()`：那里只删**被挡到的那一条**。攻击者每请求换一个源 IP 时，
+        旧 IP 的锁定项没人再去碰，就永远留在表里——"纯写不读"的那一半（第六轮审计 §三）。
+        调用点在超限时那条罕见路径上（每个被锁的 IP 至多一次），不在正常请求路径上。
+        """
+        dead = [k for k, until in self._blocked.items() if until <= now]
+        for k in dead:
+            del self._blocked[k]
+        while len(self._blocked) > self.LOCK_MAX_KEYS:
+            self._blocked.pop(min(self._blocked, key=self._blocked.get), None)
+        return len(dead)
 
     def _cleanup_expired(self, now: float) -> None:
         """清理所有已过期的 key（P0-10：防止 _hits 无界增长）。"""
@@ -858,12 +966,20 @@ class RateLimiter:
         expired = [k for k, v in self._hits.items() if not v or v[-1] <= cutoff]
         for k in expired:
             del self._hits[k]
+        self._prune_blocked(now)
 
     def check(self, key: str) -> None:
-        if self.per_minute <= 0:
-            return
         now = time.time()
         with self._lock:
+            until = self._blocked.get(key)
+            if until is not None:
+                if until > now:
+                    raise RateLimitExceeded(
+                        f"该维度已被锁定 {int(until - now)} 秒（维度 {key!r}）"
+                    )
+                del self._blocked[key]
+            if self.per_minute <= 0:
+                return
             # P0-10：超过最大 key 数时触发全量清理
             if len(self._hits) >= self._MAX_KEYS:
                 self._cleanup_expired(now)
@@ -877,7 +993,14 @@ class RateLimiter:
             if hits and hits[0] <= cutoff:
                 hits[:] = [t for t in hits if t > cutoff]
             if len(hits) >= self.per_minute:
+                if self.lock_s > 0:
+                    # 先回收再挂号：写侧自己负责让表缩回去，不等那个 IP 再来一次
+                    self._prune_blocked(now)
+                    self._blocked[key] = now + self.lock_s
+                    # 锁定即刻生效：窗口里的旧命中不再有意义，清掉免得解锁后再攒一次瞬时红
+                    self._hits.pop(key, None)
                 raise RateLimitExceeded(
-                    f"请求过于频繁（限速 {self.per_minute}/min，维度 {key!r}）"
+                    f"请求过于频繁（限速 {self.per_minute}/min，维度 {key!r}"
+                    + (f"，已锁定 {self.lock_s} 秒）" if self.lock_s > 0 else "）")
                 )
             hits.append(now)

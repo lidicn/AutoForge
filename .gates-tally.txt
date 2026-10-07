@@ -3,4 +3,6 @@
 # 为什么要有这个文件：`.gates-baseline.txt` 里追加指纹时，AST 门的「新增=0」永远绿，
 # 存量却在肥化。棘轮把**全量总数**钉在上限上——只准按评审下调，上调要评审。
 # 2026-10-02 登记：except-pass-broad=27 | fake-ok-const=77（合计 104），当轮实测 rc=0。
-104 # 2026-10-02 登记（AST 全量口径，`--no-baseline --no-smoke`）
+# 2026-10-06 下调：except-pass-broad=20 | fake-ok-const=77（合计 97）。配对 bootstrap 那批
+# 把四处成功标记改成回读读数（不是字面量），并清掉 6 条不再命中的存量指纹——只降不升。
+97 # 2026-10-06 登记（AST 全量口径，`--no-baseline --no-smoke`）

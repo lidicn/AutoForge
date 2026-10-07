@@ -1,4 +1,13 @@
-import type { Agent, AuthCode, Automation, AutomationGroup, PendingItem, PairEvent } from '../types/api'
+import type {
+  Agent,
+  AuthCode,
+  Automation,
+  AutomationGroup,
+  PairAccepting,
+  PairAcceptingState,
+  PendingItem,
+  PairEvent,
+} from '../types/api'
 
 const BASE = import.meta.env.VITE_API_BASE || '/api'
 const TOKEN_KEY = 'forgesight_token'
@@ -81,6 +90,14 @@ export const api = {
     es.onerror = () => onError?.()
     return { close: () => es.close() }
   },
+
+  // owner 侧「暂停接受配对请求」（裁定 20261006 §一）：弹窗骚扰的唯一止血口。
+  getPairAccepting: () => req<PairAcceptingState>('/user/pair/accepting'),
+  setPairAccepting: (accepting: boolean) =>
+    req<PairAccepting>('/user/pair/accepting', {
+      method: 'POST',
+      body: JSON.stringify({ accepting }),
+    }),
 }
 
 export type Api = typeof api

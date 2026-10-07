@@ -178,6 +178,37 @@ def test_status_offline_value_is_fail(monkeypatch):
     assert mod.item_status_retained(_args())[0] == mod.FAIL
 
 
+def test_status_accepts_the_032_json_document(monkeypatch):
+    """0.3.2 把 retained 载荷换成 status JSON——判据只会比裸字面量就会把一个健康的在线 AF 判红。
+
+    文档由 `homesdk.adm.status.encode_status` 现场生成，本测试不抄第二份字段表。
+    """
+    from homesdk.adm.status import STATE_ONLINE, encode_status
+
+    mod = _module()
+    doc = encode_status(STATE_ONLINE, version="2.5")
+    assert doc.startswith("{"), doc          # 反空洞：拿到的是文档而不是又被降级成字面量
+    _patch_collect(monkeypatch, mod, _msg(doc.encode("utf-8"), retain=True))
+    assert mod.item_status_retained(_args())[0] == mod.PASS
+
+
+def test_status_json_saying_offline_is_fail(monkeypatch):
+    from homesdk.adm.status import STATE_OFFLINE, encode_status
+
+    mod = _module()
+    _patch_collect(monkeypatch, mod, _msg(encode_status(STATE_OFFLINE, version="2.5").encode(), retain=True))
+    assert mod.item_status_retained(_args())[0] == mod.FAIL
+
+
+def test_unparsable_retained_status_is_fail_not_na(monkeypatch):
+    """载荷既不是 status JSON 也不是 legacy 字面量 ⇒ 系统真的坏了，不许躲进"无从判定"。"""
+    mod = _module()
+    _patch_collect(monkeypatch, mod, _msg(b"{not-a-status-doc", retain=True))
+    verdict, detail = mod.item_status_retained(_args())
+    assert verdict == mod.FAIL, detail
+    assert "status JSON" in detail, detail
+
+
 def test_status_silence_is_fail(monkeypatch):
     mod = _module()
     _patch_collect(monkeypatch, mod, None)

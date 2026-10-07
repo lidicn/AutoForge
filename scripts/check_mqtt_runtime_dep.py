@@ -4,7 +4,7 @@ CI 面（Dockerfile.test + workflows/ci.yml）。
 
 起因（§二之二十六，本批盘出）：`af_mqtt_bridge` 要 paho 才能连 broker，但 paho 在整个依赖链里
 **一处声明都没有**——homesdk 把它放在自家 `[mqtt]` extra（"装它是对调用方的要求"），而两个镜像装的
-都是**裸 wheel**（`pip install homesdk-0.3.1-py3-none-any.whl`），AF 自己的 `.[api,ha]` / `.[dev]` 也不含它。
+都是**裸 wheel**（`pip install homesdk-0.3.2-py3-none-any.whl`），AF 自己的 `.[api,ha]` / `.[dev]` 也不含它。
 开发机却一切正常——因为那份解释器里手动装过 paho。后果两种，且都不是测试能拦的：
 - 窗内把 `AUTOFORGE_MQTT=1` 打开 ⇒ `get_client()` 抛 `MqttUnavailable` ⇒ serve **拒绝启动**（fail-loud，
   但发生在停机窗里）；

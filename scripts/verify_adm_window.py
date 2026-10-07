@@ -3,7 +3,7 @@
 
 裁定原文（计划 §四）：窗后 AF 侧验收四项，**缺任一项即该步未完成，不许用"配置正确只是没抓包"过账**：
 ① `compose ps` 服务在；② `/health` 返回 200；③ 抓到一条含家庭墙钟 `ts` 的 `af/automation/fired`；
-④ `adm/autoforge/status` 的 retained 值为 `online`。
+④ `adm/autoforge/status` 的 retained 快照解码后 `state` 为 `online`。
 
 为什么要有这个脚本：这四件散在交接单 §六 的 EXEMPT 条目里，窗当天靠临时手搓命令——而"手搓"正是过账
 出事的形状（少跑一项、把 skip 读成 pass、把 `/health` 打错成 404 就判服务没起）。本脚本把四件做成
@@ -214,7 +214,13 @@ def item_fired(args) -> tuple[str, str]:
 
 
 def item_status_retained(args) -> tuple[str, str]:
-    """④ `adm/autoforge/status` 的 retained 值为 `online`——用 `msg.retain` 判，不用两次订阅猜。"""
+    """④ `adm/autoforge/status` 的 retained 快照状态为 online——用 `msg.retain` 判，不用两次订阅猜。
+
+    载荷解码走 `homesdk.adm.status.decode_status`（0.3.2 §2.2）：它同时认 status JSON 与
+    legacy 裸字面量。本脚本原来写的是 `value.lower() != "online"`——0.3.2 把 presence 的
+    retained 载荷换成 JSON 文档之后，那条字面量比较会把一个**健康的在线 AF** 判成 FAIL，
+    这正是"各仓手写 status schema"要根治的病，所以这里不留第二份判断。
+    """
     try:
         msg = _collect(STATUS_TOPIC, args.wait)
     except MqttEnvMissing as exc:
@@ -227,9 +233,17 @@ def item_status_retained(args) -> tuple[str, str]:
     if not getattr(msg, "retain", False):
         return FAIL, (f"拿到的 `{STATUS_TOPIC}` 不是 retained 快照（retain=False），值为 {value[:80]!r}"
                       f"——对端探测在线靠的是 retained，现发一条不算")
-    if value.lower() != "online":
-        return FAIL, f"retained 值不是 online：{value[:160]!r}"
-    return PASS, f"retained=True 且值为 {value!r}"
+    try:
+        from homesdk.adm.status import STATE_ONLINE, decode_status
+    except ImportError as exc:
+        raise MqttEnvMissing(f"机制层不可用（{exc}）⇒ status 解码只能在有 homesdk 的机器上取数")
+    try:
+        st = decode_status(value)
+    except ValueError as exc:
+        return FAIL, f"retained 载荷既不是 status JSON 也不是 legacy 字面量：{exc}｜{value[:160]!r}"
+    if st.get("state") != STATE_ONLINE:
+        return FAIL, f"retained 状态不是 `{STATE_ONLINE}`：{st}"
+    return PASS, f"retained=True 且状态读数为 {st!r}"
 
 
 def main(argv: list[str]) -> int:
@@ -247,7 +261,7 @@ def main(argv: list[str]) -> int:
     results = [("① compose ps 服务在", compose),
                ("② /health 返回 200", item_health(args)),
                (f"③ 抓到一条 {FIRED_TOPIC} 且 ts 是家庭墙钟", item_fired(args)),
-               (f"④ {STATUS_TOPIC} retained 值为 online", item_status_retained(args))]
+               (f"④ {STATUS_TOPIC} retained 状态为 online", item_status_retained(args))]
 
     verdicts = {v for _, (v, _) in results}
     print("══ ADM 窗后验收四项 ══")

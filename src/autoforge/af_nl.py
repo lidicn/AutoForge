@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
-from .af_ir import Automation, Graph, Node, Trigger
+from .af_ir import Automation, Graph, Node, Trigger, check_trigger_depth
 from .af_irreversible import nl_runtime_note
 from .af_time import format_duration, parse_duration
 
@@ -116,9 +116,11 @@ class NLResult:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _trigger_text(trig: Trigger) -> str:
+def _trigger_text(trig: Trigger, _depth: int = 0) -> str:
+    # F6：group 递归走者之一（第十七轮实测的 cyclic_crash 站点）。预算与 IR 层同源。
+    check_trigger_depth(_depth, "nl._trigger_text")
     if trig.type == "group":
-        parts = [_trigger_text(s) for s in trig.sources]
+        parts = [_trigger_text(s, _depth + 1) for s in trig.sources]
         joiner = " 且 " if trig.op == "and" else " 或 "
         return joiner.join(parts)
     if trig.type == "event":  # v0.4.0 订阅侧

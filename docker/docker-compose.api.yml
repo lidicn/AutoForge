@@ -49,7 +49,7 @@ services:
       # 缺省关：只有显式给 1 才起桥，键名真源是 `af_mqtt_bridge.py` 的 `ENV_ENABLED`
       # （`env_enabled()` 把空串/0/false/no/off 一律读成"关"）。
       # 下面五个 MQTT_* 的键名**不在这份文件里发明**：唯一真源是烘进镜像的那枚 wheel
-      # （`Dockerfile.api` 按文件名钉死的 `docker/homesdk/homesdk-0.3.1-py3-none-any.whl`），
+      # （`Dockerfile.api` 按文件名钉死的 `docker/homesdk/homesdk-0.3.2-py3-none-any.whl`），
       # `homesdk/mqtt.py` 的 `broker_settings()` 读 MQTT_HOST / MQTT_PORT / MQTT_KEEPALIVE，
       # `resolve_credentials()` 读 MQTT_USER / MQTT_PASSWORD。它同时认别名
       # （MQTT_USERNAME / MQTT_PASS / MQTT_PASSWD 与按 peer 作用域的 MQTT_USER_〈scope〉），

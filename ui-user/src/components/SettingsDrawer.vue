@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { ExternalLink, Pencil, Check, KeyRound, X } from 'lucide-vue-next'
+import { api } from '../api'
 import { useAgentsStore } from '../stores/agents'
 import { useAuthCodesStore } from '../stores/authCodes'
 
@@ -13,12 +14,44 @@ const DEV_PANEL_URL = import.meta.env.VITE_DEV_PANEL_URL || '/ui'
 const editing = ref<string | null>(null)
 const draft = ref('')
 
+// owner 侧「暂停接受配对请求」（裁定 20261006 §一）
+const accepting = ref(true)
+const acceptingKnown = ref(false)
+const acceptingBusy = ref(false)
+const acceptingError = ref('')
+
+async function loadAccepting() {
+  acceptingError.value = ''
+  try {
+    accepting.value = (await api.getPairAccepting()).accepting
+    acceptingKnown.value = true
+  } catch (e) {
+    // 读不到就不把开关画成任何一个确定档位：显示"未知"比显示一个没人核实的值诚实
+    acceptingKnown.value = false
+    acceptingError.value = '读不到配对开关：' + (e as Error).message
+  }
+}
+
+async function toggleAccepting() {
+  acceptingBusy.value = true
+  acceptingError.value = ''
+  try {
+    accepting.value = (await api.setPairAccepting(!accepting.value)).accepting
+    acceptingKnown.value = true
+  } catch (e) {
+    acceptingError.value = '切换失败，当前状态未变：' + (e as Error).message
+  } finally {
+    acceptingBusy.value = false
+  }
+}
+
 watch(
   () => props.open,
   (v) => {
     if (v) {
       agentsStore.load()
       authCodesStore.load()
+      loadAccepting()
     }
   },
 )
@@ -90,6 +123,38 @@ async function copy(text: string) {
               </div>
             </li>
           </ul>
+        </section>
+
+        <!-- 配对请求开关（owner 止血口，裁定 20261006 §一） -->
+        <section>
+          <h3 class="text-xs font-semibold text-ink-faint uppercase tracking-wide mb-2">配对请求</h3>
+          <div class="rounded-xl border border-black/5 p-3">
+            <div class="text-sm font-medium text-ink">
+              {{
+                !acceptingKnown
+                  ? '开关状态未读到'
+                  : accepting
+                    ? '正在接受新的配对请求'
+                    : '已暂停接受配对请求'
+              }}
+            </div>
+            <p class="text-[11px] text-ink-faint mt-1 leading-relaxed">
+              暂停后，Agent 发起配对会被直接拒绝，弹窗不再打扰；要重新配对请回到这里恢复。
+            </p>
+            <button
+              class="mt-3 w-full rounded-lg px-3 py-2 text-sm font-medium transition active:scale-95 disabled:opacity-50"
+              :class="
+                accepting && acceptingKnown ? 'bg-black/5 text-ink hover:bg-black/10' : 'bg-forge-500 text-white'
+              "
+              :disabled="acceptingBusy"
+              @click="acceptingKnown ? toggleAccepting() : loadAccepting()"
+            >
+              {{
+                !acceptingKnown ? '重试读取开关状态' : accepting ? '暂停接受配对请求' : '恢复接受配对请求'
+              }}
+            </button>
+            <p v-if="acceptingError" class="text-[11px] text-red-600 mt-2">{{ acceptingError }}</p>
+          </div>
         </section>
 
         <!-- 跳转开发面板（恒显） -->

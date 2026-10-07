@@ -66,6 +66,9 @@ from . import af_service as svc
 from .af_pending import PendingStore
 from .af_config import get_config
 from .af_auth import (
+    BOOTSTRAP_LOCK_S,
+    BOOTSTRAP_REDEEM_PER_MIN,
+    BOOTSTRAP_REQUEST_PER_MIN,
     AuthCodeStore,
     PairCodeStore,
     RateLimitExceeded,
@@ -73,11 +76,13 @@ from .af_auth import (
     TokenExpired,
     TokenInfo,
     TokenRegistry,
+    redeem_pair_code,
+    request_pair_code,
 )
 from .af_atomic import atomic_write_text
 from .af_ir import AskSpec, IRValidationError
 from .af_env import env_int
-from .af_store import ArchiveNameConflict, GraphStore
+from .af_store import ArchiveNameConflict, ArchiveOwnerUnknown, GraphStore
 
 __all__ = ["build_app"]
 
@@ -141,6 +146,20 @@ class AgentRenameBody(BaseModel):
 class LoginBody(BaseModel):
     username: str = ""
     password: str = ""
+
+
+# ── 配对 bootstrap 匿名面（裁定 20261006 §一 = B）──
+class PairRequestBody(BaseModel):
+    agent_name_hint: str = ""
+
+
+class PairRedeemBody(BaseModel):
+    code: str = ""
+    agent_name: str = ""
+
+
+class PairAcceptingBody(BaseModel):
+    accepting: bool
 
 
 # ── Round 2-A：会话（ask 审批的人机回路）──
@@ -260,6 +279,15 @@ def build_app(
         # fail-safe 解析：写错的 env 不应让 build_app() 抛（新增审计 BUG-10）
         per_minute=env_int("AUTOFORGE_RATE_LIMIT_PER_MIN", 1000, lo=1)
     )
+    # 配对 bootstrap 的**匿名**面：裁定 20261006 §一 给这两个端点单独定了档（6/min、10/min、
+    # 超限锁该 IP 于该端点 5 分钟）。刻意**不**复用上面那个全局 `limiter`：那个是 1000/min 的
+    # 认证面口径，拿它当 bootstrap 防线等于按了 6/min 却没按——数值由 DCD 钉，AF 不自签。
+    bootstrap_request_limiter = RateLimiter(
+        per_minute=BOOTSTRAP_REQUEST_PER_MIN, lock_s=BOOTSTRAP_LOCK_S
+    )
+    bootstrap_redeem_limiter = RateLimiter(
+        per_minute=BOOTSTRAP_REDEEM_PER_MIN, lock_s=BOOTSTRAP_LOCK_S
+    )
 
     # v1.9.0 用户 WebUI：配对码 / 授权码 文件存储（与 .auth/revoked.json 同目录）
     pair_store = PairCodeStore(Path(store_root) / ".auth" / "pair_codes.json")
@@ -290,6 +318,17 @@ def build_app(
                     info = None
                 if info:
                     limiter.check(f"subj:{info.subject}")
+        except RateLimitExceeded as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+
+    def _bootstrap_limit(bucket: RateLimiter, request: Request) -> None:
+        """匿名 bootstrap 腿的按 IP 限速 + 超限锁定（裁定 20261006 §一 的 6/min、10/min、锁 5 分钟）。
+
+        键里带**端点身份**（构造 `bucket` 时各自的 `per_minute` 就是那一档），所以 request 超限
+        不会把 redeem 一起锁掉——用户口述打错码之后还要能立刻重试。
+        """
+        try:
+            bucket.check(f"ip:{_client_ip(request)}")
         except RateLimitExceeded as exc:
             raise HTTPException(status_code=429, detail=str(exc)) from exc
 
@@ -406,8 +445,13 @@ def build_app(
     # 归档名别名折叠（审计 §四「路径处理」）：两个不同 name 经 `_dir()` 白名单落进同一目录，
     # 写入会静默互相覆盖、删除会连带销毁对方。存储层在写/删前拒绝并抛具名异常，HTTP 面把它
     # 落成 409（不是 400：请求本身合法，是**盘上已有归属**与它冲突；也不是 500：可重试可改名）。
+    # `ArchiveOwnerUnknown`（F12）同一个口径：目录里有记录但归属读不出 ⇒ 同样"拒绝动盘、可修复后重试"，
+    # 落成 409 而不是让它冒成 500——500 会让调用方以为请求格式有问题，而实际要先修盘上那条记录。
     @app.exception_handler(ArchiveNameConflict)
-    def api_archive_name_conflict(request: Request, exc: ArchiveNameConflict) -> JSONResponse:
+    @app.exception_handler(ArchiveOwnerUnknown)
+    def api_archive_name_conflict(
+        request: Request, exc: ArchiveNameConflict | ArchiveOwnerUnknown
+    ) -> JSONResponse:
         return JSONResponse(status_code=409, content={"ok": False, "error": str(exc)})
 
     @app.get("/api/health")
@@ -1058,6 +1102,84 @@ def build_app(
         n = registry.rename_subject(agent_id, new_name)
         return {"ok": True, "renamed": n, "from": agent_id, "to": new_name}
 
+    # ── 配对 bootstrap 匿名面（裁定 20261006 §一 = B：新增两个匿名端点）──
+    @app.post("/api/mcp/pair/request")
+    def api_pair_request_bootstrap(body: PairRequestBody, request: Request) -> dict[str, Any]:
+        """还没有令牌的 agent 用它发起配对——**这正是配对要解决的问题本身**。
+
+        今天 `af_request_pair`（`af_mcp.py`）与 `af_pair` 的 scope 都是 write，HTTP 面 `/mcp` 挂
+        `Depends(_write)` ⇒ 要拿配对码必须先有一枚 write 令牌，而死锁就在这儿。裁定驳回过
+        "把两工具 scope 改 None"（等于自撤 MCP 面 default-deny，且任何人可刷配对请求），
+        选的是**只把这两个动作开成匿名端点**——匿名射程比今天那张整工具表更小。
+
+        码**不返回给 agent**（只显示给用户弹窗），agent 等用户口述后调 redeem 兑换。
+        """
+        _bootstrap_limit(bootstrap_request_limiter, request)
+        if not pair_store.is_accepting():
+            raise HTTPException(
+                status_code=409,
+                detail="用户已暂停接受配对请求（ForgeSight 里恢复后重试）",
+            )
+        pc = request_pair_code(pair_store, body.agent_name_hint)
+        # `ok` 来自回读而不是字面量：create() 之后登记面读不出这枚码，用户弹窗里就没有码可念，
+        # agent 只会等到超时——这一条回读把"告诉 agent 去等"这个承诺兑现了才返回。
+        persisted = pair_store.get(pc.code) is not None
+        if not persisted:
+            raise HTTPException(status_code=500, detail="配对码已生成但未登记，请重试")
+        return {
+            "ok": persisted,
+            "expires_at": pc.expires_at,
+            "message": "配对请求已发起，请在 ForgeSight 中输入显示的 8 位码完成配对",
+        }
+
+    @app.post("/api/mcp/pair/redeem")
+    def api_pair_redeem_bootstrap(body: PairRedeemBody, request: Request) -> dict[str, Any]:
+        """用用户口述的 8 位码兑换 Bearer 令牌。与 MCP `af_pair` 共用 `redeem_pair_code`（一份顺序）。"""
+        _bootstrap_limit(bootstrap_redeem_limiter, request)
+        status, token, subject = redeem_pair_code(
+            pair_store, registry, body.code, body.agent_name
+        )
+        if status == "no_code":
+            raise HTTPException(status_code=400, detail="缺少 code")
+        if status == "invalid":
+            raise HTTPException(status_code=409, detail="配对码无效、已使用或已过期")
+        if status == "not_ready":
+            raise HTTPException(status_code=503, detail="服务未就绪（令牌注册表不可用）")
+        issued = registry.authenticate(token)
+        verified = issued is not None and issued.subject == subject
+        if not verified:
+            raise HTTPException(status_code=500, detail="配对码已消费但签发的令牌未能回读，请重新发起配对")
+        return {
+            "ok": verified,
+            "token": token,
+            "subject": subject,
+            "message": "配对成功：请将 token 作为 Bearer 调用 AutoForge API",
+        }
+
+    @app.post("/api/user/pair/accepting", dependencies=[Depends(_write)])
+    def api_pair_accepting(body: PairAcceptingBody) -> dict[str, Any]:
+        """owner 侧"暂停接受配对请求"开关——裁定给的是"弹窗骚扰唯一由用户自己就能止血的形状"。
+
+        写盘走 `_atomic_write_text`（`PairCodeStore.pause/resume` 内部），**只写布尔不写码**：
+        这枚开关不该成为配对码的第二份副本。
+        """
+        if body.accepting:
+            pair_store.resume()
+        else:
+            pair_store.pause()
+        applied = pair_store.is_accepting()
+        if applied != body.accepting:
+            raise HTTPException(status_code=500, detail="配对开关回读与请求不一致，请勿当作已生效")
+        return {"ok": applied == body.accepting, "accepting": applied}
+
+    @app.get("/api/user/pair/accepting", dependencies=[Depends(_write)])
+    def api_pair_accepting_state() -> dict[str, Any]:
+        """开关现值。暂停时 SSE 不再产出新事件，前端没有别的途径知道"是我自己按停的"。
+
+        只读盘点不返回 `ok`——这条是仓内既有口径（见 `tests/unit/test_af_undo_http.py`）。
+        """
+        return {"accepting": pair_store.is_accepting()}
+
     @app.post("/api/user/pair/{code}/confirm", dependencies=[Depends(_write)])
     def api_pair_confirm(code: str) -> dict[str, Any]:
         """用户在前端点'确认配对成功'：agent 已用码经 MCP `af_pair` 兑换令牌。
@@ -1208,7 +1330,8 @@ def build_app(
         d = store._dir(name)
         if not d.is_dir():
             raise HTTPException(status_code=404, detail="未找到自动化")
-        # rmtree 是不可逆的：目录里混有别人的版本记录时，store 层抛 ArchiveNameConflict ⇒ 409
+        # rmtree 是不可逆的：目录里混有别人的版本记录 ⇒ ArchiveNameConflict；记录读不出归属
+        # ⇒ ArchiveOwnerUnknown（F12）。两者都在 store 层抛出、由上面的处理器落 409。
         store.assert_deletable(name)
         shutil.rmtree(d)
         return {"ok": True, "deleted": name}
