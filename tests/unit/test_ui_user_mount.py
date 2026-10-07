@@ -282,13 +282,17 @@ def test_serve_cli_exposes_the_flag():
     这一条不是形式主义：线上事故就是「compose 有 `--ui-user-dir`、镜像里的 CLI 没这个选项」，
     typer 会把未知选项判成用法错误（退出码 2），配 `restart: unless-stopped` 就是反复重启。
 
-    判据只数**选项行**（typer 渲染成 `--ui-user-dir        <str>`），不用整段 `in` 子串：
-    `serve` 的帮助正文里本来就有「传 --ui-user-dir …」这句话，子串判据在参数根本没注册时
-    照样绿（变异腿实测过：改名 `--ui-user-dir-x` 后仍命中子串，红不起来）。
+    判据读 CLI 自己的**参数注册表**（click 的 `Option.opts`），不读 `--help` 的渲染文本。
+    原先这里数的是渲染出来的选项行（`--ui-user-dir        <str>`），为的是躲开子串判据的空洞
+    ——`serve` 的帮助正文本来就有「传 --ui-user-dir …」这句话，改名 `--ui-user-dir-x` 后子串照样命中。
+    但**文本行本身也不可靠**：2026-10-08 CI run 113 红在这一条，本机 18 条全绿。runner 上 typer
+    带 ANSI 与 80 列面板渲染，标志与 metavar 之间夹着转义序列；本机同样的命令是无色输出，
+    所以同一条正则一边绿一边假红。本机用 `FORCE_COLOR=1` + `COLUMNS=80` 复现出 CI 那一条假红
+    （按文本的正则不命中，把 ANSI 剥掉就命中）⇒ 换读注册表，渲染宽度与配色都再也影响不到判据。
     """
     import inspect
-    import re
 
+    from typer.main import get_command
     from typer.testing import CliRunner
 
     from autoforge.af_cli import app as cli_app
@@ -296,9 +300,15 @@ def test_serve_cli_exposes_the_flag():
 
     result = CliRunner().invoke(cli_app, ["serve", "--help"])
     assert result.exit_code == 0, result.output
-    assert re.search(r"--ui-user-dir\s+<str>", result.output), result.output
-    # 对照：开发面板那枚也必须在（两脸同一 CLI，少一枚就部署不成对）
-    assert re.search(r"--ui-dir\s+<str>", result.output), result.output
+
+    by_opt = {opt: param for param in get_command(cli_app).commands["serve"].params for opt in param.opts}
+    for flag in ("--ui-user-dir", "--ui-dir"):
+        param = by_opt.get(flag)
+        assert param is not None, f"serve 没注册 {flag}；现有选项={sorted(by_opt)}"
+        # 取值型而非开关：compose 传的是 `--ui-user-dir /mimo` 两段式。只核"名字在不在"
+        # 会放过被改成布尔开关的那一版——名字还在，容器却起不来。
+        assert param.is_flag is False, (flag, param.is_flag)
+        assert param.nargs == 1, (flag, param.nargs)
     # 结构腿：签名里没有这个形参 ⇒ build_app 那侧不可能收到值
     params = list(inspect.signature(serve).parameters)
     assert "ui_user_dir" in params, params
