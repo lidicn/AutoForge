@@ -5844,3 +5844,108 @@ UI↔路由门也已把这两条认领为"消费面是 agent 自己的 HTTP 客�
 两件按此关账；仍开放的 AF 侧动作只有**窗内那一类**（镜像重烤 + 变更后验收）与**等 0.3.3 的库侧三件**。
 
 —— AutoForge 开发 · 2026-10-08
+
+## 二之七十、§5.3 第 7、8 两行按 HEAD 现读翻成"已交付"；两行各自那一格**不归 AF** 的残留当场量出来——契约表里 `READONLY_DEGRADED:` 至今零命中
+
+### 一、为什么这两行还挂在计划表上：账本早就说过交付，计划表一字未动
+
+§二之六十五 那批的"读数"一节里写过：「§5.3 第 7–10 行逐条对过 HEAD：第 7 行（`READONLY_DEGRADED:`）与第 8 行
+（`check_bounded_caches.py`）已在 `7dbd640`/`c0476e2` 交付」。**那句话是对的，计划表是错的**——第 7、8 两行的
+"验收/前置"格到今天仍是原始待办文案。这与 §二之六十七 翻第 12、9 行时同一族：产物早已上线，欠的是记账，
+而记账欠着的代价不是美观问题，是下一轮会把它当未做项重报（裁定 20261004 §一 4 特意要 AF 标的正是这一族）。
+
+本批不引用那句旧话当证据，全部读数在 HEAD（`659cea8`）当场重取：
+
+```
+git merge-base --is-ancestor 7dbd640 HEAD   ⇒ 通过（exit 0）
+git merge-base --is-ancestor c0476e2 HEAD   ⇒ 通过（exit 0）
+```
+
+### 二、第 7 行（单写者租约装上 MCP 真机写面）：三条验收逐条对到今天的腿名
+
+| 裁定 §一 1 A 的口径 | 落点（今日现读） | 腿（`tests/unit/test_serve_lease_single_writer.py`） |
+|---|---|---|
+| 被持锁时 `ServiceError(503)` | `af_service.py:1690 _single_writer_check()` ⇒ `:1698 FileLock(serve_lock_path(root)).held_by_other()` ⇒ `:1700` 抛带前缀文本、`:1702 status=503` | HTTP 面那条：`:230 test_http_face_returns_503` |
+| **只 check 不 acquire** | `held_by_other()` 探测**不写 sidecar**、不改归属；判据只认内核锁 | `:207 test_another_process_holding_the_lease_is_detected`（持锁方是 `subprocess` 真子进程，in-process 假 holder 判不出这一族） |
+| MCP 拒收且**不构造传输层** | `af_mcp.py:988 except svc.ServiceError`：**原样**回传，不套"工具执行出错："那层壳（`:991` 注释：套壳前缀就不在文本开头） | `:216 test_live_run_refused_when_another_process_holds_the_lease` + `:241 test_mcp_face_text_starts_with_the_prefix` |
+| 锁空闲时**照常下发** | 同一函数，未持锁即返回 | `:262 test_live_run_dispatches_when_the_lease_is_free`、`:272 test_serve_holding_its_own_lease_still_dispatches`（`_LOCAL_HELD` 认出本进程，闸门不反装）、`:185`/`:194` 空闲与本进程两档对照 |
+| 前缀字面量单一出处 | `af_service.py:1687 READONLY_DEGRADED_PREFIX = "READONLY_DEGRADED:"`；锁文件名同源 | `:290 test_serve_lock_file_name_has_a_single_source` |
+
+**读数（当场跑，非引用）**：`pytest tests/unit/test_serve_lease_single_writer.py tests/unit/test_dcd_20261007_mcp_failure_envelope.py -q`
+⇒ **`18 passed, 1 warning in 7.06s`**，`LEASE_RC=0`。两文件合跑是为了把"前缀位置"这条**口径变化**同场核住：
+裁定 20261007 §二 戊A 之后，`af_mcp.py:992-993` 的注释明写前缀现位于 `message` 这个**字符串值的开头**而不再
+是整段 text 的开头，对应的腿是 `test_dcd_20261007_mcp_failure_envelope.py:110 test_service_layer_rejection_reads_internal_and_keeps_its_prefix`；
+这一条的 DB 侧读数口径变化已随交接单交 DB（计划第 14 行、§二之六十），不是本面偷偷改的形状。
+
+**本行未闭的一格不归 AF，且是现读不是记忆**：验收原文后半句「并登记进契约表」。
+
+```
+grep -n "READONLY_DEGRADED\|单写者\|503\|租约" E:/NAS/homesdk/doc/ADM联动主题注册表与消息契约.md   ⇒ GREP_RC=1（零命中）
+grep -n "READONLY_DEGRADED\|单写者\|503\|租约" E:/NAS/homesdk/doc/homesdk-0.3.2-规格.md          ⇒ GREP_RC=1（零命中）
+```
+
+DCD 那侧唯一写过这枚前缀的地方是裁定自己（`关键决策部/decisions/20261004-AF四件与DB一件与MA五件-裁定.md:23`
+「MCP 侧文本带**固定前缀** `READONLY_DEGRADED:`（便于 DB 判别）」）；契约表 §7.3 只有 degrade-flag 那一档的泛写
+（`ADM联动主题注册表与消息契约.md:225`），没有这枚字面量。⇒ **登记动作在 DCD／homesdk 手里**，本仓铁律 AF 不动他仓文档。
+这一格不是本批新发明的欠账：§二之二十九 交付当天就标了「契约表登记该前缀那一半在 DCD 手里」（账本 §五 第 10 件那格，
+现读在第 4298 行），AF 侧申请也已投过——`关键决策部/inbox/20261003-AF-单写者租约只装了HTTP面MCP真机写未受约束-决策申请.md:56`
+原文即「AF 补三条判据（HTTP 503 / MCP 拒收且**不构造传输层** / 锁空闲时照常下发）**并在契约表登记该前缀**」，
+另有 `inbox/20261007-AF-降级面契约缺口四格与0.3.3库能力请求-决策申请.md` 把降级面的契约缺口按四格投出。
+计划表第 7 行因此翻成 **AF 半边已交付 · 契约表登记待 DCD**，而不是整行 ✅。
+
+### 三、第 8 行（有界缓存注册表式门禁）：交付时读数 vs 今日读数——门会随仓长，这两档都得留
+
+| 口径 | 交付时（§二之三十，`c0476e2`） | 今日（HEAD `659cea8`，当场 `python scripts/check_bounded_caches.py src/autoforge`） |
+|---|---|---|
+| 注册表项 `BOUNDED_CACHES` | 2 | **3** |
+| 固定键项 `FIXED_KEY_CACHES` | 2 | **3** |
+| 扫到增长容器 | 76 | **125** |
+| 基线冻结 | 74 | **114** |
+| 就地豁免标记 | 2 | **12** |
+| 死写容器（判据 E） | 该判据当时还不存在（§二之四十七 才加） | **0**（读取点收集器数到 3951 个被读过的名字） |
+| 反例测试 | 21 passed（21.75s） | **`34 passed in 35.98s`**，`BG_RC=0` |
+
+今日绿行逐字（`GATE_RC=0`）：
+`[有界缓存] 注册表 3 项双腿齐全且测试 id 被收集；固定键 3 项带理由；扫到增长容器 125 个，其中基线冻结 114 个、就地豁免标记 12 处；死写容器 0 个（判据 E 按名字在全仓数读取点，3951 个名字被读到过）`
+
+**多出来的两项不是漂移，是后续批次按这道门入库的**（这正是"注册表式门禁"起作用的形状——新容器要进来就必须带两条腿 + 一条测试 id）：
+- 注册表第 3 项 `af_auth.RateLimiter._blocked`（`cap=LOCK_MAX_KEYS`、`ttl=lock_s`、
+  `test=tests/unit/test_dcd_20261006_pairing_bootstrap.py::test_blocked_map_is_pruned_without_any_read`）由配对 bootstrap 那批（`2f86af9`，§二之六十七）登记；
+- 固定键第 3 项 `af_mqtt_bridge.AfMqttBridge.caps`（理由：整体替换的 caps 快照，唯一写入口 `advertise()` 每次 `dict(caps)` 覆盖，键集封闭）由降级播报那批登记。
+
+验收那句「门可判红：新增增长容器未登记即红」今日仍在位且有名字：`:209 test_c_new_container_without_registration_goes_red`，
+配套 `:218 test_c_in_line_exemption_is_enough_and_names_the_line`、`:231 test_c_baseline_shrinks_only`（基线只减不增）。
+`exit 2` 那一档也没被省掉：`:514`/`:522`/`:531`/`:541` 四条分别钉"注册表文件不在预期位置 / 不再是纯字面量字典 / 空注册表 / 扫到 0 个容器"
+都读不出而不是红，接线在 `gates.sh:238`（跑门）`:239 cache_rc` `:371-373`（`exit 2` 单独结论并透传）`:375-377`（`exit 1` 红并打印处置口径），CI 的 `quality-gates` 作业跑同一口径。
+
+同批交付的另外两条"回收逻辑写好了没人按"（`Runtime.tick()` 接 `sweep()`、`UndoStore.purge_expired()` 进写路径）
+仍在仓里，注册表第 2 项 `af_undo.UndoStore._records` 的 `test` 出处就是那条
+（`tests/unit/test_reclaim_callers_wired.py::test_undo_snapshot_count_is_capped_without_reads`，现读在 `src/autoforge/af_bounded_caches.py:47`）。
+
+### 四、本批没做的事（写明，免得下一轮当漏做）
+
+- **未动 `docker/docker-compose.api.yml`**：一个字节未改。铁律 #3 + `README.md:228`（compose 侧注释由部署方在 NAS 上落），同 §二之六十八 那一格同口径。
+- **未动他仓文档**：契约表、0.3.2 规格、DCD `decisions/` 只读；AF 的诉求一律走 `关键决策部/inbox/`。
+- **第 7 行的真机半边仍无读数**：租约 503 需要"生产 serve 持锁 + 另一进程调 MCP"两进程拓扑，属合并窗动作（计划第 1/2/6/10/13 行那一族），本批不预签；仓侧九条腿是**子进程真持锁**的形状，不等价于 NAS 现场。
+- **审计侧本批无新件 intake**：`docs/audit/元宝` 实测 0 份、`归档` 72 份、`参考` 4 份，没有第二十一轮报告 ⇒ 本轮"审计里的全部 bug"这一格无新增可做。
+
+### 五、顺手收的一处内部口径矛盾（`docs/audit/index.md`）
+
+同一份索引文件里两处读数互斥：`目录结构` 段写「`元宝/` 已清空（原 20 份全部核实收口并转入 `归档/`）」，
+而上方"整理动作记录"还留着「元宝新增的 20 份审计报告保留在 `元宝/`，待逐轮核实」，没有更正标记。
+现读：`元宝/` **0 份**、`归档/` **72 份**、`参考/` **4 份** ⇒ 前者为真。按 §二之六十七 那族教训（**负向账目也会过期**：
+"保留待核实"这种句子将来只会让下一轮去开一份不存在的 20 件清单），本批在那一行就地补一句当日口径说明，
+不动其历史内容——这条记录的价值是"整理那天确实这么分过"，坏在没写"后来变了"。
+
+卫生：本次改动只碰 `docs/audit/index.md` 一行，改后 `git diff --numstat` 报 `1 1`（不是整份重写；
+该文件行尾是 CRLF，`tr -dc '\r' | wc -c` 改前 175，本批改后必须仍是"每行一枚"）；
+账本追加用 `tempfile.mkstemp` + `os.replace`，落盘后 CR 计数 0、`git diff --numstat` 为纯追加（`N 0`）。
+
+### 六、读数汇总
+
+- 计划表：第 7 行 → **AF 半边已交付 · 契约表登记待 DCD**，第 8 行 → **已交付**（两行都按今日现读写腿名与数字，不复制交付时那批的旧数）。
+- 判据：租约 + 戊A 信封合跑 `18 passed` RC=0；注册表门反例套件 `34 passed` RC=0；门自身 `GATE_RC=0` 打印上面那行绿读数。
+- 两笔交付 commit `7dbd640`/`c0476e2` 均确认是 HEAD 祖先（`merge-base --is-ancestor` 各 exit 0）。
+- 本批为**纯文档**批：`src/`、`tests/`、`scripts/`、`gates.sh`、compose 一字未动，故不产新判据、不抬任何棘轮上限。
+
+—— AutoForge 开发 · 2026-10-08
