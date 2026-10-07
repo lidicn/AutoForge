@@ -5823,3 +5823,24 @@ UI↔路由门也已把这两条认领为"消费面是 agent 自己的 HTTP 客�
 - 回归：门禁链 `GATES_RC=0`、全量 `3416 passed, 53 skipped, 65 subtests`（读数见 §二之六十六 那批的同日实测，本批只动 `docs/`）。
 
 —— AutoForge 开发 · 2026-10-08
+
+## 二之六十九、DCD 20261007 §六 三件的 AF 半边按现读收口（第 54/55 号任务的"待批"口径已过期）
+
+本批按 §二之六十七 那条纪律再走一遍：任务卡上写着"阻塞在 DCD 批复"的两件（#54 0.3.2 消费侧、
+#55 20261007 §六三件），先对裁定原文与对 HEAD 现读，不引任务卡的旧状态。
+
+裁定出处：`关键决策部/decisions/20261007-MA五件与AF一件-裁定.md` §六（第 76–92 行）。三问的 AF 侧落点逐格核：
+
+| 裁定 §六 | 裁定要求 AF 做的 | 现读（本批实测） | 定性 |
+|---|---|---|---|
+| Q1 bump 窗口 → **A** | 仓内先换 wheel + pin 五处：`docker/homesdk/` 只留 0.3.2、`ci.yml`×3、两份 Dockerfile、`pyproject.toml` → `homesdk>=0.3.2`；权威 sha256 由 AF 自取 `dist` 那份钉**字节** | `ls docker/homesdk/` ⇒ 仅 `homesdk-0.3.2-py3-none-any.whl`；`ci.yml:25/42/63`、`Dockerfile.api:26-27`、`Dockerfile.test:26-27` 五条引用全是 0.3.2；`pyproject.toml:61 "homesdk>=0.3.2"`；sha256 `19bc83a6…fb5505` 不止写在文档里，还钉进判据 `tests/unit/test_mqtt_compose_env.py:163` | **已交付**（`2f86af9`）。裁定说"镜像重烤搭变更窗"那一半仍属窗内动作，不在仓内射程 |
+| Q2 presence 载荷 → **预期变更（A）**，并当场把规格 §三.4/§四 更正为"status 载荷是有意变更（字面量→JSON），消费侧必须走 `decode_status`、禁止再比字面量" | 把 `tests/unit/test_af_mqtt_bridge.py:91/104` 两条改成按合同判定（`state==online` 且 `retain==True`，形状由库保证） | `test_start_publishes_retained_online_and_sets_lwt` 现读已是合同档：`decode_status(payload)` + `st["state"] == STATE_ONLINE` + `st["version"] == "2.5"`，并且带一条**反空洞**断言 `json.loads(payload)` 非空（因为 `decode_status` 认 legacy 字面量，光"解得出 online"证明不了升级真发生过）；LWT 那格同编码器、同 `decode_status` 口径 | **已交付**（`2f86af9`）。任务 #54 那句"两条presence断言的红**刻意保留**、不改绿"是**批复前的口径**，本批据裁定更正为已收口 |
+| Q3 F16 gates 递归无深度预算 → **A（库侧修，排 0.3.3）**，**驳回 B**（AF 侧临时绕行） | 无 AF 侧动作；裁定明写"AF 替依赖补它自己该装的护栏"是被驳回的选项 | AF 仓内没有为 F16 写绕行代码；与甲A/乙A/丙A 同档挂在 homesdk 0.3.3（计划表 §5.3 第 14 行已登记该等待关系） | **不属 AF 射程**，登记为待 0.3.3 |
+
+判据实测：`pytest tests/unit/test_af_mqtt_bridge.py tests/unit/test_mqtt_compose_env.py tests/unit/test_dcd_20261006_pairing_bootstrap.py -q`
+⇒ **77 passed**（本批未改任何代码，这一跑是把"已交付"这句挂在读数上而不是挂在任务卡上）。
+
+口径更正一处：任务 #54/#55 的"阻塞在 DCD 批复"从本批起不再成立——批复（20261007 §六）已回且 AF 侧已落。
+两件按此关账；仍开放的 AF 侧动作只有**窗内那一类**（镜像重烤 + 变更后验收）与**等 0.3.3 的库侧三件**。
+
+—— AutoForge 开发 · 2026-10-08
