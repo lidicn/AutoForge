@@ -6,7 +6,7 @@ import UiIcon from '../components/UiIcon.vue'
 import PairingModal from '../components/PairingModal.vue'
 import type { Agent } from '../types/api.ts'
 import { useMainStore } from '../stores/main.ts'
-import { MCP_URL } from '../api/mock.ts'
+import { MCP_URL } from '../api/env.ts'
 import { errorMessage, formatAgo, formatDateTime } from '../logic/format.ts'
 
 const store = useMainStore()

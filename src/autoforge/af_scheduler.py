@@ -262,7 +262,9 @@ class Scheduler:
             # entity_id，导致 and 永远不成立。修复后：对 state 类型子 trigger
             # 查当前状态快照；event 类型仍按事件匹配。
             if trig.op == "and":
-                return all(self._group_sub_satisfied(sub, event) for sub in trig.sources)
+                return all(
+                    self._group_sub_satisfied(sub, event, _depth + 1) for sub in trig.sources
+                )
             # or 保持原逻辑：任一子 trigger 匹配当前事件即成立
             results = [self._satisfied(sub, event, _depth + 1) for sub in trig.sources]
             return any(results)
@@ -281,9 +283,14 @@ class Scheduler:
             return False
         return True
 
-    def _group_sub_satisfied(self, sub: Trigger, event: BusEvent) -> bool:
+    def _group_sub_satisfied(self, sub: Trigger, event: BusEvent, _depth: int = 0) -> bool:
         """P1-6：group and 的子 trigger 判定——state 类型查状态快照，event 类型按事件匹配。"""
         sub = _normalize(sub)
+        if sub.type == "group":
+            # 嵌套 group 交回 `_satisfied`：那里同时装着深度预算与 and/or 两种复合口径。
+            # 不认这一档就会落到本函数末尾那句"非事件驱动类型 ⇒ False"，于是 `and` 里套
+            # `or`（合法 IR，扫描器只查预算不查形状）**条件永远不成立**——静默 False 比报错难查得多。
+            return self._satisfied(sub, event, _depth + 1)
         if sub.type == "state":
             if not sub.entity_id:
                 return False

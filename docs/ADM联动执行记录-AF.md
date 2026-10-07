@@ -5264,3 +5264,68 @@ F1 与 F2 是同一根因的两侧：F2 是腿没接预算，F1 是接了预算�
 | 扫描器形状复测 | `EXPR_OVER: scan OK codes=[… 'EXPR_INVALID' …]`、`TRIGGER_OVER/TRIGGER_CYCLIC: … 'TRIGGER_INVALID'`、`PARAMS_OVER: scan OK`；闸门档 `容器层数=64 放行 / 65 拒 / 66 拒` |
 
 —— AutoForge 开发 · 2026-10-08
+
+## 二之六十二、收计划 §5.3 第 16 项的两件登记缺陷（`MCP_URL` 去写死 / 调度器嵌套 group 静默 False），两处都做了变异自证
+
+第十七批（承接 §二之六十一 的读数格之后。远端 `2db2fa2` 已推，本批在其上）。
+
+### 一、①：`ui-user-mimo` 把 MCP 地址抄死在源码里
+
+现场：`src/api/mock.ts:11` 有 `export const MCP_URL = 'http://192.168.2.200:8787/mcp'`，被 `src/views/AgentsView.vue:24,62` 拿去显示「Agent 该连哪里」。这不是排版问题：那是一张**配对用**的卡片，而 §二之六十 刚把服务端 `POST /mcp` 挂进与页面同一个服务层——同源之后正确地址本该由 `location.origin` 现推。写死 LAN 的结果是换一次部署（换端口、走反代、换内网段）卡片就显示一个连不上的 URL，而它显示的语义恰恰是「照这个连」。
+
+落法：定义搬进 `src/api/env.ts`，三档取值——
+
+```ts
+export const MCP_URL =
+  src.VITE_MCP_URL ||
+  (typeof location === 'object' && location.origin ? location.origin + '/mcp' : '')
+```
+
+`||` 不是 `??`：`.env` 里「键在、值留空」的写法走 `??` 会把卡片显示成空白，看着像「后端没配」，实际是「配置里那一行是空的」。裸 node 跑判据时没有 `location`，取值由 `tests/mock.env` 当场给；两条路都不给就是空串——**不编一枚看起来能用的地址**。`src/api/index.ts` 改成从 `env.ts` 再导出（`MCP_URL`）并把 `apiError` 留在 `mock.ts`；`AgentsView.vue` 的 import 换到 `../api/env.ts`；`tests/ui-contract.test.mjs` 的锚点跟着换成 `has('src/api/env.ts', 'export const MCP_URL')`。
+
+判据：`tests/mock-api.test.mjs` 两条——正向那条钉「env 读得到」（值来自 `tests/mock.env`，所以搬走定义不会假绿），加一条反向断言拦住 `src/api/mock.ts` 里再出现 `192.168.2.200` 字面量；三档那条用**子进程**量（env 与 `location` 都是模块加载期读一次，同进程改属性只会拿到缓存），新夹具 `tests/fixtures/probe-mcp-url.mjs`。
+
+变异自证（跑在 `%TEMP%` 副本树，工作树未动）：把副本里的 `||` 改成 `??`——
+- 控制组三档：`http://192.168.9.9:8787/mcp` / `http://nas.local/mcp` / （空）
+- 变异组三档：`http://192.168.9.9:8787/mcp` / **（空）** / （空）
+中间档塌成空，正是 `:39` 那条 `run('', 'http://nas.local')` 该杀的东西——判据不是装饰。
+
+### 二、②：`af_scheduler._group_sub_satisfied` 对嵌套 group 静默 False
+
+现场：`_group_sub_satisfied`（原 `:284`）只认 `state` 与 `event` 两档子 trigger，遇到 `type == "group"` 就一路落到函数末尾的「非事件驱动类型 ⇒ `return False`」。而 `op == "and"` 分支调它时也没往下传深度。后果：`and` 里套 `or`（合法 IR，扫描器只查预算不查形状）条件**永远不成立**——不报错、不降级、不留日志。静默 False 比报错难查得多。
+
+落法：嵌套 group 交回 `self._satisfied(sub, event, _depth + 1)`（那里同时装着深度预算与 `and`/`or` 两种复合口径，别在子判定里再抄一份口径），并把 `and` 分支的 `_depth + 1` 补上。
+
+判据 5 条（`tests/unit/test_p1_6_and_trigger.py::TestNestedGroupInAnd`）：`or` 套在 `and` 里会触发 / 反空洞①`and` 的兄弟分支仍要成立 / 反空洞②嵌套分支真的被求值（事件来自第三个实体）/ `and` 套 `and` 也走 / 超预算嵌套在该腿上抛 `TriggerDepthError`。
+
+变异自证（副本树 `%TEMP%/af_sched_mut`，先证 `autoforge.af_scheduler.__file__` 落在副本，防止安装路径把变异跑成白工）：把 `:293` 的 `return self._satisfied(…)` 退回 `return False` ⇒ **3 failed, 6 passed**（`test_or_inside_and_fires`、`test_and_inside_and_is_evaluated`、`test_over_budget_nesting_raises_named_error_on_this_leg`）。
+读数里顺出一条事实：超预算那条也依赖这层交回——不认嵌套 group，深树根本走不进带预算的 `_satisfied`，**深度预算在这条腿上就不响**。反空洞①（兄弟分支仍要成立）在变异下仍绿：它钉的是「不该触发时不触发」，静默 False 恰好满足它，所以它只能当配套，不能单独当自证。
+
+### 三、本批新登记的失败族（探针自身的）
+
+第一次变异自证拿不到读数：三档全打印空。原因是子进程调用把 stderr 丢了，而副本树没有 `{"type":"module"}`，node 实报 `Failed to load the ES module … Cannot use 'import.meta' outside a module`，退出码 1。空输出被当成了「三档都是空」——**丢 stderr 的子进程探针，失败长得像结论**。修法：副本根补 `package.json`，并且量之前不 `2>` 丢弃；判据成立与否要用退出码说话。
+
+### 四、DCD 投件（不能自主决定的一件）
+
+`af_conflict_runtime.py:282-293`：冲突内省（introspect）自身抛任何异常都走 `except Exception` → `_audit_degraded("introspect", …)` → **照常执行原动作**。这是 fail-open 的策略选择，不是笔误：改成 fail-closed 会让内省侧的偶发故障变成「整条自动化不执行」，保持降级则是「冲突没查出来也照做」。影响面是产品语义（可用性 vs 一致性），归 SP/PM 裁。
+投件：`E:\NAS\关键决策部\inbox\20261008-AF-冲突内省失败照常执行-决策申请.md`（id `20261008-AF-conflict-introspect-fail-open`），问 1=A（fail-closed）/B（保持降级）、2=是/否（选 B 时是否通知 owner）。已自主落的缓解 4 件在件内列明。
+
+### 五、仍未收口的格（如实记）
+
+- NAS 侧收敛仍待 go-ahead：wheel 拷到 `//192.168.2.200/docker/libs/homesdk/`、部署克隆换成推上去的 HEAD、`docker compose build` 再起容器。顺序地雷不变——手工补过的 compose 已给旧镜像传 `--ui-user-dir`，typer 会 exit 2 把 :8787 连同开发者控制台一起 crash-loop。
+- `af_nl_parse` 无产品调用者（§二之六十一 那格）；HTTP 错误体键名 `error` vs `message`、ADM code 是否上 HTTP body、契约 v2.1 的可选 `code`，仍等裁定；甲A/乙A/丙A 随 homesdk 0.3.3。
+
+### 六、本批读数
+
+| 项 | 读数 |
+|---|---|
+| `pytest -q`（全量，调度器改动后） | **3407 passed, 53 skipped, 1 warning, 65 subtests passed in 214.84s**，`PYTEST_EXIT=0`（上一登记 3402，+5 = `TestNestedGroupInAnd` 五条新腿） |
+| `test_p1_6_and_trigger.py` 单跑 | **9 passed**，EXIT=0 |
+| UI 套件 `node --test "tests/*.test.mjs"` | **tests 75 / pass 75 / fail 0**，`UI_EXIT=0` |
+| `npm run build` | `BUILD_EXIT=0`（「✓ built in 19.45s」，PWA precache 23 entries / 527.77 KiB） |
+| `GATES_PYTHON=$PY bash gates.sh` | `GATES_RC=0`，结论「门禁干净」 |
+| 变异自证 A（UI `||`→`??`） | 中间档 `http://nas.local/mcp` → 空（杀） |
+| 变异自证 B（调度器交回→`return False`） | 3 failed, 6 passed（杀） |
+| 行尾自证 | `env.ts`/`index.ts`/`mock.ts`/`mock-api.test.mjs`/`mock.env` 保持 CRLF；`af_scheduler.py`、`test_p1_6_and_trigger.py`、本记录保持 LF |
+
+—— AutoForge 开发 · 2026-10-08

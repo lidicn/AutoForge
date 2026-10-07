@@ -8,5 +8,6 @@ import { USE_MOCK } from './env.ts'
 
 export const api = USE_MOCK ? mockApi : httpApi
 
-export { MCP_URL, apiError } from './mock.ts'
+export { MCP_URL } from './env.ts'
+export { apiError } from './mock.ts'
 export type { ApiClient, ApiErrorCode } from './mock.ts'

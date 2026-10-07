@@ -38,7 +38,7 @@ test('顶栏标题 AutoForge + 底部小字 ForgeSight + 三 Tab + 600px 居中'
 test('Agent Tab：MCP 卡片 + 复制按钮 + 删除配对 + 内联改名', () => {
   // 端点值只在 mock-api.test.mjs 钉一次；这里钉"导出在位 + 视图真引用它"这两个接合点，
   // 同一个字面量抄进两份判据就是下一个改端口的人只改对一处。
-  has('src/api/mock.ts', 'export const MCP_URL')
+  has('src/api/env.ts', 'export const MCP_URL')
   has('src/views/AgentsView.vue', 'MCP_URL')
   has('src/views/AgentsView.vue', 'useClipboard')
   has('src/views/AgentsView.vue', '删除配对')

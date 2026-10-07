@@ -1,13 +1,15 @@
+import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { beforeEach, test } from 'node:test'
 import assert from 'node:assert/strict'
-import {
-  MCP_URL,
-  __advanceClock,
+import {  __advanceClock,
   __break,
   __reset,
   __setLatency,
   mockApi,
 } from '../src/api/mock.ts'
+import { MCP_URL } from '../src/api/env.ts'
 
 beforeEach(() => {
   __reset()
@@ -16,8 +18,26 @@ beforeEach(() => {
 
 const isErr = (code) => (e) => { assert.equal(e.code, code); return true }
 
-test('MCP 端点常量固定（顶栏卡片展示用）', () => {
+test('MCP 端点取自 env，源码里没有写死的 LAN 地址（顶栏卡片展示用）', () => {
+  // 值来自 tests/mock.env：这一条钉的是「env 读得到」，而不是「源码里那枚常数还在」，
+  // 所以搬走定义不会把它假绿；LAN 字面量则由下面那条反向断言拦住。
   assert.equal(MCP_URL, 'http://192.168.2.200:8787/mcp')
+  assert.ok(!readFileSync(new URL('../src/api/mock.ts', import.meta.url), 'utf8').includes('192.168.2.200'))
+})
+
+test('MCP 端点的三档取值：显式覆盖 > 同源 origin > 空（不编造地址）', () => {
+  // 子进程量：env 与 location 都是模块加载期读一次，同进程里改属性只会拿到缓存。
+  // 空覆盖那一档拦的是 `??` 与 `||` 的界线——`.env.production` 那种"键在、值留空"的写法
+  // 若走 `??` 会把卡片显示成空白，看着像"后端没配"，实际是"配置里那一行是空的"。
+  const probe = fileURLToPath(new URL('./fixtures/probe-mcp-url.mjs', import.meta.url))
+  const run = (env, origin) =>
+    execFileSync(process.execPath, ['--experimental-strip-types', probe, origin], {
+      encoding: 'utf8',
+      env: { ...process.env, VITE_MCP_URL: env },
+    }).trim()
+  assert.equal(run('http://192.168.9.9:8787/mcp', 'http://nas.local'), 'http://192.168.9.9:8787/mcp')
+  assert.equal(run('', 'http://nas.local'), 'http://nas.local/mcp')
+  assert.equal(run('', ''), '')
 })
 
 test('登录语义与后端对齐：任意非空凭据 ⇒ 单 owner 会话，用户名原样回显', async () => {

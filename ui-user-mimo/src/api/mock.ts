@@ -8,8 +8,6 @@ import type { Agent, AuthCode, Automation, PairRequest, PendingItem, User } from
 import { PAIR_CODE_LENGTH, PAIR_TTL_MS, isPairCode, randomDigits } from '../logic/pairing.ts'
 import { SHORT_CODE_LENGTH, shortRemainMs, validateShortMinutes } from '../logic/authcodes.ts'
 
-export const MCP_URL = 'http://192.168.2.200:8787/mcp'
-
 export type ApiErrorCode =
   | 'AUTH_FAILED' | 'AUTH_INVALID_INPUT'
   | 'NOT_FOUND' | 'INVALID_NAME' | 'INVALID_STATE' | 'INVALID_MINUTES' | 'BAD_REQUEST'
