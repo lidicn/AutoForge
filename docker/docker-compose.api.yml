@@ -39,7 +39,7 @@ services:
     #       export AUTOFORGE_HA_TOKEN=... 后 docker compose up。
     # secrets:
     #   - autoforge_ha_token
-    #   - autoforge_api_tokens
+    #   - autoforge_tokens
     #   - autoforge_revoked_tokens
     environment:
       - AUTOFORGE_LIVE_ENABLED=${AUTOFORGE_LIVE_ENABLED:-0}
@@ -72,8 +72,12 @@ services:
       - MQTT_KEEPALIVE=${MQTT_KEEPALIVE:-}
       - MQTT_USER=${MQTT_USER:-}
       - MQTT_PASSWORD=${MQTT_PASSWORD:-}
+      # 令牌面的键名真源是 `af_auth.py` 的 `load_secret(...)`：多令牌主体用这枚键（JSON 对象，
+      # 每条自报 subject + scopes）。旧文案把它写成了复数，而代码里没有复数那枚读数——宿主机的值
+      # 注入得再认真也只是喂给一个没人读的空位，鉴权照旧失败且不留原因（NAS 现场手补即为此）。
+      # 这条键名同源由 `tests/unit/test_compose_env_key_source.py` 当场核对。
+      - AUTOFORGE_TOKENS=${AUTOFORGE_TOKENS:-}
       # - AUTOFORGE_HA_TOKEN=${AUTOFORGE_HA_TOKEN:-}
-      # - AUTOFORGE_API_TOKENS=${AUTOFORGE_API_TOKENS:-}
     restart: unless-stopped
 
 # 顶层 secret 定义（docker secrets 风格；默认全注释——启用前先在宿主机创建对应文件）：
@@ -81,7 +85,7 @@ services:
 # secrets:
 #   autoforge_ha_token:
 #     file: /vol1/1000/docker/autoforge/secrets/AUTOFORGE_HA_TOKEN
-#   autoforge_api_tokens:
-#     file: /vol1/1000/docker/autoforge/secrets/AUTOFORGE_API_TOKENS
+#   autoforge_tokens:
+#     file: /vol1/1000/docker/autoforge/secrets/AUTOFORGE_TOKENS
 #   autoforge_revoked_tokens:
 #     file: /vol1/1000/docker/autoforge/secrets/AUTOFORGE_REVOKED_TOKENS

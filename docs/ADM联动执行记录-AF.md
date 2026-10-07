@@ -5329,3 +5329,88 @@ export const MCP_URL =
 | 行尾自证 | `env.ts`/`index.ts`/`mock.ts`/`mock-api.test.mjs`/`mock.env` 保持 CRLF；`af_scheduler.py`、`test_p1_6_and_trigger.py`、本记录保持 LF |
 
 —— AutoForge 开发 · 2026-10-08
+
+## 二之六十三、把部署机上的两件手工补丁收进版本库（`load_conf` 的两种"读不到" / compose 令牌键复数漂移），并上新同源门
+
+第十八批（在 `8d380b3` 之上）。起因不是新审计报告，是**去 NAS 部署用户视角 UI 时读到的现场**：
+`/vol1/1000/docker/autoforge` 有六处未提交改动。逐条与 HEAD 对账（`git diff --ignore-cr-at-eol`
+把 CRLF 噪声剥掉后只剩 3/1、11/5、2/1、2/0、1/1、4/4 行），其中四处 HEAD 已含或已更优
+（`af_cli.py` 的 `--ui-user-dir` 与 HEAD 同形；`af_api.py` 那份是 `/mimo` 挂载的粗版——字符串
+`mimo` 抄在 fallback 里、防穿越用 `str(candidate).startswith(str(root))`，HEAD 已换成
+`UI_USER_PREFIX` 单一真源 + `is_relative_to`；`vite.config.ts` 的 `base: '/mimo/'` 与
+`package-lock.json` 的 `engines.node` 都已在 HEAD）。**只有两件是 HEAD 真缺的**，本批收口。
+
+### 一、①：`load_conf` 把"快照还没写过"和"快照坏了"包成同一种错
+
+`af_store.py:796`（R14-02 那次收口留下的）写的是 `except (OSError, ValueError)`——
+`FileNotFoundError` 是 `OSError` 的子类，于是"这台机器从没存过置信度快照"也被包成
+`ValueError("置信度快照读取失败 …")`。而两处调用方（`af_service._conf_of:1067` 与 metrics 聚合
+`:2020`）只兜 `FileNotFoundError` 并据此降级 ⇒ 接不住 ⇒ 500。更要紧的是那段注释自己写着
+"调用方通常只兜 FileNotFoundError"，代码却把这一档吃掉——**注释与代码互相矛盾的现场版**。
+NAS 上那枚手工补丁（`except FileNotFoundError: raise`）说明这不是假想路径，是已经在这台机器上
+响过一次的。
+
+落法：放过 `FileNotFoundError`，其余 `OSError`/`ValueError` 仍包成"快照不可用"。
+判据 4 条（`tests/unit/test_af_store.py`）：缺文件 ⇒ `FileNotFoundError`（控制组）；文件内容坏 ⇒
+`ValueError`；**同名目录** ⇒ 仍 `ValueError`（反空洞：放过 FileNotFound 不能顺手把权限类错误放出
+去；`read_text` 抛的是 `PermissionError`/`IsADirectoryError`，皆 `OSError` 皆非 FileNotFound，
+这条不需要 monkeypatch 就能跨平台量）；调用方降级 ⇒ `_conf_of` 返回播种后的置信度表而不是炸
+（这才是"整面板 500"的那张脸）。
+变异自证（`%TEMP%/af_f3_mut` 副本树，先证 `af_store.__file__` 落在副本）：删掉那两行守卫 ⇒
+**2 failed, 2 passed**——红的正是"缺文件"与"调用方降级"两条，另两条（坏文件 / 权限）不受影响，
+说明这 4 条各钉每一档，没有一条是摆设。
+
+### 二、②：compose 里那枚代码不读的令牌键
+
+`docker-compose.api.yml` 把多令牌主体写成复数（`_API_TOKENS`），而 `af_auth.py:169` 读的是
+`AUTOFORGE_TOKENS`（旧单令牌别名是 `af_auth.py:165` 的 `AUTOFORGE_API_TOKEN`）。复数那枚**全仓
+无人读**：宿主机 `.env` 里值填得再对，也只是喂给一个空位，鉴权照旧失败且不留原因——部署机于是
+手工补了一行。这与 §5.3 第 10 件的 MQTT_* 键名同族，只是这族长在 `AUTOFORGE_*` 上。
+
+落法：compose 改成会执行的 `- AUTOFORGE_TOKENS=${AUTOFORGE_TOKENS:-}`，secrets 段与注释里的
+service key 一起改名；注释里**不再拼写那枚死键**（新哨兵会连注释一起抓，见下）。
+新门 `tests/unit/test_compose_env_key_source.py` 四条：
+- 正向：compose `environment:` 段里每条会执行的 `AUTOFORGE_*` 键，必须在 `src/autoforge/*.py`
+  里真有其读数（数到的键少于 6 就报"形状改了，这条『干净』没有依据"，不给自己空跑的机会）；
+- 现场回归：`AUTOFORGE_TOKENS` 必须在会执行的键里；
+- 反向哨兵：整份 `docker/` 目录（含注释与 secret 路径）不许再出现复数那枚；
+- 反向同源：`af_auth` 用 `load_secret("AUTOFORGE_*")` 读的每个键，compose 要么有引用，要么在
+  `NOT_DEPLOYED` 里带**非空理由**；豁免名单里的键若已不是代码的读数，判红（豁免不能烂掉）。
+变异自证（同一副本树）：伪造一枚 `- AUTOFORGE_DEADKEY=${…}` ⇒ 正向那条红；把旧别名的豁免理由
+清成空串 ⇒ 反向同源那条红。读数 **2 failed, 2 passed**（未针对的两条不受牵连）。
+
+**这一批自己踩到的两枚坑，如实记在这里**：
+1. 第一版 compose 注释里把死键原样拼了出来，于是"整份 docker/ 不许出现"这条哨兵**在干净树上
+   就红**——不是判据太严，是拼写死键本来就会让它复活。改写成"旧文案把它写成了复数"，哨兵保持
+   整文件口径不放宽。
+2. 变异脚本第一次跑成 `TypeError: can't concat str to bytes`（bytes 行尾里混进了 str 常量），
+   改动根本没落盘，而后面那次 `4 passed` 其实是**未变异树的读数**。若不是我认得那次
+   `tail -7` 里没有红条目，就会把"4 passed"当变异自证写进台账。修法：断言 `count(anchor)==1`
+   与 `count(dead)==0` 之后再落盘，落盘后重跑，并把"变异组必须出现红条目"当作读数的门槛。
+
+### 三、NAS 部署前置（本批只读、未动容器）
+
+现读到五条会影响上线的事实，登记为计划 §5.3 第 19 项：部署机的 `docker/homesdk/` 停在 **0.3.1**
+而 `Dockerfile.api:26` 按文件名钉 **0.3.2**（不先 scp wheel，`compose build` 就在 COPY 步失败）；
+部署机**无 node** ⇒ `ui-user-mimo/dist` 只能本机构建再 scp（现在那份 dist 是 10-07 23:34 的，
+早于本批两次提交，无论如何都要重出）；compose 的 `.env` 在 `docker/` 目录（不在仓库根），
+部署机那份里带着令牌键——重启若从别的目录跑 compose，插值取空会把鉴权面自己关掉；
+裸仓 `/vol1/1000/git/autoforge.git` 的 `master` 与 GitHub 的 `main` 是两条线，**推 GitHub
+不等于线上前进**；顺序地雷不变（先重烤再起，旧镜像不认 `--ui-user-dir` ⇒ typer exit 2 crash-loop）。
+本批只做了只读核查（`git status`、`diff --numstat`、`docker ps`、`printenv` 只取键名不取值），
+未推 `nas`、未重烤、未重启——这三件是共享系统动作，等 go-ahead。
+
+### 四、本批读数
+
+| 项 | 读数 |
+|---|---|
+| `pytest -q`（全量） | **3415 passed, 53 skipped, 1 warning, 65 subtests passed in 212.20s**，`PYTEST_EXIT=0`（上一登记 3407，+8 = 快照 4 条 + compose 同源门 4 条） |
+| `test_af_store.py -k "conf_snapshot or degrades_to_seeded" -v` | **4 passed, 20 deselected**（确认新腿真被收进 collected，不是静默跳过） |
+| `test_compose_env_key_source.py` + `test_mqtt_compose_env.py` | **11 passed**（compose 改动没破 MQTT_* 那条同源） |
+| 变异自证 A（删 `FileNotFoundError` 守卫） | **2 failed, 2 passed**（杀：缺文件 / 调用方降级） |
+| 变异自证 B（伪造死键 + 豁免理由清空） | **2 failed, 2 passed**（杀：正向键名同源 / 反向同源） |
+| `GATES_PYTHON=$PY bash gates.sh` | `GATES_RC=0`，结论「门禁干净」 |
+| 行尾自证 | `af_store.py` 1103 行 / CR 1103、`test_af_store.py` 397 / 397、compose 91 / 91（CRLF 未破）；`test_compose_env_key_source.py` 新建为 LF（与同目录多数测试一致）；`ast.parse` 三文件 OK、`yaml.safe_load` compose OK |
+| NAS 只读核查 | 部署机 `docker ps`：`autoforge-api` Up 4 hours（`0.0.0.0:8787->8787`）；容器 env 键名 11 枚含 `AUTOFORGE_TOKENS`；`/vol1/1000/docker/autoforge` HEAD=`9aa6499`，六处未提交改动（差集见 §一 开头） |
+
+—— AutoForge 开发 · 2026-10-08

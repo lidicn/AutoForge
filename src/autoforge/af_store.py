@@ -791,10 +791,13 @@ class GraphStore:
 
     def load_conf(self, name: str) -> ConfidenceStore:
         path = self.root / f"{self._dir(name).name}.conf.json"
-        # R14-02：裸读 json.loads 会让文件损坏/权限错误直接穿出（调用方通常只兜 FileNotFoundError）。
-        # 统一包成 ValueError，语义是"置信度快照不可用"，调用方可选择降级为空置信度。
+        # R14-02：文件损坏/权限错误包成 ValueError，语义是"快照不可用"。但"快照还没写过"是
+        # 另一种状态——`af_service._conf_of` 与 metrics 聚合都只兜 FileNotFoundError 并据此降级；
+        # 把它一起包进 ValueError 等于把"首次运行"读成 500（NAS 现场即此）。
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise
         except (OSError, ValueError) as exc:
             raise ValueError(f"置信度快照读取失败 {path}: {exc}") from exc
         if not isinstance(payload, dict) or "conf" not in payload:

@@ -358,3 +358,40 @@ def test_r20_import_no_owner_backward_compatible(tmp_path):
     assert "shared" in report["imported"]
     # 无 owner 导入后记录 owner 为空（公共），这是 CLI 场景的预期行为
     assert store._record_owner("shared") == ""
+
+# ─────────────────────────────────────────────────────────────────────
+# 置信度快照的两种「读不到」（NAS 现场把「首次运行」读成 500）
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_conf_snapshot_missing_raises_filenotfound(tmp_path):
+    # 快照没写过 ≠ 快照坏了：两处调用方（`af_service._conf_of` / metrics 聚合）只兜这一档来降级。
+    store = GraphStore(tmp_path)
+    with pytest.raises(FileNotFoundError):
+        store.load_conf("demo")
+
+
+def test_conf_snapshot_corrupt_wraps_as_valueerror(tmp_path):
+    store = GraphStore(tmp_path)
+    path = store.save_conf(ConfidenceStore().seed(_graph()), "demo")
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(ValueError, match="置信度快照读取失败"):
+        store.load_conf("demo")
+
+
+def test_conf_snapshot_other_os_error_still_wraps(tmp_path):
+    # 反空洞：放过 FileNotFound 不能顺手把权限类错误也放出去——那才是 R14-02 原本要兜的那档。
+    store = GraphStore(tmp_path)
+    path = store.save_conf(ConfidenceStore().seed(_graph()), "demo")
+    path.unlink()
+    path.mkdir()  # 同名目录：read_text 抛 PermissionError/IsADirectoryError（皆 OSError，皆非 FileNotFound）
+    with pytest.raises(ValueError, match="置信度快照读取失败"):
+        store.load_conf("demo")
+
+
+def test_conf_of_degrades_to_seeded_store_when_snapshot_absent(tmp_path):
+    # 出问题的脸在这里：以前 load_conf 把 FileNotFound 包成 ValueError，这层 except 接不住 ⇒ 整面板 500。
+    from autoforge.af_service import _conf_of
+    store = GraphStore(tmp_path)
+    conf = _conf_of(store, "demo", _graph())
+    assert conf.values, "降级成空表就等于面板永远显示无置信度"
