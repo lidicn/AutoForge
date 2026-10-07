@@ -5549,3 +5549,61 @@ recreate 之后两者一致。
   回滚路径 = `docker compose --env-file .env -f docker-compose.api.yml up -d --force-recreate`（用旧 compose + 旧 dist 重放）
 
 —— AutoForge 开发 · 2026-10-08
+
+## 二之六十五、部署后的三方字节对撞（证明线上那份就是带修复的那份），以及 `gates.sh` 解释器缺省值在本机的错位读数
+
+### 1. 门禁链读数：`GATES_RC=2` 报的是"未安装"，真因是默认解释器不存在
+
+- `bash gates.sh`（不带变量）⇒ `GATES_RC=2`，日志只有三行：`homesdk 未安装。先执行： python3 -m pip install -e E:/NAS/homesdk …`
+- 逐条核解释器：`command -v python3` ⇒ **MISSING**（本机根本没有 `python3` 这个别名）；`python` ⇒
+  `C:\Users\lidicn\AppData\Local\Programs\Python\Python313\python.exe`，`import homesdk.gates` OK（解析到 `E:\NAS\homesdk\src\homesdk\__init__.py`）。
+  脚本第 24 行是 `PYTHON="${GATES_PYTHON:-python3}"`，第 26 行的探测失败后不区分"解释器不存在"与"包没装"，一律报后者。
+- 带解释器重跑：`GATES_PYTHON=<Python313> bash gates.sh` ⇒ **`GATES_RC=0`**（71 行）。关键读数：
+  AST 门 `新增/未获批 0 条（error 0 / warn 0），基线内存量 97 条，过期基线条目 0 条`；计数棘轮 `全量违规 97 条 / 登记上限 97 条`（顶格未超）；
+  `门禁装配覆盖门干净（盘上 check_*.py 19 个，gates.sh 覆盖 18 个，工作流覆盖 1 个）`；`import 冒烟（解释器：Python 3.13.2）` 0 违规。
+- **不在此刻改 gates.sh 的文案**：它是 AgentOps 模板的复制件（脚本头注明"复制到仓库根"，适用 AutoForge/doubao-butler 两家），
+  单仓改会让四仓分叉。跨仓那条"解释器不存在却报未装包"的诊断错位留作待窗项，需要时投 DCD，不在这里私改模板。
+
+### 2. 线上产物 ↔ 仓库产物 ↔ 现场重建：三方对撞同一条 md5
+
+本轮要回答的是"§二之六十四 落码之后，NAS 上跑的那份到底含不含修复"。只用状态码答不了（假部署那次三张脸全 200），
+改成按字节对撞：
+
+| 口径 | 读数 |
+| --- | --- |
+| 服务端 `/mimo/` index 的资源名 | `assets/index-D22QXJ0K.js`、`assets/naive-B1EdxPTJ.js` |
+| 仓库 `ui-user-mimo/dist/index.html` 的资源名 | 同上，两条逐字相同 |
+| 服务端 chunk 的 md5 | `c237596dc67684581779beb645db637b` |
+| NAS 宿主机 `ui-user-mimo/dist/assets/index-D22QXJ0K.js` 的 md5 | 同一个值 |
+| 从 HEAD 重新 `npm run build`（`BUILD_RC=0`）产出的 chunk | 资源名与 md5 都复现同一个值 |
+
+- 最后一行是决定性的一条：构建可复现 ⇒ 服务端那份 = 已提交源码那份，**不需要再部署一次**。
+- 产物口径的直接证据（服务端 chunk 原文，minified 后 `createWebHistory` 被改名，实参仍是 base）：
+  `Io({history:io("/mimo/"),routes:[{path:"/login",name:"login",…`；同 chunk 内 `/mimo/` 字面量 2 处，另一处是 `modulepreload` 的资源前缀。
+- 深链接与三张脸：`/mimo/login` ⇒ 200 且回落同一份 index（不是另一张脸）；`autoforge-api Up 19 minutes`；`health=200 mimo=200 dev=200`。
+- 反空洞：这一节的判据如果退化成"200 就算上线"，就正好复现 §二之六十四 开头那组假部署读数——所以口径钉在资源名与字节上。
+
+### 3. 新登记的部署地雷（未修，先记名）：mimo 构建带 PWA precache
+
+- `npm run build` 尾部读数：`PWA v0.21.2 / mode generateSW / precache 23 entries (527.77 KiB)`，产出 `dist/sw.js` 与 `dist/workbox-9c191d2f.js`。
+- 当前接入方式让这一格**看不见**：`http://192.168.2.200:8787` 是不安全源，SW 无法注册（现场 `navigator.serviceWorker` 为 undefined，
+  这也是 §二之六十四 把"浏览器缓存/SW"排除掉、最终定位到 bind mount inode 的依据）。
+- 风险在**接入方式变更那一次**：改走 https 或 localhost 后 precache 会把旧 bundle 继续端给用户，表现为"推了没生效"。
+  本仓验收口径已经按资源名/md5 对撞，天然免疫这一类假绿；留待接 https 时一并处理 `sw.js` 的版本口径。
+
+### 4. 提交与三处远端读数
+
+- 本地：`c06d8ea`（`4 files changed, 150 insertions(+), 2 deletions(-)`）。
+- GitHub：`git push origin master:main` ⇒ `8406757..c06d8ea  master -> main`（`PUSH_RC=0`）；
+  `git ls-remote origin refs/heads/main` ⇒ `c06d8eaf1fa6e0d1decfc4ff87d69fb5a4d39d1d`，与 `git rev-parse HEAD` 逐字相同。
+- NAS 裸仓：`git push nas master` ⇒ `8406757..c06d8ea  master -> master`。
+- NAS 工作副本 `/vol1/1000/docker/autoforge`：`BEFORE=8406757` → `git merge --ff-only origin/master` → `AFTER=c06d8ea`，
+  ff 前后 `git status --short` 均为空。ff 只改 src 与 docs；`ui-user-mimo/dist` 是 gitignore（`tracked=0`、`ignored=yes`），
+  因此不动正在服务的那棵树——随后 `health/mimo/dev` 仍 200、chunk md5 未变，这一条是核过的而不是假定。
+
+### 5. 审计进件面复核（本轮无新进件）
+
+`docs/audit/元宝` = 0 份、`归档` = 72 份、`参考` = 4 份；顶层仅 `index.md` 与 `.gitkeep`；`index.md` 内 grep `待核实|未收口|第二十一轮` 无命中。
+进件政策不变：新报告到达即按四档收口（先复测 HEAD，成立项落码补判据，已覆盖项登记"核实成立但已修"，不成立项写明理由），不在核实前登记状态。
+
+—— AutoForge 开发 · 2026-10-08
