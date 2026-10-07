@@ -418,12 +418,17 @@ class TokenRegistry:
         p = Path(self._issued_path)
         data: dict[str, Any] = {}
         if p.is_file():
+            # 第十轮 F10①：文件存在却读不出来时**拒写**，不退回空字典。此前 `data = {}`
+            # 会让这次写入只落"内存里那一条"，等于一次签发把已签发令牌名单全部抹掉。
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                data = {}
+            except (OSError, ValueError) as exc:
+                raise ValueError(
+                    f"{p.name} 已损坏，拒绝写入以保护已签发令牌名单；"
+                    f"请修复或隔离该文件后重试（{type(exc).__name__}）"
+                ) from exc
         if not isinstance(data, dict):
-            data = {}
+            raise ValueError(f"{p.name} 形状不是对象，拒绝写入以保护已签发令牌名单")
         # 顺带把已过期的条目从落盘文件里剔掉：否则重启后 `_load_issued_file`
         # 读回来的全是过期令牌，文件单调增长（新增审计 BUG-19）。
         now = time.time()
@@ -506,6 +511,28 @@ def _purge_expired_codes(codes: dict[str, Any]) -> int:
     return len(dead)
 
 
+def _refuse_when_list_file_unreadable(path: Path, label: str) -> None:
+    """落盘前的护栏：`path` 存在却读不出数组形状时**拒写**（fail-closed）。
+
+    第十轮 F10①②③ 那一族：两族码仓的 `_load` 在文件损坏时只会静默得到空字典，而
+    `_persist` 是**整档由内存快照重写**——一次 `create` 就把盘上全部待发码抹掉，
+    现场也没了。护栏必须紧邻落盘调用（第十轮 W30：装在调用方不走的方法上等于没装）。
+
+    文件不存在是正常首写场景，不拒。
+    """
+    if not path.is_file():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"{path.name} 已损坏，拒绝写入以保护已有{label}；"
+            f"请修复或隔离该文件后重试（{type(exc).__name__}）"
+        ) from exc
+    if not isinstance(data, list):
+        raise ValueError(f"{path.name} 形状不是数组，拒绝写入以保护已有{label}")
+
+
 #: ── 配对 bootstrap 匿名端点的参数（裁定 20261006 §一 钉死，AF 不自签）──
 #: 数值来自 `关键决策部/decisions/20261006-AF配对与段间封顶与DPP四件与MA三件-裁定.md` §一 追问两答；
 #: 要改这三个数，先把裁定改掉（测试里有钉值的那一条会红）。
@@ -558,6 +585,9 @@ class PairCodeStore:
         return _purge_expired_codes(self._codes)
 
     def _persist(self) -> None:
+        # 第十轮 F10②：整档由内存快照重写，所以落盘前必须确认盘上那份还读得出来。
+        # `_load` 在文件损坏时只会得到空字典，若此处照写，一枚新配对码就把全部待发配对码抹掉。
+        _refuse_when_list_file_unreadable(self._path, "配对码")
         _atomic_write_text(
             self._path,
             json.dumps(list(self._codes.values()), ensure_ascii=False, indent=2),
@@ -754,6 +784,9 @@ class AuthCodeStore:
         return _purge_expired_codes(self._codes)
 
     def _persist(self) -> None:
+        # 第十轮 F10③：与配对码同形态——`_load` 遇损坏静默留空，这里整档重写。
+        # 一次 `create` 就把盘上全部已签发授权码抹掉，且现场一同消失。
+        _refuse_when_list_file_unreadable(self._path, "授权码")
         _atomic_write_text(
             self._path,
             json.dumps(list(self._codes.values()), ensure_ascii=False, indent=2),

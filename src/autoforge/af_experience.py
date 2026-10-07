@@ -27,6 +27,26 @@ EXPERIENCE_PRIOR_SCALE = 8.0
 EXPERIENCE_PRIOR_WEIGHT_CAP = 20.0
 
 
+def _refuse_when_dict_file_unreadable(path: Path, label: str) -> None:
+    """落盘前的护栏：`path` 存在却读不出对象形状时**拒写**（fail-closed）。
+
+    第十轮 F13 那一族：`_load` 在文件损坏时静默返回空字典，而写侧是**整档由内存快照重写**
+    ——一次成功观测就把盘上全部历史经验抹平，坏字节的现场也一起没了。护栏必须紧邻落盘调用
+    （第十轮 W30：装在调用方不走的方法上等于没装）。文件不存在是正常首写场景，不拒。
+    """
+    if not path.is_file():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"{path.name} 已损坏，拒绝写入以保护已有{label}；"
+            f"请修复或删除该文件后重试（{type(exc).__name__}）"
+        ) from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{path.name} 形状不是对象，拒绝写入以保护已有{label}")
+
+
 class ExperienceStore:
     """实体共现/IR 模式经验库（单文件原子写）。"""
 
@@ -52,6 +72,11 @@ class ExperienceStore:
         return data
 
     def _save(self, data: dict[str, Any]) -> None:
+        # 累积型写入（observe）：整档覆盖，落盘前必须确认盘上那份还读得出来。
+        _refuse_when_dict_file_unreadable(self.path, "经验记录")
+        self._write(data)
+
+    def _write(self, data: dict[str, Any]) -> None:
         data["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         atomic_write_text(
             self.path, json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True)
@@ -204,6 +229,8 @@ class ExperienceStore:
 
     def clear(self) -> None:
         with FileLock(str(self.path) + ".lock", timeout=10.0):
-            self._save(
+            # 显式清空是损坏现场的修复出口之一，不走 `_save` 的拒写护栏：
+            # 那种时侯「拒绝清空」只会让操作者连重置都做不了。
+            self._write(
                 {"observed": 0, "pairs": {}, "entities": {}, "patterns": {"kinds": {}, "adapters": {}, "modes": {}}}
             )
