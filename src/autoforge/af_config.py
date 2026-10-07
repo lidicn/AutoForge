@@ -42,6 +42,11 @@ class Config:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
         self._lock = threading.Lock()
+        #: 本进程**从未成功读过** `credentials.json`（文件在、却读不出对象形状）⇒ 置位后
+        #: `update_credentials` 拒写。理由与 ADM-auditkit 第十轮 F10 那一族相同：内存快照是空的，
+        #: 整档重写等于"只把这一条新令牌写回去"，盘上其余凭据连坏字节的现场一起抹掉。
+        #: 读得出快照时不置位——那种情况下整档重写恰好是把好数据写回盘上的修复动作（R19-01 口径）。
+        self._creds_unreadable = False
         self._creds = self._load_credentials()
         self.connection_revision = self._load_revision()
 
@@ -54,13 +59,30 @@ class Config:
 
     # ── 读取 ────────────────────────────────────────────────────────
     def _load_credentials(self) -> dict[str, Any]:
+        path = self._creds_path()
+        kept: dict[str, Any] = {}
         try:
-            return json.loads(self._creds_path().read_text(encoding="utf-8")) or {}
+            data = json.loads(path.read_text(encoding="utf-8")) or {}
         except (OSError, ValueError) as exc:
+            if not path.is_file():
+                # 文件不存在是正常首建场景，不置"读不出来"标志——否则第一次写凭据会被自己拒掉
+                return {}
             # R9-01/R13-02/R19-01：凭据文件损坏**不能静默清空**，否则 HOME_ASSISTANT_TOKEN 等
             # 回退默认 host；保留内存中现有凭据并告警（首次加载无内存凭据时退化为空）。
             _logger.warning("credentials.json 损坏，保留内存凭据: %s", exc)
-            return dict(getattr(self, "_creds", {}) or {})
+            kept = dict(getattr(self, "_creds", {}) or {})
+            self._creds_unreadable = not kept  # 手上没快照 ⇒ 落盘只会抹掉盘上其余凭据
+            return kept
+        if not isinstance(data, dict):
+            # 形状不对与读不出来同一条失败方向：`_creds.get` 会当场 AttributeError
+            _logger.warning(
+                "credentials.json 形状不是对象，按读不出来处理: type=%s", type(data).__name__
+            )
+            kept = dict(getattr(self, "_creds", {}) or {})
+            self._creds_unreadable = not kept
+            return kept
+        self._creds_unreadable = False
+        return data
 
     def _load_revision(self) -> int:
         try:
@@ -121,6 +143,13 @@ class Config:
     ) -> dict[str, Any]:
         """原子落盘新凭据 + 自增 connection_revision，返回 describe（只掩码）。"""
         with self._lock:
+            if self._creds_unreadable:
+                # 护栏紧邻落盘调用（第十轮 W30）：本进程一份凭据都没读到过，写下去就是
+                # 用"只有这一条新令牌"的快照整档覆盖 credentials.json。拒写，直到文件被修复或隔离。
+                raise ValueError(
+                    "credentials.json 已损坏且本进程未从中读到任何凭据，"
+                    "拒绝写入以免抹掉盘上其余凭据；请修复或删除该文件后重试"
+                )
             creds = dict(self._creds)
             if ha_token is not None:
                 creds["ha_token"] = ha_token

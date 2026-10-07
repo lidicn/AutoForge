@@ -524,19 +524,41 @@ class DeviceCatalog:
     def _record_bucket(self, bucket: str) -> None:
         """累加解析遥测（`{root}/.catalog/resolve_metrics.json`，锁 + 原子写）。"""
         path = self.root / ".catalog" / "resolve_metrics.json"
+        outcome = "failed"
         try:
-            with FileLock(str(path) + ".lock", timeout=10.0):
-                try:
-                    data = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
-                    data = {}
-                counts = data.setdefault("buckets", {})
-                counts[bucket] = int(counts.get(bucket, 0)) + 1
-                data["total"] = int(data.get("total", 0)) + 1
-                data["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-                atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
+            outcome = self._bump_metrics_bucket(path, bucket)
         except Exception:  # 遥测失败绝不影响解析本身
-            return
+            outcome = "failed"
+        # 留痕必须在这个宽 `except Exception: return` 的覆盖范围**外面**：第十二轮的补丁把
+        # 隔离/日志写在 try 里面，`quarantine` 少一个 import ⇒ NameError 被自己吞掉，
+        # "修了等于没修"（该轮 §一）。第 3 档遥测的正确修法就是静默跳过，不该抛异常打断解析。
+        if outcome == "unreadable":
+            logger.error(
+                "RESOLVE_METRICS_UNREADABLE path=%s —— 遥测本轮跳过写入，盘上那份坏文件原样保留"
+                "（整档覆盖会把全部历史计数抹成只剩这一条）",
+                path,
+            )
+
+    def _bump_metrics_bucket(self, path: Path, bucket: str) -> str:
+        """读-改-写一份解析遥测计数。返回 `written` / `unreadable`（后者=拒写，不动盘）。"""
+        with FileLock(str(path) + ".lock", timeout=10.0):
+            data: dict[str, Any] = {}
+            if path.is_file():
+                # F11（第十一轮那处 no_write）：文件存在却读不出来时**跳过写入**，
+                # 不退回空字典再整档覆盖——坏字节留在盘上，现场不被遥测抹平。
+                try:
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    return "unreadable"
+                if not isinstance(loaded, dict):
+                    return "unreadable"
+                data = loaded
+            counts = data.setdefault("buckets", {})
+            counts[bucket] = int(counts.get(bucket, 0)) + 1
+            data["total"] = int(data.get("total", 0)) + 1
+            data["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
+            return "written"
 
     def _finish(self, result: dict[str, Any]) -> dict[str, Any]:
         """给 resolve 结果补 `bucket` + （歧义时）`disambiguation`，并记解析遥测。"""

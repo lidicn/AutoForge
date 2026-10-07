@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import uuid
@@ -38,6 +39,16 @@ DEFAULT_MIN_SAMPLES = 3
 DEFAULT_CONFIDENCE_THRESHOLD = 0.6
 #: 明细留存上限：偏好明细是抽样证据，聚合态 `_stats` 才服务于决策。
 DEFAULT_MAX_RECORDS = 5000
+
+_logger = logging.getLogger(__name__)
+
+
+def _jsonl_has_content(path: Path) -> bool:
+    """盘上这份 JSONL 有没有**非空白内容**（用来区分"空库"与"整档读不出来"）。"""
+    try:
+        return any(line.strip() for line in path.read_text(encoding="utf-8").splitlines())
+    except OSError:
+        return False
 
 
 def time_bucket(hour: int) -> str:
@@ -145,6 +156,9 @@ class PreferenceModel:
         self._evicted = 0
         #: 距上次整档压缩已追加的行数
         self._since_compact = 0
+        #: F13：`preferences.jsonl` 有内容却一行 JSON 对象都读不出来 ⇒ 置位后整档压缩拒写。
+        #: 追加式写入不受影响（它只加一行，不重写整档，抹不掉盘上已有的东西）。
+        self._records_unreadable = False
         self._load()
 
     # ── 记录 ────────────────────────────────────────────────────────
@@ -384,7 +398,9 @@ class PreferenceModel:
             self._records = deque(r for r in self._records if r.automation_id != automation_id)
             n = before - len(self._records)
             self._rebuild_stats()
-        self._rewrite_all()
+        # 全量清空是修复现场的动作，允许越过拒写护栏；按 automation 过滤的部分清空**不**越过
+        # ——它同样是整档重写，读不出来时写下去会把别的记录一起抹掉。
+        self._rewrite_all(force=automation_id is None)
         return n
 
     # ── 内部 ────────────────────────────────────────────────────────
@@ -525,9 +541,14 @@ class PreferenceModel:
         """允许文件比内存留存多出这么多行再压缩（把整档重写摊薄到 O(1)/条）。"""
         return max(64, self._max_records // 8)
 
-    def _rewrite_all(self) -> None:
+    def _rewrite_all(self, *, force: bool = False) -> None:
         """整档压缩（原子写）：留存明细有多少写多少。"""
         if not self._persist_dir:
+            return
+        if self._records_unreadable and not force:
+            # 护栏紧邻落盘调用（第十轮 W30）：这份文件本进程一行都没读出来，内存明细是空的，
+            # 整档重写等于把盘上明细抹平。拒写（fail-closed），直到文件被修复或隔离；
+            # `clear()` 的显式清空是唯一例外（那是修复现场的动作，不是累积写入）。
             return
         os.makedirs(self._persist_dir, exist_ok=True)
         lines = "\n".join(
@@ -535,6 +556,7 @@ class PreferenceModel:
         )
         atomic_write_text(Path(self._path(PREFERENCES_FILE)), (lines + "\n") if lines else "")
         self._since_compact = 0
+        self._records_unreadable = False  # 盘上现在就是内存这份快照，现场已一致
 
     def _migrate_legacy(self) -> list[PreferenceRecord]:
         """旧整档格式（preferences.json）只读迁移：读入后由 `_rewrite_all` 落成 JSONL。
@@ -565,6 +587,15 @@ class PreferenceModel:
         if path.is_file():
             # 读入量受上限约束：整档只可能比留存多出 _compact_slack 行
             rows = read_jsonl_bounded(path, self._max_records + self._compact_slack())
+            if not rows and _jsonl_has_content(path):
+                # F13（第九轮实测 data_lost 的那处）：盘上有内容却一行都读不出来。
+                # `_records` 这时是空的，任何整档压缩都会把明细抹平且连坏字节的现场一起没。
+                self._records_unreadable = True
+                _logger.error(
+                    "PREFERENCES_UNREADABLE path=%s —— 整档压缩已拒写，坏文件原样保留", path
+                )
+            else:
+                self._records_unreadable = False
             raw = [r for r in (self._record_from_row(row) for row in rows) if r is not None]
         else:
             raw = self._migrate_legacy()
