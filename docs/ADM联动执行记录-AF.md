@@ -5413,4 +5413,11 @@ service key 一起改名；注释里**不再拼写那枚死键**（新哨兵会�
 | 行尾自证 | `af_store.py` 1103 行 / CR 1103、`test_af_store.py` 397 / 397、compose 91 / 91（CRLF 未破）；`test_compose_env_key_source.py` 新建为 LF（与同目录多数测试一致）；`ast.parse` 三文件 OK、`yaml.safe_load` compose OK |
 | NAS 只读核查 | 部署机 `docker ps`：`autoforge-api` Up 4 hours（`0.0.0.0:8787->8787`）；容器 env 键名 11 枚含 `AUTOFORGE_TOKENS`；`/vol1/1000/docker/autoforge` HEAD=`9aa6499`，六处未提交改动（差集见 §一 开头） |
 
+### 五、附：补 §二之六十二 的验收那一格（构建产物口径，现测）
+
+第 16 项 ① 的验收写的是"构建产物里不再出现写死的 LAN 地址"，当时只量到源码层，本批补上产物层：
+`ui-user-mimo` 本机 `npm run build` ⇒ `BUILD_EXIT=0`（"✓ built in 12.61s"，PWA precache 23 entries /
+527.77 KiB）；`grep -rl "192.168.2.200" dist` ⇒ **0 个文件命中**；`dist/index.html` 的资源引用是
+`/mimo/assets/index-*.js` 这一族（base 与 `UI_USER_PREFIX` 对得上，白屏那档不会犯）。
+这份 dist 已就绪待 scp——部署机无 node，产物只能在这儿出。
 —— AutoForge 开发 · 2026-10-08
