@@ -5607,3 +5607,219 @@ recreate 之后两者一致。
 进件政策不变：新报告到达即按四档收口（先复测 HEAD，成立项落码补判据，已覆盖项登记"核实成立但已修"，不成立项写明理由），不在核实前登记状态。
 
 —— AutoForge 开发 · 2026-10-08
+
+## 二之六十六、CI 连红五轮的读数归因：假红不在产品，在判据自己依赖渲染
+
+### 1. 现场形状（"远端响、本机不响"的镜像版：远端红、本机绿）
+
+- 远端读数（`GET /repos/lidicn/AutoForge/actions/runs`）：run 110 `2db2fa2` / 111 `8d380b3` / 112 `5c9955f` / 113 `8406757` / 114 `c06d8ea` 全部 `completed failure`；
+  上一条成功是 run 109 `2f86af9`（同日 04:50）。
+- run 113 的作业级读数：六作业里**只有 `pytest` 红**，`quality-gates` / `layering-gates` / `ui-typecheck-build` / `adm-linkage-contracts` / `ui-user-mimo-judgments` 全绿；
+  失败步骤 `Run tests`，annotations 只给 `Process completed with exit code 1.`。
+- 本机同一份代码：`pytest tests/ -q` ⇒ `PYTEST_RC=0`、`3416 passed, 53 skipped, 65 subtests passed`。**本机绿与远端红同时成立**，说明差异在环境或判据形状，不在被测行为。
+
+### 2. 取日志这一跳（不靠"看得见网页"）
+
+浏览器匿名会话读 Actions 日志被挡（页面写 `Sign in to view logs`；三个日志端点都 404/403）。走仓里那条只读链路：
+
+```
+python scripts/gh_ci_status.py log 112970914059 "FAILED"
+匹配 1 行（关键词 'FAILED'）
+FAILED tests/unit/test_ui_user_mount.py::test_serve_cli_exposes_the_flag - AssertionError:
+```
+
+同一条命令换关键词 `ui-user-dir` 打出断言里的 `result.output` repr——开头是 `\x1b[1m`，且选项行是 rich 面板框（`│ --ui-user-dir        <str>  用户视角 UI…│`）。**这一行就是定性依据**：CI 上 stdout 带 ANSI，标志与 metavar 之间夹转义序列。
+
+### 3. 根因与本机复现（把 CI 条件搬回工作台）
+
+判据是 §二之六十四 那条腿：`re.search(r"--ui-user-dir\s+<str>", result.output)`——按 `--help` 的**渲染文本**数选项行。同一份代码：
+
+| 口径 | 读数 |
+| --- | --- |
+| 本机默认（rich 不出色） | `18 passed`，正则命中 |
+| `TERM=xterm-256color FORCE_COLOR=1 COLUMNS=80` 跑同一条腿（HEAD 副本树） | `1 failed, 1 warning in 2.83s` —— 与 CI 同一红点、同一断言 |
+| 同一输出先剥 ANSI 再套同一条正则 | 命中（`ANSI_STRIPPED_HITS: True`） |
+
+⇒ 产品没问题（`forge serve` 确实注册了这枚选项，NAS 容器正用它跑着），**红的是判据对渲染的依赖**。这一族与 §二之六十四 的 `GET→404` 探针形状不匹配同型：判据的形状必须与它要判的东西同轴，否则报的是探针自己。
+
+### 4. 修法：判据读参数注册表，不读渲染文本
+
+`tests/unit/test_ui_user_mount.py::test_serve_cli_exposes_the_flag` 改为读 click 自己的结构：
+
+```python
+by_opt = {opt: param for param in get_command(cli_app).commands["serve"].params for opt in param.opts}
+for flag in ("--ui-user-dir", "--ui-dir"):
+    param = by_opt.get(flag)
+    assert param is not None, ...
+    assert param.is_flag is False, (flag, param.is_flag)
+    assert param.nargs == 1, (flag, param.nargs)
+```
+
+宽度、配色、面板框线再也进不了判据；`--help` 退出码 0 那一条保留（证明帮助真能渲染），
+`inspect.signature(serve)` 那条结构腿保留。原注释里"不用整段子串"的理由（改名后子串照样命中）继续成立——注册表判据同样按名字取，比文本行更强。
+
+### 5. 反空洞三条变异（跑在 `git archive HEAD` 副本树，工作树未动，源码还原后按字节核过）
+
+| 变异 | 期望 | 实测 |
+| --- | --- | --- |
+| CONTROL（未变异） | 绿 | `1 passed`（CI 口径环境下） |
+| M1 `--ui-user-dir` → `--ui-user-dir-x` | 红 | `1 failed` |
+| M2 `--ui-dir` → `--ui-dir-x` | 红 | `1 failed` |
+| M3 那枚改成布尔开关（`str`+`""` → `bool`+`--x/--no-x`） | 红，且红点必须落在"取值型"那一断言 | `AssertionError: ('--ui-user-dir', True)` / `assert True is False` @:310 |
+
+M3 单独归因过一次（只报"红了"不算响对）：名字仍命中注册表，红的是 `is_flag` 那一腿——正是原文本判据抓不住的那一档。
+
+### 6. 回归读数
+
+- 本文件：本机口径 `18 passed`；CI 口径（`FORCE_COLOR=1` + `COLUMNS=80`）同样 `18 passed`。
+- 全量：`3416 passed, 53 skipped, 1 warning, 65 subtests passed in 178.95s`（`FULL_RC=0`）。
+- 门禁链：`GATES_RC=0`，`新增/未获批 0 条（error 0 / warn 0），基线内存量 97 条，过期基线条目 0 条`。
+- mimo 判据：`tests 75 / pass 75 / fail 0`（本批只动 Python 侧判据，这一跑是确认没连带）。
+- 射程盘点：全仓 grep `--help` 与 `<str>`/`<int>`/`<path>` 锚点，**只有这一条腿**按渲染文本判选项（`tests/unit/test_ui_user_mount.py`）；其余门的锚点取整行代码。
+
+### 7. 更正 §二之六十五 §3 的口径（过头了）
+
+那格把 PWA 写成"新登记的部署地雷"，措辞过界：`generateSW` 是本仓**有意配置且已有判据钉住**的
+（`ui-user-mimo` 里那条 `§8-1 PWA：manifest standalone + workbox 预缓存已配置`）。本批新增的只是窄得多的一格：
+**接入方式改走 https/localhost 之后**，SW precache 会把旧 bundle 继续端给用户，表现为"推了没生效"。PWA 本身不动、不摘。
+
+### 8. 远端那一格（以 CI 结论为准，不预填）
+
+- 提交：`26f860f`（`17 insertions(+), 7 deletions(-)`，只动那一条腿）；`git push origin master:main` ⇒ `d5a3c90..26f860f`，`git ls-remote origin refs/heads/main` = `26f860f96b6bd8d4a60ed69bb8ff496544029d5f` = 本地 HEAD；`git push nas master` 同步。
+- 归因提醒：run 115（`d5a3c90`，只加记账那一笔）里那条腿**仍是旧判据**，它红不推翻本批修法；只有 `26f860f` 之后那轮的 `pytest` 作业才是这一条的验收。
+- 远端读数（`gh_ci_status.py runs` / `jobs 37681800655` / `log 112999439629`，2026-10-08 现取）：run **116** = `26f860f` ⇒ `status=completed conclusion=success`；六条作业逐条 `completed/success`（`quality-gates` 112999439341、`ui-user-mimo-judgments` 112999439579、`ui-typecheck-build` 112999439584、`adm-linkage-contracts` 112999439625、**`pytest` 112999439629**、`layering-gates` 112999439689），`failed_steps` 全空。
+- `pytest` 作业日志摘要行原样：`3418 passed, 51 skipped, 1 warning in 131.74s (0:02:11)`。与本机 `3416 passed, 53 skipped` 差 2 条，方向是"远端多跑 2 条、少跳 2 条"——本仓这一族差值历来来自平台条件跳过（`skipif` 按 win/linux 落档），**不是**判据丢失；两侧各自的数都按各自真实运行报，不做归一。
+- 结论定档：本批修的是**判据自身**，验收面 = run 115 红的那一条腿在 run 116 绿。上面那句逐作业 `success` + `pytest` 摘要行即是这一格的数，**"已修"到此为止有据**，不再有"待回填"的悬空。
+
+—— AutoForge 开发 · 2026-10-08
+
+## 二之六十七、计划 §5.3 第 12 件收口：核对剩余开放行时读出现读事实与台账相反 —— 配对 bootstrap 早已落地（`2f86af9`），而我在 §二之四十二 把**自己申请书里的建议路径**转写成了"裁定说"
+
+### 1. 触发点：没有照抄台账，而是对着一行"前置：无（裁定已给）"往代码多问了一步
+
+本轮清理 §5.3 的开放行时，第 12 件（DCD 20261006 §一 配对 bootstrap）挂的是「前置：无（裁定已给）」，
+而执行记录 §二之五十五 结尾写着「**§一（配对 bootstrap B）本批未落地**」。两句合起来的意思是"这活还没开工，
+但可以直接开工"。按本仓的规矩，"未落地"是可以被现读推翻的陈述，不是登记即生效的账：
+
+```
+grep -n "pair/request\|pair/redeem\|_bootstrap_limit" src/autoforge/af_api.py
+```
+读出 5 条命中（`:1129`、`:1158`、`:1140`、`:1161`、`:335`）。⇒ **代码里有，台账说没有。**
+落地在 commit `2f86af9`（`git log --oneline -- tests/unit/test_dcd_20261006_pairing_bootstrap.py` 只这一枚 ⇒ 新增即该批），
+那一笔的标题是"台账 F12/F6 + 0.3.2 消费侧"，**这批把 §一 一起做掉了却没给它一格账** ⇒ 于是 §二之五十五 写下"未落地"时
+参照的是不完整的账，而不是树。错的不是那一句的事后描述，是"落地批次没有对应记账"这一族：**做了事没记账，
+下一批就会把已完成项再排一遍**，这是本仓登记过的"文档比代码乐观"的镜像形状（文档比代码**悲观**，同样没人判红）。
+
+### 2. 裁定四条要求逐条对现读（每条给出处，不做概括）
+
+| 裁定 20261006 §一 的要求 | 现读（本批实测，非记忆） |
+|---|---|
+| 两个匿名 bootstrap 端点 | `src/autoforge/af_api.py:1129 @app.post("/api/mcp/pair/request")`、`:1158 @app.post("/api/mcp/pair/redeem")`；两条各自在函数体第一句调 `_bootstrap_limit(...)`（`:1140`、`:1161`），限速器定义 `:335`，按 `ip:<客户端IP>` 键、超限抛 `HTTPException(429)` |
+| `request` 每 IP 每分钟 ≤6、`redeem` ≤10、超限锁该 IP 于**该端点** 5 分钟 | `src/autoforge/af_auth.py:512 BOOTSTRAP_REQUEST_PER_MIN = 6`、`:513 BOOTSTRAP_REDEEM_PER_MIN = 10`、`:514 BOOTSTRAP_LOCK_S = 300`；`af_api.py:296-301` 为两条**各建一只桶**（不共用），所以 request 超限不牵连 redeem——键里带端点身份。`:293-295` 的注释写明刻意**不**复用 1000/min 的认证面 `limiter`，「数值由 DCD 钉，AF 不自签」 |
+| 码参数维持 8 位 / 300s / 单次 | `af_auth.py` `_rand6()`（docstring 口径：8 位纯数字，N-P0-sec 把 6 位改 8 位）、`PairCodeStore.create(agent_name_hint, ttl_s=300)`、`consume()` 对 `consumed` 或过期一律返回 `None` ⇒ 单次 |
+| owner 侧"暂停接受配对请求"开关 | `af_api.py:1182 @app.post("/api/user/pair/accepting", dependencies=[Depends(_write)])`（写盘后**回读比对**，不一致抛 500，不把没生效的开关报成生效）、`:1198 GET` 给现值；开关文件缺失 = 出厂开放档、坏档 = fail-closed（两条各有腿名）。**关掉后请求真的进不来**：匿名腿第一句过限速、第二句即 `:1141 if not pair_store.is_accepting(): raise HTTPException(409, "用户已暂停接受配对请求…")` |
+| 匿名射程只开这两条、整张工具表仍 default-deny | `tests/unit/test_dcd_20261006_pairing_bootstrap.py:312 BOOTSTRAP_ROUTES = {("app.post","/api/mcp/pair/request"), ("app.post","/api/mcp/pair/redeem")}`；`:334` 用 AST 断言那个匿名命名空间**恰等于**该集合且两条都调 `_bootstrap_limit`；`:87` 另有一条"带 write scope 的端点对匿名调用者照旧拒"。**被驳回的 A（把两工具 scope 降 `None`）没有被偷偷落地**：`af_mcp.py:548`、`:564` 两枚工具的 scope 实测仍为 `"write"` |
+
+判据实跑：`python -m pytest tests/unit/test_dcd_20261006_pairing_bootstrap.py -q` ⇒ **23 passed in 4.44s**（本机 `Python313` 解释器）。
+UI↔路由门也已把这两条认领为"消费面是 agent 自己的 HTTP 客户端、第一方 UI 天生不调它"（`tests/unit/test_ui_api_paths_gate.py:778-779`），
+所以它们不在"未被调用"的反向读数里——这一格是落地批已经做过的对表，本批复核未漂移。
+
+### 3. 本批更深的一格更正：**我把申请书里的建议路径写进了"裁定说"的位置**
+
+§二之四十二 的登记表第 21 行转写裁定回执时写的是：
+
+> 「同一份裁定 §一 已回：B——两个匿名 bootstrap 端点（`POST /api/pair/request` / `POST /api/pair/redeem`，工具层 default-deny 一字不动…）」
+
+本批逐字重读裁定原文（`关键决策部/decisions/20261006-AF配对与段间封顶与DPP四件与MA三件-裁定.md` §一，第 11–25 行）：
+裁定钉的是**形状与数值**（"两个匿名端点"、6/min、10/min、锁 5 分钟、8 位/300s/单次、owner 开关），
+**没有钉任何字面路径**。核验方式不是"我没看见"，是反向 grep：
+
+- `grep -n "api/pair" <该裁定>` ⇒ **0 命中**；
+- 契约表 `homesdk/doc/ADM联动主题注册表与消息契约.md` 与 `homesdk/doc/homesdk-0.3.2-规格.md` grep `api/pair` ⇒ 亦 **0 命中**。
+
+⇒ 那两条 `/api/pair/*` 的字面量来自**我方申请书**（同一格前半句「B（AF 建议：…`POST /api/pair/request` / `POST /api/pair/redeem`…）」），
+而我在转写时把它放进了"裁定已回"的引号位。这是"把自己的建议读成对方的指令"那一族，和"报告说 X ⇒ 登记 X"同规：**转写不是引用**。
+后果面：实际落的是 `/api/mcp/pair/*`（与既有 SSE `/api/mcp/pair-request`、MCP 工具 `af_pair` 同族，拼法自洽），
+因为裁定与契约都没钉字面路径 ⇒ 这属 AF 可自决射程，**不构成偏离裁定**；但账要说清，
+否则下一个人会以为"改路径要过 DCD"，或反过来以为存在一份外部真源可以对照——实测三份文档都没有这个数。
+
+历史句子不改写（§二之四十二 第 21 行、§二之五十五 结尾那句"本批未落地"原样留着），以本格的"本批更正"指回去。
+
+### 4. 计划表动作
+
+§5.3 第 12 行从开放改成已交付，并把**实测路径**写进去（不是申请书路径）：
+「**已交付**（commit `2f86af9`，23 条腿实测绿）。落成的两条匿名端点字面量是 `POST /api/mcp/pair/request` / `POST /api/mcp/pair/redeem`——
+裁定与契约表均未钉字面路径（三份文档 grep `api/pair` 全 0 命中），拼法属 AF 自决，见执行记录 §二之六十七」，
+残留那一格写"真机 curl 级未测"（见 §5）。同批把 §二之四十二 的"落地未做 ⇒ 已登记为计划 §5.3 第 12 件"读作历史陈述，不追改。
+
+### 5. 残留（诚实档，不含进"已交付"）
+
+- **真机读数：本批已在部署实例上补测，但这一条是带着一次误判补上的**（先说误判，再说数）：
+  我原打算做"只读探测"——发一个空 body，假定 pydantic 会因缺必填字段先返 422、于是不产生任何码。
+  实测 `POST /api/mcp/pair/request` 传 `{}` ⇒ **200**：该端点的入参模型**没有必填字段**
+  （`af_api.py:152-153 PairRequestBody.agent_name_hint: str = ""`，默认空串而非 `...`），
+  空 body 合法 ⇒ 请求被**受理**，在役实例当场生成一枚 8 位码并经 SSE 推给用户 ForgeSight 弹窗。
+  ⇒ **出资人侧若在这台机器上看到一条配对码弹窗，是本批这条探测产生的，不是新的 agent 在申请接入**；
+  该码单次、`ttl_s=300` 到点即失效，过期记录由 `PairCodeStore._purge_expired()` 在下一次写时清掉，AF 侧不需人工回收；
+  本次响应用 `curl -s -o /dev/null` 发出，**未落任何文件、未读取码值**（凭据不外抄口径）。
+  教训与本节末条（"台账里凡是'裁定说 X'的格子，X 必须能在裁定原文里 grep 到"）同族：**能 grep 的才叫实测**——
+  我按"必填缺失先 422"设计只读档，实际那个模型无必填，只读档不存在，探测等价于真发起了一次配对。
+  同批四条真机读数（同一实例 `192.168.2.200:8787`，同一分钟窗，`--max-time 8`）：
+
+  | 探测（全部匿名、无 Bearer） | 读数 | 这一格证明什么 |
+  |---|---|---|
+  | `POST /api/mcp/pair/request` + `{}` | **200** | 匿名腿在**在役镜像**上可达，不是只活在 `TestClient` 里（第 12 件因此从"判据级"升为"现场级"） |
+  | `POST /api/mcp/pair/redeem` + `{}` | **400** | 命中 `af_api.py:1166` 的 `no_code` 分支 ⇒ redeem 腿亦匿名可达；缺码报 400 而非 409，是判据 `test_redeem_without_code_is_400_not_409` 的现场版 |
+  | `POST /api/pending/list` | **403** | CONTROL：匿名面**不是**整面敞开，`_write` 闸仍在 ⇒ 上面两格是"射程恰两条"，不是"没鉴权" |
+  | `GET /api/health` | **200** | 服务在役（同一次探测的存活前提，不是新结论） |
+
+- **真机仍缺的两格，且刻意不在本批补**：超限 **429** 与暂停档 **409**。前者要把同一 IP 打到该端点 6 次以上
+  （每次都会真生成一枚码 ⇒ 连弹 6 次用户弹窗），后者要先翻 owner 的"暂停接受配对请求"开关（改在役状态、
+  且需要 write 令牌）。两者都属"影响他人可见状态"的动作，不在只读探测射程内 ⇒ 等与出资人确认后或随窗口跑。
+  仓侧这一族已由 `:95`（六次后锁 IP）、`:110`（窗口翻转后锁仍持有）、`:224`/`:235`（暂停挡住匿名腿与 MCP 腿）四条腿判红，等级是判据级。
+- 配对**全链**的浏览器像素验收仍缺（与 §二之五十五 那格同口径：本机 browser 通道取不到视口就不把像素级挂在账上）。
+- 本格的教训登记为可迁移的一条：台账里凡是"裁定说 X / 契约要求 X"的格子，X 必须能在对方原文里 grep 到；
+  grep 不到就写"AF 建议，裁定未钉"，不写进引用位。
+
+—— AutoForge 开发 · 2026-10-08
+
+## 二之六十八、§5.3 第 9 件（安全遗留）按同一条纪律复核：七格里六格在 HEAD 上早已交付，剩下一格按裁定不归 AF 落
+
+### 1. 起因就是 §二之六十七 那条纪律的第二次应用
+
+第 12 件读成"未落地"而实际已落地之后，我没有只改那一行就收工——同一族的登记口径可能在别处也过时。
+挑了 §5.3 里字面最重的一行（第 9 件，裁定 20261004 §一 / §五 的七子项）逐格现读，不引台账。
+
+### 2. 七子项的现读（每格给"键名/路由/腿名"级证据，不给概括）
+
+| 第 9 件的子项 | 现读 | 定性 |
+|---|---|---|
+| 长期码可配绝对上限（默认 180 天，`AUTOFORGE_AUTH_LONGCODE_TTL_DAYS`，0=显式关） | 键名在 `src`/`tests` 共 5 处命中；判据 `tests/unit/test_dcd_20261004_auth_limits.py:40 test_long_code_gets_default_180_day_cap`，另有 `:96`（老码按绝对上限老化，不做迁移豁免）、`:105`（上限内仍可兑换） | **已交付** |
+| `af_auth.list()` 输出"距生成多久" | `src/autoforge/af_auth.py:803` 的 `age_s`（注释即点名 DCD 20261004 §一 Q1）；`tests/unit/test_dcd_20261004_auth_limits.py:117` 那格的口径就是"防 list 与创建时间错位" | **已交付** |
+| MCP 未设令牌默认拒绝，`AUTOFORGE_MCP_ALLOW_NO_TOKEN=1` 才放行（只认 `1`） | 键名 10 处命中；判据在 `tests/unit/test_dcd_20261004_mcp_default_deny.py`；另 `tests/unit/test_v0_8_auth.py:89 test_no_tokens_fail_closed` / `:98 test_no_tokens_allow_noauth` 钉两档 | **已交付**（§二之三十八 那批） |
+| `GET /api/asks/pending` 加 `Depends(_read)` | `src/autoforge/af_api.py:647` 原样挂着该依赖 | **已交付** |
+| `/api/user/auth-codes` 收紧到 write，且 owner 面明文／非 owner 面掩码 | `af_api.py:1085` 用 `Depends(_write_scope)` + `reveal = info is None or info.subject in _OWNER_SUBJECTS`；验收四条各有腿：`:450`（注释逐字引裁定"read 令牌取 auth-codes 列表 403"，用只读令牌 `tok-reporter` 实测）、`:492 test_masked_face_keeps_the_status_fields`（掩码档仍交回状态字段）、`tests/unit/test_v1_4_credentials.py:13 test_describe_masked`（掩码不可还原） | **已交付** |
+| `docstring` 里的 `demo/forge2026` 明文默认凭据移除 | `grep -rn forge2026 --include=*.py` 在 `src`/`tests` 下 **0 命中**；余下命中全在散文（`.codebuddy/plans/*`、`docs/design/对接_前端ForgeSight_联调清单_20260924.md:188`、计划表第 9 行本身、执行记录的历史格）——裁定 F-2 那句要求的是"从页面/代码移除明文，不改校验逻辑"，散文里的历史记述不在射程 | **已交付** |
+| "只在可信 LAN"写成显式部署前提进 **README + compose 注释** | README 半边在：`README.md:215-229`（§4.1，含"公开读端点的边界靠网络而非鉴权"与 `--host 0.0.0.0` 保留的理由）。compose 半边**不归 AF**：`README.md:228` 原样写着"compose 侧的同一条注释由部署方在 NAS 上落（本仓不改 compose，见交接记录铁律 #3）" | AF 半边**已交付**；compose 那一格是 **SP／部署方动作**，本批据此不改 `docker/docker-compose.api.yml` |
+
+### 3. 我在这格上差点做的错动作，以及拦住它的是哪条读数
+
+现读第 7 子项时，我第一反应是"compose 里少了这段注释 ⇒ AF 补上就闭环了"，并且已经把
+`docker/docker-compose.api.yml` 整份读完、准备顺手更正第 7 行那句「⚠️ Round 1 只读：不连真实 HA、不写设备」
+（v2.x 起写面已交付，那句看起来像过期文案）。两处读数把这次动手拦住了：
+
+1. `README.md:228` 明写这一格归部署方（铁律 #3）⇒ 补注释不是 AF 的收尾活，写了反而与裁定分工分叉；
+2. 那句"只读"在**本文件的缺省档下是成立的**：`:45 AUTOFORGE_LIVE_ENABLED=${…:-0}`、`:46 AUTOFORGE_HA_URL=${…:-}` 都是关/空
+   ⇒ 容器起着也不下发 HA。它是"缺省档为真"的陈述，不是"永久属性"的谎言，改它属越界重写别人的部署口径。
+
+⇒ 结论：**这一格不动，且不动是有出处的**，不是"没找到时间动"。若出资人要 NAS 那侧真的落这条前提，
+需要在部署机的 compose 上加一行注释（AF 已在交接面登记，见本节末）。
+
+### 4. 计划表动作与残留
+
+- §5.3 第 9 行改为「AF 六格已交付（现读证据如上，判据在 `test_dcd_20261004_auth_limits.py` / `test_dcd_20261004_mcp_default_deny.py`）」，
+  并把第 7 子项的 compose 那一格单独标成「归 SP／部署方，AF 依 `README.md:228` 不动」。
+- 本批不新增代码：七格里没有一格是"AF 该做而没做"的形状，因此没有可落的判据，也就没有为凑交付而写的测试。
+- 回归：门禁链 `GATES_RC=0`、全量 `3416 passed, 53 skipped, 65 subtests`（读数见 §二之六十六 那批的同日实测，本批只动 `docs/`）。
+
+—— AutoForge 开发 · 2026-10-08
