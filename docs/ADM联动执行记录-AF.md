@@ -5421,3 +5421,131 @@ service key 一起改名；注释里**不再拼写那枚死键**（新哨兵会�
 `/mimo/assets/index-*.js` 这一族（base 与 `UI_USER_PREFIX` 对得上，白屏那档不会犯）。
 这份 dist 已就绪待 scp——部署机无 node，产物只能在这儿出。
 —— AutoForge 开发 · 2026-10-08
+
+## 二之六十四、用户视角 UI 真上线（NAS 现场执行 + 部署中现读出的第 4 处同源洞）
+
+本批是把计划 §5.3 第 19 件从"待 go-ahead"推成"已交付"，并收下部署过程中**实测坐实**的一件新缺陷。
+部署动作全部在部署机上真实执行（不是"应当如此"的推理），下面每一格读数都当场量。
+
+### 1. 起点的真实形状：第 16 件那条"假部署"机制在现场复现
+
+上线前只读核查（`docker inspect` + `curl`）拿到的读数是：
+
+| 读数点 | 上线前 |
+|---|---|
+| 容器 `.Args` | `serve … --ui-dir /ui`（**没有** `--ui-user-dir`） |
+| 容器 `.Mounts` | 只有 `/data`、`/ui`（`/mimo` 从未挂上；容器内 `ls /mimo` → `No such file or directory`） |
+| `GET /mimo/` | **200** + `<title>AutoForge 控制台</title>`（开发面板的 catch-all 兜住了用户端前缀） |
+| `GET /mimo/assets/index-Dkt45e7T.js` | 200 + `text/html` 489B —— 用户端资源名被开发面板 index 应答 |
+
+这正是 `af_api.py:1369-1371` 那段注释预言的形状，也是 `test_ui_user_mount.py` 第一-leg 按**内容**而非状态码判的理由：
+用 `curl -o /dev/null -w %{http_code}` 验收会全绿。现场另有一层：**部署机的源码工作副本比版本库落后 7 个提交**
+（`HEAD=9aa6499` + 六份手工补丁），而容器**不挂源码卷**（`Dockerfile.api` 把 `src` 烘进镜像），
+所以那六份手补对运行中的容器**一点都没生效**——补丁只改了盘上文件，运行态从未 reload。
+
+对账表（工作副本 vs `8406757`，`--ignore-cr-at-eol` 后逐个看 `+` 侧）：手补里没有任何版本库缺的东西，
+`+` 侧全是**被版本库取代的旧形状**（复数令牌死键 `AUTOFORGE_API_TOKENS`、F12 之前的 `_dir_owner` 返回 None 那一族、
+`--ui-user-dir` 的旧 help 文案）。先把整份手补存成
+`/vol1/1000/docker/autoforge/backups/nas-handpatch-20261008.patch`（374353 字节）再落盘版本库内容，不靠"我记得等价"。
+
+### 2. 执行顺序（每条都是真实命令与真实退出码）
+
+1. `git push nas master` ⇒ `9aa6499..8406757 master -> master`，`PUSH_EXIT=0`，
+   `git ls-remote nas refs/heads/master` = `84067572e631794658188db2157231b65fce863d`（与本机 HEAD 同一枚）。
+2. 部署机：`git checkout -- <六份手补文件>` → `git merge --ff-only origin/master` ⇒ `HEAD=8406757`、`git status` 空。
+3. wheel：`docker/homesdk/` 只有 0.3.1，而 `Dockerfile.api:26` 按文件名钉死 0.3.2 ⇒ 那份 0.3.2 其实**在版本库里**
+   （`2f86af9` 记的是 `R062 homesdk-0.3.1… → homesdk-0.3.2…`，git 里是**改名**而不是"增一枚删一枚"，
+   所以 `git log --diff-filter=D -- docker/homesdk/` 查不到删除——按删除去查会误判成"版本库没管这枚"）。
+   ff-merge 到部署机时目录里就只剩 `homesdk-0.3.2-py3-none-any.whl`（49374 字节）。
+   这条把第 19 件里"必须 scp wheel"的预判**降级成不需要**：预判是照 9aa6499 的目录形状做的，没照版本库走。
+   现场我在合并之后仍按预判 scp 了一次（同字节重复覆盖，无副作用），登记时要改成"由版本库带过去"，别再教人手工 scp。
+4. 产物：部署机无 node ⇒ dist 只能本机出。`npm run build` ⇒ `BUILD_EXIT=0`、
+   `grep -rl 192.168.2.200 dist` ⇒ **0 命中**、资源族 `/mimo/assets/index-*.js`；scp 后现场 `files=23 LAN=0`。
+5. 镜像：`docker compose --env-file .env -f docker-compose.api.yml build` ⇒ `BUILD_EXIT=0`，
+   新镜像 `sha256:cfba9043…`，日志含 `COPY docker/homesdk/homesdk-0.3.2-py3-none-any.whl` 与
+   `Successfully installed … paho-mqtt-2.0.0 …`。
+   第一次跑成了 `BUILD_EXIT=1 / no configuration file provided` —— 因为文件名是 `docker-compose.api.yml`，
+   compose v2.40.3 不会自动认它，必须 `-f`。这条也是"照 docs 里那行命令直接抄"的代价（仓内那行写的是
+   `docker compose -f docker/docker-compose.api.yml up -d --build`，在仓库根执行；我按 §6.1 的"在 docker/ 目录执行"改了一半）。
+6. **重烤后再起**（第 19 件钉的顺序）：起容器之前先验新镜像认这个参数——
+   `docker run --rm --entrypoint forge autoforge-api:latest serve --help | grep -c -- --ui-user-dir` ⇒ **2**，
+   `docker run --rm --entrypoint python … -c "import homesdk;print(homesdk.__version__)"` ⇒ **0.3.2**。
+   这样"typer 退出码 2 反复重启把 :8787 连同开发控制台一起带走"那一档在**没有容器被拆掉之前**就被排掉了。
+7. `up -d` ⇒ 容器 `Recreated`，`.Args` 里出现 `--ui-user-dir /mimo`，挂载出现 `/mimo`。
+
+### 3. 现场读数（上线后）
+
+| 判据 | 读数 |
+|---|---|
+| `GET /api/health` | 200，`ok:true` |
+| `GET /mimo/` | 200 + 1040B + `<title>AutoForge</title>` + `/mimo/assets/index-D22QXJ0K.js` |
+| `GET /mimo/assets/index-D22QXJ0K.js` | 200 55621B `text/javascript` |
+| `GET /mimo/login`、`/mimo/agents` | 200 + 1040B（深链回用户端 index，不串面板） |
+| 容器日志 | `取得单写者锁` / `用户端静态托管：http://0.0.0.0:8787/mimo/（dist=/mimo）`，无退出码 2 |
+| 开发面板回归 `GET /` | 200 + `<title>AutoForge 控制台</title>`（另一张脸没被挤掉） |
+| 浏览器端到端 | 登录 ⇒ `/mimo/agents` 显示真实 `af_admin`（"Agent 列表 1"）、`/mimo/automations` 显示 **"45 条"** 真实归档、MCP 卡片显示 `http://192.168.2.200:8787/mcp`（由 origin 拼出，非源码常数）、控制台**零报错**、退出登录回到 `/mimo/login` |
+| 网络面（浏览器真实请求） | `POST /api/auth/login` 200、`GET /api/user/agents` 200、`GET /api/automations?group_by=flat` 200、`POST /api/pending/list` 200、`GET /api/user/auth-codes` 200 |
+
+`POST /api/pending/list` 那一格起初我用 `GET` 探到 **404**，差点登记成"UI 调了个不存在的端点"。
+现读 `af_api.py:486` 才定性：它是 **POST-only**，而 GET 会落进 catch-all 的 `/api` 分支读 404
+（Starlette 的"路径匹配、方法不匹配"不会先于 catch-all 报 405）。按 `http.ts:221` 的真实方法（POST）复测 ⇒ 200。
+**结论：不是缺陷**；探针用错方法造成的假红，登记进台账（形状不匹配那一族，探针的请求方法也是形状）。
+
+### 4. 部署中现读出的缺陷：路由 base 是第 4 处同源，缺它则"首屏之后刷新即换脸"
+
+`ui-user-mimo/src/router.ts:5` 原本是 `createWebHistory()`（不带 base）。服务端三处同源
+（`UI_USER_PREFIX` ↔ `vite.config.ts` 的 `base` ↔ compose 的 `--ui-user-dir`/卷）已由
+`test_ui_user_mount.py` 第 4 节钉住，**但客户端地址栏由 vue-router 决定，服务端管不着**：
+真实现场第一屏从 `/mimo/` 跳到登录时，地址被写成 `http://192.168.2.200:8787/login?redirect=/agents`（站点根），
+而根路径上服务的是**开发面板**的 index ⇒ 用户一刷新（或把链接发给别人）就从用户端掉进工程控制台。
+浏览器实测读数（修复前）：`href = /login?redirect=/agents`，加载的资源仍是 `/mimo/assets/*.js` ——
+**页面正常、地址错**，这一族不会自己叫。
+
+修法：`createWebHistory(import.meta.env.BASE_URL)`（base 由 vite 构建期注入，与上面三处同一枚真源）。
+判据落在 `tests/unit/test_ui_user_mount.py`：新增 `test_mimo_router_history_carries_the_vite_base`
+——正腿钉"参数必须是 `import.meta.env.BASE_URL`"，CONTROL 腿钉"vite base 确实是子路径"
+（base 若是 `/`，不带参数无害，正腿就没有对照物）。
+
+变异自证（副本树 `%TEMP%/af-mut-router-20261008`，工作树未动）：
+
+| 腿 | 变异 | 读数 |
+|---|---|---|
+| M1 摘掉护栏 | `createWebHistory(import.meta.env.BASE_URL)` → `createWebHistory()` | **1 failed**（`AssertionError: create…`，test_ui_user_mount.py:273） |
+| M2 抽掉对照 | `vite.config.ts` 的 `base: '/mimo/'` → `base: '/'` | **1 failed**（`AssertionError: vit…`） |
+
+两条腿都红过 ⇒ 这一格不是空门。回归读数：`pytest tests/unit/test_ui_user_mount.py` ⇒ **18 passed**；
+全量 `pytest -q` ⇒ **3416 passed, 53 skipped, 65 subtests passed in 197.73s**（比上一批多一条，就是这条新腿）；
+`ui-user-mimo` 的 node 判据 `npm test` ⇒ **75 pass / 0 fail**。
+
+### 5. 一条新的部署通道地雷：卷挂的是**目录 inode**，改名目录后容器仍读旧树
+
+现场踩到的形状：容器起来之后，我把 `dist` 改名成 `dist.prev-…` 再把新产物落成同名新目录，
+于是**仓库路径** `ui-user-mimo/dist/index.html` 是新的（`index-D22QXJ0K.js`），
+而 `GET /mimo/` 仍回旧的（`index-DUSr5ZJN.js`）——bind mount 在**创建容器时**把宿主目录解析成 inode，
+`docker restart` 不会重新解析，只有 `up -d --force-recreate` 才换。
+读数对照（同一次 ssh 里先后取）：host path `index-D22QXJ0K.js` vs served `index-DUSr5ZJN.js`；
+recreate 之后两者一致。
+这条与"浏览器 HTTP 缓存"长得很像（我第一反应是缓存，用 `?v=` 打了一次仍读到旧包，才排掉缓存），
+区别在于：**服务端读到的字节就是旧的**，清缓存无用。
+落地做法记成规程：**先覆盖进已挂载的那棵树，或者改名后必须 `--force-recreate`**；
+验收要拿"仓库路径的 index 里的资源名"和"服务端 index 里的资源名"**做字符串比对**，不能只看 200。
+
+### 6. `/api/health` 的 `readonly` 那格与真实写闸分叉（投件 DCD，AF 不自决）
+
+现场同时读到：`/api/health` 报 `"readonly": true`，而实例日志报"取得单写者锁"、写闸探针
+`POST /api/pending/list` 返回 **200**。现读代码坐实两者无连接：写闸由 `af_cli.py:1420` 的租约决定并经
+`build_app(readonly=…)` 生效（`af_api.py:421-428`），而 `af_service.py:246` 那枚是**硬编码字面量**
+（docstring `:208` 自记"v1.x 只读服务层身份声明"）。同一次部署里"另一格按真实桥状态如实报 unwired"
+和"这一格永远报 true"并存，读方无法分辨。改它的语义会动到 DB/MA/ADM 三家的既有判读，
+已投件：`E:/NAS/关键决策部/inbox/20261008-AF-health的readonly字段与实际写闸分叉-决策申请.md`
+（问 1 三选项 A 接真值 / B 保留旧字段+加新键 / C 维持现状，AF 建议 B；问 2 命名口径是否入契约表）。
+裁定前 AF 不新造对外键，避免与裁定分叉。
+
+### 7. 备份与回滚位（都在盘上，不是"应当存在"）
+
+- 手补全量：`/vol1/1000/docker/autoforge/backups/nas-handpatch-20261008.patch`（374353 字节）
+- 旧产物两棵：`backups/dist.prev-20261008`（上一版 dist）、`backups/dist.stale-20261008`（带 LAN 死键常数的更早一版）
+- 旧镜像仍在本地镜像层（`autoforge-api:latest` 被新构建覆盖标签，构建日志留有 `sha256:cfba9043…`）；
+  回滚路径 = `docker compose --env-file .env -f docker-compose.api.yml up -d --force-recreate`（用旧 compose + 旧 dist 重放）
+
+—— AutoForge 开发 · 2026-10-08

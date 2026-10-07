@@ -2,7 +2,9 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useMainStore } from './stores/main.ts'
 
 export const router = createRouter({
-  history: createWebHistory(),
+  // base 必须跟着构建期 base 走：部署在子路径时不带参数的 history 会把地址写成站点根，
+  // 首屏之后刷新就落到另一张脸的 index 上（服务端 catch-all 送回的是 /mimo 那份，救不了）。
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/login', name: 'login', component: () => import('./views/LoginView.vue') },
     {

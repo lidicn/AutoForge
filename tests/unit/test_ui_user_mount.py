@@ -260,6 +260,22 @@ def test_compose_mounts_the_user_dist_at_the_same_prefix():
     assert volume.group(2).strip("/") == target, volume.group(2)
 
 
+def test_mimo_router_history_carries_the_vite_base():
+    """同源的第四处：客户端路由的 base 必须跟着构建期 base，不能留在站点根。
+
+    服务端 catch-all 把 `/mimo/<深链>` 送回用户端 index（上面第 1 节管的是这一半），但地址栏
+    由 vue-router 决定：不带参数的 history 把首跳写成 `/login`，用户一刷新就拿到开发面板的
+    index——2026-10-07 NAS 现场实测到的是同一次部署里两半不同源。
+    """
+    text = (REPO_ROOT / "ui-user-mimo" / "src" / "router.ts").read_text(encoding="utf-8")
+    call = re.search(r"createWebHistory\(([^)]*)\)", text)
+    assert call, "router.ts 里没有 createWebHistory(...) 调用"
+    assert call.group(1).strip() == "import.meta.env.BASE_URL", call.group(0)
+    # CONTROL：base 若真是 `/`，不带参数也无害 ⇒ 上面那条就没有对照物。这条钉住子路径前提。
+    vite = (REPO_ROOT / "ui-user-mimo" / "vite.config.ts").read_text(encoding="utf-8")
+    assert re.search(rf"base:\s*'{re.escape(f'/{UI_USER_PREFIX}/')}'", vite), "vite base 不是子路径"
+
+
 def test_serve_cli_exposes_the_flag():
     """装配面：`forge serve` 必须认这个参数——compose 传了而 CLI 不认 ⇒ 容器起不来。
 
