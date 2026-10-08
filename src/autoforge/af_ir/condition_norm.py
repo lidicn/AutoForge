@@ -23,6 +23,7 @@ __all__ = [
     "condition_equivalent",
     "MAX_CNF_CLAUSES",
     "CNFBudgetExceeded",
+    "LeafUnserializable",
 ]
 
 #: CNF 子句数硬上限。分配律展开是笛卡尔积：`or` 的子句数是各子 CNF 之积，
@@ -36,12 +37,29 @@ class CNFBudgetExceeded(ValueError):
     """CNF 展开超出 `MAX_CNF_CLAUSES` 预算（表达式过于复杂，无法归一化）。"""
 
 
+class LeafUnserializable(CNFBudgetExceeded):
+    """condition 叶子无法 JSON 序列化（自引用对象 / 含非 JSON 类型的值）。
+
+    第十三轮 §三 的那第二条腿：叶子是**终端**，`_nnf` 不在它上面递归，所以深度预算
+    根本不会被调用到——`json.dumps` 遇到自引用抛 `ValueError`、遇到 datetime/set 抛
+    `TypeError`，两种都绕过全部遍历闸门，并且都不在 `condition_equivalent` 的捕获范围里，
+    于是「无法证明等价 ≠ 判为等价」这条口径在这种形状下变成抛穿。
+    继承 `CNFBudgetExceeded` 让两个入口同时成立：`normalize_condition` 拿到具名失败，
+    `condition_equivalent` 照既有语义判 False。
+    """
+
+
 _BINARY = ("and", "or")
 _FLIP = {"and": "or", "or": "and"}
 
 
 def _leaf_key(expr: Mapping[str, Any]) -> str:
-    return json.dumps(expr, sort_keys=True, ensure_ascii=False)
+    try:
+        return json.dumps(expr, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise LeafUnserializable(
+            f"condition 叶子无法 JSON 序列化，归一化中止：{type(exc).__name__}: {exc}"
+        ) from exc
 
 
 def _nnf(expr: Mapping[str, Any], neg: bool, _depth: int = 0) -> tuple:

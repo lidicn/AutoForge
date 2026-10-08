@@ -24,6 +24,11 @@ docs/audit/
 
 ## 一、归档/（已完成核实与修复，72 份）
 
+> 份数可对账口径：**72 = A 19 + B 9 + C 24 + §二转入的元宝 20**。C 组 24 份含 ADM-auditkit 体系
+> 第八~二十轮（第八~十三轮那六份此前从未被列举，索引从第七轮直接跳到第十四轮——2026-10-08 补入，
+> 逐份定性与 HEAD 复测见 `docs/ADM联动执行记录-AF.md` §二之七十一）。
+> 现读核对：`ls docs/audit/归档 | wc -l` = 72、`元宝/` = 0、`参考/` = 4（2026-10-08）。
+
 ### A. 多 Agent 主题审计报告（第一轮体系，19 份，已由《审计回执》核实收口）
 - 审计报告-并发与异步正确性.md
 - 审计报告-错误处理与降级路径.md
@@ -56,13 +61,19 @@ docs/audit/
 - 审计报告_增量模块_20260930.md
 - 审计回执_十三轮BUG核实与修复_20261006.md（BUG-01…21 共 21 项收口总账）
 
-### C. 原始审计底稿 / 独立审计（15 份）
+### C. 原始审计底稿 / 独立审计（24 份）
 - AutoForge_第二轮审计报告.md
 - AutoForge_第三轮审计报告.md
 - AutoForge_第四轮审计报告.md
 - AutoForge_第五轮审计报告.md
 - AutoForge_第六轮审计报告.md
 - AutoForge_第七轮审计报告.md
+- AutoForge_第八轮审计报告.md（ADM-auditkit 体系，round-008 工具链重建 + 两份 PoC 首次同轮产出：**本轮未新增缺陷**（该轮 §五 自记），"F1–F14 全部 still_open" 是审计方台账口径；对 AF 的新事实 = `GraphStore.set_tags` 的 F8 **第一次被端到端自动确证**（前七轮为人工实测）。收口见执行记录 §二之七十一）
+- AutoForge_第九轮审计报告.md（ADM-auditkit 体系，round-009 状态损坏 PoC **首次 9/9 data_lost**：F8/F10/F13 三族此前全靠人工实测支撑，本轮由机器端到端复现，九站清单在该轮 §二。AF 侧落码 `3d49595`（四站）+ `f315112`（三站），另两站（`af_store` 写侧、`set_alias`）按 HEAD 现读早已是拒写口径）
+- AutoForge_第十轮审计报告.md（ADM-auditkit 体系，round-010 补丁副本 7 guarded / 2 no_write：**原仓库未改动**（该轮 §六 自记），"已修"只存在于 `/data/workspace/repos/af-patched`；给 AF 的真产品结论是 §二 那条**护栏装在不会被执行到的路径上**——`set_tags` 不走 `_write_tags`、`update_credentials` 只装读侧、`record` 只装压缩腿。AF 落码时按此把护栏装进真正落盘的方法体并写成结构判据）
+- AutoForge_第十一轮审计报告.md（ADM-auditkit 体系，round-011 两侧可测量性同时提高（原仓库 9/9、补丁副本 8 guarded）：W30「护栏必须紧邻落盘调用，不能放方法入口」+ `_fetch_stub` 只返回一个实体造成的假阴性；`_record_bucket` 探针到不了改人工补验。AF 侧该站落在 `f315112`，按第 3 档改为静默跳过）
+- AutoForge_第十二轮审计报告.md（ADM-auditkit 体系，round-012：**F11 补丁自身静默失效**——少 import `quarantine`，NameError 被本函数既有的 `except Exception: return` 吞掉，数据保住了但既无隔离也无日志，"修了等于没修"；W33 patch_lint 上门禁、W34 第 3 档判据（遥测不该要求抛异常）。AF 侧 `f315112` 的"拒写与静默跳过按档位分开"与"留痕移到宽 `except` 外面"直接采用该口径）
+- AutoForge_第十三轮审计报告.md（ADM-auditkit 体系，round-013 F14 补丁副本 0 崩溃：实测证明**环检测与深度预算正交**——只装 `visited` 后 9 个 cyclic_crash 变成 8 个 depth_crash，Python 栈上限先于业务预算触发。AF 侧口径不同：预算装在**每个递归站点入口**，环每绕一圈深度 +1 必然撞上限（`af_ir/models.py:166` 明写"自引用不需要 visited"），九站现读全部带 `check_*_depth`；**该轮 §三 的 `_leaf_key` 第二条失败腿成立且预算挡不住**（叶子是终端，不经遍历），本批收成具名 `LeafUnserializable`）
 - AutoForge_第十四轮审计报告.md（ADM-auditkit 体系，F15 出站盲跟 3xx：核实成立，已修 + 上门禁，见执行记录 §二之五十六）
 - AutoForge_第十五轮审计报告.md（ADM-auditkit 体系：F15 同批提出，AF 侧半边已修 `79d1c3e`；F16 判在 homesdk 库侧，裁定 §六 Q3=A）
 - AutoForge_第十六轮审计报告.md（ADM-auditkit 体系：**无新增 AF 缺陷**，动作项在 auditkit 自己仓里；"F1–F16 全部 still_open" 是 zip 快照口径）

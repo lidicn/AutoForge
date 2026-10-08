@@ -6034,3 +6034,121 @@ ADM-auditkit 第八/九轮把九处状态站点测成 data_lost（第八轮 1/9 
 
 —— AutoForge 开发 · 2026-10-08
 
+## 二之七十二、ADM-auditkit 第八~十三轮**六份报告从未被索引列举**：逐轮定性 + 九站 HEAD 复测 + 第十三轮 §三 那条 `_leaf_key` 第二条腿本批落码
+
+### 一、先记账面上那一格：索引从第七轮直接跳到第十四轮，中间六份在盘上却无人点名
+
+现读核对（不是引用旧话）：
+
+```
+ls docs/audit/归档 | wc -l                       ⇒ 72
+diff <归档文件名全集> <index.md 列举全集>          ⇒ 未列举恰好 6 个：
+  AutoForge_第八轮审计报告.md / 第九轮 / 第十轮 / 第十一轮 / 第十二轮 / 第十三轮
+```
+
+这六份是 **ADM-auditkit 体系**的第八~十三轮（`round-008`…`round-013`，六份报告日期均为 2026-10-06），
+与 `元宝/` 系列同轮次号但不同文件（例如 `AutoForge_第九轮审计报告.md` ≠ `AutoForge_第九轮配置面健壮性审计报告.md`）
+——索引 §二 收口元宝 20 份时把这六份同号码的漏掉了。本批补入 §C 并改正计数（那里小标题写「15 份」实列 18 条，
+补后为 24 份），同时对账 `72 = A 19 + B 9 + C 24 + 元宝 20`。
+
+### 二、六轮的定性：本轮**无一条新增 AF 缺陷**，但有三条方法学结论必须留在 AF 台账里
+
+| 轮 | 该轮自记的结果 | AF 侧定性 |
+|---|---|---|
+| 第八轮（round-008，工具链被第七轮探针写坏 300+ 文件后重建） | 原文 §五「**本轮未新增缺陷**」；`GraphStore.set_tags` 的 F8 **首次端到端自动确证**；状态 PoC 1 data_lost / 7 unavailable；「F1–F14 全部 still_open」是**审计方台账口径** | 成立但已修：F8 族在 `3d49595`/`f315112` 前已是拒写口径（见 §二之七十一 §二）。工具链自身事故（W20 原子写 + 回读校验、W23 抑制锚点弃行号）**归 auditkit 仓**，AF 只吸收同类教训：判据锚点不能是行号 |
+| 第九轮（round-009，状态 PoC **9/9 data_lost**） | 三处「此前靠人工实测」的凭证站点被机器复现；四处探针盲区全是**假阴性** | 九站逐站归属已在 §二之七十一 §二 列表收口，无一站读成"没测到" |
+| 第十轮（round-010，补丁副本 7 guarded / 2 no_write） | §一 新建 `af_stateguard`；§二 「**护栏装在不会被执行到的路径上**」三例；§六 原文「补丁只存在于只读副本 `/data/workspace/repos/af-patched`，**未改动原仓库**」 | "已修"不能采信为 AF 已修（项目记忆：外部审计跑的是快照/副本不是 HEAD）。§二 那三例是本轮给 AF 的**真产品结论**，直接变成 `test_corrupt_state_write_bar.py` 的结构腿口径 |
+| 第十一轮（round-011，两侧可测量性同时提高） | W30「护栏必须**紧邻落盘调用**，不能放方法入口」；`_fetch_stub` 只返回一个实体 ⇒ 手工说修好了、机器说没修好；`_record_bucket` 探针到不了，改人工补验 | 采纳：AF 侧该站（`f315112`）不依赖"抛异常"证明，改判第 3 档静默跳过 + 留痕 |
+| 第十二轮（round-012） | **F11 补丁自身静默失效**：`from .af_stateguard import` 少 `quarantine` ⇒ NameError 被本函数既有的 `except Exception: return` 吞掉；数据保住了但既无隔离也无日志——「修了等于没修」；W33 patch_lint 上门禁、W34 第 3 档判据 | 采纳并写进判据：`f315112` 把 `RESOLVE_METRICS_UNREADABLE` 留痕**移到宽 `except` 外面**，并有变异腿证明"搬回里面就会红" |
+| 第十三轮（round-013，F14 补丁副本 0 崩溃） | §二 实测证明**环检测与深度预算正交**：只装 `visited` 后 9 个 cyclic_crash 变成 8 个 **depth_crash**（Python 栈上限 ~1000 先于业务预算触发）；§三 `_nnf` 的第二条失败路径在 `_leaf_key` 的 `json.dumps` | 见下面 §三、§四：九站 HEAD 复测成立；§三 那条**成立且预算挡不住**，本批落码 |
+
+三轮共同的一句话结论：这六轮把 F1–F14 **测得更实**（自动确证、正交性、补丁自身的失效面），
+但**没有把 AF 的台账推大**——新增缺陷为 0，`docs/audit/index.md` 与 `归档/` 的份数变化只是补记。
+
+### 三、F14 九站的 HEAD 复测：AF 用「每站点预算」，不用 `visited`
+
+`src/autoforge/af_ir/models.py:166` 明写的口径：「自引用不需要 visited：环每绕一圈深度就 +1，必然撞上限」。
+现读逐站（每一站都有 `check_*_depth` 或同预算的内联判断）：
+
+| 递归站点（HEAD 现读 file:line） | 预算 |
+|---|---|
+| `af_ir/expr.py:272 _walk`、`:288 _walk_operand` | `check_expr_depth` |
+| `af_ir/condition_norm.py:54 _nnf`、`:83 _to_cnf` | 内联 `MAX_EXPR_DEPTH`（同一真值源） |
+| `af_evo.py:160 _canon`、`:705 _interpret` | `check_param_depth` |
+| `af_nl.py:168 _expr_text`、`:121 _trigger_text` | `check_expr_depth` / `check_trigger_depth` |
+| `af_orchestrator.py:386 iter_strings`、`:429 substitute_refs`、`:1771 _rep` | `check_param_depth` |
+| `af_orchestrator.py:557 describe_condition`、`:1893 _probe_expr` | `check_expr_depth` |
+| `af_version.py:138 _jsonable` | `check_param_depth` |
+| 八/九/十三轮列为 `unavailable` 的其余站：`af_conflict_runtime.py:147`、`af_fidelity.py:39`、`af_scanner.py:770`、`af_scheduler.py:257`、`af_ir/models.py:170/211/234/253`、`af_closedloop/detectors.py:21`、`af_nl_parse.py:637/1202/1280/1375` | 同一份预算（第十七/二十轮已装） |
+
+⇒ 登记为**核实成立但已修**，并把审计方"9 崩 → 0 崩"的读数与 AF 的"预算覆盖 9 站"分开记账：两者**修法不同**，
+结论相同（不再耗栈）。差异要留着——审计方副本装 `visited` 之后冒出 depth_crash 这一档，正是"只装一道会换一种崩"的实测证据。
+
+### 四、第十三轮 §三 的 `_leaf_key` 第二条腿：核实成立、**预算确实挡不住**，本批收成具名失败
+
+先在 HEAD 当场实测（`sys.setrecursionlimit(1000)`，`PYTHONPATH=src`，Python 3.13.2）：
+
+```
+CYCLE_leaf    : RAISED ValueError: Circular reference detected
+DATETIME_leaf : RAISED TypeError: Object of type datetime is not JSON serializable
+SET_leaf      : RAISED TypeError: Object of type set is not JSON serializable
+DEEP300_leaf  : OK          DEEP1000_leaf : OK      ← 深但可序列化的叶子本来就不崩
+condition_equivalent(自引用叶子, 自己) : RAISED ValueError   ← 该落 False 的一档抛穿了
+```
+
+为什么预算管不住它：**叶子是终端**，`_nnf` 不在叶子上递归，所以那条腿从不经过深度判断；
+`json.dumps` 自己碰环/碰非 JSON 类型。后果比"崩"更糟的一格是 `condition_equivalent`
+（`condition_norm.py:148-157`）：它只 `except CNFBudgetExceeded`，文档口径写的是「**无法证明等价 ≠ 判为等价**，
+落 False 交人工看」——而这两种 stdlib 异常从 `try` 里抛穿，把"证明不了"变成了"整条校验崩掉"。
+
+修法（`src/autoforge/af_ir/condition_norm.py`）：新增 `LeafUnserializable(CNFBudgetExceeded)`，
+`_leaf_key` 把 `json.dumps` 包进 `except (TypeError, ValueError)` 改抛它。
+**不采用审计方副本的 `safe_json_dumps → repr` 回退**：`repr` 回退等于让"不可 JSON 序列化"的 IR 通过归一化继续比键，
+而 IR 的契约要求它必须能过 JSON（落盘 + 出向都走 JSON）——证明不了就该落"不确定"那一档，不是换个表示继续判。
+继承 `CNFBudgetExceeded` 让两个入口**同时**成立且不新增第二套说法：`normalize_condition` 拿到具名失败，
+`condition_equivalent` 照既有语义返回 False。
+
+判据：`tests/unit/test_condition_norm.py` +8 腿（含原始失败存在性反空洞、datetime/set/bytes 三档 parametrize、
+CONTROL「深 300 层但可序列化」不误拒、结构腿钉住"护栏就在那条真的会序列化的腿上"、继承关系腿）。
+变异自证 5 档，跑在 `git archive HEAD` 副本树（工作树未动，注入前先 `ast.parse`，按字节还原并自证一致）：
+
+```
+M1 拆护栏（回到裸 json.dumps）              rc=1  6 failed, 9 passed
+M2 具名异常不再继承 CNFBudgetExceeded        rc=1  1 failed, 14 passed
+M3 回退成 repr（审计方副本的口径）            rc=1  6 failed, 9 passed
+M4 只收 TypeError（漏掉自引用那一档）         rc=1  3 failed, 12 passed
+CONTROL 只改 docstring 一句散文              rc=0  15 passed
+COPY_REMOVED_OK
+```
+
+全量与门禁：`pytest -q` ⇒ **3484 passed / 53 skipped / 65 subtests**（`PYTEST_RC=0`，较 §二之七十一 §四 的 3476 恰 +8），
+`GATES_RC=0`。
+
+### 五、本批**没收**的两格，点名不谎报
+
+1. `src/autoforge/af_fidelity.py:29-30` 的 `_canon` 是同一形状（裸 `json.dumps`）。它的调用方只有 F14 P1 校验器
+   （`project_automation` / `fidelity_equal` / `verify_roundtrip`），现读**产品侧零调用点**
+   （`grep -rn "verify_roundtrip" src/` 只有 `af_nl_build.py:7` 的 docstring 引用，调用全在 `tests/f14/`）
+   ⇒ 失败面是 dev/CI 工具崩，不在运行期下发路径。收它要给 `FidelityReport` 加一档"无法证明保真"的语义，
+   属于校验器口径变更，**本批不做**，登记为待窗项。
+2. 六轮报告共同的「仍未覆盖」四格（semgrep / detect-secrets / pip-audit 依赖 CVE / 变异测试）在 AF 台账里
+   仍是**审计工具链的射程缺口**，不是"AF 无风险"——沿用 §二十轮那一格的口径继续挂着。
+
+### 六、远端读数补齐（§二之七十一 那四个提交的 CI 那一格，本批当场取）
+
+`python scripts/gh_ci_status.py runs` ⇒ `total_count=123`，`success runs: [123, 122, 121, 120, 119, 118, 117, 116]`；
+逐个 `jobs <run_id>` 展开（六条作业全部 `completed/success`、`failed_steps=[]`）：
+
+| 提交 | run | 六条作业 |
+|---|---|---|
+| `3d49595` | 120（id=37690552222） | adm-linkage-contracts / pytest / quality-gates / ui-user-mimo-judgments / layering-gates / ui-typecheck-build 全 success |
+| `f315112` | 121（id=37701980834） | 同上六条全 success |
+| `488901c` | 122（id=37709521300） | 同上六条全 success |
+| `7f3d210` | 123（id=37715806995） | 同上六条全 success |
+
+⇒ §二之七十一 §四 里"已推但没记远端"的那一格补上：**四个提交在 GitHub 侧都是全绿**，
+本机 `GATES_RC=0` 与远端 `quality-gates: success` 两档口径一致，不存在"本机绿、远端没跑"的错觉。
+本地最终读数（工作树 = 本批全部改动）：`pytest -q` ⇒ **3484 passed / 53 skipped / 65 subtests**，`PYTEST_RC=0`。
+
+—— AutoForge 开发 · 2026-10-08
+
