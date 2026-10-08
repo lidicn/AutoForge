@@ -179,6 +179,8 @@ class ConflictArbiter:
         self._flicker_until: dict[str, float] = {}
         self._cooldown_until: dict[str, float] = {}
         self._circuits: dict[str, _Circuit] = {}
+        # DCD 20261008 裁定§五：冷却登记失败的实体进入"待补"态，登记成功前 AF 不写该实体
+        self._cooldown_pending: set[str] = set()
 
     # ------------------------------------------------------------------ #
     # 公开 API
@@ -207,19 +209,18 @@ class ConflictArbiter:
                 now = self._now()
                 self._acquire(ids, automation_id, instance_id, action, now, forced=True)
             return decision
-        except Exception as exc:  # 故障优先：绝不阻塞 do 节点
-            # `fail_open: True` 不是装饰（裁定 20261008 §二 把"降级放行"与"fail-closed 拒发"
-            # 分成两档之后，台账里每一类 degraded 都要说自己那一档）。本站仍是放行档，因为
-            # 反转它=改变本仲裁器的公开契约（所有直接调用方都指望它不抛），已连同 file:line
-            # 投 DCD inbox 求裁定；`af_conflict_runtime` 那两站抛异常的才走 fail-closed。
+        except Exception as exc:  # DCD 20261008 裁定§三：仲裁器内层 fail-closed
+            # 裁定 A：request() 不再吞异常回答 ALLOW。内层失明 = 守卫本体失明，
+            # 放行是"覆盖发生"的 UNSAFE 失败，拒发是"没覆盖"的 SAFE 失败。
+            # 与外层（af_conflict_runtime）的两站 fail-closed 同形状：_abort + fail_open: False + Q2 通知。
             self._emit(
                 KIND_DEGRADED,
                 ids[0] if ids else "",
                 automation_id,
                 None,
-                {"phase": "request", "error": repr(exc), "fail_open": True},
+                {"phase": "request_inner", "error": repr(exc), "fail_open": False},
             )
-            return RequestDecision.ALLOW
+            return RequestDecision.REJECT
 
     def release(self, entity_ids: list[str], automation_id: str, *, success: bool = True) -> None:
         """do 节点完成后释放锁（success 用于熔断的成功/失败衰减）。"""
@@ -241,13 +242,19 @@ class ConflictArbiter:
             self._emit(KIND_DEGRADED, "", automation_id, None, {"phase": "release", "error": repr(exc)})
 
     def on_user_override(self, entity_id: str) -> None:
-        """InterventionDetector 检测到 user_override 时调用：释放锁 + 冷却期。"""
+        """InterventionDetector 检测到 user_override 时调用：释放锁 + 冷却期。
+
+        DCD 20261008 裁定§五：冷却登记失败 ⇒ 该实体进入"冷却登记待补"态，
+        登记成功前 AF 不写该实体（fail-closed）。用户手动覆盖是最高优先的意图信号，
+        冷却期是尊重该意图的护栏；冷却没启动 ⇒ AF 可能立刻把用户刚设的状态改回去。
+        """
         try:
             now = self._now()
             lock = self._locks.pop(entity_id, None)
             self._cooldown_until[entity_id] = now + self.cooldown_after_user
             for key in [k for k in self._pending if k[2] == entity_id]:
                 self._pending.pop(key, None)
+            self._cooldown_pending.discard(entity_id)  # 登记成功，解除待补态
             self._emit(
                 KIND_USER_COOLDOWN,
                 entity_id,
@@ -256,7 +263,10 @@ class ConflictArbiter:
                 {"phase": "start", "cooldown": self.cooldown_after_user, "released": lock is not None},
             )
         except Exception as exc:
-            self._emit(KIND_DEGRADED, entity_id, "user", None, {"phase": "user_override", "error": repr(exc)})
+            self._cooldown_pending.add(entity_id)  # 登记失败，进入待补态：AF 不写该实体
+            self._emit(KIND_DEGRADED, entity_id, "user", None,
+                       {"phase": "user_override", "error": repr(exc), "fail_open": False,
+                        "cooldown_pending": True})
 
     def locks(self) -> dict[str, ResourceLock]:
         """当前所有锁（可观测性）。"""
@@ -332,6 +342,15 @@ class ConflictArbiter:
                 self._emit(
                     KIND_USER_COOLDOWN, eid, automation_id, self._holder_of(eid),
                     {"phase": "block", "remaining": round(until - now, 3)},
+                )
+                return RequestDecision.REJECT
+
+        # 1.5) DCD 20261008 裁定§五：冷却登记待补态——登记成功前 AF 不写该实体
+        for eid in ids:
+            if eid in self._cooldown_pending:
+                self._emit(
+                    KIND_DEGRADED, eid, automation_id, self._holder_of(eid),
+                    {"phase": "cooldown_pending_block", "fail_open": False},
                 )
                 return RequestDecision.REJECT
 

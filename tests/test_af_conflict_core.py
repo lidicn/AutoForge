@@ -249,12 +249,12 @@ def test_wait_enabled_queues_and_wakes_on_release():
     assert ready and ready[0].automation_id == "B"       # 锁释放 → 唤醒等待者
 
 
-def test_internal_error_fails_open_and_audits():
+def test_internal_error_fails_closed_and_audits():
     events = []
     arb = ConflictArbiter(BrokenConf(), FakeClock(), on_event=events.append)
-    assert arb.request(["light.study"], "A", "i-1", "light.turn_on", {}) is RequestDecision.ALLOW
-    assert kinds(events) == ["degraded"]                 # 降级 ALLOW + 记录错误
-    # 裁定 20261008 §二 只把 `af_conflict_runtime` 的两站改成 fail-closed；仲裁器这一层
-    # 反转它 = 改掉公开契约（所有直接调用方都指望它不抛），故仍是放行档，但台账必须自报。
-    # 这条腿同时也是"残余面还开着"的证据：那一层哪天改判，这里就该红。
-    assert events[0].details["fail_open"] is True
+    assert arb.request(["light.study"], "A", "i-1", "light.turn_on", {}) is RequestDecision.REJECT
+    assert kinds(events) == ["degraded"]                 # 降级 REJECT + 记录错误
+    # DCD 20261008 裁定§三：仲裁器内层 fail-closed。内层失明 = 守卫本体失明，
+    # 放行是"覆盖发生"的 UNSAFE 失败，拒发是"没覆盖"的 SAFE 失败。
+    # 与外层（af_conflict_runtime）的两站 fail-closed 同形状。
+    assert events[0].details["fail_open"] is False

@@ -306,6 +306,14 @@ class ConflictService:
             # 没有东西可锁），与上面那一档不同路——那档是守卫失明，这档是数据本来就没有实体。放行。
             return original(instance, node)          # 只读/无实体节点不参与锁
         band = self._safe_band(automation_id)
+        if band is None:
+            # DCD 20261008 裁定§四：band 读不出来就拒发（fail-closed）。
+            # 授权档的语义就是"不知道就按最保守的来"，不是"不知道就按最冒进的来"。
+            self._audit_degraded("band_read_failed", Exception("conf.band() raised"),
+                                 entity_ids[0], automation_id, fail_open=False)
+            self._notify_guard_blind(automation_id, "band_read_failed",
+                                     RuntimeError("conf.band() returned None"), entity_ids)
+            return self._abort(executor, instance, node, RequestDecision.REJECT, "band_read_failed")
         if band in PASSIVE_BANDS:                      # shadow：只读比对，不执行真实动作（F8 ① 单一真值源）
             return original(instance, node)
         if band in CONFIRM_REQUIRED_BANDS and self.settings.mode != "observe":
@@ -494,12 +502,17 @@ class ConflictService:
                 "冲突守卫失明的 degraded 快照发布失败（拒判照旧）：%r", bridge_exc
             )
 
-    def _safe_band(self, automation_id: str) -> str:
-        """统一 band 真值源读取（故障优先：缺省 auto，绝不因 band 查询异常而阻断下发）。"""
+    def _safe_band(self, automation_id: str) -> str | None:
+        """统一 band 真值源读取（DCD 20261008 裁定§四：fail-closed——读不出来返回 None，调用方拒发）。
+
+        原实现缺省 "auto" = 把"我不知道属于哪档"当成"有权直接写设备"，一个 ask 带
+        （正是为"高危须人工确认"而设）在置信库读取出问题那一刻被降级成 auto。
+        授权档的语义就是"不知道就按最保守的来"，不是"不知道就按最冒进的来"。
+        """
         try:
             return str(self.conf.band(automation_id))
         except Exception:
-            return "auto"
+            return None
 
     def _adapter_is_dry(self, executor: Any, node: Any) -> bool:
         try:
