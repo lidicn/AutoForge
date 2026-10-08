@@ -208,12 +208,16 @@ class ConflictArbiter:
                 self._acquire(ids, automation_id, instance_id, action, now, forced=True)
             return decision
         except Exception as exc:  # 故障优先：绝不阻塞 do 节点
+            # `fail_open: True` 不是装饰（裁定 20261008 §二 把"降级放行"与"fail-closed 拒发"
+            # 分成两档之后，台账里每一类 degraded 都要说自己那一档）。本站仍是放行档，因为
+            # 反转它=改变本仲裁器的公开契约（所有直接调用方都指望它不抛），已连同 file:line
+            # 投 DCD inbox 求裁定；`af_conflict_runtime` 那两站抛异常的才走 fail-closed。
             self._emit(
                 KIND_DEGRADED,
                 ids[0] if ids else "",
                 automation_id,
                 None,
-                {"phase": "request", "error": repr(exc)},
+                {"phase": "request", "error": repr(exc), "fail_open": True},
             )
             return RequestDecision.ALLOW
 

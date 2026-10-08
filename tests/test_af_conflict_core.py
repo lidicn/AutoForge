@@ -254,3 +254,7 @@ def test_internal_error_fails_open_and_audits():
     arb = ConflictArbiter(BrokenConf(), FakeClock(), on_event=events.append)
     assert arb.request(["light.study"], "A", "i-1", "light.turn_on", {}) is RequestDecision.ALLOW
     assert kinds(events) == ["degraded"]                 # 降级 ALLOW + 记录错误
+    # 裁定 20261008 §二 只把 `af_conflict_runtime` 的两站改成 fail-closed；仲裁器这一层
+    # 反转它 = 改掉公开契约（所有直接调用方都指望它不抛），故仍是放行档，但台账必须自报。
+    # 这条腿同时也是"残余面还开着"的证据：那一层哪天改判，这里就该红。
+    assert events[0].details["fail_open"] is True

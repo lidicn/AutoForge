@@ -1,5 +1,6 @@
 import importlib
 import importlib.util
+import ast
 import pathlib
 import sys
 from dataclasses import dataclass, field
@@ -232,9 +233,15 @@ def test_user_override_releases_lock_and_cools_entity():
     assert [e.kind for e in service.auditor.events][-1] == "user_cooldown"
 
 
-def test_arbiter_error_degrades_to_allow():
+def test_arbiter_error_refuses_and_records_fail_closed():
+    """裁定 20261008 §二 裁 A① 的同族推广：request 抛 = 这次动作根本没拿到锁 = 守卫失明。
+
+    改判前这条腿断言的是 `{"then"}`（「故障优先：降级 ALLOW」）。留着它等于把旧口径
+    钉在绿灯里，所以整条换向：不执行 + 走 on_error + 台账记 `fail_open: False`。
+    """
     service = make_service()
-    executor = FakeExecutor([])
+    log = []
+    executor = FakeExecutor(log)
     service.attach(executor)
 
     def boom(*args, **kwargs):
@@ -242,8 +249,13 @@ def test_arbiter_error_degrades_to_allow():
 
     service.arbiter.request = boom
     edges = executor._do(make_instance("A", "i-1"), make_node())
-    assert edges == {"then"}                                    # 故障优先：不阻塞 do 节点
-    assert [e.kind for e in service.auditor.events] == ["degraded"]
+    assert edges == {"on_error"}
+    assert executor.soft_fail.reason == "request_failed:RuntimeError"
+    assert not any(item[0] == "call" for item in log)          # adapter.call 未发生
+    events = [e for e in service.auditor.events if e.kind == "degraded"]
+    assert len(events) == 1
+    assert events[0].details["phase"] == "request"
+    assert events[0].details["fail_open"] is False
 
 
 def test_shadow_automation_bypasses_arbitration():
@@ -416,3 +428,203 @@ def test_watch_feed_failure_does_not_block_dispatch():
     finally:
         af_watch.record_conflict = original
     _reset_watch()
+
+
+# ── 裁定 20261008 §二 裁 A：守卫失明（内省 / request 自身抛异常）不再放行 ─────────
+#
+# 两条放行点必须**分开**（裁 A① vs 裁 A②）：
+#   ① 内省/request 抛异常 → 锁必然装不上 → fail-closed 拒绝 + 落审计 + Q2 的 owner 可见通知；
+#   ② 内省成功却挖不出实体 → 正常形状 → 照旧放行。
+# 把 ① 写成 `except Exception: entity_ids = []` 就顺着 ② 溜了，行为看起来仍"对"——
+# 那正是本仓反复判红的"修了等于没修"形状，所以除了行为腿还有一条 AST 结构腿钉住两档分离。
+
+
+def _blind_node(params):
+    return SimpleNamespace(adapter="light", action="light.turn_on", params=params, canary=None)
+
+
+def _deep_params(levels: int = 70):
+    """超过 `MAX_PARAM_DEPTH`（64）的嵌套容器 → `extract_entity_ids` 抛 ParamDepthError。"""
+    node = {"entity_id": "light.study"}
+    for _ in range(levels):
+        node = {"target": node}
+    return node
+
+
+def _degraded(service):
+    return [e for e in service.auditor.events if e.kind == "degraded"]
+
+
+def test_introspect_exception_refuses_the_action():
+    """裁 A①：内省抛代码 bug 那一档——动作根本不发出。"""
+    log = []
+    service = make_service()
+    executor = FakeExecutor(log)
+    service.attach(executor)
+    edges = executor._do(make_instance("A", "i-1"), _blind_node(object()))    # dict(object()) 抛 TypeError
+    assert edges == {"on_error"}
+    assert executor.soft_fail.reason == "introspect_failed:TypeError"
+    assert not any(item[0] == "call" for item in log)
+    events = _degraded(service)
+    assert len(events) == 1
+    assert events[0].details["phase"] == "introspect"
+    assert events[0].details["fail_open"] is False
+
+
+def test_param_depth_over_budget_refuses():
+    """裁 A①点名的一档：超预算与代码 bug 同处理——后果相同（覆盖发生），只是触发面不同。"""
+    log = []
+    service = make_service()
+    executor = FakeExecutor(log)
+    service.attach(executor)
+    edges = executor._do(make_instance("A", "i-1"), _blind_node(_deep_params()))
+    assert edges == {"on_error"}
+    assert executor.soft_fail.reason == "introspect_failed:ParamDepthError"
+    assert not any(item[0] == "call" for item in log)
+    assert _degraded(service)[-1].details["fail_open"] is False
+
+
+def test_introspect_success_without_entities_still_executes():
+    """裁 A②的 CONTROL 腿：只读/无实体节点必须照旧跑，否则 fail-closed 变成"全体停摆"。"""
+    log = []
+    service = make_service()
+    executor = FakeExecutor(log)
+    service.attach(executor)
+    edges = executor._do(make_instance("A", "i-1"), _blind_node({"query": "temperature"}))
+    assert edges == {"then"}
+    assert ("call", "light.turn_on") in log
+    assert _degraded(service) == []                     # 放行不是降级：台账不该出现 degraded
+    assert service.arbiter.locks() == {}                # 也没给它装锁
+
+
+def test_observe_mode_observes_even_when_the_guard_is_blind():
+    """试演期的承诺是"不改行为"：两档都照旧放行，但要说自己放行了（`fail_open: True`）。
+
+    内省腿用超预算那份参数——执行器自己 `dict(node.params)` 不炸、守卫的深度预算炸，
+    这样断言到的才是"守卫瞎了但仍放行"，而不是"节点本身坏到两边都跑不动"。
+    """
+    log = []
+    service = make_service(mode="observe")
+    executor = FakeExecutor(log)
+    service.attach(executor)
+    assert executor._do(make_instance("A", "i-1"), _blind_node(_deep_params())) == {"then"}
+    assert ("call", "light.turn_on") in log
+    assert _degraded(service)[-1].details["fail_open"] is True
+
+    service2 = make_service(mode="observe")
+    executor2 = FakeExecutor([])
+    service2.attach(executor2)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("arbiter down")
+
+    service2.arbiter.request = boom
+    assert executor2._do(make_instance("A", "i-1"), make_node()) == {"then"}
+    assert _degraded(service2)[-1].details["fail_open"] is True
+
+
+def test_the_two_allow_points_are_separated_in_source():
+    """结构腿：裁 A②那条放行必须是 dispatch 函数体顶层，不在内省 except 处理器里。
+
+    钉住的是"最省事的合并写法"：`except Exception: entity_ids = []`——行为上让守卫失明
+    顺着空实体档溜走，而所有行为腿在这一刻仍全绿。
+    """
+    tree = ast.parse(pathlib.Path(af_conflict_runtime.__file__).read_text(encoding="utf-8"))
+    svc = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ConflictService")
+    dispatch = next(n for n in svc.body if isinstance(n, ast.FunctionDef) and n.name == "dispatch")
+    trials = [n for n in ast.walk(dispatch) if isinstance(n, ast.Try)]
+    introspect = next(t for t in trials if "extract_entity_ids(" in ast.unparse(t))
+    handler = ast.unparse(introspect.handlers[0])
+    assert "self._abort(" in handler, "内省异常那档必须真的拒发"
+    assert "fail_open=observe" in handler, "台账要记录这一条到底放没放行"
+    assert "if not entity_ids or not automation_id" not in handler, "两档被合并了：失明会顺着空实体档溜走"
+    top = [ast.unparse(s) for s in dispatch.body]
+    assert any("if not entity_ids or not automation_id" in s for s in top), "裁 A②的放行点必须留在函数体顶层"
+
+
+# ── Q2=是：拒绝要 owner 可见（监护视图常驻指示 + 出向事件）──────────────────
+
+
+class FakeBridge:
+    def __init__(self):
+        self.codes = []
+        self.published = 0
+
+    def mark_degraded(self, code):
+        self.codes.append(code)
+
+    def publish_degraded(self):
+        self.published += 1
+        return {"published": True}
+
+
+class ExplodingBridge(FakeBridge):
+    def mark_degraded(self, code):
+        raise RuntimeError("broker down")
+
+
+def test_guard_blind_refusal_is_resident_evidence_in_the_monitor_view():
+    """常驻指示走 af_watch 的 conflict 列：被挡下 ≠ 生产验证失败，三档各归各栏。"""
+    _reset_watch()
+    af_watch = _load("af_watch")
+    seen = []
+    original = af_watch.record_conflict
+
+    def spy(automation_id, status, at, detail=None):
+        seen.append((automation_id, status, detail or {}))
+        return original(automation_id, status, at, detail)
+
+    af_watch.record_conflict = spy
+    try:
+        service = make_service()
+        executor = FakeExecutor([])
+        service.attach(executor)
+        executor._do(make_instance("A", "i-1"), _blind_node(_deep_params()))
+    finally:
+        af_watch.record_conflict = original
+
+    assert len(seen) == 1, "一次失明拒发只该有一条指示，不重复喂"
+    automation_id, status, detail = seen[0]
+    assert automation_id == "A" and status == "conflict"
+    assert detail["reason"] == "guard_blind" and detail["phase"] == "introspect"
+    assert "ParamDepthError" in detail["error"]
+    row = _watch_row("A")
+    assert row is not None and row["conflict"] == 1
+    assert row["failed_in_prod"] == 0 and row["verified_in_prod"] == 0
+    _reset_watch()
+
+
+def test_guard_blind_refusal_publishes_the_outbound_degraded_snapshot(monkeypatch):
+    """出向事件走 retained status（`af/status`）：`publish_failed` 的唯一生产者仍是 observe_terminal。
+
+    本模块自己开第二个事件写者会撞 `check_mqtt_writers` 判据 B，那条门是 §二之二十二
+    "测试测不到、对端却在收"换来的，不该为这一件拆掉。
+    """
+    from homesdk.adm.errors import ADM_ERR_INTERNAL
+
+    af_mqtt_bridge = _load("af_mqtt_bridge")
+    bridge = FakeBridge()
+    monkeypatch.setattr(af_mqtt_bridge, "current_bridge", lambda: bridge)
+    service = make_service()
+    executor = FakeExecutor([])
+    service.attach(executor)
+    executor._do(make_instance("A", "i-1"), _blind_node(object()))
+    assert bridge.codes == [ADM_ERR_INTERNAL]
+    assert bridge.published == 1
+
+
+def test_notification_failure_does_not_change_the_verdict(monkeypatch):
+    """通知面（桥未接线 / 桥抛错）不得把拒发变回放行，也不得让异常冒进执行链。"""
+    af_mqtt_bridge = _load("af_mqtt_bridge")
+    monkeypatch.setattr(af_mqtt_bridge, "current_bridge", lambda: None)
+    service = make_service()
+    executor = FakeExecutor([])
+    service.attach(executor)
+    assert executor._do(make_instance("A", "i-1"), _blind_node(object())) == {"on_error"}
+
+    monkeypatch.setattr(af_mqtt_bridge, "current_bridge", lambda: ExplodingBridge())
+    service2 = make_service()
+    executor2 = FakeExecutor([])
+    service2.attach(executor2)
+    assert executor2._do(make_instance("A", "i-1"), _blind_node(object())) == {"on_error"}
+    assert service2.auditor.events[-1].details["fail_open"] is False

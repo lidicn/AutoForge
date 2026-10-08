@@ -16,6 +16,8 @@ auto/shadow/ask 三级自主同口径——`shadow` 只读比对不参与冲突�
     request() -> ALLOW  -> adapter.call -> note_af_action -> release()
     request() -> REJECT / CIRCUIT_OPEN -> _soft_fail(...)（on_error / default 边）
     request() -> WAIT   -> 挂起，锁释放后 call_later(0, retry)
+    内省 / request 自身抛异常 -> fail-closed 拒绝 + 落审计 + owner 可见通知（裁定 20261008 §二 裁 A①）
+    内省成功但挖不出实体      -> 放行（裁 A②：那是只读/无实体节点的正常形状，不是守卫失明）
 """
 
 from __future__ import annotations
@@ -140,8 +142,8 @@ def extract_entity_ids(params: Mapping[str, Any] | None) -> list[str]:
 
     def _walk(container: Any, _depth: int = 0) -> None:
         # 第二十轮 F2：深容器实测 994 层才 RecursionError，这里接预算改抛 ParamDepthError。
-        # 注意 dispatch() 的 `except Exception` 把任何 introspect 失败都变成「降级放行」，
-        # 所以本函数受控失败后并不会自动锁住该节点——降级面另案登记。
+        # 裁定 20261008 §二 裁 A① 之后，dispatch() 不再把内省失败当成「降级放行」：超预算
+        # 也好、代码 bug 也好，守卫不知道这次写哪个实体 = 锁必然装不上 = 当场拒发。
         check_param_depth(_depth, "conflict_runtime.extract_entity_ids")
         if not isinstance(container, Mapping):
             return
@@ -279,6 +281,10 @@ class ConflictService:
     def dispatch(self, executor: Any, original: Callable[..., Any], instance: Any, node: Any) -> Any:
         if self.settings.mode == "off":
             return original(instance, node)
+        observe = self.settings.mode == "observe"
+        automation_id = ""
+        instance_id = ""
+        entity_ids: list[str] = []
         try:
             automation_id = _automation_id(instance)
             instance_id = _instance_id(instance)
@@ -286,10 +292,18 @@ class ConflictService:
             action = str(getattr(node, "action", "") or "")
             entity_ids = extract_entity_ids(params)
         except Exception as exc:
-            self._audit_degraded("introspect", exc, "", "")
-            return original(instance, node)
+            # 裁定 20261008 §二 裁 A① + 判例 1：内省抛异常（超预算或任何代码 bug）= 守卫自己瞎了
+            # = 锁必然装不上 = 放行等于把锁失效静默化（第十八轮 F12 那次覆盖的形状）。拒绝执行。
+            self._audit_degraded("introspect", exc, "", automation_id, fail_open=observe)
+            if observe:
+                return original(instance, node)      # 试演期只观测：不改行为，否则判据没法对比
+            self._notify_guard_blind(automation_id, "introspect", exc, entity_ids)
+            return self._abort(executor, instance, node, RequestDecision.REJECT,
+                               f"introspect_failed:{type(exc).__name__}")
 
         if not entity_ids or not automation_id:
+            # 裁定 20261008 §二 裁 A②：内省**成功**却挖不出实体是正常形状（只读/无实体节点本就
+            # 没有东西可锁），与上面那一档不同路——那档是守卫失明，这档是数据本来就没有实体。放行。
             return original(instance, node)          # 只读/无实体节点不参与锁
         band = self._safe_band(automation_id)
         if band in PASSIVE_BANDS:                      # shadow：只读比对，不执行真实动作（F8 ① 单一真值源）
@@ -300,14 +314,20 @@ class ConflictService:
         if self._adapter_is_dry(executor, node):
             return original(instance, node)          # dry_run 不参与冲突
 
-        observe = self.settings.mode == "observe"
         try:
             decision = self.arbiter.request(
                 entity_ids, automation_id, instance_id, action, params, observe=observe
             )
-        except Exception as exc:                     # 故障优先：降级 ALLOW
-            self._audit_degraded("request", exc, entity_ids[0], automation_id)
-            decision = RequestDecision.ALLOW
+        except Exception as exc:
+            # 与内省那一档同形：request 抛出 = 这次动作根本没拿到锁，后面的 note_af_action /
+            # release 全是空转。裁定只点名"内省"，本站是按判例 1 同族推广（逐站理由已投 DCD inbox 求追认）。
+            self._audit_degraded("request", exc, entity_ids[0], automation_id, fail_open=observe)
+            if observe:
+                decision = RequestDecision.ALLOW     # 同上：试演期不改行为
+            else:
+                self._notify_guard_blind(automation_id, "request", exc, entity_ids)
+                return self._abort(executor, instance, node, RequestDecision.REJECT,
+                                   f"request_failed:{type(exc).__name__}")
 
         # F4：仲裁器真判出争抢（排队 / 拒绝 / 熔断）就落生产证据，observe 模式的探测同样算证据
         if decision is not RequestDecision.ALLOW:
@@ -438,6 +458,42 @@ class ConflictService:
                 "af_watch 聚合冲突证据失败（不影响下发）：%r", exc
             )
 
+    def _notify_guard_blind(self, automation_id: str, phase: str, exc: BaseException, entity_ids: Sequence[str]) -> None:
+        """裁定 20261008 §二 Q2=是：拒绝不能只躺在日志里——监护视图常驻指示 + 出向事件。
+
+        视图侧走 af_watch 的 conflict 列，与 `record_cap_warning()` 那档"常驻指示"同一用法：
+        它是"守卫失明所以这一跑被拒"，不进 `failed_in_prod`（被挡下 ≠ 生产验证失败，
+        同 `test_reject_feeds_conflict_evidence` 立的三档分栏）。
+        出向侧只登记降级码 + 发 retained status：`publish_failed` 的唯一生产者是
+        `af_mqtt_bridge.observe_terminal`，本模块再开一个写者会撞 `check_mqtt_writers` 判据 B；
+        而对端拿不到的通知不叫通知。通知失败**不得**改变拒判结果，但原因必须进日志。
+        """
+        self._feed_watch_conflict(
+            automation_id, "guard_blind", phase=phase, error=repr(exc), entity_ids=list(entity_ids)
+        )
+        try:
+            from homesdk.adm.errors import ADM_ERR_INTERNAL
+
+            from . import af_mqtt_bridge
+        except Exception as bridge_exc:  # noqa: BLE001 —— 联动面缺席（未装 homesdk / 未接线）
+            logging.getLogger("autoforge.conflict").warning(
+                "冲突守卫失明的出向通知没有通道（拒判照旧）：%r", bridge_exc
+            )
+            return
+        bridge = af_mqtt_bridge.current_bridge()
+        if bridge is None:
+            logging.getLogger("autoforge.conflict").warning(
+                "冲突守卫失明但联动桥未接线：degraded 出向通知发不出去（拒判照旧）"
+            )
+            return
+        try:
+            bridge.mark_degraded(ADM_ERR_INTERNAL)
+            bridge.publish_degraded()
+        except Exception as bridge_exc:  # noqa: BLE001
+            logging.getLogger("autoforge.conflict").warning(
+                "冲突守卫失明的 degraded 快照发布失败（拒判照旧）：%r", bridge_exc
+            )
+
     def _safe_band(self, automation_id: str) -> str:
         """统一 band 真值源读取（故障优先：缺省 auto，绝不因 band 查询异常而阻断下发）。"""
         try:
@@ -453,15 +509,23 @@ class ConflictService:
         except Exception:
             return False
 
-    def _audit_degraded(self, phase: str, exc: Exception, entity_id: str, automation_id: str) -> None:
+    def _audit_degraded(
+        self, phase: str, exc: Exception, entity_id: str, automation_id: str, *, fail_open: bool = True
+    ) -> None:
+        """守卫自身出故障的记账点。`fail_open` 是**这一条到底有没有放行**的真值，不是装饰：
+
+        裁定 20261008 §二 裁 A 之后，`introspect` / `request` 两站 fail-closed（记 `False`），
+        其余站点仍是"记账/通知失败不得阻断下发"（记 `True`）。读审计的人靠这个键区分
+        "降级放行了一次"与"拒发了一次"——把它写成常量，两档就又在台账里长得一样了。
+        """
         try:
             from .af_conflict import KIND_DEGRADED, ConflictEvent
         except ImportError:  # pragma: no cover
             from af_conflict import KIND_DEGRADED, ConflictEvent
         import uuid as _uuid
 
-        # 记账本身不得抛出：本方法的调用点位于「故障优先 ALLOW」的 except 分支里，
-        # 若 record()/_persist() 写盘失败向外抛，「故障优先降级」就变成「故障优先报错」，
+        # 记账本身不得抛出：本方法的调用点位于「失败不阻断下发」的 except 分支里，
+        # 若 record()/_persist() 写盘失败向外抛，「故障优先」就变成「故障优先报错」，
         # 且原始异常被记账异常顶掉（新增审计 BUG-13）。
         try:
             self.auditor.record(
@@ -472,12 +536,12 @@ class ConflictService:
                     requester_id=automation_id,
                     holder_id=None,
                     timestamp=float(self.clock.monotonic()),
-                    details={"phase": phase, "error": repr(exc), "fail_open": True},
+                    details={"phase": phase, "error": repr(exc), "fail_open": bool(fail_open)},
                 )
             )
         except Exception:
             logging.getLogger("autoforge.conflict").warning(
-                "降级记账失败（不影响 fail-open 决策）：phase=%s error=%r", phase, exc, exc_info=True
+                "降级记账失败（不影响本次判定）：phase=%s error=%r", phase, exc, exc_info=True
             )
 
 
