@@ -661,22 +661,24 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
     reviewer 硬编码 `"human"`（服务层约束：agent 不能自批）；HTTP 层传令牌主体。
     """
     ps = PendingStore(store.root)
-    # R4-03 修复：load 与 delete 之间无排他会导致并发重复批准同一待批；
-    # 持锁先删除待批，确保同一 op_id 只会被批准一次（持锁区间尽量短，save_graph 在锁外）。
+    # R4-03 修复 v2：load → 校验 → delete 全部在锁内，确保：
+    # 1) 同一 op_id 只会被批准一次（并发安全）
+    # 2) 禁止自批检查失败时不删除待批（拒绝后可重试，不再孤儿化）
+    # FFL 20261008 发现：原实现先 delete 再做 P0-13 检查，被 403 拒绝的待批直接消失。
     with ps._lock:
         op = ps.load(op_id)
         if op is None:
             raise ServiceError(f"未找到待批操作 {op_id!r}", status=404)
+        # P0-13：禁止自批（提交人不能批准自己提交的操作）
+        # ADM B-11：submitted_by 为空时（无鉴权原型模式）不阻止，但标注 unverified
+        submitter = str(op.get("submitted_by") or "")
+        if reviewer and submitter and reviewer == submitter:
+            raise ServiceError(
+                f"禁止自批：提交人 {submitter!r} 不能批准自己提交的操作 {op_id!r}",
+                status=403,
+            )
         ps.delete(op_id)
-    # P0-13：禁止自批（提交人不能批准自己提交的操作）
-    # ADM B-11：submitted_by 为空时（无鉴权原型模式）不阻止，但标注 unverified
-    submitter = str(op.get("submitted_by") or "")
     self_check = ""
-    if reviewer and submitter and reviewer == submitter:
-        raise ServiceError(
-            f"禁止自批：提交人 {submitter!r} 不能批准自己提交的操作 {op_id!r}",
-            status=403,
-        )
     if not submitter:
         self_check = "unverified_submitter"  # ADM B-11：无提交人信息，自批检查无法生效
     payload = op["payload"]

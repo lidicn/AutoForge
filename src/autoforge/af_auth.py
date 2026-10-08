@@ -840,6 +840,9 @@ class AuthCodeStore:
         failed_attempts）两档都给，撤销一枚码仍然要求手里真有那枚码。谁可以 `reveal=True`
         由 API 面判（`/api/user/auth-codes` 的 owner 面），存储层不自备身份概念。
         """
+        # FFL 20261008 发现：list() 不调用 _load()，内存快照从不刷新，
+        # 已消费码的 consumed 字段永远显示 false。与 revoke()/validate()/consume() 同口径，读前重载。
+        self._load()
         now = time.time()
         with self._lock:
             out: list[dict[str, Any]] = []
