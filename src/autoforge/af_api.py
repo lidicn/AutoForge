@@ -69,6 +69,7 @@ from .af_auth import (
     BOOTSTRAP_LOCK_S,
     BOOTSTRAP_REDEEM_PER_MIN,
     BOOTSTRAP_REQUEST_PER_MIN,
+    AdminUserStore,
     AuthCodeStore,
     PairCodeStore,
     RateLimitExceeded,
@@ -144,6 +145,12 @@ class AgentRenameBody(BaseModel):
 
 # ── v1.9.0 用户 WebUI：轻量单 owner 登录请求体 ──
 class LoginBody(BaseModel):
+    username: str = ""
+    password: str = ""
+
+
+# ── 登录正规化：首次注册请求体 ──
+class RegisterBody(BaseModel):
     username: str = ""
     password: str = ""
 
@@ -303,6 +310,8 @@ def build_app(
     # v1.9.0 用户 WebUI：配对码 / 授权码 文件存储（与 .auth/revoked.json 同目录）
     pair_store = PairCodeStore(Path(store_root) / ".auth" / "pair_codes.json")
     auth_store = AuthCodeStore(Path(store_root) / ".auth" / "auth_codes.json")
+    # 登录正规化：管理员用户存储（首次设定账号密码）
+    admin_store = AdminUserStore(Path(store_root) / ".auth" / "admin.json")
 
     def _client_ip(request: Request) -> str:
         # P0-10 修复：默认不信任 X-Forwarded-For（可伪造）
@@ -964,12 +973,59 @@ def build_app(
         revoked = registry.revoke(body.token)
         return {"ok": True, "revoked": revoked}
 
-    # ── v1.9.0 用户 WebUI：轻量单 owner 登录（无用户表、无隔离）──
+    # ── 登录正规化：首次设定账号密码 ──
+    @app.get("/api/auth/has-admin")
+    def api_auth_has_admin() -> dict[str, Any]:
+        """检查是否已有管理员用户。前端用来判断显示注册页还是登录页。"""
+        return {"ok": True, "has_admin": admin_store.has_admin}
+
+    @app.post("/api/auth/register")
+    def api_auth_register(body: RegisterBody) -> dict[str, Any]:
+        """首次注册管理员。只有当没有管理员时才允许；已有管理员则拒绝。
+
+        注册成功后自动签发登录令牌，免去注册后再登录一步。
+        """
+        if not (body.username and body.password):
+            raise HTTPException(status_code=400, detail="用户名或密码为空")
+        if len(body.username) < 2:
+            raise HTTPException(status_code=400, detail="用户名至少 2 个字符")
+        if len(body.password) < 6:
+            raise HTTPException(status_code=400, detail="密码至少 6 个字符")
+        try:
+            ok = admin_store.register(body.username, body.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not ok:
+            raise HTTPException(status_code=409, detail="已有管理员，不允许重复注册")
+        token = registry.issue_for_agent("owner", ("read", "write", "live"))
+        return {
+            "ok": True,
+            "user": {"username": body.username, "role": "admin"},
+            "token": token,
+        }
+
+    # ── v1.9.0 用户 WebUI：登录（验证用户名密码）──
     @app.post("/api/auth/login")
     def api_auth_login(body: LoginBody) -> dict[str, Any]:
-        """轻量登录：任意非空凭据签发单 owner JWT（裁定 20261004 §一 F-2：凭据样例不写在码里）。"""
+        """登录：验证用户名和密码，通过后签发 owner JWT。
+
+        向后兼容：如果还没有管理员用户（未注册），保持旧的「任意非空凭据可登录」行为，
+        避免升级后老用户被锁在外面。注册后切换为严格验证。
+        """
         if not (body.username and body.password):
             raise HTTPException(status_code=401, detail="用户名或密码为空")
+        # 未注册时的兼容模式：任意非空凭据可登录（旧行为）
+        if not admin_store.has_admin:
+            token = registry.issue_for_agent("owner", ("read", "write", "live"))
+            return {
+                "ok": True,
+                "user": {"username": body.username, "role": "admin"},
+                "token": token,
+                "warning": "尚未设置管理员账号，建议立即注册",
+            }
+        # 已注册：严格验证
+        if not admin_store.verify(body.username, body.password):
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
         token = registry.issue_for_agent("owner", ("read", "write", "live"))
         return {
             "ok": True,

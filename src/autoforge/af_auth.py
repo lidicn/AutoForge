@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import hmac
+import hashlib
 import json
 import os
 import tempfile
@@ -1040,3 +1041,110 @@ class RateLimiter:
                     + (f"，已锁定 {self.lock_s} 秒）" if self.lock_s > 0 else "）")
                 )
             hits.append(now)
+
+
+# ── 管理员用户存储（登录正规化：首次设定账号密码）──
+
+class AdminUserStore:
+    """单管理员用户存储：用户名 + PBKDF2 密码哈希，落盘原子写。
+
+    设计：
+    - 单用户系统，只有一个管理员账号
+    - 首次启动无用户 → 允许注册（/api/auth/register）
+    - 已有用户 → 注册接口拒绝，必须登录
+    - 密码用 PBKDF2-HMAC-SHA256，100000 次迭代，随机盐
+    - 落盘到 {store_root}/.auth/admin.json，权限 0600
+    """
+
+    PBKDF2_ITERATIONS = 100000
+    SALT_BYTES = 16
+
+    def __init__(self, path: str | Path | None = None) -> None:
+        self._path = Path(path) if path else None
+        self._lock = threading.Lock()
+        self._username: str | None = None
+        self._salt: str | None = None
+        self._hash: str | None = None
+        self._load()
+
+    def _load(self) -> None:
+        if not self._path or not self._path.is_file():
+            return
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+            self._username = data.get("username")
+            self._salt = data.get("salt")
+            self._hash = data.get("hash")
+        except (OSError, ValueError):
+            # 文件损坏 = 没有用户（fail-closed：不允许登录，但允许重新注册）
+            self._username = None
+            self._salt = None
+            self._hash = None
+
+    def _persist(self) -> None:
+        if not self._path:
+            return
+        data = {
+            "username": self._username,
+            "salt": self._salt,
+            "hash": self._hash,
+            "iterations": self.PBKDF2_ITERATIONS,
+            "algorithm": "pbkdf2_sha256",
+        }
+        _atomic_write_text(self._path, json.dumps(data, ensure_ascii=False, indent=2))
+
+    @property
+    def has_admin(self) -> bool:
+        """是否已有管理员用户。"""
+        return bool(self._username and self._salt and self._hash)
+
+    @property
+    def username(self) -> str | None:
+        return self._username
+
+    @staticmethod
+    def _hash_password(password: str, salt: str) -> str:
+        dk = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            bytes.fromhex(salt),
+            AdminUserStore.PBKDF2_ITERATIONS,
+        )
+        return dk.hex()
+
+    def register(self, username: str, password: str) -> bool:
+        """注册管理员。只有当没有管理员时才允许。
+
+        返回 True 表示注册成功，False 表示已有管理员（拒绝注册）。
+        """
+        if not username or not password:
+            raise ValueError("用户名和密码不能为空")
+        if len(username) > 64 or len(password) > 256:
+            raise ValueError("用户名或密码过长")
+        with self._lock:
+            if self.has_admin:
+                return False
+            salt = secrets.token_hex(self.SALT_BYTES)
+            self._username = username
+            self._salt = salt
+            self._hash = self._hash_password(password, salt)
+            self._persist()
+            return True
+
+    def verify(self, username: str, password: str) -> bool:
+        """验证用户名和密码。恒定时间比较。"""
+        if not self.has_admin:
+            return False
+        if not username or not password:
+            return False
+        with self._lock:
+            expected_hash = self._hash or ""
+            salt = self._salt or ""
+            stored_user = self._username or ""
+        # 恒定时间比较用户名
+        if not hmac.compare_digest(username, stored_user):
+            # 即使用户名不对也跑一次哈希，防止时序攻击推断用户名
+            self._hash_password(password, salt or "00" * self.SALT_BYTES)
+            return False
+        actual_hash = self._hash_password(password, salt)
+        return hmac.compare_digest(actual_hash, expected_hash)
