@@ -244,7 +244,7 @@ def test_mcp_face_text_starts_with_the_prefix(tmp_path, gate):
 
     戊A 之前 MCP 的异常路径是散文，DB 按整段文本 `startswith` 判别；现在异常路径统一成
     JSON `{ok:false, code, message}`，判别点随之挪进 `message`。**这条挪动本身要交给 DB
-    一份读数变化说明**（见 docs/handoff/20261008-AF-MCP异常路径改JSON信封-读数变化说明.md）：
+    一份读数变化说明**（见 docs/handoff/交接卡_MCP异常路径JSON信封_读数变化_20261008.md）：
     对端若还按老口径判整段文本，`{"ok": false…` 永远不匹配前缀 ⇒ 降级态静默读成"没降级"。
     """
     store = GraphStore(tmp_path)

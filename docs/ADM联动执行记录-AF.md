@@ -5949,3 +5949,88 @@ DCD 那侧唯一写过这枚前缀的地方是裁定自己（`关键决策部/de
 - 本批为**纯文档**批：`src/`、`tests/`、`scripts/`、`gates.sh`、compose 一字未动，故不产新判据、不抬任何棘轮上限。
 
 —— AutoForge 开发 · 2026-10-08
+## 二之七十一、四个**已推 GitHub 但账本没记**的提交补齐（`3d49595`/`f315112`/`488901c`/`7f3d210`）：读数、两处自家判据真的红过、两处残余档点名
+
+### 一、为什么单开一节：欠账的形状和 §二之七十 批评计划表的那条一模一样
+
+现读核对（本批之前跑的结果）：
+
+```
+grep -n "3d49595\|f315112\|488901c\|7f3d210" docs/ADM联动执行记录-AF.md   ⇒ 0 命中
+```
+
+四个提交都已经在 `main` 上（远端对账见 §四），外部现读 clone 拿得到**产物**、拿不到**记账**。
+§二之七十 那节开头批的是"产物早已上线，欠的是记账，代价是下一轮把它当未做项重报"——这次欠的是账本自己。
+本节只补账，不引入新判据、不改产品代码。
+
+### 二、数据丢失族七站（`3d49595` + `f315112`）：九站全部有归属，无一站读成"没测到"
+
+ADM-auditkit 第八/九轮把九处状态站点测成 data_lost（第八轮 1/9 → 第九轮 9/9），第十/十一轮的修复
+**只存在于审计方的只读副本 `/data/workspace/repos/af-patched`**（第十一轮 §六 原文「原仓库未改动」）。
+逐站对 HEAD 现读的归属：
+
+| # | 站点（第九轮 §二 清单） | HEAD 归属 | 失败方向 |
+|---|---|---|---|
+| 1 | `af_auth.py` `TokenRegistry._persist_issued` | `3d49595` | 读失败改 raise（原先 `data={}` 兜底），形状非对象同拒 |
+| 2 | `af_auth.py` `PairCodeStore._persist` | `3d49595` | 共用 `_refuse_when_list_file_unreadable()`：拒写 |
+| 3 | `af_auth.py` `AuthCodeStore._persist` | `3d49595` | 同上 |
+| 4 | `af_experience.py` `ExperienceStore._save` | `3d49595` | `_refuse_when_dict_file_unreadable()`；`clear()` 走 `_write` 绕过护栏——显式清空是损坏现场的**修复出口**，不该被同一道门挡死 |
+| 5 | `af_config.py` `Config.update_credentials` | `f315112` | 本进程从未成功读过该文件时拒写；内存握有快照时**不拒**（整档重写正是 R19-01 的修复动作） |
+| 6 | `af_catalog.py` `DeviceCatalog._record_bucket`（第 3 档遥测） | `f315112` | **静默跳过**写入（第十二轮 W34：第 3 档不该要求抛异常打断解析），并把 `RESOLVE_METRICS_UNREADABLE` 留痕**移到宽 `except` 外面**（第十二轮 §一：留在里面等于没留） |
+| 7 | `af_preference.py` `PreferenceModel._rewrite_all` | `f315112` | 一行都读不出来时压缩拒写；追加式写入不拦（只加一行抹不掉已有字节）；`clear()` 允许越过护栏 |
+| 8 | `af_catalog.py` `DeviceCatalog.set_alias` | 早已是拒写口径（R16-01） | 不在本批改动面 |
+| 9 | `af_store.py` `GraphStore.set_tags` | 早已是拒写口径（R10-02） | 不在本批改动面 |
+
+判据：`tests/unit/test_corrupt_state_write_bar.py` **七站 45 腿**——四份 CONTROL、坏形状/文件缺失两档边界、
+三处拆护栏自证，外加四条结构腿。结构腿的形状直接取自审计方第十/十一轮自己踩的错（`set_tags` 的护栏装在
+`_write_tags()` 而调用方根本不经过它、护栏放在方法入口而 `mark_poisoned()` 几行之后才置位）：
+**护栏必须装在真的会落盘的那个方法体内，且排在写调用之前**。
+
+读数（可复核锚点 = 提交信息本身）：`3d49595` ⇒ `GATES_RC=0`、全量 **3440 passed / 53 skipped / 65 subtests**；
+`488901c` ⇒ **3468**；`7f3d210` ⇒ **3476**；本批 HEAD（`7f3d210` + 未推的 §七十二）当场全量重跑
+⇒ **3484 passed / 53 skipped / 65 subtests**，`PYTEST_RC=0`。
+⚠️ 一格的口径欠账如实登记：`f315112` 的全量计数**没写进它自己的提交信息**（当场读数是 3461，但仓内证据复核不到）。
+今后批注一律落进提交信息，别只留在会话里。
+
+### 三、`488901c`（裁定 20261008 §一 裁 B + Q2=是）：两处自家判据绊到自己，都按"不放宽扫描"收
+
+- 新增 `write_gate(store, readonly=)` 三档：`blocked`（装配期降级**或**运行期租约被他进程持有——后者由
+  `_single_writer_check` 真会抛 503 决定，不能只信启动标志）/ `open`（两条都不成立，本进程自持不算）/
+  `no_lease`（没 store 可探或探测失败，故意不落在两态里，同 `linkage.unwired`）。旧键 `readonly` 一个字没动。
+- **判据腿 `test_serve_lock_file_name_has_a_single_source` 绊到了自己写的散文**：这条腿对包内全部 `*.py`
+  做 `SERVE_LOCK_NAME in p.read_text()`，**docstring 也在罩住的范围内**——新写的 `write_gate` 散文里手抄了
+  锁文件名字面量，腿立刻红。按既有口径修散文（引用常量名）而不是放宽扫描。⇒ 再次确认：**按名字 grep 的门
+  管不住"只有代码算第二出处"这件事，散文也算**。
+- **参数注入门禁**：MCP 面调 `write_gate` 时**不递** `readonly` 是有意的（MCP 没有 serve 标志，按锁判才是它的真值），
+  于是豁免点从 2 涨到 3。同批把判据从"只钉数量"改成"**数量 + 所在文件一起钉**"，防"删一条真豁免、别处补一条假豁免"
+  凑数静默通过。现读复核（本批当场跑）：`python scripts/check_param_injection.py` ⇒
+  「扫描 100 个文件，98 个带 store/readonly 的模块级函数，现场豁免 **3** 处」，`PI_RC=0`。
+- 残余档点名（**不读成干净**）：`src/autoforge/af_store.py:129-134` 的 `append_jsonl` 仍是一次
+  `fh.write(line + "\n")`，docstring 自证「单行写入不撕裂」。这条自证依赖缓冲不被撕裂、不被并发插入——
+  失败面是"丢一行"（读侧 `read_jsonl_bounded:138-147` 对坏行是**跳过**），比九站那族"整档被抹平"轻一个量级，
+  但**不是一条已经收口的**。登记为待窗项。
+- 顺手修的一处引用漂移：`tests/unit/test_serve_lease_single_writer.py:247` 的交接卡路径写的是
+  `docs/handoff/20261008-AF-MCP异常路径改JSON信封-读数变化说明.md`，盘上真名是
+  `docs/handoff/交接卡_MCP异常路径JSON信封_读数变化_20261008.md`（现读 `ls` 确认）——本批只改引用，不改口径。
+
+### 四、`7f3d210`（裁定 20261008 §二 裁 A①② + Q2=是）与远端对账
+
+- 裁 A①：内省抛异常（含 `ParamDepthError` 超预算，也含任何其它代码 bug）⇒ **拒发** + `fail_open: False` 审计 +
+  owner 可见通知（监护视图常驻指示走 `af_watch` 的 `conflict` 列、`reason=guard_blind`；出向腿走 retained
+  `af/status` 带 `ADM_ERR_INTERNAL`——`publish_failed` 的唯一生产者仍是 `observe_terminal`，没拆 `check_mqtt_writers`）。
+  裁 A②：内省成功却挖不出实体 ⇒ 照旧放行（只读/无实体节点是正常形状）。两档在源码里必须是两条路，
+  所以除行为腿外加了一条 AST 结构腿钉住"合并写法"（在 `except` 里 `entity_ids = []`）复活不了。
+- 判据 `+8` 腿、`1` 腿由"降级放行"改向"拒发"；变异自证 5 档跑在 `git archive HEAD` 副本树（工作树未动，注入前先
+  `ast.parse`）：M1 拆 fail-closed **6 红** / M2 两档混掉 **4 红** / M3 只删通知 **2 红** / M4 内层不再自报 **1 红** /
+  M5 合并写法 **7 红**（结构腿独享）。`GATES_RC=0`，全量 **3476 passed / 53 skipped / 65 subtests**。
+- 两处残余档**同一批投 DCD 求裁**，不自行反转：内层 `af_conflict.py:210-218` 的 `except → ALLOW`（那是它的公开契约，
+  本轮只给它的事件补 `fail_open: True` 自报，并钉成"内层改判时该红"的判据）；`conf.band()` 异常缺省 `auto`
+  （ask 带会被当成可直接下发）。申请件：`关键决策部/inbox/20261008-AF-冲突内省fail-closed落码回执与两处残余档-决策申请.md`。
+  读方口径写在 `docs/handoff/交接卡_冲突守卫改fail-closed_读数变化_20261008.md`：`fail_open` **三档**——
+  键缺位 = 老 AF「没看」，不得读成 `false`，也不得读成「无降级」。
+- 远端对账（当场跑，非引用）：`git push origin master:main` ⇒ `ORIGIN_RC=0`（`488901c..7f3d210`）、
+  `git push nas master` ⇒ `NAS_RC=0`；`git ls-remote` 三方同值
+  `7f3d21054568955fabd20fcccb5bdaead4661eac`（LOCAL = `origin/main` = `nas/master`）。
+
+—— AutoForge 开发 · 2026-10-08
+
