@@ -166,8 +166,10 @@ def _diagnostics(result: ScanResult) -> list[dict[str, Any]]:
     return [_diag(d) for d in result.diagnostics]
 
 
-def _load_ir(ir: Mapping[str, Any]) -> Graph:
+def _load_ir(ir: Mapping[str, Any] | None) -> Graph:
     """从请求体里的 IR（单条或 `{"automations": [...]}`）构造 Graph。"""
+    if not ir:
+        raise IRValidationError("IR 为空")
     return load_graph(dict(ir))
 
 
@@ -515,12 +517,14 @@ def save_graph(
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _blast_radius_of(ir: Mapping[str, Any]) -> dict[str, Any]:
+def _blast_radius_of(ir: Mapping[str, Any] | None) -> dict[str, Any]:
     """复用 v1.3.0 的爆炸半径口径：影响面 = 本 IR 自动化条数。"""
+    if not ir:
+        return {"affected": 0, "limit": blast_radius_limit()}
     try:
         graph = _load_ir(ir)
         affected = len(list(graph))
-    except (IRValidationError, ValueError, KeyError):
+    except (IRValidationError, ValueError, KeyError, TypeError):
         affected = 0
     return {"affected": affected, "limit": blast_radius_limit()}
 
