@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
@@ -298,3 +299,85 @@ def test_serve_lock_file_name_has_a_single_source():
         p.name for p in src.glob("*.py") if SERVE_LOCK_NAME in p.read_text(encoding="utf-8")
     )
     assert files == ["af_flock.py"], f"锁文件名出现了第二个抄本：{files}"
+
+
+# ── 裁定 20261008 §一 B：`/api/health` 的 `write_gate` 必须跟着这道闸的真值 ──────────
+#
+# 旧键 `readonly` 是硬编码 `True`（v1.x 身份声明），语义不动；新键承载运行期档位。
+# 判据口径：**读 `/api/health` 的人得到的档位，必须和真打写端点得到的结果一致**——
+# 分叉的形状正是"health 报一个值、写面做另一件事"。
+
+def _health_write_gate(client: TestClient) -> str:
+    body = client.get("/api/health").json()
+    assert body["readonly"] is True, "旧键是身份声明，不许被运行期档位改写（裁定 §一 驳回 A）"
+    return body["write_gate"]
+
+
+def test_control_writable_serve_reads_open_while_readonly_stays_true(tmp_path):
+    """CONTROL：锁空闲 + 装配期没降级 ⇒ `open`。现场那条"health true + 写面 200"的矛盾读数
+    在这里被拆成两格各说各话：身份声明仍是 true，运行期档位如实 open。"""
+    client = TestClient(build_app(store_root=str(tmp_path), readonly=False))
+    assert _health_write_gate(client) == svc.WRITE_GATE_OPEN
+    assert svc.write_gate(GraphStore(tmp_path)) == svc.WRITE_GATE_OPEN
+
+
+def test_boot_degraded_serve_reads_blocked_and_the_write_face_refuses(tmp_path):
+    """裁定 §一 的主判据：health 报 blocked，且写端点确实 503 —— 两边同读一道闸。"""
+    client = TestClient(build_app(store_root=str(tmp_path), readonly=True))
+    assert _health_write_gate(client) == svc.WRITE_GATE_BLOCKED
+    assert client.post("/api/live/run", json=ARGS).status_code == 503
+
+
+def test_lease_taken_after_boot_still_reads_blocked(tmp_path, gate):
+    """启动后才被别人抢走租约：装配期标志说 open，探测说 blocked ⇒ 必须读 blocked，
+    因为这一格的定义是"现在打写端点会怎样"（`live_run` 里 `_single_writer_check` 真会拒）。"""
+    store = GraphStore(tmp_path)
+    with _other_process_holding(tmp_path):
+        client = TestClient(build_app(store_root=str(tmp_path), readonly=False))
+        assert _health_write_gate(client) == svc.WRITE_GATE_BLOCKED
+        assert client.post("/api/live/run", json=ARGS).status_code == 503
+    assert gate == []
+
+
+def test_nothing_to_probe_reads_no_lease_not_open(tmp_path):
+    """`no_lease` 是"没看"，不是"能写"：没有 store 根可探时报第三档，退化成 open 就是本裁定要禁的假读数。"""
+    assert svc.health()["write_gate"] == svc.WRITE_GATE_NO_LEASE
+    # 但装配期已经知道自己降级 ⇒ 没得探也必须报 blocked（降级不因为探不到就消失）
+    assert svc.write_gate(None, readonly=True) == svc.WRITE_GATE_BLOCKED
+    assert svc.health(None, readonly=True)["write_gate"] == svc.WRITE_GATE_BLOCKED
+
+
+def test_this_processes_own_lease_reads_open(tmp_path):
+    """本进程持锁不能读成 blocked，否则 serve 每次真机下发都被自己的租约拦（闸门装反）。"""
+    lease = FileLock(serve_lock_path(tmp_path))
+    lease.acquire()
+    try:
+        assert svc.write_gate(GraphStore(tmp_path)) == svc.WRITE_GATE_OPEN
+    finally:
+        lease.release()
+
+
+def test_write_gate_is_driven_by_the_flag_not_a_constant(tmp_path):
+    """反空洞：同一函数、同一 store，两档必须给出两个不同读数。"""
+    store = GraphStore(tmp_path)
+    hi = svc.health(store, readonly=True)["write_gate"]
+    lo = svc.health(store, readonly=False)["write_gate"]
+    assert {hi, lo} == {svc.WRITE_GATE_BLOCKED, svc.WRITE_GATE_OPEN}
+
+
+def test_health_route_hands_the_gate_flag_to_the_readout():
+    """结构腿：`/api/health` 必须把 `readonly` 递给 `svc.health`。
+
+    这一格是分叉的根：过去 route 只递 store/presence，`write_gate` 就只能靠探测，
+    "启动降级、锁后来空了"的那个实例会一边 503 一边报 open。静态钉住"接线"这件事。
+    """
+    src = Path(svc.__file__).resolve().parent / "af_api.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and ast.unparse(node.func) == "svc.health"
+        and any(k.arg == "readonly" for k in node.keywords)
+    ]
+    assert calls, "af_api 的 health 调用没把 readonly 递进去（读数与闸会分叉）"

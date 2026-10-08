@@ -55,6 +55,10 @@ __all__ = [
     "MILESTONES",
     "ServiceError",
     "health",
+    "write_gate",
+    "WRITE_GATE_OPEN",
+    "WRITE_GATE_BLOCKED",
+    "WRITE_GATE_NO_LEASE",
     "list_graphs",
     "get_graph",
     "save_graph",
@@ -201,11 +205,51 @@ def _linkage_health(presence: Any) -> dict[str, Any]:
     return linkage_status(presence)
 
 
-def health(store: "GraphStore | None" = None, *, presence: Any = None) -> dict[str, Any]:
+#: `health()["write_gate"]` 的三档（裁定 20261008 §一 B）。取值口径与 `linkage.state` 同族：
+#: 第三档专给"这一面没有闸的信息"，**不许**读成 `open` 或 `blocked` 中的任一个。
+WRITE_GATE_OPEN = "open"
+WRITE_GATE_BLOCKED = "blocked"
+WRITE_GATE_NO_LEASE = "no_lease"
+
+
+def write_gate(store: "GraphStore | None" = None, *, readonly: bool | None = None) -> str:
+    """本面**受闸的写入口**（HTTP 写端点、MCP 真机下发）此刻收不收写。
+
+    管的是单写者租约这一道闸，不是权限/作用域那一道：`light.turn_on` 能不能写设备由
+    `live_allow` 与 Tier-0 守卫决定，这里只回答"这个实例会不会在闸上被拒"。归档类写入
+    （`save_graph`）本来就不在这道闸里。
+
+    - `blocked`：会拒。两条来源任一成立都要报 blocked——装配期就降级（serve 抢不到
+      `serve_lock_path` 那把单写者租约，`_readonly_guard` 对所有写端点回 503），或运行期租约正被**别的进程**持有
+      （`live_run` 里的 `_single_writer_check` 会抛 503，哪怕这个面启动时是 `readonly=False`）。
+    - `open`：两条都不成立，写入口放行。本进程自己持着锁不算"被别人持有"（`_LOCAL_HELD`）。
+    - `no_lease`：无从判断——没有 store 根可探、或探测本身失败，且装配期没给过降级标志。
+      留这一档而不是退成 `open`/`blocked`，是因为把"没看"读成"能写"正是本次裁定要消掉的假读数。
+
+    `readonly` 由知道自己档位的那一面显式传入（serve 从 `af_cli` 拿到）；它只能证明"启动时
+    闸是关的"，闸后来自己开了不代表这个面会恢复收写，所以启动降级一律优先判 `blocked`。
+    """
+    blocked_at_boot = bool(readonly)
+    if store is None:
+        return WRITE_GATE_BLOCKED if blocked_at_boot else WRITE_GATE_NO_LEASE
+    try:
+        held_by_another = FileLock(serve_lock_path(Path(store.root))).held_by_other()
+    except Exception:
+        # 探测失败不当"能写"处理：这一格的作用是让读的人知道自己看到了什么。
+        return WRITE_GATE_BLOCKED if blocked_at_boot else WRITE_GATE_NO_LEASE
+    return WRITE_GATE_BLOCKED if (blocked_at_boot or held_by_another) else WRITE_GATE_OPEN
+
+
+def health(
+    store: "GraphStore | None" = None, *, presence: Any = None, readonly: bool | None = None
+) -> dict[str, Any]:
     """WO-AF-004 打回 4：ok 由真实探测决定，不再硬编码 True。
 
     探 store 可读（list 归档历史）；store 为 None（测试/离线场景）时 ok=True
-    保持向后兼容。readonly 仍是硬编码字面量（v1.x 只读服务层身份声明）。
+    保持向后兼容。`readonly` 仍是硬编码字面量（v1.x 只读服务层身份声明，语义不动）；
+    运行期写闸真值由新键 `write_gate` 承载（裁定 20261008 §一 B）——现场已经出现过
+    "health 报 readonly=true + 写面 200"的矛盾读数，旧键不能改（已有读方按它写判读），
+    所以另开一格说真话。
 
     `presence`（裁定 20261007 §二 丁A）是联动桥本体，由调用面**每次请求时**取来递进来：
     契约 §7.3 的 degrade-flag 档明写「MQTT 断连 → health 报 degraded」，而此前 `/health`
@@ -243,7 +287,10 @@ def health(store: "GraphStore | None" = None, *, presence: Any = None) -> dict[s
         "version": API_VERSION,
         "contract_version": CONTRACT_VERSION,
         "milestones": list(MILESTONES),
+        # v1.x 身份声明：本服务层的能力面（"这是一个可被只读部署的服务"），不是运行期档位。
+        # 运行期写闸真值看下一格 `write_gate`（裁定 20261008 §一 B：旧键语义不动，新键承载真值）。
         "readonly": True,
+        "write_gate": write_gate(store, readonly=readonly),
         "store_ok": store_ok,
         "linkage": _linkage_health(presence),
         "tick_health": tick_health,

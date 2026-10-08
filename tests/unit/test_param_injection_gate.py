@@ -358,4 +358,15 @@ def test_repo_src_is_clean():
     findings, files, exempted = _module().check(ROOT / "src")
     assert findings == []
     assert files >= 90                      # 扫的是整个 src，不是空树假绿
-    assert exempted == 2                    # 目前只有 af_vhass/dual_track 那一一对拍调用
+    # 豁免点 3 处、分布在 2 个文件。数量与**位置**一起钉：只钉数量的话，
+    # "删一条真豁免、在别处补一条假豁免"也能凑够数静默通过。
+    assert exempted == 3
+    marked = sorted(
+        str(p.relative_to(ROOT).as_posix())
+        for p in (ROOT / "src").rglob("*.py")
+        if "param-injection: exempt(" in p.read_text(encoding="utf-8")
+    )
+    assert marked == [
+        "src/autoforge/af_mcp.py",           # 裁定 20261008 §一：MCP 无 serve 的 readonly 可递
+        "src/autoforge/af_vhass/dual_track.py",  # 纯仿真对拍，store 只喂 root 读数（2 处）
+    ], marked

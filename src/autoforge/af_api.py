@@ -479,7 +479,10 @@ def build_app(
             pass
         else:
             presence = af_mqtt_bridge.current_bridge()
-        return svc.health(store, presence=presence)
+        # 裁定 20261008 §一 B：`write_gate` 报的是**这个面**现在收不收写，所以把装配期那个
+        # `readonly` 显式递进去。不递的话只能靠探测锁，而"启动时降级、之后锁空了"这种实例
+        # 会一边回 503 一边报 open——那正是本裁定要消掉的分叉。
+        return svc.health(store, presence=presence, readonly=readonly)
 
     # ── v1.4.0 治理面：待批队列（部署前写操作先入队，人审后回放）──
     # 注意：approve / reject **只在服务层**（此处 + CLI），MCP 面绝不注册。

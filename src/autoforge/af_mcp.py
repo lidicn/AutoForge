@@ -137,7 +137,10 @@ def _t_health(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     # `linkage`——两脸一面有桥、一面没桥，就是本仓反复登记的"多张调用脸对不上"形状。
     from . import af_mqtt_bridge
 
-    return svc.health(store, presence=af_mqtt_bridge.current_bridge())
+    # `write_gate`（裁定 20261008 §一）这一面**不递** `readonly`：MCP 不抢锁、也没有 serve 的
+    # 装配期降级标志，它的真机下发是被 `_single_writer_check` 按锁判的，所以探测锁才是真值。
+    # 生产 serve 持锁时这里如实读成 `blocked`——那是这个面的事实，不是 bug。
+    return svc.health(store, presence=af_mqtt_bridge.current_bridge())  # param-injection: exempt(MCP 无 serve 的 readonly 标志可递，探测锁即真值)
 
 
 def _t_build(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
