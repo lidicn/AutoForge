@@ -53,21 +53,21 @@ on <id> <trigger JSON> [for "<时长>"] [debounce "<时长>"] [name "<名称>"]
 {"type": "state", "entity_id": "binary_sensor.xxx", "to": "on"}
 
 // 时间触发（cron）
-{"type": "time", "at": "22:00:00", "today_only": true}
+{"type": "time", "at": "22:00:00"}
 
 // 太阳触发
 {"type": "sun", "event": "sunset", "offset": "-PT30M"}
 
 // 自定义事件触发
-{"type": "event", "event_name": "my_custom_event"}
+{"type": "event", "event": "my_custom_event"}
 ```
 
 **示例：**
 ```
 on t1 {"type": "state", "entity_id": "binary_sensor.0x00158d0001f34db6_contact", "to": "on"} name "防盗门打开"
-on t2 {"type": "time", "at": "22:00:00", "today_only": true} name "晚上10点"
+on t2 {"type": "time", "at": "22:00:00"} name "晚上10点"
 on t3 {"type": "sun", "event": "sunset", "offset": "-PT30M"} name "日落前30分钟"
-on t4 {"type": "event", "event_name": "custom_event"} name "收到自定义事件"
+on t4 {"type": "event", "event": "custom_event"} name "收到自定义事件"
 ```
 
 ### 3.2 if（条件节点）
