@@ -6690,7 +6690,13 @@ FULL_RC=1
 ### 十、本批没收的，点名不谎报
 
 1. **"收到 presence/device-health 事件落盘"这半格在 NAS 上仍未验**：仓内证到的是"回调按契约形状判收、原子落盘、消费侧从盘上取并注入总线"，对端**真发**一条 presence 事件我没有读数。要等 NAS 合并窗（`mosquitto_sub -t 'ma/#'` 对撞载荷键名，任务 #76）。
-2. **载荷里最要紧的键，节点还写不出条件**：`_trigger_repr`（`af_instance.py:464-473`）对非 Mapping 事件只取 `{entity_id, state}`，而 `BusEvent.custom(name, data)` 走的是 Mapping 分支，所以 `subject`/`members`/`from_state` 能进触发上下文，但**按成员做条件**要等卡2 的变量绑定才能在 DSL 里写出来。卡3 交的是"能触发"，不是"能按成员条件决策"。
+2. **载荷进了总线，节点读不到——所以"按成员触发"这半句验收现在只成立一半**（本条先前写反了，以下是当场实测）：`_trigger_repr`（`af_instance.py:464-473`）的 Mapping 分支只接 `Mapping`，而 `BusEvent` 是 dataclass ⇒ 走的是 `{entity_id, state}` 那条：
+   ```
+   BusEvent.custom('ma_presence', {'subject':'m1','members':[...]}) → _trigger_repr(...)
+   isinstance Mapping: False
+   trigger_repr: {'entity_id': 'event.ma_presence', 'state': ''}
+   ```
+   第二道墙在解析器：`make_resolver`（`af_state.py:157-182`）对 `context.` 只做**平表查找**（`split_namespace` 用 `partition(".")`，`context.trigger.subject` 的 key 是 `"trigger.subject"`，不在 `ctx` ⇒ `KeyError`）。所以 DSL 今天写得出"有 presence 事件就触发"，写不出"妈妈回家才开灯"或"是哪台设备掉的线"。`as_trigger_data()` 铺好的 `subject`/`members`/`from_state`/`trace_id` 只在**触发上下文之外**可读（盘上记录、`/api/health` 的 `inbound`）。按成员/设备取值要等一条能读载荷的绑定语义——那是卡2 的变量绑定面，具体口径（新增 `context.trigger_*` 平键、还是让解析器走嵌套路径）AF 不自决，已按 §十一 交 DCD。
 3. **`serve` 不消费队列**：`grep -cE "start_ticker|\.tick\("` 在 `src/autoforge/af_api.py` 现读 **0** ⇒ HTTP 侧常驻时入向事件只落盘不触发，只有 `forge watch` 会泵。这与 §二之七十四 那条"用户视角到真机没有常驻通道"是同一根问题的两个面，申请已交 DCD（`20261009-AF-用户视角到真机的常驻通道`），不由本批自决。
 4. **没有面板格**：`inbound` 读数目前只在 `/api/health` 的 JSON 里，mimo 面板没有"入向事件"这一格。加格要同时动第一方调用点（UI↔路由门的双向判据），属面板批次。
 5. **契约 §1.3 护栏 3（按 source 限速）未实现**：入向侧也没有 per-source 计数，presence 洪水靠 500 条/类的裁剪兜住容量，兜不住"某一成员疯狂抖动"这种公平性问题。
@@ -6698,5 +6704,19 @@ FULL_RC=1
 7. **§7.4 卡3 那格已从「未落」改成本批落形**，但计划文件整段 §七 是 DCD 未提交原文，AF 只动自记的 §7.4，**该文件继续不提交**（是否代提交归用户）。
 8. **卡2 / 卡5 仍外部阻塞**：MA 三路径 MCP MVP 不在 AF 手里。卡4 另一半（`ma_query` 失败 ⇒ `ADM_ERR_UPSTREAM_TIMEOUT`、`ADM_ERR_*` 三落点）排在卡2 之后，任务 #75 已挂。
 9. 并发会话那批未提交改动（`af_api.py`/`af_auth.py`/`docker/*`/`ui-user-mimo/*`）与四条杂散文件（`docker-compose.api.yml.tmp`、`issued_tokens.json.tmp`、`issued_tokens_clean.json`、`docker/docker-compose.api-test.yml`）**不在本批提交内**；`docs/audit/参考/FFL-200题测试提示词.md` 那处来源不明的令牌掩码同样排除在外。第九节那 2 条鉴权红与第十节第 3 点的测试隔离现象都归那批，不由 AF 代收。
+
+### 十一、本批的一处自我订正（已推的文字里有一句是错的）＋ 一条新交 DCD 的申请
+
+§十 第 2 条先前写的是"`BusEvent.custom(name, data)` 走的是 Mapping 分支，所以 `subject`/`members`/`from_state` 能进触发上下文"。**这句写反了**，且已随 `64308b5` 推到 GitHub。当场实测（`af_instance.py:464-473` + `af_state.py:157-182`）：
+
+```
+BusEvent.custom('ma_presence', {'subject':'m1','members':[...]}) → _trigger_repr(...)
+isinstance Mapping: False
+trigger_repr: {'entity_id': 'event.ma_presence', 'state': ''}
+```
+
+`BusEvent` 是 dataclass 不是 `Mapping` ⇒ 走 `{entity_id, state}` 那条，载荷全丢；第二道墙是解析器对 `context.` 只做平表查找（`split_namespace` 用 `partition(".")`，`context.trigger.subject` 的键是 `"trigger.subject"` ⇒ `KeyError`）。所以计划 §7.2 卡3 那句"自动化可按**成员**/设备状态触发"目前**只成立一半**：能按事件类触发，不能按是谁/是哪台分支。两份架构文档（知识文档 §3.4 与第 16 章第 11 条、架构说明 §十八 B.12）写的口径是对的，错的只有执行记录这一句，已按上面的实测改写。
+
+这半格不是"我再补三行就完"：它要么给 DSL 新增 `context.*` 公开键，要么给表达式求值层加嵌套路径（那条线有第十七轮 F6 / 第二十轮 F2 的预算事故形状），要么把"按成员"从卡3 的验收文字里摘给卡2。三样都改的是对外语义或验收边界 ⇒ **AF 不自决**，已递交：`E:\NAS\关键决策部\inbox\20261009-AF-入向事件载荷怎么进DSL-决策申请.md`（编号 `20261009-AF-入向事件载荷怎么进DSL`，三档甲/乙/丙 + 两个问题，Q1 选档、Q2 键名是否按契约 §1.2 直译）。未裁之前 `_trigger_repr` 与 `make_resolver` 都不动。
 
 —— AutoForge 开发 · 2026-10-09 · 基准 HEAD `2d92bb1`

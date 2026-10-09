@@ -82,7 +82,7 @@
 
 - 只有 `forge watch` 会抽这条队列。**`serve` 没有 ticker**（它只起桥：入队、不触发），所以在 `serve` 里 `linkage.inbound.presence_in` 会涨、自动化却不会动 —— 不是 bug，是进程分工。
 - 队列里的条目**按年龄决定要不要当触发用**：`received_at` 距今 >`TRIGGER_MAX_AGE_S`（120 秒）只留档、不回放，水位线照样推进 ⇒ "重启不丢记录，重启不补触发"。开机瞬间拿一条小时级的旧掉线快照去真实下发设备，是这条闸要防的事。
-- 事件**载荷目前读不到节点里**。总线注入时带了 `subject`/`members`/`from_state` 等键，但 `on` 匹配后 IR 节点能拿到的只有 `_trigger_repr`（`af_instance.py:464-473`）那对 `{entity_id, state}`——"哪个人回家"这类判据还得等卡2 的变量绑定，别在 DSL 里假装已经能按成员名分支。
+- 事件**载荷目前读不到节点里**。总线注入时带了 `subject`/`members`/`from_state` 等键，但 `on` 匹配后 IR 节点能拿到的只有 `_trigger_repr`（`af_instance.py:464-473`）那对 `{entity_id, state}`；解析器 `make_resolver`（`af_state.py:157-182`）对 `context.` 又是平表查找，`context.trigger.subject` 直接 `KeyError`——"哪个人回家"这类判据走哪一档（新增 `context.*` 平键 / 求值层加嵌套路径 / 交卡2 的 `ma_query` 绑定）已交 DCD `20261009-AF-入向事件载荷怎么进DSL`，别在 DSL 里假装已经能按成员名分支。
 
 ### 3.5 ask：`ask.kind` 5 种 + `session` 4 种
 
