@@ -74,7 +74,7 @@
 
 - **作用域**：实例全局，跨求值段持久，实例销毁时释放；实例间完全隔离
 - **类型**：强制显式（`numeric`/`boolean`/`string`/`enum`），与实体状态类型系统对齐，**禁止隐式转换**
-- **命名空间**：`entity.*`（只读快照）｜`vars.*`（可写私有）｜`context.*`（系统内置：`instance_id`/`trigger_time`）—— 禁止命名冲突
+- **命名空间**：`entity.*`（只读快照）｜`vars.*`（可写私有）｜`context.*`（系统内置：`instance_id`/`trigger_time`/`trigger`，另有裁定 20261009 §四 甲补的三枚触发平键 `trigger_subject`/`trigger_kind`/`trigger_entity_id`，名单真源是 `af_instance.TRIGGER_FLAT_KEYS`）—— 禁止命名冲突
 
 ---
 

@@ -36,6 +36,7 @@ __all__ = [
     "Instance",
     "InstanceManager",
     "DEFAULT_TTL_SECONDS",
+    "TRIGGER_FLAT_KEYS",
 ]
 
 CREATED = "created"
@@ -260,6 +261,7 @@ class InstanceManager:
             # 与项目红线「表达式不读墙钟、时间必须可测」相悖。虚拟时间源下现在完全确定。
             "trigger_time": self.clock.now().isoformat(),
             "trigger": _trigger_repr(trigger_event),
+            **_trigger_flat_keys(trigger_event),
         }
         # 初始化声明过的实例变量
         for name, decl in automation.vars.items():
@@ -471,6 +473,38 @@ def _trigger_repr(event: Any) -> Any:
     if entity_id is not None:
         return {"entity_id": entity_id, "state": state}
     return repr(event)
+
+
+#: 裁定 20261009 §四 甲：自定义事件在 `context` 上的三枚平键（键名即公开词汇）。
+TRIGGER_FLAT_KEYS: tuple[str, ...] = ("trigger_subject", "trigger_kind", "trigger_entity_id")
+
+
+def _trigger_flat_keys(event: Any) -> dict[str, str]:
+    """把触发事件的主标识摊成三枚平键，供 `context.trigger_*` 直接读（表达式解析器不动）。
+
+    取值全部**直译**契约 §1.2 的既有键名，不新造字段：`entity_id`→`trigger_entity_id`、
+    事件主标识→`trigger_subject`（裁定那格写的是 device-health=`entity_id`、presence=`member_id`，
+    所以有 `entity_id` 时主标识就是它；没有才落 `subject`——在场事件里 `subject` 正是 member_id 串）、
+    事件类型→`trigger_kind`。对端没报的那一格落成空串——三枚键必须**恒定在场**，
+    否则 `make_resolver` 对缺失的 `context.*` 抛「未知系统变量」，一条写了新词汇的自动化会在运行期整段失败。
+    """
+    if event is None:
+        return dict.fromkeys(TRIGGER_FLAT_KEYS, "")
+    if isinstance(event, Mapping):
+        payload: Mapping[str, Any] = event
+        bus_entity = ""
+    else:
+        raw = getattr(event, "payload", None)
+        payload = raw if isinstance(raw, Mapping) else {}
+        # 自定义事件的总线主体是 `event.<名>`，它不是设备 entity_id，不能拿来填平键。
+        is_custom = getattr(event, "event", None) is not None
+        bus_entity = "" if is_custom else str(getattr(event, "entity_id", "") or "")
+    entity_id = str(payload.get("entity_id") or "") or bus_entity
+    return {
+        "trigger_entity_id": entity_id,
+        "trigger_subject": entity_id or str(payload.get("subject") or ""),
+        "trigger_kind": str(payload.get("kind") or ""),
+    }
 
 
 def _initial_value(decl: VarDecl) -> Any:

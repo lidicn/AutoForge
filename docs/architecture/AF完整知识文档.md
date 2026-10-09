@@ -82,7 +82,7 @@
 
 - 只有 `forge watch` 会抽这条队列。**`serve` 没有 ticker**（它只起桥：入队、不触发），所以在 `serve` 里 `linkage.inbound.presence_in` 会涨、自动化却不会动 —— 不是 bug，是进程分工。
 - 队列里的条目**按年龄决定要不要当触发用**：`received_at` 距今 >`TRIGGER_MAX_AGE_S`（120 秒）只留档、不回放，水位线照样推进 ⇒ "重启不丢记录，重启不补触发"。开机瞬间拿一条小时级的旧掉线快照去真实下发设备，是这条闸要防的事。
-- 事件**载荷目前读不到节点里**。总线注入时带了 `subject`/`members`/`from_state` 等键，但 `on` 匹配后 IR 节点能拿到的只有 `_trigger_repr`（`af_instance.py:464-473`）那对 `{entity_id, state}`；解析器 `make_resolver`（`af_state.py:157-182`）对 `context.` 又是平表查找，`context.trigger.subject` 直接 `KeyError`——"哪个人回家"这类判据走哪一档（新增 `context.*` 平键 / 求值层加嵌套路径 / 交卡2 的 `ma_query` 绑定）已交 DCD `20261009-AF-入向事件载荷怎么进DSL`，别在 DSL 里假装已经能按成员名分支。
+- 事件**载荷按"哪台设备"这一格读得进节点，按"哪个成员"这一格还读不进**（裁定 20261009 §四 甲/直译已落地）：`spawn`（`af_instance.py:264`）除 `{entity_id, state}` 外再摊三枚平键进 `context` —— `trigger_entity_id` / `trigger_subject` / `trigger_kind`，取值逐字直译契约 §1.2 的键名（device-health 有 `entity_id` 就用它当主标识；presence 没有 `entity_id`，主标识落 `subject`，那一格正是 `member_id` 串），名单真源 `TRIGGER_FLAT_KEYS`（`af_instance.py:479`）。对端没报的那一格落**空串**：三枚键必须恒定在场，否则 `make_resolver`（`af_state.py:157-182`）对缺失的 `context.*` 抛 `KeyError`，一条用了新词汇的自动化会整段失败。**解析器仍是平表**，`split_namespace` 用 `partition(".")` ⇒ `context.trigger.members` 这类嵌套路径读不出，所以**别在 DSL 里假装能按成员名分支**（那半边按裁定留给乙或卡2 的 `ma_query` 绑定）。能写的形状举例：`if context.trigger_entity_id == "switch.ac_plug"` —— 判据是"读出的值真会改分支"，不是"读得出"。
 
 ### 3.5 ask：`ask.kind` 5 种 + `session` 4 种
 
@@ -490,7 +490,7 @@ PYTHONPATH=src <py313> -m pytest tests -q
 8. 收件箱投递（计划 §七 卡1）三管线（编译/仿真/NL）与 fail-closed 已绿，但**`mosquitto_sub` 那一半验收要在 NAS 上做**，属合并窗动作，本批只到"上线字节由库侧生成并被测试反解核对"为止。同一条未接的还有契约 §1.3 护栏 3（按 source 限速）与编译期的 >500 字符检查——长度上限现在由库侧 `_len_bounded` 把，编译期不提前报。
 9. publish 失败目前只归一个码（`ADM_ERR_BROKER_UNREACHABLE`，原始 `rc=…` 写在 message 里）：ACL 拒绝与 broker 不可达在 AF 侧不做区分，是否要独立码已列为 DCD 待问项。
 10. 计划 §七 卡3（订阅 `ma/presence`/`ma/device-health` 并落独立持久队列）仓内半边已绿，**没收的三样点名写出**：① 对端实际载荷是否逐键符合契约 §1.2 那两行，只有 NAS 合并窗的 `mosquitto_sub` 能对撞，仓内证到的是"契约要求的必填项缺了就拒收并带 `ADM_ERR_*`"；② 面板上没有"入向联动"这一格，唯一读数面是 `/api/health` 的 `linkage.inbound`；③ 队列没有 per-source 限速（与第 8 条同一护栏）。
-11. 入向事件的**载荷读不进 DSL**：总线注入时带了 `subject`/`members`/`from_state`，但 `_trigger_repr`（`af_instance.py:464-473`）给节点的只有 `{entity_id, state}` ⇒ 现在只能"有 presence 事件就触发"，不能按成员/房间/哪台设备分支。按成员取值要等卡2 的变量绑定。
+11. 入向事件的**载荷按设备读得进、按成员数组仍读不进**（裁定 20261009 §四 甲已落地）：`spawn`（`af_instance.py:264`）除 `{entity_id, state}` 外再摊三枚平键进 `context`（`trigger_entity_id`/`trigger_subject`/`trigger_kind`，真源 `TRIGGER_FLAT_KEYS` `:479`），所以"哪台设备掉线"这一格现在能写进 DSL 分支；`_trigger_repr`（`af_instance.py:466-475`）本身一字未动。仍堵的是结构半边：`make_resolver`（`af_state.py:157-182`）是平表、`split_namespace` 用 `partition(".")` ⇒ `context.trigger.members` 这类嵌套路径读不出，"是妈妈回家才开灯"要等乙或卡2 的 `ma_query` 变量绑定。
 12. `serve` 只入队、**不抽队**（该进程没有 ticker）：`linkage.inbound.presence_in` 会涨而自动化不动。分工不是缺陷，但读健康的人要知道这一格在 `serve` 里不代表"触发链活着"。
 
 ---
@@ -544,4 +544,5 @@ FAILED tests/unit/test_ui_api_paths_gate.py::test_all_trees_of_this_repo_are_in_
 | 2026-10-09 | 同上，保真复核 | 四项清单与注册表逐项对撞（31/90/18/40 全等）；§七 安全闸表 42 名收成 40 键，并写明 `IR_SCHEMA` 是错误知识分类、`L2_NEEDS_CANARY` 发诊断却未注册；§十二 时区键补 `HOMESDK_TZ`（规范）与全序 |
 | 2026-10-09 | HEAD `e5b3fd5` + 收件箱批次 | 计划 §七 卡1 落地：`adapter: inbox` 三动作（`speak`/`notify`/`tv`）走 `af_mqtt_bridge.inbox_publish`，载荷 schema 直接读 `homesdk.presence` 函数签名、不在 AF 重抄；`dry_run` 零字节上线；桥缺席＝缺凭据 ⇒ `ADM_ERR_AUTH_REQUIRED`。§七 补 `classify_action` 的「动作名不带点退回适配器名」段落（这是本批由漂移测试抓出的真 bug：DSL 会把 `inbox.speak` partition 成 `adapter=inbox`+`action=speak`，只按动作名判会落进未知 domain 的 L2 缺省档，扫描阶段就红）；§八 补收件箱在预演档下的口径。同时修掉 publish `rc` 被丢弃（bug D）：`rc≠0` 现在计 `publish_errors`、置 degraded、重发 status |
 | 2026-10-09 | HEAD `2d92bb1` + 联动入向批次 | 计划 §七 卡3 落地（AF 侧半边）：桥订 `ma/presence` + `ma/device-health`，入向事件落**独立持久队列** `af_linkage_feed.LinkageFeed`（`{store}/linkage_events/{kind}/{13位毫秒}-{event_id}.json`，每类各 500 封顶 + 24h TTL，都裁最旧）；触发**复用 `on event`**（`ma_presence`/`ma_device_health` 两个事件名，不立第六类 trigger）；收/消费分线程——paho 回调只判形状＋原子写，常驻 tick 线程经 `af_live.pump_linkage` 抽水位线注总线（`EventBus` 没有锁），"重启不丢记录、不补触发"由 `TRIGGER_MAX_AGE_S=120` 那档分开。`/api/health` 的 `linkage.inbound` 是这一路的唯一读数面（`subscribed`/`presence_in`/`device_health_in`/`rejected`/`feed`，未新增路由）。顺手关掉 HEAD 上就红的 4 条计数棘轮（有界缓存 125→129、路由 85→87、routes 88→90、mimo 20→22），并给 `_cooldown_pending` 补上带理由的就地豁免 |
+| 2026-10-09 | HEAD `925f56e` + 平键批次 | 裁定 20261009 §四 甲/直译落地：§3.4 第三条口径改成"按设备读得进、按成员数组读不进"，`context` 新增 `trigger_entity_id`/`trigger_subject`/`trigger_kind` 三枚平键（名单真源 `af_instance.TRIGGER_FLAT_KEYS`，缺失格落空串而不是缺席），解析器 `make_resolver` 与 `_trigger_repr` 一字未动；判据两树 12+17 绿、相关七腿 983 passed、变异两枚分别杀 3 条与 7 条 |
 | 2026-09-24 | 当时 HEAD | 初版（端到端实测后） |

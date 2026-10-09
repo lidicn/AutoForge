@@ -286,3 +286,73 @@ def test_make_linkage_feed_keeps_two_separate_directories(tmp_path):
     feed = make_linkage_feed(store_root=tmp_path / "store")
     assert feed.root == tmp_path / "store" / "linkage_events"
     assert feed.root != (tmp_path / "store" / "insight_proposals")
+
+
+# ── 裁定 20261009 §四 甲：平键走完真链路（桥 → 队列 → 总线 → DSL 分支）──
+def _branch_runtime(event_name: str, want: str):
+    """`on event.<name>` 之后按 `context.trigger_entity_id` 分岔——裁定举的那个用例本身。"""
+    graph = load_graph({"automations": [{
+        "ir_version": "0.2.1",
+        "id": "pick_backup",
+        "name": "掉的若是这台就走备用那条",
+        "version": 1,
+        "mode": "single",
+        "nodes": [
+            {"id": "o", "kind": "on", "trigger": {"type": "event", "event": event_name}},
+            {"id": "i", "kind": "if", "expr": {
+                "op": "eq",
+                "left": {"var": "context.trigger_entity_id", "type": "string"},
+                "right": {"const": want},
+            }},
+            {"id": "d_main", "kind": "do", "adapter": "mock", "action": "light.turn_on",
+             "params": {"entity_id": "light.b"}},
+            {"id": "d_backup", "kind": "do", "adapter": "mock", "action": "light.turn_off",
+             "params": {"entity_id": "light.b"}},
+            {"id": "p", "kind": "pass"},
+        ],
+        "edges": [
+            {"from": "o", "to": "i", "kind": "then"},
+            {"from": "i", "to": "d_main", "kind": "then"},
+            {"from": "i", "to": "d_backup", "kind": "no"},
+            {"from": "d_main", "to": "p", "kind": "then"},
+            {"from": "d_backup", "to": "p", "kind": "then"},
+        ],
+    }]})
+    runtime = build_runtime(graph)
+    runtime.adapters.register(MockAdapter())
+    return runtime
+
+
+def test_device_health_flat_entity_decides_the_dsl_branch(tmp_path):
+    bridge, _ = _bridge(tmp_path)
+    bridge.handle_message(None, None, _msg(DEVICE_HEALTH_TOPIC, HEALTH_OK))
+    runtime = _branch_runtime("ma_device_health", "sensor.plug")
+
+    assert af_live.pump_linkage(runtime, bridge) == 1
+    assert [a for a, _ in runtime.adapters.get("mock").calls] == ["light.turn_on"]
+    ctx = runtime.instances.all()[0].ctx.context
+    assert ctx["trigger_entity_id"] == "sensor.plug"
+    assert ctx["trigger_subject"] == "sensor.plug"      # 裁定：device-health 的主标识取 entity_id
+    assert ctx["trigger_kind"] == KIND_DEVICE_HEALTH
+
+
+def test_a_different_device_takes_the_other_branch(tmp_path):
+    """判据不是"读得出"，是"读出的值真会改分支"——否则平键等于一件摆设。"""
+    bridge, _ = _bridge(tmp_path)
+    bridge.handle_message(None, None, _msg(DEVICE_HEALTH_TOPIC, {**HEALTH_OK, "entity_id": "sensor.fridge"}))
+    runtime = _branch_runtime("ma_device_health", "sensor.plug")
+
+    assert af_live.pump_linkage(runtime, bridge) == 1
+    assert [a for a, _ in runtime.adapters.get("mock").calls] == ["light.turn_off"]
+
+
+def test_presence_flat_keys_reach_the_instance(tmp_path):
+    bridge, _ = _bridge(tmp_path)
+    bridge.handle_message(None, None, _msg(PRESENCE_TOPIC, PRESENCE_OK))
+    runtime = _presence_runtime()
+
+    assert af_live.pump_linkage(runtime, bridge) == 1
+    ctx = runtime.instances.all()[0].ctx.context
+    assert ctx["trigger_entity_id"] == ""               # 契约 §1.2 的 presence 行没有 entity_id
+    assert ctx["trigger_subject"] == "dad，mom"          # 主标识是 member_id 串
+    assert ctx["trigger_kind"] == KIND_PRESENCE

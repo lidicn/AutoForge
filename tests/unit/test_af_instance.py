@@ -6,11 +6,13 @@ import json
 
 import pytest
 
+from autoforge.af_bus import BusEvent
 from autoforge.af_instance import (
     ACTIVE,
     CANCELLED,
     DONE,
     SUSPENDED,
+    TRIGGER_FLAT_KEYS,
     IllegalTransition,
     InstanceManager,
 )
@@ -133,3 +135,43 @@ def test_vars_type_is_enforced(manager):
     assert inst.ctx.vars["counter"] == 3.0
     with pytest.raises(TypeError):
         manager.set_var(inst, "counter", "abc")
+
+
+# ── 裁定 20261009 §四 甲：`context.trigger_*` 三枚平键 ──────────────────
+
+
+def test_three_flat_keys_are_always_present(manager):
+    """手动触发（不给事件）也要在场：`make_resolver` 对缺失的 `context.*` 抛「未知系统变量」，
+    少一枚键就等于一条用了新词汇的自动化在手动那一档整段失败。"""
+    ctx = manager.spawn(load_automation(AUTO)).ctx.context
+    assert set(ctx) >= set(TRIGGER_FLAT_KEYS)
+    assert [ctx[key] for key in TRIGGER_FLAT_KEYS] == ["", "", ""]
+
+
+def test_state_event_fills_the_entity_and_leaves_the_old_shape(manager):
+    inst = manager.spawn(load_automation(AUTO), trigger_event=BusEvent.of("binary_sensor.motion", "on"))
+    ctx = inst.ctx.context
+    assert ctx["trigger_entity_id"] == "binary_sensor.motion"
+    assert ctx["trigger_subject"] == "binary_sensor.motion"
+    assert ctx["trigger_kind"] == ""
+    assert ctx["trigger"] == {"entity_id": "binary_sensor.motion", "state": "on"}
+
+
+def test_custom_event_takes_the_contract_entity_id_not_the_bus_subject(manager):
+    """`event.<名>` 是总线主体、不是设备，不许漏进平键；主标识按裁定落 `entity_id`。"""
+    event = BusEvent.custom(
+        "ma_device_health",
+        {"kind": "device_health", "subject": "light.desk", "entity_id": "sensor.plug"},
+    )
+    ctx = manager.spawn(load_automation(AUTO), trigger_event=event).ctx.context
+    assert ctx["trigger_entity_id"] == "sensor.plug"
+    assert ctx["trigger_subject"] == "sensor.plug"
+    assert ctx["trigger_kind"] == "device_health"
+
+
+def test_presence_snapshot_has_no_device_entity(manager):
+    event = BusEvent.custom("ma_presence", {"kind": "presence", "subject": "dad，mom"})
+    ctx = manager.spawn(load_automation(AUTO), trigger_event=event).ctx.context
+    assert ctx["trigger_entity_id"] == ""
+    assert ctx["trigger_subject"] == "dad，mom"
+    assert ctx["trigger_kind"] == "presence"
