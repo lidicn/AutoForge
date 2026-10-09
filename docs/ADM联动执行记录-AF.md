@@ -6857,4 +6857,30 @@ python -m pytest tests/unit/test_serve_lease_single_writer.py::test_write_gate_i
 
 **结论按口径分开写**：本轮**没有新增红**（红格数与 §二之七十六 相同、来源相同），但**整树仍不绿**，卡的就是 §二 那 2 条 `fake-ok-const`。所以"门绿"这句在裁定回来之前不能写进任何验收文字。
 
-—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `aec8a23`
+### 八、顺手把计划 §7.4 卡4 那行"半边已落"换成能核对的三格读数
+
+同一批归属纪律下的第二处过期文字。卡4 写的是"降级语义：`ma_query` 失败 ⇒ `ADM_ERR_UPSTREAM_TIMEOUT`；`inbox` 发布失败 ⇒ degraded + `ADM_ERR_BROKER_UNREACHABLE`；不静默"，三落点（status `reasons[]` / HTTP / MCP 响应体）逐格现读：
+
+| 落点 | 现读（HEAD） | 定性 |
+|---|---|---|
+| status `reasons[]` | `af_mqtt_bridge.py:627` `mark_degraded(ADM_ERR_BROKER_UNREACHABLE)`、`:633` 载荷带 `code` | 已带码 |
+| MCP 响应体 | `git show HEAD:src/autoforge/af_mcp.py \| grep -c ADM_ERR` ⇒ **14** | 已带码（裁定 20261007 §二 戊A 那批） |
+| HTTP 响应体 | `git show HEAD:src/autoforge/af_api.py \| grep -c ADM_ERR` ⇒ **0**（工作树同读数） | **未落**，且落点文件正躺并发 WIP ⇒ 归属纪律挡住 |
+
+另外那半句"`ma_query` 失败 ⇒ `ADM_ERR_UPSTREAM_TIMEOUT`"**没有承载体**：`grep -rn "ma_query" src/autoforge --include=*.py` ⇒ **0 命中**。这不是漏实现，是节点本身属卡2（前置 = MA 三路径 MCP MVP，外部阻塞），所以 `UPSTREAM_TIMEOUT` 在 AF 侧今天无处可挂。
+
+已交付那半边的腿当场跑过：
+
+```
+python -m pytest tests/unit/test_inbox_adapter.py tests/unit/test_af_mqtt_bridge.py -k "degraded" -v
+→ collected 76 items / 71 deselected / 5 selected → 5 passed in 0.39s      RC=0
+  test_degraded_status_carries_the_code_when_inbox_is_refused
+  test_recovered_delivery_clears_degraded_and_readvertises_caps
+  test_event_publish_failure_flips_retained_status_to_degraded_with_a_code
+  test_degraded_status_clears_when_the_transport_returns
+  test_degraded_announcement_that_also_fails_does_not_reach_the_execution_chain
+```
+
+任务表里 #75 的口径也跟着改：原先叫"落卡4"，容易被读成"AF 少写几行就行"；现改成"剩余两格：`ma_query`（等卡2）与 HTTP 响应体（等 `af_api.py` 归属）"。
+
+—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `31b6243`
