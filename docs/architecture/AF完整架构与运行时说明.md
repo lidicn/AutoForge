@@ -1,255 +1,471 @@
 # AutoForge 完整架构与运行时说明
 
-> 本文档基于 2026-09-24 实测验证，不是理论设计。
-
-## 一、一句话总结
-
-**AF 是一个智能家居自动化的"设计+运行"一体化平台**：Agent 通过 MCP 接口设计自动化（自然语言→IR→安全闸→仿真→入队），approve 后由 `forge watch` 常驻运行时引擎订阅 HA 事件流，实时驱动自动化执行。
-
----
-
-## 二、核心组件
-
-### 2.1 两个进程
-
-| 进程 | 命令 | 职责 | 碰真机吗 |
-|------|------|------|---------|
-| **HTTP/MCP 服务** | `forge serve --host 0.0.0.0 --port 8787 --store-root /data` | 设计/编译/仿真/MCP 接口 | ❌ 不碰真机 |
-| **运行时 daemon** | `forge watch <ir.json> --confirm --ha-url ... --live-allow ...` | 常驻订阅 HA 事件流，实时驱动自动化 | ✅ 真操作 HA |
-
-### 2.2 关键路径
-
-```
-E:\NAS\AutoForge\src\autoforge\
-├── af_draft.py          # 意图 JSON → IR（新，MiMo 方案）
-├── af_apply.py          # 合并 build+simulate+save（新，MiMo 方案）
-├── af_mcp.py            # MCP 接口层（HTTP）
-├── af_api.py            # HTTP REST API
-├── af_cli.py            # 命令行工具
-├── af_service.py        # 服务层（build/simulate/submit_pending/approve）
-├── af_runtime.py        # Runtime 引擎（事件驱动）
-├── af_store.py          # GraphStore 版本化存储
-├── af_pending.py        # 待批队列
-├── af_scanner.py        # 静态安全闸（StaticScanner）
-├── af_ir/               # IR 模型与节点定义
-└── af_adapters.py       # HA 适配器（HAAdapter/HTTPAdapter/MockAdapter）
-```
+> **更新时间**：2026-10-09　**鲜度基准**：`master` HEAD `e5b3fd5`（本文每一条读数都在这一版代码上当场重取，不引用旧版结论）
+> **本文回答什么**：AF **怎么搭的、怎么跑的、每道闸在哪个文件哪一行**。用法、清单、命令速查在《AF完整知识文档.md》。
+> **两文档分工**（避免同一事实长两处、改一处漏一处）：
+> - 本文 = 机制与不变量（档位语义、闸门位置、失败面、出向唯一生产者）。
+> - 知识文档 = 面与清单（MCP 31 工具表、HTTP 路由表、CLI 18 命令、IR 语言参考、安全闸 40 项）。
+> **取证口径**：所有 `file:line` 均可用 `git show HEAD:<file>` 复核；行数是当场用注册表/枚举读出来的（`len(TOOLS)=31`、`len(CHECKS)=40`、`len(app.routes 含 methods)=90`、`forge --help` 命令表 18 条），不是手抄。
 
 ---
 
-## 三、完整链路：从自然语言到真机执行
+## 〇、这一版重写了什么：旧文失效点逐条
 
-### 3.1 设计阶段（forge serve）
+旧版基于 2026-09-24，此后三周内下列各条**已被代码推翻**，逐条给现读：
 
-```
-用户自然语言
-    ↓
-af_draft(intent JSON)     # 意图 → IR，返回 ref（不回传 IR 全文）
-    ↓
-af_apply(ref, stage="check")   # 只过安全闸（dry run）
-    ↓
-af_apply(ref, stage="simulate") # 安全闸 + 仿真回放（假事件）
-    ↓
-af_apply(ref, stage="save")    # 安全闸 + 仿真 + 入待批队列
-    ↓
-待批队列（/data/pending/*.json）
-    ↓
-人工 approve（CLI: pending approve --root /data <op_id>）
-    ↓
-保存到 GraphStore（版本化归档）
-```
+| 旧文断言 | 现状（当场读数） | 证据 |
+|---|---|---|
+| 「MCP 工具 13 个」 | **31 个**（`len(af_mcp.TOOLS)=31`） | `src/autoforge/af_mcp.py:463` |
+| 「`af_adapters.py` 单文件」 | 已是包 `af_adapters/`（base/ha/http/mock） | `ls src/autoforge/af_adapters` |
+| 「`af_self_repair.py`」 | **该文件不存在**（自修正闭环改由 `af_intervention`/`af_insight_queue`/`af_proposal` 承载） | 文件读不到 |
+| 「IR 节点 7 种：on/if/do/ask/wait/pass/**emit**」 | 8 种：on/if/do/ask/wait/**set**/pass/**group**；`emit` 是 v0.3.0 已实现的**节点字段**，不是 kind | `src/autoforge/af_ir/models.py:75`、`:103-104` |
+| 「边 6 种：then/**true**/**false**/on_error/on_timeout/yes/no」 | 7 种：then/yes/no/**default**/on_timeout/**on_cancel**/on_error，且有强制优先级 | `af_ir/models.py:85`、`:88-95` |
+| 「没有 CI（.github/workflows 不存在）」 | `.github/workflows/ci.yml` 存在并在跑 | `ls .github/workflows` |
+| 「镜像 `autoforge-api:nonroot`；源码挂卷 `/app/src`」 | 镜像 `autoforge-api:latest`，`src` **已烘进镜像**、运行时不挂源码卷 | `git show HEAD:docker/docker-compose.api.yml`（image 行 + 被注释掉的 src 卷） |
+| 「`AUTOFORGE_LIVE_ENABLED=1`」 | 仓里 compose 缺省 **`=0`**（真机下发默认关），**NAS 现场注入成了 1** —— 两边读数会相反：`GET /api/live/status` 在 NAS 读 `enabled=true`，仓内缺省档读 `false`。以宿主机 env／`.env` 为准，别拿仓内默认值当部署事实 | `docker/docker-compose.api.yml:45`（`${AUTOFORGE_LIVE_ENABLED:-0}`）× NAS `/api/live/status`（§六） |
+| 「`AF_REQUIRE_AUTH=1` 强制鉴权」 | 该键**已废弃**；缺省即 fail-closed，逃生阀换名为 `AF_ALLOW_NOAUTH` | `src/autoforge/af_api.py:360-383` |
+| 「协调锁在 `/app/.forge/watch.lock`」 | 两把不同的锁：单写者租约 `{store_root}/.serve.lock`，watcher 协调锁 `{persist_dir}/watch.lock`（+ `watch.lock.info` sidecar） | `af_flock.py:29`、`af_cli.py:599`、`af_service.py:2463-2464` |
+| 「webui 前端未构建，根路径 404」 | 两棵 dist 已挂载同源：控制台 `/ui`、用户视角 `/mimo` | `docker/docker-compose.api.yml` volumes、`af_api.py:265` |
+| 「全量回归 1107 passed」 | HEAD 整树跑批 **3479 passed / 5 skipped* 53 / 5 failed**（5 条红见 §十八，全部是"钉住的读数漂移未重钉"这一族） | 本文 §十八 原样读数 |
 
-### 3.2 运行阶段（forge watch）
-
-```
-HA 设备状态变化
-    ↓
-HA SSE 事件流（/api/stream）
-    ↓
-forge watch 订阅事件
-    ↓
-Runtime 评估触发条件
-    ↓
-匹配到自动化 → 执行 do 节点
-    ↓
-HAAdapter 调用 HA 服务（light.turn_on 等）
-    ↓
-真机动作执行 ✅
-```
+旧文里那份 **MCP 令牌明文**（此处连前缀都不复述，记作 `af****`）已从文档删除：口令类字面量不入库、不出境，运行侧真值只在 `AUTOFORGE_TOKENS`（`af_secrets.py:20-26` 的读取顺序）。**旧值已在 git 历史里，按已泄漏处理，该换。** 同一值在 `docs/audit/参考/FFL-200题测试提示词.md` 也写过明文，同批改成 `$AF_MCP_TOKEN`。
 
 ---
 
-## 四、三种模式对比
+## 一、三面、两态、两个常驻进程
 
-| 模式 | 命令 | 做了什么 | 碰真机吗 | 用途 |
-|------|------|---------|---------|------|
-| **check** | `af_apply(ref, stage="check")` | 只过 build 安全闸 | ❌ | 快速验证语法/安全 |
-| **simulate** | `af_apply(ref, stage="simulate")` | 安全闸 + 假事件仿真 | ❌ | 逻辑验证 |
-| **save** | `af_apply(ref, stage="save")` | 安全闸 + 仿真 + 入待批队列 | ⏳ 待 approve | 提交审核 |
-| **watch** | `forge watch <ir.json> --confirm` | 常驻监听 HA 事件，实时驱动 | ✅ 真操作 | 生产运行 |
+### 1.1 三个调用面（同一份服务层真相）
 
----
+| 面 | 入口 | 传输 | 谁在用 |
+|---|---|---|---|
+| **MCP** | `forge mcp`（stdio，协议 `2024-11-05`）／`POST /mcp`（HTTP JSON-RPC） | stdio 或 HTTP | Agent（黄金路径 `af_draft`→`af_apply`） |
+| **HTTP REST** | `forge serve` → FastAPI（90 条参与匹配的路由） | REST + SSE | 两棵 WebUI、外部监控、配对流程 |
+| **CLI** | `forge <18 个子命令>` | 进程内 | 运维、判据脚本、CI |
 
-## 五、MCP 工具列表（当前已注册）
+三面共用 `af_service.py` 的服务语义（`af_service.py:52` 起的 `__all__` 就是这份契约面）。**MCP 面与 HTTP 面不是两套实现**：`af_mcp.py` 的工具实现直接调 `svc.*`（例：`_t_apply` → `af_apply.apply`，`af_mcp.py:387-392`）。这条"一面一实现"是历史上多起"只修了一脸"缺陷的根因（记录 §二之二十六、§5.3 第 7 行），现在由门禁盯。
 
-| 工具 | 用途 |
-|------|------|
-| `af_draft` | 意图 JSON → IR，返回 ref |
-| `af_apply` | 合并 build+simulate+save |
-| `af_resolve_entity` | 中文实体名 → entity_id |
-| `af_remember_entity` | 记住实体映射 |
-| `af_list_entities` | 列出实体 |
-| `af_catalog` | 实体目录 |
-| `af_build` | 编译安全闸（旧接口） |
-| `af_compile_spec` | AF-Spec 文本 → IR（旧接口） |
-| `af_simulate` | 仿真回放（旧接口） |
-| `af_list_graphs` | 列出已保存的自动化 |
-| `af_get_graph` | 获取自动化详情 |
-| `af_health` | 健康检查 |
-| `af_live_run` | 一次性真机下发 |
+### 1.2 两态：设计态 / 运行态
 
----
+- **设计态**（`forge serve`、`forge mcp`、`forge build/sim/spec/diff`）：不碰真机。写面只落**待批队列**与**归档**。
+- **运行态**（`forge watch`、`forge run --live`）：订阅 HA 事件流、真下发。生产 compose **只起 `forge serve`**，watch 由人/`POST /api/watch/start` 显式拉起。
 
-## 六、关键配置
-
-### 6.1 NAS 部署
-
-- **docker 容器**：autoforge-api
-- **源码路径**：/vol1/1000/docker/autoforge/src:/app/src（挂卷）
-- **数据路径**：/data（GraphStore + pending + 持久化）
-- **git 分支**：master
-- **MCP 地址**：http://192.168.2.200:8787/mcp
-- **HA 地址**：http://192.168.2.200:8123
-
-### 6.2 环境变量
-
-| 变量 | 值 | 说明 |
-|------|-----|------|
-| AUTOFORGE_HA_URL | http://192.168.2.200:8123 | HA 地址 |
-| AUTOFORGE_HA_TOKEN | eyJhbGci... | HA 长期令牌 |
-| AUTOFORGE_LIVE_ENABLED | 1 | live mode 开关 |
-| AUTOFORGE_RATE_LIMIT_PER_MIN | 100000 | 限流（已放开） |
-
----
-
-## 七、实测验证（2026-09-24）
-
-### 7.1 测试用例
-
-- **自动化**：防盗门打开 → 开客厅灯
-- **触发实体**：binary_sensor.0x00158d0001f34db6_contact
-- **动作实体**：light.mijia_cn_group_1861372413196005378_group4_s_2_light
-
-### 7.2 测试步骤
-
-1. `af_draft(intent)` → 返回 ref `af:xxx`
-2. `af_apply(ref, stage="save")` → 返回 pending id `b5021eed87b24a44`
-3. CLI approve → 保存到 GraphStore
-4. 导出 IR JSON → `/tmp/test_ir.json`
-5. 启动 `forge watch /tmp/test_ir.json --confirm`
-6. 手动设置防盗门状态为 on
-7. watch 收到事件 → 触发自动化 → 客厅灯真的开了 ✅
-
-### 7.3 实测结果
+### 1.3 进程拓扑（NAS 现状）
 
 ```
-[FIRE] binary_sensor.0x00158d0001f34db6_contact=on → 实例 31b1a314111b
-  · light.mijia_cn_group_1861372413196005378_group4_s_2_light = on
+┌ autoforge-api 容器（compose 起，restart: unless-stopped）
+│  ├ forge serve --host 0.0.0.0 --port 8787 --store-root /data
+│  │    --ui-dir /ui --ui-user-dir /mimo --examples /app/examples/ir
+│  ├ （同进程内）联动桥：AUTOFORGE_MQTT=1 才起，且排在 uvicorn.run 之前、不吞异常
+│  └ （同进程内）watch 子进程：由 /api/watch/start 或 forge watch 拉起，靠 watch.lock 单实例
+└ 卷：/data=autoforge-store、/ui=ui/dist、/mimo=ui-user-mimo/dist（源码不挂卷，已烘进镜像）
 ```
 
-**客厅灯真的从 off 变成了 on。端到端链路完全打通。**
+起桥位置：`af_cli.py:1335` 定义 `_start_linkage_bridge`，serve 那一路在 `af_cli.py:1446` 调它、`af_cli.py:1449` 才 `uvicorn.run`（watch/dry-live 那一路在 `af_cli.py:322` 也调，未开启即 no-op）——桥配不好就是**整个 AF 起不来**，含只读面。
 
 ---
 
-## 八、已知问题与待办
+## 二、模块地图（按层，共 62 个顶层模块 + 5 个包）
 
-### 8.1 架构缺口
+| 层 | 模块 | 责任 |
+|---|---|---|
+| **IR 与编译** | `af_ir/`（models/schema/condition_norm/…）、`af_spec.py`、`af_nl.py`、`af_nl_parse.py`、`af_nl_build.py`、`af_fidelity.py` | 图模型、JSON Schema、AF-Spec 文本⇄IR、NL 渲染与解析、往返保真 |
+| **第一道闸** | `af_scanner.py`（`CHECKS` 40 项、`live_preflight`、`DeviceGuardRegistry`）、`af_irreversible.py` | 编译期静态安全闸、L2/L3 不可逆字段标注 |
+| **第二道闸** | `af_vhass/`（`fake.py` 唯一效果真值表、`high_fidelity.py`）、`af_expect.py` | 双轨仿真 + 后置条件断言 |
+| **设计链** | `af_draft.py`（staging，进程内 TTL，不落盘）、`af_apply.py`、`af_premiere.py`、`af_pending.py`、`af_service.py` | 意图→IR→校验→仿真→（预演）→入队→试演期 |
+| **运行态** | `af_runtime.py`、`af_executor.py`、`af_scheduler.py`、`af_bus.py`、`af_state.py`、`af_registry.py`、`af_time.py` | 实例生命周期、事件总线、调度、状态源、时钟 |
+| **真机接线** | `af_live.py`、`af_tick_supervisor.py`、`af_adapters/`（base/ha/http/mock）、`af_watch.py` | SSE 订阅、tick 自愈、HA 适配、生产态证据聚合 |
+| **治理** | `af_conf.py`、`af_shadow.py`、`af_canary.py`+`af_canary_supervisor.py`、`af_conflict.py`+`af_conflict_runtime.py`+`af_conflict_audit.py`、`af_intervention.py`、`af_undo.py`、`af_health.py`、`af_closedloop/` | 置信度 band、影子比对、金丝雀、冲突仲裁、人工干预、回滚、降级、自改进闭环 |
+| **插件装配** | `af_runtime_ext.py`、`af_runtime_plugins.py` | 把治理件挂到 executor/runtime 上（不改内核） |
+| **经验与观测** | `af_telemetry.py`、`af_experience.py`、`af_error_knowledge.py`、`af_preference.py`、`af_predict.py`、`af_pretrigger.py`、`af_insight_queue.py`、`af_proposal.py`、`af_feedback.py`、`af_metrics.py`、`af_evo.py` | 遥测、共现经验、错误知识库、预测触发、洞察队列、提案、反馈 |
+| **存储与凭据** | `af_store.py`、`af_persist.py`、`af_atomic.py`、`af_flock.py`、`af_secrets.py`、`af_auth.py`、`af_audit.py`、`af_fire_recorder.py`、`af_bounded_caches.py`、`af_config.py`、`af_env.py`、`af_conf.py` | 版本化归档、实例持久化、原子写、租约、密钥、令牌、审计、封顶注册表 |
+| **出向** | `af_mqtt_bridge.py` | ADM 联动桥（唯一出向生产者） |
+| **面** | `af_api.py`、`af_mcp.py`、`af_cli.py`、`af_catalog.py`、`af_scene.py`、`af_fault.py`、`af_version.py`、`af_instance.py`、`af_vhass/` | 对外接口与设备目录 |
 
-1. **没有自动启动 watch daemon**：docker 里只跑了 `forge serve`，watch 需要手动启动
-2. **IR 导出格式坑**：`graph_to_raw()` 返回数组，但 `forge watch` 期望 `{"automations": [...]}` 对象
-3. **协调锁**：同一时刻只能一个 watcher 运行，锁文件在 `/app/.forge/watch.lock`
-4. **白名单**：`--live-allow` 显式列出可写实体，不在白名单的实体不会被操作
-
-### 8.2 FFL 测试相关
-
-1. **PowerShell JSON 序列化问题**：嵌套 JSON 用 PowerShell 调 MCP 会出错，必须用 Python
-2. **中英文动作映射**：af_draft 支持中文（开灯/关灯）和英文（turn_on/turn_off）
-3. **entity 解析是占位**：af_draft 的 `_resolve_entity()` 目前直接透传 entity_name，没有接 af_catalog 做真实中文→entity_id 解析
-
-### 8.3 审计遗留问题
-
-1. P0-9：无令牌时整站开放（fail-closed 未完全收口）
-2. P1-4：跨自动化成环漏检（deps+emit_deps union 已修）
-3. 没有 CI（.github/workflows 不存在）
-4. device_id/area_id 不展开
+**依赖方向是门禁**：`pyproject.toml` 的 import-linter 契约（例：`name = "Service boundary never imported by kernel"`）在 CI 里跑，跨层反向 import 直接判红。
 
 ---
 
-## 九、快速操作命令
+## 三、设计链：意图 → 归档
 
-### 9.1 MCP 调用
-
-```bash
-# draft
-curl -X POST http://192.168.2.200:8787/mcp \
-  -H "Authorization: Bearer af_X1nLv_NiiuD80yM0wrKJiYLDEJs6NKAT" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"af_draft","arguments":{"intent":{...}}}}'
-
-# apply
-curl -X POST http://192.168.2.200:8787/mcp \
-  -H "Authorization: Bearer af_X1nLv_NiiuD80yM0wrKJiYLDEJs6NKAT" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"af_apply","arguments":{"ref":"af:xxx","stage":"save"}}}'
+```
+自然语言 / 意图 JSON
+   ↓ af_draft(intent)                    进程内 staging（TTL，不落盘）af_draft.py:51
+   ↓ 返回 ref（IR 永不回传，防上下文炸）
+   ↓ af_apply(ref, stage=?)              af_apply.py:72
+   ├── build   → StaticScanner 40 项 CHECKS
+   ├── simulate→ af_service.simulate / simulate_track（双轨）
+   ├── [dry_run] → 到此为止，零写入            af_apply.py:189-193
+   └── save    → submit_pending 入待批队列      af_apply.py:196-204
+   ↓ 人工 approve（CLI pending approve / POST /api/pending/approve）
+   ↓ GraphStore 版本化归档（{root}/…，save af_store.py:296）
+   ↓ 导出 IR → forge watch 常驻运行
 ```
 
-### 9.2 CLI 操作
+设计链上的三条硬不变量：
 
-```bash
-# 列出待批
-docker exec autoforge-api python -m autoforge.af_cli pending list --root /data
-
-# 批准
-docker exec autoforge-api python -m autoforge.af_cli pending approve --root /data <op_id>
-
-# 列出已保存
-docker exec autoforge-api python -m autoforge.af_cli store log --root /data
-
-# 启动 watch
-docker exec -d autoforge-api python -m autoforge.af_cli watch /tmp/test_ir.json --confirm --ha-url http://192.168.2.200:8123 --live-allow light.xxx
-```
-
-### 9.3 HA API
-
-```bash
-# 设置实体状态
-curl -X POST http://192.168.2.200:8123/api/states/binary_sensor.xxx \
-  -H "Authorization: Bearer <HA_TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{"state": "on"}'
-
-# 开关灯
-curl -X POST http://192.168.2.200:8123/api/services/light/turn_on \
-  -H "Authorization: Bearer <HA_TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{"entity_id": "light.xxx"}'
-```
+1. **未知 stage 必须拒收**（`af_apply.py:92-98`）。旧实现里打错一个字母会一路落到 `save` = **打错字就部署**。现在只有 `APPLY_STAGES`（`:30`）+ 别名表 `STAGE_ALIASES={"apply":"save"}`（`:34`）能进。
+2. **`af_save` 也先过第一道闸**：静态扫描未过就拒绝归档（MCP 工具描述里明写，`af_mcp.py:816`）。
+3. **批量启停要显式二次确认**：`af_set_tags`/`af_enable_by_tag`/`af_import_store`/`af_save` 有 `allow_bulk` 爆炸半径护栏（`af_mcp.py:770`、`:796`、`:816`）。
 
 ---
 
-## 十、总结
+## 四、运行链：事件 → 实例 → 动作 → 证据
 
-**AF 已经跑通了完整的端到端链路**：
-- ✅ 自然语言 → 意图 JSON → IR
-- ✅ IR → 安全闸校验
-- ✅ 安全闸 → 仿真回放
-- ✅ 仿真 → 入待批队列
-- ✅ 人工 approve → 保存到 GraphStore
-- ✅ watch daemon → 订阅 HA 事件 → 真机执行
-- ✅ 实测：防盗门触发 → 客厅灯真的开了
+```
+HA 状态变化
+  ↓ SSE /api/stream（`af_live.py:110` 路径常量，订阅在 `:219`）           或 /api/events（事件注入）
+  ↓ af_bus.EventBus：去重 dedup_key :121 / 节流 _pass_throttle :215（窗口 200ms，:137-147）/ 熔断结果 breaker_open :191
+  ↓ Runtime 匹配 trigger → 起实例（af_runtime.py / af_scheduler.py）
+  ↓ NodeExecutor 逐节点走（on/if/do/ask/wait/set/pass/group）
+  ↓ 【插件拦截链】冲突守卫 dispatch → shadow/ask band 路由 → canary 观察期 → adapter.call
+  ↓ HAAdapter（dry_run 或真实下发）
+  ↓ 终态 → af_mqtt_bridge.observe_terminal() 唯一出向写者（:442/:445）
+  ↓ af_watch 聚合生产态证据 verified_in_prod
+  ↺ tick：af_tick_supervisor（TRANSIENT/DEGRADED/FATAL 三-class :28-30，退避，连续 20 次 SAFE HALT）
+```
 
-**下一步要做的**：
-1. 把 watch daemon 加入 docker compose 自动启动
-2. 修复 af_draft 的 entity 解析（接 af_catalog）
-3. 补全 MCP 工具注册（af_draft/af_apply 已注册）
-4. FFL 200 题正式跑一轮
+`af_tick_supervisor` 是给常驻 watcher 兜底的"心跳自愈"：tick 线程死了会在 `/api/health` 的 `ticker_alive` / `tick_exit_reason` 上读到（`af_service.py:272-288`、`:299-301`）。**读不到桥就报 `unwired`，不许读成健康**（`af_service.py:256-260` 的 docstring 把这条写成判据）。
+
+---
+
+## 五、写侧档位：`check / simulate / dry_run / save`（预演就在这一格）
+
+`APPLY_STAGES = ("check", "simulate", "dry_run", "save")`（`af_apply.py:30`）。四个档不是"同一件事的四种说法"，**每一档的写入面不同**：
+
+| stage | 过 build | 过 simulate | 消费首演码 | 进待批队列 | 进试演期 | 落盘 | 返回值特征 |
+|---|---|---|---|---|---|---|---|
+| `check` | ✅ | ❌ | ❌ | ❌ | ❌ | 无 | 在 `af_apply.py:175-176` 直接返回 |
+| `simulate` | ✅ | ✅ | ❌ | ❌ | ❌ | 无（仿真只喂遥测） | 在 `:186-187` 返回 |
+| **`dry_run`** | ✅ | ✅ | **❌** | **❌** | **❌** | **零写入** | `:189-193`：`{stage:"dry_run", dry_run:True, would_enqueue:True, pending_ref:None}` |
+| `save` | ✅ | ✅ | ✅（若带码） | ✅ | ✅（默认 24h） | pending 文件 | `:196-217` |
+
+三条容易读错的地方，逐条给代码位置：
+
+- **`dry_run` 一律不带首演码**：一次性码消费掉就没了，"先看看"不该有代价（`af_apply.py:134-135`）。DB 侧「拟→验→批→部署」里的**"验"**就是这一档——它必须能在零写入前提下跑，所以 MCP 工具描述里明写了这句（`af_mcp.py:486`）。
+- **正面证据写在返回值里，不靠调用方"记得自己没入队"**：`would_enqueue=True` = 真跑 `save` 就会入队；`pending_ref=None` = 此刻队列里确实什么都没有（`af_apply.py:190-192` 的注释就是这条的理由）。
+- **`save` 成功后自动进"试演期" 24 小时**：`af_premiere.enter_trial(store_diff_sha, hours=24)`（`af_apply.py:206-208`）+ `PREMIERE_TRIAL_STARTED` 审计（`:209-217`）。试演期的语义是**只统计不封禁**（冲突守卫那侧见 §八）。
+
+首演码（部署仪式）绑定的是 **store diff 的规范化 SHA256**（`_store_diff_sha`，`af_apply.py:39-51`，`sort_keys`+紧凑分隔符，issue 与 consume 两侧算同一哈希）——**验码后掉包即拒**。签发走 `issue_premiere`（`:54-69`）。
+
+---
+
+## 六、真机侧档位：`live` / `dry-live` / 服务端总开关
+
+| 档 | 开关 | 时钟 | HA 状态源 | do 动作 | 备注 |
+|---|---|---|---|---|---|
+| 纯仿真 | `forge sim` / `af_apply(stage=simulate)` | 虚拟 | FakeHA / HiFi | 不触 HA | §五 |
+| **dry-live** | `forge run --dry-live`（`af_cli.py:471`）；`POST /api/watch/start` **缺省 True**（`af_api.py` 的 `api_watch_start`、`af_service.py:2501`） | **真墙钟** | **真 HA** | **只记意图，不下发** | 抓 live 代码路径 bug，不动设备 |
+| live（一次性） | `forge run --live --confirm --live-allow …`（`af_cli.py:470`）；HTTP 侧 `POST /api/live/run`（要 `confirm=true` + 非空 `live_allow`，`af_service.py:1889/:1897`） | 真 | 真 | 真下发，**回放完就退出** | 三重闸：服务端开关 + confirm + 白名单 |
+| live（常驻） | **只有 CLI**：`forge watch <ir> --confirm --live-allow …` | 真 | 真（SSE 订阅） | 真下发 | `forge watch` **没有 `--live` 这枚旗子**：真机档就是"不带 `--dry-live`"（`live = not dry_live`，`af_cli.py:585`），缺 `--confirm` 直接拒启动（`af_cli.py:565-566`） |
+
+- **HTTP 面／用户视角界面到今天没有常驻真机通道**（2026-10-09 现场结论，之前文档把它写成"可真机"是错的）。`svc.start_watch` 只会拼两种命令：带 `--dry-live`，或什么真机旗子都不带；它**从不传** `--confirm`／`--live-allow`／`--entities`。前者只记意图，后者会被子进程自己拒启动并立即退出。所以返回值如实给两格：`tier`（`dry_live` / `live_unconfirmed`）与 `real_device`（**两档都是 `false`**）。要不要给 UI 开这条常驻通道归 DCD 裁（申请 `20261009-AF-用户视角到真机的常驻通道`）。判据钉在 `tests/unit/test_start_watch_identity.py`，其中一档是真跑 CLI 的：`forge watch` 不带 `--confirm` ⇒ `exit_code != 0` 且输出里出现 `--confirm`。
+- `ok=true` 现在**必须由 sidecar 证明是本次这份**（`af_service.py:2562-2630`）。旧形状只要 `watch.lock.info` 存在就回成功，而那是目录里唯一的一个文件——上一条 watch 的残留会被读成"本次启动成功"（现场实测：1.18 秒回 `ok=true`，带的是 9-29 另一条 IR 的路径）。现在要求 `sidecar.graph == 本次写出的 IR 路径`，认不上就分三种如实失败：`child_exited` / `coord_lock_held_by_other` / `not_registered`，成功时一并回 `acquired_at`。
+
+机制上只有**一个分岔点**：`HAAdapter(dry_run=…)`。
+
+- `HAAdapter.__init__` 的 **缺省是 `dry_run: bool = True`**（`af_adapters/ha.py:227`）——默认构造就是安全档，要真下发必须显式给 False（`af_cli.py:304`、`af_service.py:1942/:2054`）。
+- `call()` 的顺序是**故障注入 → dry_run → transport**（`af_adapters/ha.py:253-268`）：注入的失败优先于 dry_run（`:241-251` 四件 `fail_next/timeout_next/drop_next/unavailable_next`），dry_run 只 append 意图并返回 `{"dry_run": True, …}`（`:258-266`），没注入 transport 又想真下发 = `AdapterError`（`:267-268`）。
+- `intents` 环形封顶 `INTENTS_MAX=200`（`af_adapters/ha.py:46`、`:259-261`）：常驻服务里 dry_run 也每次都记一条，不裁就只增不减。
+- **动作前快照（撤销）只在真实下发路径生效**：`undo_recorder` 在 `dry_run` 分支之后（`af_adapters/ha.py:266` 之后那段），且 `--dry-live` 不触发 recorder（`af_cli.py:305-308`）。
+- `--dry-live` 会自动放过 confirm 预检、并跳过写白名单检查（`af_scanner.py:1245/1272/1282-1283`）：**它不下发，所以不该被下发护栏拦**。
+
+服务端总开关 `AUTOFORGE_LIVE_ENABLED`（`af_service.py:1768`）：没开 ⇒ `live_run` 抛 403（`:1889`）、undo 抛（`:2045`）。仓内 compose 缺省 **0**（`docker/docker-compose.api.yml:45`），**NAS 那侧被宿主 env 注入成了 1**——两档读数相反，判部署事实要看 `/api/live/status` 而不是仓内默认值。
+
+---
+
+## 七、自主档位：band = `auto / shadow / ask`（单一真值源）
+
+band 是**运行时置信度**（`ConfidenceStore`）映射出来的自主级别，不是 IR 静态字段。数值与集合的唯一出处：
+
+- 阈值：`AUTO_MIN = 0.85`、`SHADOW_LOW = 0.60`（`af_conf.py:23-24`）⇒ `auto ≥0.85`、`shadow 0.60–0.85`、`ask <0.60`。
+- 优先级：`BAND_PRIORITY = {"ask":0, "shadow":1, "auto":2}`（`af_conf.py:37`）——**取最严**时按它比。
+- 只读比对集合：`PASSIVE_BANDS = {"shadow"}`（`af_conf.py:39`）。
+- 必须人工确认集合：`CONFIRM_REQUIRED_BANDS = {"ask"}`（`af_conf.py:41-42`）。
+
+**shadow 档的运行语义**（`af_shadow.py:1-17` 的模块 docstring 就是这条的权威表述）：`ShadowRunner` 用 Python 实例属性优先级**就地装饰 `NodeExecutor._do`**，不改 `af_executor.py`：
+
+- `auto` → 透传原 `_do`（真实执行），并向 `InterventionDetector` 报到；
+- `shadow` → **绝不调用 `adapter.call`**，只写 `shadow_log`（动作+参数+期望态），延迟 `compare_after` 秒后**只读比对**目标实体是否真变成期望态（`af_shadow.py:367-381` 路由、`:399-413` `run_do` 不落设备）；
+- `ask` → 不执行，生成 ask 提案挂起等人确认（`open_ask`）。
+
+达标转正：连续 `streak_to_promote` 次命中（或 conf 自己爬到 `AUTO_MIN`）→ `conf.promote()`，并回调 `on_promote` 重挂 canary + 启动 `CanarySupervisor` 观察期。`shadow_log.json` 独立存放，与正常运行日志隔离；重启时会回放日志，**日志损坏会在 `replay_load_error` 上留痕**，不会把"历史判定丢了"读成"回放一切正常"（`af_shadow.py:360-366`）。
+
+band 与执行闸的联动在两处：编译期 `SHADOW_WRITES_DEVICE`/`LOW_CONF_WRITES_DEVICE`（`af_scanner.CHECKS`），运行期 `af_conflict_runtime.py:317-321`（shadow 不参与抢锁、ask 一律拒自动下发）。
+
+`af_canary.py` / `af_canary_supervisor.py` **不是仿真档**：`auto_rollback`（`af_canary.py:145`）与 `demote_below`（`af_canary_supervisor.py:68`）是真机路径上的护栏策略；适配器是 dry 时执行器会跳过 canary 接线（`af_executor.py:546-555`）。历史上 `suspend→resume` 接缝丢过 `auto_rollback=false` 旗子（`af2ee56`）。
+
+---
+
+## 八、冲突守卫档位：`off / observe / enforce`
+
+唯一开关是环境变量 `AUTOFORGE_CONFLICT_ARBITER`（`af_conflict_runtime.py:47`），取值解析在 `:106-133`：
+
+| 值 | mode | 行为 |
+|---|---|---|
+| 空/其他 | `off`（**缺省**，`:87`） | 完全不装拦截器，`dispatch` 直通（`:281-282`） |
+| `observe` / `audit` / `log` / `watch`（`:71`） | `observe` | 照常内省、照常仲裁，但**不改行为**：异常/拒绝一律回落到"照常执行" |
+| `1` / `true` / `on` / `yes` / `enforce`（`:70`） | `enforce` | 判红就真拦：REJECT/CIRCUIT_OPEN → 走 `on_error` 边；WAIT → 停车 `_park` |
+
+**enforce 档的 fail-closed 站点表**（DCD 20261008 §二 落地，判例 1：守卫自己的输入来源失败时 fail-closed）：
+
+| 站点 | 触发条件 | 处置 | 位置 |
+|---|---|---|---|
+| 内省 | `_automation_id`/`extract_entity_ids` 等**抛异常**（超预算或任何代码 bug） | REJECT + `_audit_degraded(fail_open=False)` + owner 可见通知 | `af_conflict_runtime.py:288-301` |
+| 内省成功但挖不出实体 | 只读/无实体节点的**正常形状** | **放行**（与上一档不同路） | `:304-311` |
+| 读 band | `conf.band()` 返回 `None` | REJECT + 通知 | `:312-316` |
+| 仲裁请求 | `arbiter.request(...)` **抛异常** | REJECT（同族推广，逐站理由已投 DCD 求追认） | `:330-339` |
+| 仲裁器内层 | 内层实现异常 | REJECT（**旧实现这里是改写 ALLOW，已修**） | `af_conflict.py:212-223` |
+| 用户覆盖登记 | cooldown 登记失败 | 进 `_cooldown_pending` 并 fail-closed 挡住 | `af_conflict.py:266`、`:350-353` |
+
+observe 档的例外是**设计**而不是漏网：`:296-297`、`:334-335` 处注释都写着"试演期只观测：不改行为，否则判据没法对比"。
+
+其余可调环境变量：`_ENV_FLOATS`/`_ENV_INTS`/`_ENV_BOOLS` 三张表（`af_conflict_runtime.py:49-69`），审计落盘目录 `AUTOFORGE_CONFLICT_AUDIT_DIR`（`:69`，默认 `.forge/conflict_audit.json`，`af_conflict_audit.py:21`）。
+
+---
+
+## 九、证据档位：仿真"跑对了吗"怎么读
+
+这一层解决的是**假绿**：`ok=True` 只回答"跑完了、没抓到反例"，回答不了"验过了"。
+
+### 9.1 双轨仿真 `simulate_track`
+
+`af_service.py:1037-1063`：
+
+- `track="fake"`：降级内存底座（`FakeHAAdapter`），动作立即生效；`sun` 固定 18:00/06:00。
+- `track="hifi"`：`HighFidelityHA + HighFidelityAdapter`，动作**入队后 flush 才落位**，`sun` 用真实太阳几何。
+- 两轨共享 `af_vhass/fake.py` 的**唯一效果真值表**（`SERVICE_STATE` / `service_effect` / `is_modeled`），对建模动作的结果必须一致；**唯一已知分歧点是 `sun`**，对拍由 `compare_dual_track` 白名单豁免。
+- `track` 不是 `fake`/`hifi` 就抛 `ValueError`（`:1062-1063`），仿真底座切换另有一枚 `AUTOFORGE_VHASS_HIFI`（`af_vhass/high_fidelity.py:276-283`），它只换底座、不是产品档。
+- 返回里 `fully_verified = bool(items) and not non_simulable and expect.failed == 0`（`:1210`）——**比 `ok` 严**：声明过断言且全部验过才算。
+
+### 9.2 诚实报告五档 `honest_report`
+
+`af_service.py:1156-1211`，绝不把"没验到"当"验过了"：
+
+| 档 | 含义 | 来源 |
+|---|---|---|
+| `verified` | 断言**实际跑过**（status=pass/fail） | `expect.items` |
+| `inferred` | 仿真产出但**没有断言覆盖**的实体（final_states 里未被任何 expect target 覆盖） | 按实体前缀匹配，注意实体 id 本身含点号，不能 `split(".")[0]`（`:1192-1201`） |
+| `non_simulable` | 断言**无法验证**（status=unverified）→ 显式标黄；含底座**未建模的动作** | `:1175-1185` |
+| `exempted` | 副作用不可观测、被**显式豁免**（决策 B 真豁免通道，如 notify）——单列一档，绝不冒充 verified，也不算 non_simulable | `:1177` 注释、`:1207` |
+| `verified_in_prod` | **生产态真实证据**（shadow/canary/conflict 落点，由 `af_watch` 聚合回灌） | `:1209` |
+
+强度排序（读结果时按这个次序判"证据有多硬"）：`verified_in_prod`（真跑过且对）> `fully_verified` > `verified` > `inferred` > `non_simulable` > `exempted`（后者是"不打算验"，不是"验过了"）。
+
+编译期还有三条配套检查防"假断言"：`EXPECT_MISSING`（没声明后置条件）、`EXPECT_UNREACHABLE`（断言的实体图里既不读也不写 ⇒ 永远验不到）、`EXPECT_STATE_INVALID`（断言值不在该实体域内）——都在 `af_scanner.CHECKS`。
+
+### 9.3 不可逆字段标注
+
+`af_irreversible.py:42-66` 给 L2/L3 动作标不可逆；`RUNTIME_ONLY_FIELDS`（`:31-33`）把 `stage`/`diff_sha`/`simulate_track`/`honest_report` 这些**仿真产物**从 NL 往返里剥掉。现读：它的产品调用方只有 NL 渲染侧（`af_nl.py`、`af_nl_parse.py`），**执行面没有调用方**——列在 §十八 残余里。
+
+---
+
+## 十、测试通道（`af_test`）：批量跑题、自动放行、与正式区隔离
+
+产品化的"测试模式"只有一个，就是 `af_test.TestChannel`（`src/autoforge/af_test.py`）。设计文档在 `docs/reference/AF测试通道设计方案.md`，实现与它是同名的同物。
+
+| 维度 | 现读 |
+|---|---|
+| 隔离根 | `TestChannel(test_root="/data/test")`（`af_test.py:40`），正式区是 `/data` | 
+| 目录 | `pending/`、`graphs/`、`reports/`（`:41-49`） |
+| 批次上限 | `MAX_BATCH_SIZE = 500`（`:24`），超限 `TestError`（`:71-72`）——**这正是旧文那条"跑 200 题必须用 simulate"的根因**：走正式 `save` 会撞待批队列熔断，测试通道把熔断换成自己的批次闸 |
+| 单条流程 | `draft → apply(stage="simulate") → save_graph(tags=["test"])`（`:86-161`）：**不碰 pending 队列**，直接落测试区归档（`:138` 的注释就是这句） |
+| 是否碰真机 | **不碰**。中间只跑 build + simulate（`:120`） |
+| 报告 | `batch_id/total/pass/fail/pass_rate/fail_reasons/details/created_at`（`:184-193`）；失败原因按 `stage`/`code` 归类计数（`:171-182`） |
+| 落盘 | `reports/{batch_id}.json` 走 `atomic_write_text`（`:195-200`）——报告是 WebUI 轮询读的，崩在半截会被读成"没有这份报告"（判据 E，审计 BUG-05） |
+| 读侧 | `get_report`（`:202-208`，不存在就抛）、`list_reports`（`:210-227`，坏 JSON 跳过不炸） |
+| 清理 | `clear()`：`shutil.rmtree(test_root, ignore_errors=True)` 后重建目录（`:229-233`） |
+| 调用脸 | **只有 MCP 脸**：`af_test_submit`（`af_mcp.py:499`，scope `write`）、`af_test_report`（`:513`，无 scope）、`af_test_clear`（`:526`，scope `write`）；实现在 `:395-422` |
+
+两条必须写进架构的边界（现读，不是推测）：
+
+1. **`/data/test` 这个根是硬编码缺省**（`af_test.py:40`、`:240`；MCP 侧 `get_test_channel()` 不传参 ⇒ 用缺省，`af_mcp.py:401/:412/:421`）。隔离靠"路径不同"，**不靠写闸**：测试区里的 `save_graph` 是真写盘（写进 `GraphStore(root=test_root)`）。
+2. **`clear()` 没有任何归属/前缀守卫**：拿到这个工具（scope `write`）就能 `rmtree` 掉 `test_root` 指向的目录；`get_test_channel` 的 `test_root` 形参允许任意路径。这与第十八轮 F12 那族（归属未知不放行、`assert_deletable`）同形，**当前没接**。列在 §十八，且需要裁定（要不要把测试通道也接进 `af_bounded_caches`/归属守卫那一套，还是另立"只准删 `{root}/test` 前缀"的闸）。
+
+---
+
+## 十一、前端：三棵第一方树，生产用的是两棵
+
+| 树 | 面向 | 技术栈 | base / 挂载 | 状态 |
+|---|---|---|---|---|
+| `ui/` | 开发者/工程师控制台（naive-ui） | Vue 3.5 + vue-router 4.5 + naive-ui 2.45 + pinia 3 + vite | 挂 `/ui`（compose volume + `--ui-dir`） | **在用**，20 条路由（`ui/src/router/index.ts:5-30`） |
+| `ui-user-mimo/` | **用户视角 WebUI（ForgeSight 线）** | Vue 3.5 + naive-ui 2.40 + pinia 2.2 + vite-plugin-pwa | 挂 `/mimo`，vite `base:'/mimo/'`（`vite.config.ts:9`） | **在用**（生产），路由带 `beforeEach` 登录守卫（`src/router.ts:4-30`） |
+| `ui-user/` | 早期原型（Tailwind + lucide） | Vue 3.5 + tailwind 3.4 + pinia 2.2 | 无 Python/Docker 引用 | **已冻结/归档**（`ui-user/README.md:1-3` 明写） |
+
+> 注意名字坑：**"用户视角 WebUI" = `ui-user-mimo/`，不是 `ui-user/`**。`ui-user/` 里那份登录是坏的（`stores/auth.ts` 写 `'mock-token'`，`api/client.ts` 根本没有 `login` 方法；token key 两处还分叉 `forgesight_token` vs `fs_token`）。任何"改用户视角 UI"的任务如果落到 `ui-user/` 上，改的是废树。
+
+**`/mimo` 这条同源链是白屏事故的来源，已被判据钉住**：dist 里资源绝对路径 `/mimo/assets/*` 必须与后端挂载前缀一致，不一致就"200 但白屏"。三处必须同值：
+
+1. `af_api.py:265` `UI_USER_PREFIX = "mimo"`（声明为唯一真源）；
+2. `ui-user-mimo/vite.config.ts:9,24-25`（`base` + PWA `start_url/scope`）；
+3. `docker/docker-compose.api.yml:23,27`（`--ui-user-dir /mimo` + volume）。
+
+外加 router 的 history base 用 `import.meta.env.BASE_URL`（构建期同源，不硬编码），这条由 `c06d8ea` 收；跨三处的一致性由 `tests/unit/test_ui_user_mount.py:71-155` 当场核对，**不靠人记得**。
+
+SPA fallback：`af_api.py:1389-1448`（catch-all，`ui_dir`/`ui_user_dir` 由 `build_app(store_root, examples_dir, ui_dir, ui_user_dir, readonly)` 注入）。MCP 与 HTTP **同一个 FastAPI app**（`POST /mcp` 在 `af_api.py:1057`），没有第二个静态服务。
+
+UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调用点 94 处（ui 53、ui-user 19、ui-user-mimo 22）、字面量 55、模板拼接 38、条件分支 1、传输层包装 3、SSE 建流 2、参与匹配路由 90、兜底/MCP 排除 2、反向读数未被调用 15（只计数不判红）。
+
+### 卡片取数正源：`svc.automation_card`（2026-10-09 重钉）
+
+`GET /api/automations` 与 `GET /api/automations/{name}` 的卡片字段**只有一个写者**：`af_service.automation_card`（`af_service.py:461-518`），端点只做参数搬运。这条接缝此前在 `af_api.py` 里直接读 `rec["graph"]` 那一层的 `nodes` / `enabled` / `nl` —— **那一层没有这些键**：`_graph_raw` 写出的容器层只有 `{"automations": [...]}`（`af_store.py:56-58`），`nodes`/`enabled`/`nl` 全在 automation 级。于是 12/12 条归档一律渲染成「无设备 / 空预演 / 恒已启用」，而"停用"点在容器层落旗子、没有代码读它——**运行期真正读这枚旗子的是调度器**（`af_scheduler.py:87-89` 不为禁用项注册触发、`:241-243` 不排空其队列），写在容器层等于按钮白按：现场表现为"卡片是假的、点了没反应"，而这条自动化到底在不在跑，跟卡片那几个读数无关。
+
+- 设备：`sorted(auto.reads() | auto.writes())` 跨 automation 去重，人类可读名走 `DeviceCatalog.display_names()`（`af_catalog.py`，**只读缓存、不发网络**，缓存没有的实体回 `entity_id` 本身）。
+- 启停：`enabled = bool(autos) and all(auto.enabled …)`；空归档按"未启用"呈现（真值不是缺省）。
+- 预演：`render_graph(graph).text`；归档解析失败**不再把整个列表打成 500**，坏记录只在自己那一格写 `⚠ 归档无法解析（IR 校验失败）：…`。
+- `trial` / `last_triggered` / `trigger_7d`：**没有可读取的落盘正源**，一律 `null` / `0`。首演-试演台账按 `store_diff_sha256` 记账（`af_apply.py:208` → `af_premiere.enter_trial(store_diff_sha, hours=24)`），不是按自动化名；触发记录只在 watch 进程内存里。旧形状在这里硬写 `state:"auto"` 等于替每条自动化宣布"已走到全自动档"——读不出就给 `null`。
+- 启停写侧走 `svc.set_automation_enabled`（`af_service.py:521-543`）→ `store.resave_raw`：锁、版本号、归属核对留在 store 那一处，端点不碰盘；形状不认识（容器层不是 `{"automations":[…]}` 或含非对象条目）**抛 409 且不落新版本**，不写在容器层装成功。
+- 判据：`tests/unit/test_user_ui_card_and_toggle.py`（含一条源级腿：`af_api.py` 里不得再出现 `g.__setitem__("enabled"` 这种手抄落盘）。
+
+---
+
+## 十二、鉴权：登录正规化、令牌、配对
+
+### 12.1 首次进入设定管理员（`e5b3fd5`）
+
+- `AdminUserStore`（`af_auth.py:1053`）：**PBKDF2-HMAC-SHA256，`PBKDF2_ITERATIONS = 100000`（`:1064`），`SALT_BYTES = 16`（`:1065`，`secrets.token_hex`）**；落盘 `{store_root}/.auth/admin.json`，权限 0600（`:1061`）。
+- 校验走常数时间比较，且**用户名不存在时也照算一次哈希**（`verify` `:1139-1152`，缺盐时用 `"00"*SALT_BYTES`）——防时序侧信道"哪个用户名存在"。
+- 端点：`GET /api/auth/has-admin`、`POST /api/auth/register`（已存在则 409，注册即自动发令牌）、`POST /api/auth/login`、`/logout`、`/me`。
+- 前端怎么知道要首设：`ui-user-mimo/src/views/LoginView.vue` 挂起来拉 `/api/auth/has-admin`，`isRegister = !has_admin`。**没有第四个信号源**。
+- 兼容档：管理员尚未注册时 `login` 接受任意非空凭据并回 `warning`；注册后转严格校验。**这一档是"未登录也能用"的窗口，只在首设前存在。**
+
+### 12.2 令牌面
+
+- `TokenRegistry` 持久化 `{store_root}/.auth/issued_tokens.json`（`af_api.py:294`、`af_mcp.py:1060` 读写同一份，一个注册表两个脸）。
+- 缺省 TTL `ISSUED_TTL_S = 86400.0`（`af_auth.py:144`，签发在 `:329`）；`expires_at` 缺失/naive ⇒ fail-closed（`:212-233`）。
+- 多主体令牌注入键名 **`AUTOFORGE_TOKENS`（单数）**，真源是 `af_auth.py` 的 `load_secret(...)`；这条键名同源由 `tests/unit/test_compose_env_key_source.py` 钉住（旧文写成复数，NAS 现场因此手补过）。
+- 读取优先级：**credentials.json > secret 文件（`/run/secrets/<NAME>`，`AUTOFORGE_SECRET_DIR` 可覆盖）> 环境变量**（`af_secrets.py:6`、`:20-26`）。
+
+### 12.3 三个逃生阀（都是"只放权限、不改执行"）
+
+| 键 | 位置 | 语义 |
+|---|---|---|
+| `AF_ALLOW_NOAUTH=1/true/yes` | `af_api.py:360-383` | 放开匿名读；**当前有一枚在飞的扩展改动（工作区未提交）**，本文按 HEAD 描述 |
+| `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1` | `af_mcp.py:94-95` | 只认字面量 `1`；原型全放行档 |
+| `AF_REQUIRE_AUTH` | `af_api.py:374-377` | **已废弃**，fail-closed 是缺省 |
+
+`conftest.py:21-23` 规定这些只能 per-test `monkeypatch.setenv`，**不许全局置位**（否则会出现"测试绿是因为把鉴权关了"）。
+
+### 12.4 配对（Agent 拿令牌，不拿码）
+
+`af_request_pair`（`af_mcp.py:540`）→ 后端生成 **8 位单次短时效码**，经 SSE 推到用户 ForgeSight 弹窗 → 用户**口述**给 Agent → `af_pair`（`:554`）兑换 Bearer 令牌。码只显示给用户，Agent 侧不落地。HTTP 侧对应 `/api/mcp/pair/request`、`/api/mcp/pair/redeem`、`/api/mcp/pair-request`（SSE）、`/api/user/pair/{code}/confirm`、`/api/user/pair/accepting`。
+
+---
+
+## 十三、写闸与单写者租约
+
+两把锁，别混：
+
+| 锁 | 名字真源 | 路径 | 作用 |
+|---|---|---|---|
+| **单写者租约** | `SERVE_LOCK_NAME = ".serve.lock"`（`af_flock.py:29`） | `{store_root}/.serve.lock`（`:32-33`） | 决定这个实例**收不收写** |
+| watcher 协调锁 | 字面量 `watch.lock`（`af_cli.py:599`、`af_service.py:2463-2464`） | `{persist_dir}/watch.lock`（+ `watch.lock.info` sidecar） | 同一时刻只允许一个 watcher |
+
+- 启动时抢：`af_cli.py:1416-1430` 用 `FileLock(serve_lock_path(store_root)).try_acquire()`；抢不到 ⇒ `readonly=True` 传进 `build_app`，写端点 `_readonly_guard` 回 503（`af_api.py:430-441`）。
+- 运行期探：`_single_writer_check` 用 **`held_by_other()` 只探测、不 acquire**（`af_flock.py:114-135`；`_LOCAL_HELD` 认出本进程持有的锁，`:121`，闸门不反装），判据只认内核 flock/`msvcrt.locking`，陈旧 sidecar 忽略。
+- 拒收文本前缀唯一出处：`READONLY_DEGRADED_PREFIX = "READONLY_DEGRADED:"`（`af_service.py:1840`），MCP 真机下发被拒时**原样回传、不套壳**（`af_mcp.py:988-993`），HTTP 面 503（`:1751-1753`）。这枚前缀在契约表里的登记半边**归 DCD／homesdk**，现读两文档各零命中（执行记录 §二之七十一）。
+- `/api/health` 两格分开：`readonly` 是**身份声明**（v1.x "这是一个可被只读部署的服务"，硬编码字面量，语义不动，`af_service.py:294`）；`write_gate` 才是**运行期真值**（裁定 20261008 §一 B，`:217-242`、`:295`）。三态：`open` / `blocked` / `no_lease`——**探不到租约状态时读 `no_lease`，绝不塌回 `open`**。旧现场出现过"health 报 readonly=true 但写面 200"的矛盾读数，这就是新增那一格的理由。
+
+---
+
+## 十四、出向通道：只有一条生产者
+
+| topic | 方向 | 唯一生产者 | 位置 |
+|---|---|---|---|
+| `af/automation/fired` | 出 | `observe_terminal()` | `af_mqtt_bridge.py:61`、`:422`、`:442` |
+| `af/automation/failed` | 出 | `observe_terminal()`（同处声明 sole writer） | `:62`、`:425`、`:445` |
+| `adm/autoforge/status`（retained，presence） | 出 | `advertise()` / `publish_degraded()` | `:67`、`:59`、`:335`、`:350-371` |
+| `ma/insights` | **入向 only** | 订阅白名单守卫拒任何出向尝试 | `:63`、`:456-457`、`:461`、`FORBIDDEN_SUBSCRIPTIONS :70` |
+
+- 载荷必经 `_envelope()`；错误码/状态名从 `homesdk.adm.errors` import，不手抄。
+- 这条"唯一生产者 + 必经信封"已升成静态门禁：`scripts/check_mqtt_writers.py`（`8b629b8`）。
+- 守卫失明半边仍走 retained `af/status`（`mark_degraded(ADM_ERR_INTERNAL)` + `publish_degraded()`）。
+- 洞察入向落盘：`PersistentInsightSink` → `{root}/insight_proposals`（`af_mqtt_bridge.py:182`），`af_insight_queue.py:75/:181` 是**不可部署**的队列（approve/reject 才进提案面，`af_proposal.py:125/:186`，无 deployer ⇒ 不自动上线）。
+
+---
+
+## 十五、持久化：默认根、原子写、拒写护栏
+
+| 面 | 现读 | 位置 |
+|---|---|---|
+| 归档默认根 | `.forge`（`DEFAULT_STORE_ROOT`） | `af_store.py:49` |
+| 实例持久化 | `{root}/instances/{instance_id}.json`，原子 + 记录级 SHA256 校验和；**读侧坏记录/坏校验和跳过不炸** | `af_persist.py:35-37`、`:76-83`、`:223` |
+| 两种写形 | **append**（`append_jsonl` `af_store.py:129`，用于 `af_error_knowledge.py:174`/`af_preference.py:535`/`af_telemetry.py:168`）vs **rewrite-on-save**（`save` `:296`、`resave_raw` `:349`） | — |
+| 撕裂面 | 单行写入不撕裂（`fh.write(line + "\n")`），坏行的失败面是"丢一行"（`read_jsonl_bounded:138-147` 跳过坏行） | 执行记录 §二之七十一 |
+| **拒写护栏（数据丢失族）** | 归档/凭据/偏好/授权码等九站在落盘前判"现档是否坏"，坏 ⇒ **拒写并留原因**，绝不用空/半截覆盖好文件 | `af_store.py:427-434`、`:457`、`:461`；九站归属见执行记录 §二之七十一（`3d49595`+`f315112`） |
+| 原子写助手 | `atomic_write_text`（tmp + fsync + `os.replace`），21 个模块走它 | `af_atomic.py:27` |
+| 审计 | append-only journal（`open("a")`） | `af_audit.py:132-156` |
+| fire 日志 | `{store_dir}/fire_log.json`，rewrite 且原子；坏行容忍 | `af_fire_recorder.py:40-45`、`:55` |
+| 有界容器 | `BOUNDED_CACHES`/`FIXED_KEY_CACHES` 注册表（不落盘） | `af_bounded_caches.py:30-32` |
+| secrets | `/run/secrets/<NAME>`，`AUTOFORGE_SECRET_DIR` 覆盖 | `af_secrets.py:20-26` |
+
+---
+
+## 十六、门禁与判据：绿不是给人看的
+
+| 门禁 | 判什么 | 位置 |
+|---|---|---|
+| `gates.sh` | 仓内质量门禁总入口（`GATES_PYTHON=<path>` 指定解释器） | `gates.sh` |
+| `scripts/check_mqtt_writers.py` | 出向唯一生产者 + 载荷必经 `_envelope` | `scripts/` |
+| `scripts/check_bounded_caches.py` | 新增增长容器必须进注册表/固定键表/基线，或带豁免标记 | `scripts/` |
+| `scripts/check_mqtt_runtime_dep.py` | 镜像/开发/测试三面依赖一致（paho 必须在） | `scripts/` |
+| `scripts/verify_adm_window.py` | 停机窗当天验收入口，缺项读不成绿（PASS/FAIL/UNAVAILABLE 三态） | `scripts/` |
+| `tests/unit/test_ui_api_paths_gate.py` | UI 调用点 ↔ 后端路由双向对账（含三棵树、反向读数） | `tests/unit/` |
+| `tests/unit/test_ui_user_mount.py` | `/mimo` 三处同源 | `tests/unit/` |
+| `tests/unit/test_compose_env_key_source.py` | compose 环境变量键名 = 代码读取键名 | `tests/unit/` |
+| `tests/unit/test_serve_lease_single_writer.py` | 租约三判据（HTTP 503 / MCP 拒收不套壳 / 空闲照常） | `tests/unit/` |
+| `tests/unit/test_corrupt_state_write_bar.py` | 九站拒写护栏（45 腿） | `tests/unit/` |
+| import-linter 契约 | 分层依赖方向（kernel 不得 import service 边界） | `pyproject.toml` |
+
+反空洞纪律（本项目已踩出来的做法，写在账本里）：每条新判据要带 **CONTROL 腿**（什么都不改也必须绿）、**边界腿**、**原始失败存在性腿**（不套 wrapper 前先证明坏会真坏）、**AST 结构腿**（守卫装在那个真的会落盘的方法体内、且排在写调用之前）；变异腿只跑在 `%TEMP%` 的 `git archive HEAD` 副本树里，跑前 `ast.parse`，字节备份在 `finally` 还原。
+
+---
+
+## 十七、部署现状（NAS）
+
+- 编排：`docker/docker-compose.api.yml`（HEAD）。`build.context=..`、`image=autoforge-api:latest`、`container_name=autoforge-api`、端口 `8787:8787`、`restart: unless-stopped`。
+- 镜像：`docker/Dockerfile.api`，基础镜像 `python:3.14-slim`，**`COPY src`（源码烘进镜像）**，`pip install -e ".[api,ha,mqtt]"` + 钉死文件名装 `docker/homesdk/homesdk-0.3.2-py3-none-any.whl`，非 root `uid=1000/gid=1001` 运行。
+- 卷：`/vol1/1000/docker/autoforge-store:/data`、`…/ui/dist:/ui`、`…/ui-user-mimo/dist:/mimo`。**运行期不挂 `src`**（热改后端要重烘镜像；开发期临时挂卷那行是注释掉的，勿入生产）。
+- 环境：`AUTOFORGE_LIVE_ENABLED`（缺省 0）、`AUTOFORGE_HA_URL`、`AUTOFORGE_SESSION_TTL_S=3600`、`AUTOFORGE_INBOX_KEY`、`AUTOFORGE_MQTT`（缺省 0）+ `MQTT_HOST/PORT/KEEPALIVE/USER/PASSWORD`（值一律留空）、`AUTOFORGE_TOKENS`。敏感值走 secrets 或宿主 shell env，**不写进这份入库文件**。
+- compose 的 `.env` 加载位置在**文件同目录**（`docker/.env`），不是仓库根；放错就是取空值。
+- 变更后端 ⇒ `docker compose build` 重烘；inode 类变更 ⇒ `--force-recreate`；验收按 md5 对撞（部署通道细则在项目记忆/执行记录里）。
+- git：本地 `master`、远端 `main`，只准 `git push origin master:main`；NAS 侧另有 `nas` remote。
+
+---
+
+## 十八、已知残余（HEAD 现读，逐条点名）
+
+**A. HEAD 上有 5 条判据腿是红的**（当场在 `git archive HEAD` 副本树整树跑批：`3479 passed, 53 skipped, 65 subtests passed, 5 failed in 331.18s`，`PYTEST_RC=1`）：
+
+| 红腿 | 现场读数 | 根因 | 归口 |
+|---|---|---|---|
+| `tests/unit/test_bounded_caches_gate.py::test_real_repo_is_green` | `af_conflict.py:183` 的 `ConflictArbiter._cooldown_pending` 既不在注册表/固定键表/基线，也没豁免标记 | DCD 20261008 §二 那批改动的登记半边没做 | **需要裁定**：这一格是 fail-closed 的持有列表，给它硬上限/TTL 就是"丢了 pending 怎么办"的策略问题，不能顺手 `# exempt` |
+| `…::test_real_repo_measurements_are_pinned` | 扫到 126 个容器，钉的是 125 | 同上（一个站点带来两个红） | 同上 |
+| `tests/unit/test_ui_api_paths_gate.py::test_real_ui_and_src_are_clean_and_counted` | `(90-5)+2 == 85` 断言：参与匹配路由已从 85 涨到 90（新增 `/api/auth/*`） | 登录正规化 `e5b3fd5` 带来 5 条路由，未重钉 | 登录那条线自己收（重钉读数，不放宽扫描） |
+| `…::test_all_trees_of_this_repo_are_in_scope_and_green` | 期望 `ui-user-mimo 20`，现读 **22** | 同上（mimo 树多了 has-admin + register 两处调用点） | 同上 |
+| `tests/unit/test_pkg_markers_gate.py::test_real_repo_is_green_on_the_index_reading` | 仅副本树红（无 `.git` 索引） | **副本树环境所致，不是产品缺陷**；工作区里这条是绿的 | 记为测量口径，不修 |
+
+> 说明：这 4 真 + 1 口径**都不是本轮文档改动引入的**，是"产物已上线、钉住的读数没重钉"这一族。工作区当前另有并发会话未提交的 `af_api.py`/`af_auth.py`/`ui-user-mimo/*`/`docker/*` 改动，所以重钉必须等那批落定后一次做，否则钉的是混合态。
+>
+> 2026-10-09 工作区混合态现读（**未提交态**整树跑批，含并发批次的鉴权改动 + 本批 A/C 修复）：`10 failed, 3504 passed, 53 skipped, 1 warning, 65 subtests passed in 887.87s`，`PYTEST_RC=1`。逐条归属：上表 4 条真红原样还在（同因）；**新增 6 条全在鉴权线**——`test_dcd_20261004_auth_limits`（owner 明文 / 第三方 write 令牌掩码 2 条）、`test_v0_8_auth`（legacy 单令牌兼容 / 多令牌分档 / 撤销即时生效 3 条）、`test_v1_4_token_expiry`（过期令牌 HTTP 侧读到 `400` 而非 `403`，`assert 400 == 403`）。这 6 条**不在 HEAD**：对 `git archive HEAD` 副本树单跑这四份鉴权文件得 `48 passed, 1 warning in 51.38s`（`PYTEST_RC=0`），它们只在带那批未提交改动的混合态里红。本批三份判据文件（`test_user_ui_card_and_toggle` / `test_start_watch_identity` / `test_atomic_write_sites_fixes`）在这一跑里全绿、一条都没进 FAILED 名单。
+
+**B. 结构性残余**（不是红，是射程边界）：
+
+1. `af_irreversible.py` 只有 NL 渲染侧调用方，**执行面没有调用方**（§9.3）。
+2. `af_fidelity.py:29-30` `_canon` 仍是裸 `json.dumps`，与第十三轮修掉的 `_leaf_key` 同形；调用面是开发/CI 侧，需要 `FidelityReport` 新增一档才能如实表达"无法比较"，列待窗。
+3. `af_test.clear()` 的无守卫 `rmtree`（§十）。
+4. observe 档在异常/拒绝两处回落为"照常执行"是设计（§八），但它意味着**试演期的守卫是瞎的**——这段时间的降级通知半边由 `_notify_guard_blind` 承担，判据只覆盖 enforce。
+5. 语义泛化/审计工具的四个缺口（semgrep / detect-secrets / pip-audit / mutation）仍是射程缺口，未变成门禁。
+6. `READONLY_DEGRADED:` 前缀在 homesdk 契约表的登记那一格在 DCD／homesdk 手里（现读两文档零命中）。
+7. `af_nl_parse` 有实现无产品调用方；NL→IR 自由文本属 F14 P2。
+8. `L2_NEEDS_CANARY` 在 `af_scanner.py:415` 真发 ERROR 诊断，却没登记进 `CHECKS`（`:38`，40 项）——判断在、目录里没有这一项 ⇒ 按注册表 enumerating 检查面（文档、面板、"每类检查都有判据吗"这类审计）会漏掉 L2 灰度这条硬门。补法是把键加进 `CHECKS` 与 `CODE_HINT`，不是把诊断删掉。
+
+---
+
+## 十九、变更记录
+
+| 日期 | 版本基准 | 动作 |
+|---|---|---|
+| 2026-10-09 | HEAD `e5b3fd5` | 按现状整体重写：新增三面/两态拓扑、写侧四档 + `dry_run` 零写入清单、真机三档、band 三档、冲突三档与 fail-closed 站点表、证据五档与双轨、测试通道、前端三棵树与 `/mimo` 同源、登录正规化与令牌面、写闸与租约、出向唯一生产者、持久化拒写族、门禁体系、部署现状、HEAD 现读残余；删除明文 MCP 令牌；订正 12 条旧断言（§〇 表） |
+| 2026-10-09 | 工作区混合态（未提交，含并发批次的鉴权改动） | 现场回灌五件：`POST /api/watch/start` 假绿已修（sidecar 身份必须等于本次 IR，失败分三档）+ 档位如实命名 `tier`/`real_device`；**HTTP/用户视角到今天没有常驻真机通道**（申请 `20261009-AF-用户视角到真机的常驻通道`）；`/api/automations` 卡片改按 automation 级取数、`trial` 读不出就给 `null`、启停写侧走 `store.resave_raw`；订正 `forge watch` 没有 `--live`/`--vhass` 两枚旗子；记入 NAS `AUTOFORGE_LIVE_ENABLED=1` 与仓内缺省 0 的分歧；记入 `requires_confirm` 无运行期消费者、`canary` 有；重钉 12 处行号锚点 |
+| 2026-10-09 | 同上，保真复核 | 逐项对撞文档清单与代码注册表：`TOOLS=31`、`CHECKS=40`、含 methods 路由 `=90`、CLI 命令 `=18` 四项全等；安全闸表由 42 名收成正好 40 键（剔掉非注册表的 `IR_SCHEMA`、`L2_NEEDS_CANARY`）；时区键改为 `HOMESDK_TZ`（规范）/`AF_TZ`（别名）并给全序；新增残余 B.8（`L2_NEEDS_CANARY` 发诊断却未注册） |
+| 2026-09-24 | 当时 HEAD | 初版（端到端实测后） |

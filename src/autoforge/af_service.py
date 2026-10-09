@@ -417,6 +417,10 @@ def enable_by_tag(
             graph,
             name,
             note=f"v0.6.0 批量{'启用' if enabled else '禁用'}（tag={tag}）",
+            # 归属必须随版本走：store.save 的 owner 缺省是空串，不传就等于把别人建的归档
+            # 改写成"无归属"——用户视角列表按 owner 分组，一次按标签批量启停会把整批自动化
+            # 从原 agent 组里搬进「未归属/本地」，读数看起来像归档被重建过。
+            owner=_existing_owner(store, name),
         )
         affected.append({"name": name, "version": new_version, "enabled": enabled})
     return {
@@ -441,6 +445,102 @@ def get_graph(store: GraphStore, name: str, version: int | None = None) -> dict[
         "nl": render_graph(graph).text,
         "diagnostics": _scan(graph),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# v1.9.0 用户视角 WebUI：卡片与启停
+#
+# 归档记录的形状是 `rec["graph"] = {"automations": [<automation raw>…]}`
+# （`af_store._graph_raw`），而 nodes / enabled / 其余 IR 字段全住在 automation 级。
+# 端点曾经直接在 `rec["graph"]` 这一层读 `nodes`、读 `enabled`、读 `nl`——那一层没有这些键，
+# 于是每条自动化一律渲染成「无设备 / 已启用 / 预演效果空白」，且**三点"停用"不落**（旗子写在容器层，
+# 运行期读的是 automation 级：`af_scheduler.py:87-89` 不注册触发、`:241-243` 不排空队列）。正源在下面两个函数。
+# ─────────────────────────────────────────────────────────────────────
+
+
+def automation_card(
+    store: GraphStore,
+    name: str,
+    rec: Mapping[str, Any],
+    tags: Sequence[str] | None,
+    pending_map: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """把一条归档记录渲染成用户视角卡片：字段全部按**automation 级**取数。
+
+    归档解析失败不再让整张列表 500：坏记录只影响自己那一格（`preview_nl` 里当场说明原因），
+    其余自动化照常可读——列表页是日常入口，一条坏归档不该把整个入口打死。
+    """
+    archived = "archived" in (tags or [])
+    graph: Graph | None = None
+    ir_error = ""
+    try:
+        graph = load_graph(rec.get("graph") or {})
+    except (IRValidationError, KeyError, TypeError, ValueError) as exc:
+        ir_error = str(exc)
+
+    autos = list(graph) if graph is not None else []
+    ids: list[str] = []
+    seen: set[str] = set()
+    for auto in autos:
+        for eid in sorted(auto.reads() | auto.writes()):
+            if eid not in seen:
+                seen.add(eid)
+                ids.append(eid)
+    names = _catalog(store).display_names(ids) if ids else {}
+    devices = [{"entity_id": eid, "friendly_name": names.get(eid) or eid} for eid in ids]
+
+    # 空归档（automations 为空）按"未启用"呈现：没有一条规则在跑，这是真值而不是缺省。
+    enabled = bool(autos) and all(auto.enabled for auto in autos)
+    if graph is not None:
+        preview = render_graph(graph).text
+    else:
+        preview = f"⚠ 归档无法解析（IR 校验失败）：{ir_error[:200]}"
+
+    return {
+        "id": name,
+        "name": name,
+        "agent": rec.get("owner", ""),
+        "preview_nl": preview,
+        "devices": devices,
+        "enabled": enabled,
+        "archived": archived,
+        "status": "archived" if archived else ("disabled" if not enabled else "enabled"),
+        "pending_op_id": (pending_map or {}).get(name),
+        "saved_at": rec.get("saved_at"),
+        "version": rec.get("version"),
+        # 试演期与触发历史**没有可读取的落盘正源**：首演/试演台账按 diff 摘要记账
+        # （af_premiere.enter_trial(store_diff_sha)），不是按自动化名；触发记录只在 watch 进程内存里。
+        # 旧形状在这里硬写 `state: "auto"`，等于替每条自动化宣布"已经走到全自动档"——
+        # 读不出就给 null，前端 trialMeta(null) 会渲染成不点亮的三档 + 「未进入试演」。
+        "trial": None,
+        "last_triggered": None,
+        "trigger_7d": 0,
+    }
+
+
+def set_automation_enabled(store: GraphStore, name: str, enabled: bool) -> int:
+    """翻转归档内**每一条自动化**的启停旗子，返回新版本号。
+
+    写在 automation 级：运行期的读者是调度器（`af_scheduler.py:87-89` 不为禁用项注册触发、
+    `:241-243` 不排空它的队列），容器层那个位置没有任何代码读取。落盘复用 `GraphStore.resave_raw`：
+    锁、版本号、原子写与归属字段（owner / writer / note 之外的记录元数据）都留在 store 那一处，端点不碰。
+    """
+
+    def flip(graph_raw: Any) -> None:
+        items = graph_raw.get("automations") if isinstance(graph_raw, dict) else None
+        if not isinstance(items, list) or not items:
+            # fail-closed：形状不认识就**不写新版本**。写在容器层会静默无效，
+            # 抛在这里至少让调用方看到"这一条落不了"，而不是"点了没反应"。
+            raise ServiceError(
+                f"归档 {name!r} 的 graph 不是 {{'automations': [...]}} 形态，无法定位启停旗子",
+                status=409,
+            )
+        for item in items:
+            if not isinstance(item, dict):
+                raise ServiceError(f"归档 {name!r} 内含非对象条目，拒绝翻转启停旗子", status=409)
+            item["enabled"] = enabled
+
+    return store.resave_raw(name, flip)
 
 
 def save_graph(
@@ -2459,27 +2559,72 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
         pid_file.write_text(str(proc.pid), encoding="utf-8")
     except OSError:
         pass
-    # 等 sidecar 出现，同时做健康探测
+    # 等 sidecar 出现，同时做健康探测。
+    # **sidecar 身份必须对得上本次这份 IR**：它是目录里唯一的一个文件，上一条 watch 的残留会被读成
+    # "本次启动成功"（2026-10-09 现场实测：1.18s 就回 ok=true，带的是 9-29 另一条 watch 的 graph 路径）。
     import time
     info = root / "watch.lock.info"
+    mine = str(tmp)
+    # 档位如实命名，且**从本函数自己拼给 CLI 的旗子里读回来**（不另立第二套说法）。
+    # `forge watch` 没有 `--live` 这个旗子：它的真机档是"不带 `--dry-live`"（af_cli.py:585
+    # `live=not dry_live`），而缺 `--confirm` 时 CLI 直接拒启动（af_cli.py:565-566）。
+    # 本层从不传 `--confirm`/`--live-allow` ⇒ `dry_live=False` 这一档只会得到子进程退出；
+    # HTTP/用户界面到真机那条**常驻**通道因此今天不存在，是否开它归 DCD 裁（20261009-AF 申请）。
+    # 一次性真机下发 `POST /api/live/run` 是另一条已存在的通道（要 confirm + live_allow），
+    # 它不在这格的射程内——那一档下发完就退出，不监听。
+    tier = "dry_live" if "--dry-live" in cmd else "live_unconfirmed"
+    other: dict[str, Any] = {}
     for _ in range(15):
         time.sleep(1)
         # P1-19：子进程已死 → 立即返回失败（不再假成功）
-        if proc.poll() is not None:
-            return {"ok": False, "error": f"watch 子进程启动后立即退出（exit_code={proc.returncode}），请检查 watch.log"}
-        if info.exists():
-            try:
-                data = json.loads(info.read_text(encoding="utf-8"))
-                return {
-                    "ok": True,
-                    "pid": proc.pid,
-                    "owner": data.get("owner", ""),
-                    "graph": data.get("graph", ""),
-                    "dry_live": dry_live,
-                }
-            except (OSError, ValueError):
-                pass
-    # P1-19：15 秒后做最终健康探测
+        exited = proc.poll() is not None
+        try:
+            data = json.loads(info.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        if data is not None and data.get("graph") == mine:
+            return {
+                "ok": True,
+                "pid": proc.pid,
+                "owner": data.get("owner", ""),
+                "graph": data.get("graph", ""),
+                "acquired_at": data.get("acquired_at", ""),
+                "dry_live": dry_live,
+                "tier": tier,
+                # 两档都不落真机：dry_live 只记意图，live_unconfirmed 被 CLI 拒启动（走不到这一格）。
+                "real_device": False,
+            }
+        if data is not None:
+            other = data
+        if exited:
+            return {
+                "ok": False,
+                "reason": "child_exited",
+                "error": f"watch 子进程启动后立即退出（exit_code={proc.returncode}），请检查 watch.log",
+                "holder": other or None,
+            }
+    # 15 秒到：分三种如实结论
     if proc.poll() is not None:
-        return {"ok": False, "error": f"watch 子进程已退出（exit_code={proc.returncode}），请检查 watch.log"}
-    return {"ok": True, "pid": proc.pid, "dry_live": dry_live, "note": "watch 已启动，sidecar 尚未出现"}
+        return {
+            "ok": False,
+            "reason": "child_exited",
+            "error": f"watch 子进程已退出（exit_code={proc.returncode}），请检查 watch.log",
+            "holder": other or None,
+        }
+    if other:
+        return {
+            "ok": False,
+            "reason": "coord_lock_held_by_other",
+            "error": (
+                f"sidecar 属于别的 watcher（graph={other.get('graph', '?')} @ "
+                f"{other.get('acquired_at', '?')}），本次这份没拿到协调锁"
+            ),
+            "pid": proc.pid,
+            "holder": other,
+        }
+    return {
+        "ok": False,
+        "reason": "not_registered",
+        "error": "子进程仍在跑，但 15 秒内没写出自己的 sidecar——**不能证明它在监听**（旧版本这里回 ok=true）",
+        "pid": proc.pid,
+    }

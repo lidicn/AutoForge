@@ -332,6 +332,24 @@ class DeviceCatalog:
             return ""
         return _meta_area(meta)
 
+    def display_names(self, entity_ids: Iterable[str]) -> dict[str, str]:
+        """批量取缓存里的人类可读名（**只读缓存，不发网络**）。
+
+        列表页一次要给十几条自动化配设备名：逐实体走 `get_state` 是每张卡片一发 HTTP。
+        缓存里没有的实体**不返回键**——由调用方回退到 entity 标识本身，
+        免得"目录还没刷新"被渲染成"这个设备没有名字"。
+        """
+        entities = self._load().get("entities") or {}
+        out: dict[str, str] = {}
+        for eid in entity_ids:
+            meta = entities.get(eid)
+            if not isinstance(meta, Mapping):
+                continue
+            name = str(meta.get("friendly_name") or "").strip()
+            if name:
+                out[str(eid)] = name
+        return out
+
     # ── 1. 刷新（拉 HA 全量落缓存）──────────────────────────────────────
     def refresh(self, *, full: bool = True, domain: str = "", area: str = "") -> dict[str, Any]:
         """从 HA 重新快照全屋设备进本地缓存；之后 `resolve` / `list_entities` 只读缓存。

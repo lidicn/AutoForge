@@ -127,6 +127,11 @@ def test_resave_raw_leaves_no_tmp_residue(tmp_path):
 
 
 def test_enable_endpoint_round_trips_through_the_store(tmp_path, monkeypatch):
+    """启停走 store 的锁与版本，但**旗子必须落在 automation 级**——容器层那一级没有读者。
+
+    2026-10-09 现场把这一格重钉过：旧断言写的是 `["graph"]["enabled"] is True`，
+    那正是"点了没反应"的形状（版本号确实涨了、读数照旧），钉住的是 bug 而不是修法。
+    """
     monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
     store = _store(tmp_path)
     from fastapi.testclient import TestClient
@@ -135,21 +140,24 @@ def test_enable_endpoint_round_trips_through_the_store(tmp_path, monkeypatch):
     r = client.post("/api/automations/g1/enable")
     assert r.status_code == 200, r.text
     assert r.json()["version"] == 2
-    assert store.load_record("g1")["graph"]["enabled"] is True
+    container = store.load_record("g1")["graph"]
+    assert "enabled" not in container, container
+    assert [a.raw["enabled"] for a in store.load("g1")] == [True]
 
 
-def test_api_layer_no_longer_reaches_into_store_privates():
-    """`_resave_graph_raw` 必须只是转调：手抄落盘纪律 = 下一次又漏一把锁。"""
+def test_api_layer_does_no_hand_copied_archive_writes():
+    """af_api 整份不做裸落盘：`.replace`/`write_text`/`write_bytes` 一个都不许出现。
+
+    原来这一格按名字找 `_resave_graph_raw` 并检查它"只是转调"。启停下沉到
+    `af_service.set_automation_enabled` 之后那个闭包没有了——按名字守会随产物一起消失，
+    所以改成文件级口径：**这张脸**不再有手抄落盘的余地（要落盘就走 `af_atomic` 的助手）。
+    """
     tree = ast.parse((ROOT / "src" / "autoforge" / "af_api.py").read_text(encoding="utf-8"))
-    fn = next(
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and n.name == "_resave_graph_raw"
-    )
-    names = {getattr(node.func, "attr", "") for node in ast.walk(fn) if isinstance(node, ast.Call)}
-    attrs = {node.attr for node in ast.walk(fn) if isinstance(node, ast.Attribute)}
-    assert "resave_raw" in names, names
-    assert "_dir" not in attrs and "replace" not in names, attrs
+    names = {getattr(node.func, "attr", "") or getattr(node.func, "id", "")
+             for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    for banned in ("write_text", "write_bytes", "replace", "rename"):
+        assert banned not in names, f"{banned} 出现在 af_api 的落盘面上：{sorted(names)}"
+    assert "atomic_write_text" in names, "本层确有一处落盘，必须走助手"
 
 
 # ── _delete_archive：标签侧车整段在 tags.lock 内读-改-写 ───────────────

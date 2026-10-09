@@ -6152,3 +6152,213 @@ COPY_REMOVED_OK
 
 —— AutoForge 开发 · 2026-10-08
 
+
+## 二之七十三、两份架构/知识文档按 HEAD 整体重写 + 四项清单与注册表逐项对撞（安全闸表从 42 名收成 40 键），并当场量出 HEAD 是红的 5 条腿
+
+### 一、起因与基准
+
+用户指令：「重新梳理当前架构/知识文档。有遗漏的需要补上。当前新增加了测试模式。新增加了用户视角 webui。还有那些预演 dry run 等等需要详细说明。」
+
+基准 HEAD `e5b3fd5`。被改的两份：
+
+| 文档 | 改前 | 改后 |
+|---|---|---|
+| `docs/architecture/AF完整架构与运行时说明.md` | 255 行，正文自述「基于 2026-09-24 实测」 | 453 行 / 20 节（§〇~§十九），`CR=0` |
+| `docs/architecture/AF完整知识文档.md` | 504 行 | 509 行 / 19 节（§一~§十九），`CR=0` |
+
+工作区另有并发会话未提交的 `af_api.py`/`af_auth.py`/`docker/*`/`ui-user-mimo/*` 等，**本批只动这两份文档**，不碰、不登记他人 WIP。
+
+### 二、取证口径：清单不抄散文，直接读注册表
+
+旧两份文档的计数全是散文手抄，所以重写时每项都用系统自己的信号当场量：
+
+| 面 | 读数 | 取法 |
+|---|---|---|
+| MCP 工具 | **31** | `len(af_mcp.TOOLS)` |
+| HTTP 路由（含 methods 的那批） | **90** | `app.routes` 逐条带 methods 计数 |
+| CLI 命令 | **18** | typer 命令表 |
+| 安全闸检查项 | **40** | `len(af_scanner.CHECKS)`，注册表在 `af_scanner.py:38` |
+
+对撞结果：知识文档 §七 的分组表原列 **42 个名字**，多出的两个**不是检查项**：
+
+1. `L2_NEEDS_CANARY` —— `af_scanner.py:415` 会真发 **ERROR** 诊断（L2 动作标了 `requires_confirm=true` 却没配 `canary` 灰度就拒，P1-2 防"用确认位换免费豁免"），但它**没登记进 `CHECKS`**。判断在、目录里没有这一项 ⇒ 按注册表枚举检查面的地方（文档、面板、"每类检查是否都有判据"这类审计）会漏掉 L2 灰度这条硬门。**本批只登记不修**（补法=把键加进 `CHECKS` + `CODE_HINT`，并给判据，属另一批；不是把诊断删掉），已写进架构文档 §十八 B.8。
+2. `IR_SCHEMA` —— 不是扫描项，是错误知识的**分类键**（`af_error_knowledge.py:60/81/115`），把 schema 报错归到"补必填字段"的修复建议。
+
+收成 40 键后按脚本复测：表内去重 40、九个族分组求和 40、`表 − CHECKS = ∅`、`CHECKS − 表 = ∅`。
+
+顺带一个测量陷阱，写进文档免得下轮重踩：只按 `Diagnostic("字面量", …)` 的 AST 扫，会把 7 项判成"注册了却从不发出"——`ENTITY_DEP_CYCLE`/`CROSS_DEP_CYCLE`/`EMIT_SELF_LOOP` 走变量传码（`af_scanner.py:1093-1104`），`LIVE_*` 四项走模块级字符串常量（`:1233` 起）。
+
+### 三、用户点名的三块遗漏，各自落在哪一节
+
+**「测试模式」在 HEAD 上是两样东西，不是一样**，旧文档两样都没写全：
+
+| 名字 | 是什么 | 面 | 文档落点 |
+|---|---|---|---|
+| `af_test.TestChannel`（`/data/test`） | 产品化测试通道：批量 `draft → apply(stage="simulate") → save_graph(tags=["test"])`，**绕过 pending 队列**（测试区自动 approve） | **只在 MCP 面**（`af_mcp.py:499/513/526`）；`/api/test/*` 不存在 | 知识文档 §九、架构文档 §十 |
+| 执行档位 | 写侧 `dry_run`、真机侧 `--dry-live`、`HAAdapter(dry_run=True)` 缺省安全 | CLI/HTTP/MCP | 知识文档 §八、架构文档 §五、§六 |
+
+同时把**不存在**的东西点名写死，防止下轮又去找：`TEST_MODE`、`AF_MODE`、`SANDBOX`、代码里的 `safe_manual`、`/api/test/*`、`/api/live/run` 上的 `dry_run`。
+
+测试通道两条边界如实记：`MAX_BATCH_SIZE=500`（`af_test.py:24`）；`clear()` 是**无守卫 `shutil.rmtree`**（`:229-233`）——它删的是 test_root 整棵，不校验归属，与第十八轮 F12 那条"归属未知不放行"的纪律不同形，列为残余 B.3。
+
+**预演 `dry_run` 的准确定义**（旧文档只写"dry run 只跑 1、2"，没写它为什么必须零写入）：`build`+`simulate` 都真跑，然后**在入队之前返回**（`af_apply.py:189-193`，返回 `would_enqueue=True`、`pending_ref=None`）⇒ 不消费首演码（`:134-135`，一次性码用掉就没，"先看看"不该有代价）、不入待批队列、不进 24h 试演期。配套写侧 stage 表按 8 列排开（是否过闸/是否仿真/是否消费首演码/是否入队/是否进试演期/落盘/零写入/调用法），并钉住两条旧坑：未知 stage **拒**（`:92-98`，此前拼错会一路落到 `save`=部署）、别名只有 `{"apply":"save"}`（`:34`）。
+
+**用户视角 WebUI** 补的是"三棵树谁是谁"：生产 = `ui-user-mimo/` 挂 `/mimo/`（`af_api.py:265 UI_USER_PREFIX="mimo"` + vite `base:'/mimo/'` + compose 卷，三处同源由 `tests/unit/test_ui_user_mount.py:71-155` 守）；`ui/` = 开发者控制台（naive-ui，20 路由）；`ui-user/` = **冻结的坏原型**（假 `mock-token`、无 `api.login`、令牌键漂移）——旧文档把三者混成一团。登录正规化那半边（`AdminUserStore` PBKDF2 100000 轮、`{root}/.auth/admin.json` 0600、未知用户名也哈希的等时校验、`ISSUED_TTL_S=86400`）一并写进 §十。
+
+### 四、HEAD 是红的 5 条腿（当场在 `git archive HEAD` 副本树整树跑批，不是推断）
+
+```
+5 failed, 3479 passed, 53 skipped, 1 warning, 65 subtests passed in 331.18s
+PYTEST_RC=1
+```
+
+| 红腿 | 根因 | 归口 |
+|---|---|---|
+| `test_bounded_caches_gate.py::test_real_repo_is_green` | `af_conflict.py:183` 的 `_cooldown_pending` 未进注册表/固定键表/基线，也无豁免标记 | **需要裁定**：这一格是 fail-closed 的持有列表，给它硬上限/TTL 就是"丢了 pending 怎么办"的策略问题，不能顺手 `# exempt` |
+| `…::test_real_repo_measurements_are_pinned` | 扫到 126 个容器，钉的是 125（同一站点带来的第二个红） | 同上 |
+| `test_ui_api_paths_gate.py::test_real_ui_and_src_are_clean_and_counted` | `(90-5)+2 == 85` 断言，参与匹配路由已 85→90 | `e5b3fd5` 加了 5 条 `/api/auth/*` 未重钉；登录那条线自己收（重钉读数，不放宽扫描） |
+| `…::test_all_trees_of_this_repo_are_in_scope_and_green` | 期望 `ui-user-mimo 20`，现读 **22** | 同上（has-admin + register 两处调用点） |
+| `test_pkg_markers_gate.py::test_real_repo_is_green_on_the_index_reading` | 副本树无 `.git` 索引 | **测量口径，不是产品缺陷**；工作区里这条是绿的，不修 |
+
+四条真红都**不是本批文档改动引入的**，是"产物已上线、钉住的读数没跟着重钉"这一族。**不顺手重钉**的原因：同一批文件正被并发会话改，现在钉住的是混合态。两份文档的 §十八 A 已把这 5 条原文读数登记进去，等那批落定后一次重钉。
+
+### 五、一份要 owner 处置的安全项：旧文档里有真实 MCP 令牌明文
+
+旧两份文档共 **3 处**把真实 MCP 令牌明文写进了正文和 `curl` 示例。本批全部换成 `$AF_MCP_TOKEN`/`<AF_MCP_TOKEN>` 占位，并在知识文档 §十三 写明：**该值已随旧文档进过 git 历史，按已泄漏处理，需要轮换**（值在此不复述）。这是文档侧的处置，容器里那份令牌的实际轮换不在 AF 文档批的权限面内，交由 owner 在部署机上做。
+
+### 六、本批没收的，点名不谎报
+
+1. `CHECKS` 注册表缺 `L2_NEEDS_CANARY`（§二 第 1 项）——只写进文档和残余档，未加键。
+2. `af_test.clear()` 的无守卫 `rmtree`——只点名，未改语义（改它要给 test_root 做归属校验，与 F12 那条纪律同源，值得单批）。
+3. 路由/mimo 两处判据重钉、`_cooldown_pending` 上限裁定——分别在并发会话和 DCD 手里。
+4. 两份文档不属任何名字哨兵的扫描面——当场测：`grep -rln "docs/architecture" scripts/ tests/ .github/` **零命中**，所以本轮改写不可能"散文踩红判据"；但也**没有任何门禁保证文档与注册表继续一致**——这一族只有本轮的脚本对撞，属射程缺口，登记不夸口。
+
+—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `e5b3fd5`
+
+
+## 二之七十四、生产现场那条「部署了却从不触发」追出三个真缺陷：卡片按容器层取数（修）、`start_watch` 假成功（修）、UI 到真机没有常驻通道（交 DCD）
+
+### 一、起因是现场，不是审计
+
+用户实际让 deepseek-agent 经 `http://192.168.2.200:8787/mimo/automations` 部署了「书房射灯与显示器挂灯同步」，**从未触发**。用户贴回的卡片读数原样：设备「无设备」、预演效果空、试演期「未进入试演」、影子/金丝雀「自动」、最近触发「从未触发」、近 7 天 0 次。用户追问「是没接线吗」，并给出两条裁定：「起 watcher 实测这条（先 dry-live）」；「这个 mimoUI 是我实际使用的。因此我要确保它能真实控制设备，而不只是模拟运行」。
+
+追下来是**三件不同的事**，混成一句"没接线"会漏掉两件，所以分开定性为 C / A / B。
+
+### 二、C：卡片整列取数取错了层（本批已修）
+
+`/api/automations` 旧实现在 API 层手抄了一份容器改写（`af_api._automation_card` + `af_api._resave_graph_raw`），按**容器层**读 `graph["enabled"] / graph["devices"] / graph["nl"]`。而容器层根本没有这些键：`_graph_raw()`（`af_store.py:56-58`）落盘只写 `{"automations": [ automation raw … ]}`，`enabled`、`nl`、设备读写集全都只在 automation 级。后果是这三列的读数与归档真实内容**无关**：设备恒「无设备」、预演恒空、启用态恒"已启用"（现场 12/12 行同形）。
+
+写侧同族且更危险：toggle 端点把 `enabled` 写在容器层，而 `Automation.enabled` 的**运行时读者是调度器**——`af_scheduler.py:88`（禁用项不注册触发器）与 `:242`（队列不排禁用项）。写在容器层等于用户点「禁用」后调度器照旧触发；反向点「启用」一条实际禁用着的自动化，读数也不动。这是「看起来活着≠在役」的反向版本。
+
+修法：
+
+1. `svc.automation_card()`（`af_service.py:461`）成为卡片取数**唯一正源**，全按 automation 级读。设备 = `sorted(auto.reads() | auto.writes())` 去重，经 `af_catalog.display_names()`（`af_catalog.py:335`，**只查缓存、不打网络**）换显示名，缓存没命中回落 entity_id 本身；`enabled = bool(autos) and all(auto.enabled …)`（`:493`）；归档解析失败时预演位显示 `⚠ 归档无法解析（IR 校验失败）：…` 而不是空白。
+2. `svc.set_automation_enabled()`（`:521`）逐条改 automation 级 `raw["enabled"]`，再走 `store.resave_raw()`（锁 + 随机 tmp 名）；容器形状不是 `automations` 列表、或条目不是 dict ⇒ `ServiceError(status=409)` 拒，不静默改形。
+3. `af_api.py` 删掉两处手抄：`:1315` / `:1340` 改调 `svc.automation_card`，`:1352` / `:1359` 改调 `svc.set_automation_enabled`。
+4. 新增 `tests/unit/test_user_ui_card_and_toggle.py`（19 条腿）把"取数层"钉住。
+
+**我自己错判过一次，写进来免得下轮把它当依据**：先前我在注释里写「`Automation.enabled` 唯一读者在 `af_ir/models.py`」。grep 反证——真读者是调度器那两处。`af_service.py` 头注释与 `set_automation_enabled` docstring 都已改成点名调度器，且刻意写成**行数中性**的编辑，免得把本批 `+100` 行带来的引用位移再叠一层。
+
+同一批里还落了一条 DCD 判例（「测试把缺陷冻结成期望行为——改期望值前必须先证明现行为是对的」）：`test_atomic_write_sites_fixes.py` 原有一条腿把「enable 之后容器层 raw 变了」当期望，那是把缺陷冻结进测试。先证明了现行为是错的（§二 第 1 段的结构根因），再重钉成 automation 级：
+
+```python
+container = store.load_record("g1")["graph"]
+assert "enabled" not in container, container
+assert [a.raw["enabled"] for a in store.load("g1")] == [True]
+```
+
+### 三、A：`start_watch` 回 `ok=true` 却不证明锁是本次这份（本批已修）
+
+旧实现起子进程后只等 sidecar **存在**，不比对身份。sidecar 是目录里唯一那个文件，上一条 watch 的残留会被读成"本次启动成功"。现场实测过一次 **1.18s** 就回 `ok=true`，带回来的是 9-29 另一条 watch 的 graph 路径——那条子进程可能早已退出，面板却显示"在役"。
+
+修法（`af_service.py:2501` 起，sidecar 段 `:2562-2630`）：只有 `data["graph"] == mine` 才认本次；不认时给三条具名原因——`child_exited`（`:2602` / `:2610`）、`coord_lock_held_by_other`（`:2617`）、`not_registered`（`:2627`）。返回体新增 `tier` 与 `real_device`（`:2595`），且档位**从本函数自己拼给 CLI 的旗子里读回来**（`:2575`），不另立第二套说法。
+
+顺带纠正一处我自己写进架构文档的假话：`forge watch` **没有 `--live` 旗子，也没有 `--vhass`**。它的真机档是"不带 `--dry-live`"（`af_cli.py:585` `live = not dry_live`），缺 `--confirm` 时 CLI 直接拒启动（`af_cli.py:565-566`）。旧文档那句 `--vhass fake|ha` 描述的是一个不存在的选项（`af_cli.py:585` 那个 `"fake"` 是被 live 分支忽略的位置参数）。两份文档的 watch 行、真机侧行、§六 档位表都已按现读改写，并新增一条 `CliRunner` 真跑 CLI 的腿断言 `exit_code != 0` 且输出含 `--confirm`（在 `tests/unit/test_start_watch_identity.py`，11 条腿）。
+
+### 四、B：用户视角 UI 到真机没有常驻通道 —— 不自主决定，已交 DCD
+
+A、C 修完，"这条自动化到底能不能真控设备"仍然没有答案，因为缺的不是接线细节而是**通道口径**，且现场读数说明默认档根本不允许真机：
+
+| 事实 | 证据 |
+|---|---|
+| HTTP 面唯一的真机通道是 `/api/live/run`，**一次性**、需 `confirm=true`（否则 403，`af_service.py:1889`）、需 `live_allow` 非空（否则 400，`:1897`） | 且只被开发控制台接走：`ui/src/api/client.ts:126`；`ui-user-mimo/` 没有调用点 |
+| 总闸 `AUTOFORGE_LIVE_ENABLED` 仓内缺省 **0**，NAS 现场 **1** | `docker/docker-compose.api.yml:45`（工作区与 `git show HEAD:` 两份都是 `${AUTOFORGE_LIVE_ENABLED:-0}`）；NAS 侧来自部署机 env |
+| 常驻真机 watcher 只有 CLI 一条路（`forge watch`），HTTP/界面面没有 | `af_cli.py:585`；`af_api.py` 无对应端点 |
+| `requires_confirm` **没有运行时消费者**：`af_executor.py` 全文件零命中，只在编译期/文案出现 | 对照：`canary` 是真 enforcement（`af_executor.py:545-557` / `:571-596`） |
+
+⇒ 决策申请 `20261009-AF-用户视角到真机的常驻通道` 已落 `E:\NAS\关键决策部\inbox`（119 行，LF），内含 Q1（通道形态 A/B/C）、Q2（默认档甲/乙/丙）、Q3/Q4（是否）、§五「本批已落地不再申请」、以及一张「**裁定前 AF 不会做**」清单（不会替 UI 加常驻真机开关、不会把 `requires_confirm` 接成运行时闸、不会动 compose 里的 `AUTOFORGE_LIVE_ENABLED` 缺省值）。
+
+### 五、读数（当场实测；脚本与 `.log` 都在 `%TEMP%`，落不了盘的一律不引）
+
+三判定文件（工作区）：
+
+```
+42 passed, 1 skipped, 1 warning in 13.10s
+TESTS_RC=0
+```
+
+整树（工作区，含并发会话未提交的 auth WIP）：
+
+```
+10 failed, 3504 passed, 53 skipped, 1 warning, 65 subtests passed in 887.87s (0:14:47)
+PYTEST_RC=1
+```
+
+10 条红逐条归因：把这 10 条所在的 5 个文件放进 `git archive HEAD` **副本树**重跑，并断言 `autoforge.__file__` 落在副本树内（本机有 editable `.pth` 指向 `E:\NAS\AutoForge\src`，不核对就会出现"跑副本、import 工作区"的假绿）：
+
+```
+PROVENANCE=C:\Users\lidicn\AppData\Local/Temp/afHeadAttr/src\autoforge\__init__.py
+4 failed, 128 passed, 1 warning in 114.05s (0:01:54)
+HEAD_ATTR_RC=1
+```
+
+- HEAD 也红的 4 条 = 2 条 `_cooldown_pending`（有界缓存）+ 2 条 ui-path 钉数漂移，即 §二之七十三 已登记的两族，**不是本批引入**。
+- 另 6 条（`test_dcd_20261004_auth_limits` 2、`test_v0_8_auth` 3、`test_v1_4_token_expiry` 1）在 HEAD 是**绿**的（含在上面那 128 passed 里）⇒ 由并发会话那批未提交的 auth 改动造成，本批不登记、不代修、不替它重钉期望值。
+- 本批三条判定文件在那次整树跑批里全绿。
+
+### 六、变异自证：7 条缺陷形状各一条注入腿 + 1 条对照腿
+
+每条腿在 `%TEMP%` 副本树（不碰工作树）把修好的位置改回**缺陷形状**，跑三判定文件，期望"注入即红"，腿后按字节还原：
+
+```
+IMPORT_PROVENANCE=C:\Users\lidicn\AppData\Local\Temp\afMutCardToggle_lreqp47h\tree\src\autoforge\__init__.py
+BASELINE_RC=0        → 42 passed, 1 skipped, 1 warning in 33.22s
+M1-card-enabled-reads-container-layer    red  5 failed, 37 passed, 1 skipped
+M2-card-devices-empty                    red  3 failed, 39 passed, 1 skipped
+M3-card-preview-reads-container-nl       red  2 failed, 40 passed, 1 skipped
+M4-card-trial-hardcoded-auto             red  1 failed, 41 passed, 1 skipped
+M5-toggle-writes-container-layer         red  4 failed, 38 passed, 1 skipped
+M6-sidecar-identity-dropped              red  2 failed, 40 passed, 1 skipped
+M7-tier-claims-live                      red  1 failed, 41 passed, 1 skipped
+C1-control-docstring-only                green 42 passed, 1 skipped
+RESTORE_MISMATCH=NONE
+MUTATION_VERDICT=OK
+COPY_REMOVED_OK=True
+MUT_RC=0
+```
+
+对照腿 C1 只改 docstring（不改任何行为），用来证明这套判红不是"动一下就红"；M1~M5 覆盖 C 的五种取数/写侧形状，M6/M7 覆盖 A 的两条（身份比对、档位命名）。注入前一律 `ast.parse`，副本树跑完 `rmtree` 并断言已移除。
+
+### 七、门禁读数
+
+```
+GATES_RC=1
+```
+
+唯一红：`af_conflict.py:183` 的 `ConflictArbiter._cooldown_pending` 既不在注册表也不在固定键表/基线，那一行也没有豁免标记。对该门单独跑 `git archive HEAD` 副本树：
+
+```
+HEAD_BC_RC=1   （同一处、同一读数：注册表 3 项 / 固定键 3 项 / 基线 114 项 / 扫到 126 个容器）
+```
+
+且 `git diff --numstat -- src/autoforge/af_conflict.py` 为空 ⇒ 本批没碰这个文件，这条红在 HEAD 上就成立。这一格是冲突守卫 fail-closed 的 pending 持有列表：给它 TTL/硬上限就是决定"丢了 pending 怎么办"，属裁定面，**不顺手 `# exempt`**（§二之七十三 已登记，等 DCD 20261008 冲突内省那半边回话）。其余各门本次绿，含 UI↔路由契约门（UI 调用点 94 处、服务端参与匹配 90 条、反向未认领 15 条只计数不判红）与计划表口径门。
+
+### 八、本批没收的，点名不谎报
+
+1. mimo 面板"启用"与真机之间的**常驻通道**——等 `20261009-AF-用户视角到真机的常驻通道` 裁定。
+2. `_cooldown_pending` 的封顶策略——同属裁定面。
+3. 6 条 auth 红——在并发会话手里。
+4. NAS 上那条 dry-live watcher 仍在等 `switch.lumi_cn_lumi_158d000239c546_aq1_on_p_2_1` 的一次真实 off→on；只有 owner 能扳那个开关，HA 令牌在容器里，AF 不代扳。
+5. 卡片 `trial` 仍回 `null`——首演台账按 `store_diff_sha256` 记（`af_apply.py:208` `af_premiere.enter_trial(store_diff_sha, hours=24)`），一次 store 差异一份试演，**没有 per-automation 的试演来源**；这不是取数层能修的，得先有 per-automation 来源才谈得上显示。前端 `trialMeta(null)` 已经如实落到 `available:false`。
+
+—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `e5b3fd5`

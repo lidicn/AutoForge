@@ -1292,38 +1292,6 @@ def build_app(
         }
 
     # ── v1.9.0 用户 WebUI：自动化列表 / 详情 / 操作 ──
-    def _automation_card(name, rec, tags, pending_map):
-        graph = rec.get("graph", {}) or {}
-        nodes = graph.get("nodes", []) or []
-        devices = [
-            {
-                "entity_id": n.get("entity_id") or n.get("id"),
-                "friendly_name": n.get("friendly_name") or n.get("entity_id") or n.get("id"),
-            }
-            for n in nodes
-            if n.get("entity_id") or n.get("id")
-        ]
-        enabled = bool(graph.get("enabled", True))
-        archived = "archived" in (tags or [])
-        status = "archived" if archived else ("disabled" if not enabled else "enabled")
-        return {
-            "id": name,
-            "name": name,
-            "agent": rec.get("owner", ""),
-            "preview_nl": graph.get("nl") or "",
-            "devices": devices,
-            "enabled": enabled,
-            "archived": archived,
-            "status": status,
-            "pending_op_id": pending_map.get(name),
-            "saved_at": rec.get("saved_at"),
-            "version": rec.get("version"),
-            # P1 后续接运行时 persist_dir 聚合试演期与触发历史；先给诚实默认值
-            "trial": {"state": "auto", "since": None, "anomaly": False},
-            "last_triggered": None,
-            "trigger_7d": 0,
-        }
-
     def _pending_map():
         try:
             items = PendingStore(store.root).list()
@@ -1335,16 +1303,6 @@ def build_app(
             if it.get("payload", {}).get("name")
         }
 
-    def _resave_graph_raw(name, mutate):
-        """启停这类"只翻一个旗子"的写：整段交给 `GraphStore.resave_raw`。
-
-        原来这段写在端点闭包里：`store._dir()`（伸进 store 的私有面）+ 固定名
-        `v{N}.tmp` + 裸 `write_text` + `os.replace`，**既不拿 `.lock` 也不 fsync**——
-        两条并发 `/enable|/disable` 会算出同一个 `v{N}`、写同一个 tmp 文件，
-        被交错过的半截 JSON 再以"最新记录"的名字落进目录。
-        """
-        return store.resave_raw(name, mutate)
-
     @app.get("/api/automations", dependencies=[Depends(_read)])
     def api_automations(group_by: str = Query(default="agent")) -> dict[str, Any]:
         hist = store.history()
@@ -1355,7 +1313,9 @@ def build_app(
                 rec = store.load_record(h["name"])
             except FileNotFoundError:
                 continue
-            cards.append(_automation_card(h["name"], rec, store.get_tags(h["name"]), pmap))
+            cards.append(
+                svc.automation_card(store, h["name"], rec, store.get_tags(h["name"]), pmap)
+            )
         if group_by == "agent":
             groups: dict[str, list[dict[str, Any]]] = {}
             for c in cards:
@@ -1374,21 +1334,21 @@ def build_app(
             rec = store.load_record(name)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="未找到自动化")
-        card = _automation_card(name, rec, store.get_tags(name), _pending_map())
+        card = svc.automation_card(store, name, rec, store.get_tags(name), _pending_map())
         return {"ok": True, "automation": card}
 
     @app.post("/api/automations/{name}/enable", dependencies=[Depends(_write)])
     def api_automation_enable(name: str) -> dict[str, Any]:
         if store.latest(name) is None:
             raise HTTPException(status_code=404, detail="未找到自动化")
-        v = _resave_graph_raw(name, lambda g: g.__setitem__("enabled", True))
+        v = _svc(svc.set_automation_enabled, store, name, True)
         return {"ok": True, "name": name, "enabled": True, "version": v}
 
     @app.post("/api/automations/{name}/disable", dependencies=[Depends(_write)])
     def api_automation_disable(name: str) -> dict[str, Any]:
         if store.latest(name) is None:
             raise HTTPException(status_code=404, detail="未找到自动化")
-        v = _resave_graph_raw(name, lambda g: g.__setitem__("enabled", False))
+        v = _svc(svc.set_automation_enabled, store, name, False)
         return {"ok": True, "name": name, "enabled": False, "version": v}
 
     @app.post("/api/automations/{name}/archive", dependencies=[Depends(_write)])
