@@ -6671,6 +6671,14 @@ FULL_RC=1
 
 十条 FAILED 全在鉴权/ask 那条线（`test_dcd_20261004_auth_limits` 2 + `test_v0_8_auth` 3 + `test_v1_4_token_expiry` 1 + `tests/contract/test_af_ask_contract` 4），**卡3 的 31 条新腿与改过的两份计数门一条都没进 FAILED 名单**。
 
+> **提交自证（本批只提 13 份文件，并发批次那批留在工作树）**：本批两处重钉的计数（扫到 129 / 基线 114、装饰器 87 / 路由 90）是在**含并发 WIP 的工作树**里量的，所以必须证明"部分暂存"没有把门钉成一个只在工作树成立的数。当场把提交本身导出成独立树再跑：
+> ```
+> git archive 71f5682 → %TEMP%\af_card3_commit，PYTHONPATH 指副本、import 路径已自证
+> 五份文件（linkage_feed 17 + linkage_subscription 14 + af_mqtt_bridge 48 + bounded_caches 34 + ui_api_paths 50）
+> 163 passed in 109.31s (0:01:49)      COMMIT_TREE_RC=0
+> ```
+> 即那两枚数在**没有** `af_api.py`/`af_auth.py`/`ui-user-mimo/*` 那批未提交改动的树上同样成立 ⇒ 棘轮不是靠别人 WIP 凑出来的。`check_plan_ui_claims` 对本批改过的计划 §7.4 也复跑过：`rc=0`（✅ 领头声明 34 条全部落到调用点；卡3 那格用的是「已落／没收的半边」两栏措辞，没有新增 ✅ 声明）。
+
 > 一处必须如实记下的**测量学现象**（不是推断，三档读数都在下面）：`test_af_ask_contract` 那 4 条红**只在整树跑批时出现**，单独跑不出来。
 > ```
 > tests/contract/test_af_ask_contract.py 单跑：18 passed，ASK_ONLY_RC=0
