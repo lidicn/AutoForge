@@ -7245,7 +7245,7 @@ N6 的 11 条里还露出一格连带伤害：`resume` 对不是确认会话的�
 - 本轮改动清单（提交时进）：`src/autoforge/af_executor.py`、`src/autoforge/af_audit.py`、`src/autoforge/af_runtime.py`、`tests/unit/test_restore_pending_sessions.py`（新增）、`docs/architecture/AF完整架构与运行时说明.md`、`docs/architecture/AF完整知识文档.md`、`docs/reference/API_CONTRACT.md`、本执行记录；与 §二之八十一 同属未提交态，那一批另有 `tests/unit/test_requires_confirm_runtime.py`（新增）与 `tests/acceptance/test_case04_ask_timeout.py`（重写）。**不进**：`af_api.py`、`af_auth.py`、`docker/*`、`ui-user-mimo/*`、计划文档、FFL 提示词文档。
 - 枚举现读 **22 枚**；`atomic_write_sites`／有界缓存／`CHECKS=40` 三项计数本批一字未动。
 - 未跟踪产物现读四份（**AF 不删、不动**，归属不明）：`docker-compose.api.yml.tmp`、`issued_tokens.json.tmp`、`issued_tokens_clean.json`、以及本批新点名的一份 `docker/docker-compose.api-test.yml`（18:42 落盘，头部写明"FFL 测试专用、端口 8788、与生产 8787 隔离"，不是本轮任何测试建的）。
-- 远端读数：本批未推。**本地提交**：§二之八十一 与本批两格已同格提交为 **`ef9fc10`**（`git log --oneline -1` 现读），**未推的本地提交**现为 `31b6243 c93e468 69ed4a7 e805ffb 925f56e bb800bc 0300150 ef9fc10`（`git log origin/main..HEAD` 现读 8 条）。推 GitHub 要 owner 点头；推上去 `quality-gates` 仍会因那 2 条 `fake-ok-const` 红——修复窗口按裁定排在登录线之后，等，不是遗漏。
+- 远端读数：本批未推。**本地提交**：§二之八十一 与本批两格已同格提交为 **`ef9fc10`**（`git log --oneline -1` 现读）。**未推清单以 `git log origin/main..HEAD` 现读为准**——本批落仓时 8 条，其后每格记账提交各 +1，不在这里追写枚数。推 GitHub 要 owner 点头；推上去 `quality-gates` 仍会因那 2 条 `fake-ok-const` 红——修复窗口按裁定排在登录线之后，等，不是遗漏。
 - B.14 收口后，常驻真机通道那三格照旧没清：Q2=甲（owner 逐条勾实体名单，UI/HTTP 脸在 `af_api.py` 归属窗口）、Q3 试演台账（#83）、现场写闸关回 0（#84）。**重启后问得出、也答得了，不等于通道可以开。**
 - #85 收口。DCD 那件（预演档口径 + 拒绝终态）仍在等裁定，本批没自决任何东西。
 
