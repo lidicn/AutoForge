@@ -6958,3 +6958,73 @@ find docs/audit -type f -newermt "2026-10-08 12:00"
 5. **本轮新增 #80**：homesdk 0.3.3 一发版，把 `publish_degraded` 切到 `advertise(degraded=..., reasons=...)`，同时收掉 `:98` 那份第二主题串。这一格切法已由裁定钉死，属"发版即做"的排队项，不再挂"待裁"。
 
 —— AutoForge 开发 · 2026-10-09 · 基准 HEAD `69ed4a7`
+
+---
+
+## 二之七十九、在役实例的 `/api/health` 现读把"唯一的硬阻塞=镜像未烤"这句话推翻了：桥没开才是那一格，而且部署机在我们没记账的情况下又烤过一次
+
+这一轮从"把计划里所有'待窗'逐条问一遍：现在还能不能读出来"开始，结果读到一条**改变阻塞形状**的读数。全部动作只有一条对外请求：`GET http://192.168.2.200:8787/api/health`（只读、无 Bearer、不产生状态变化），其余都是仓内读数。
+
+### 一、在役面原样读数
+
+```
+HTTP 200
+TOP_KEYS ['contract_version','linkage','milestones','ok','readonly','store_ok',
+          'tick_exit_reason','tick_health','ticker_alive','tz','version','write_gate']
+
+readonly   = True        write_gate = "open"        ok = True      store_ok = True
+version    = "0.1.0"     contract_version = "1.0"
+milestones = ['G1','G2','G3','G4','G5','真机接线','G6','G7']        # 8 项
+linkage    = {wired: false, state: "unwired", degraded: false, reasons: []}
+tick_health = null       tick_exit_reason = null    ticker_alive = null
+tz = {tz_name:'Asia/Shanghai', source:'fallback', mechanism:'homesdk.time',
+      resolved_by_name: true, utc_offset: 8.0}
+probe_rc=0
+```
+
+### 二、三条推论，每条都配了仓内证据
+
+**① `write_gate` 在响应里 ⇒ 在役那份代码不早于 `488901c`。** 这枚键是 `488901c`（2026-10-08，「裁定20261008§一: /api/health 新增 write_gate」）才加的，判据现读在 `af_service.py:293-295`。而 §5.3 第 19 行记账的那次重烤只到 `8406757`，且 `git merge-base --is-ancestor 488901c 8406757` ⇒ **不是祖先**（另测 `2d92bb1`/`71f5682`/`aec8a23` 同样不是）。两条放一起只有一个解释：**部署机后来又烤（或改挂）过一次，而 AF 没有那一次的账**。上界读不出：卡1/卡3 没新增任何 HTTP 路由（`git show --stat 2d92bb1` / `71f5682` 只动 `src/autoforge/*`、`scripts/check_mqtt_writers.py` 与测试），所以从 HTTP 面无法区分"烤到 `aec8a23`"和"烤到 `488901c`"。**这一格已列为待确认交给出资人**（要在部署机跑 `docker image ls` / `docker inspect`，或直接把那次操作的执行人说清楚）。
+
+顺带把自己这边的口径也钉住：这不是"代码没进镜像"的旧形状——`docker-compose.api.yml`（HEAD 那份）`:24-31` 只挂 `store` / `ui/dist` / `ui-user-mimo/dist`，后端源码那行是**注释掉的**（注释原话："镜像已烘入 src……后端变更须经 `docker compose build` 重烘镜像"）。但部署机上那份是手改文件（第 18 行记过它的键名漂移），所以"第二次是新镜像还是把 `src` 挂出来了"这一点在这台机器上判不出来，**不硬猜**。
+
+**② 桥确实没开，而且这是唯一还挡着 §四 窗后验收的理由。** `linkage.wired=false` + `state="unwired"` 就是丁A 那条"读不到如实 `unwired`"在**在役面**上的第一次实测命中（之前只有仓内腿）。§5.2 旧文「AF 代码全绿但镜像未烤——这是 AF 唯一的硬阻塞」按字面已经不成立；改写后的阻塞是三条：在役面落后 HEAD 的 17 个提交（`git log --oneline 488901c..master | wc -l` = 17）、`AUTOFORGE_MQTT` 未开、`MQTT_*` 五条按 §5.3 第 10 行的口径留空。后两条要点灯需要出资人点头（开开关 = 改他人可见状态）。
+
+**③ 裁定 20261008 §一 B 的效果第一次在同一份响应里看得见。** 当初投件的现场证据是"同一台实例三个读数互相打架"（health 说 `readonly: true`、日志说"取得单写者锁"、写面探针说能写）。今天同一份 JSON 里 `readonly=True` 与 `write_gate="open"` **并排**出现 ⇒ 分叉被新键如实报出来了，而不是被抹平。裁定驳回 A 的那句理由（「已存在的读方按"AF 永远 readonly=true"写判读，会在可写部署上读到 `false` 而误报警」）在役面上成立：旧键没动，真值走新键。
+
+`tz.source="fallback"` 单独说一句，因为它容易被误读成 bug：`af_time.py:224-231` 的口径是"六个键都没给才 fallback"，现读 `TZ_ENV_KEYS`（模块自己打印）= `('HOMESDK_TZ','TZ','HOMESDK_AF_TZ','AF_TZ','HOMESDK_TZ_OFFSET_HOURS','TZ_OFFSET_HOURS')`，`mechanism="homesdk.time"` 说明机制层在、`resolved_by_name=true` 说明按名字真解析成功、`utc_offset=8.0` 与 `TZ_FALLBACK_NAME="Asia/Shanghai"`（`:88`）一致 ⇒ **部署机没显式给时区 env，靠仓内缺省顶上**。要让它显式，是部署机加一个 env 的事，不是改代码；写进计划 §5.2 的副产物那一段。
+
+### 三、本轮改的计划文字（都在 `docs/ADM联动执行计划-AF.md`，仍**不进暂存**）
+
+| 处 | 旧文字 | 改成 | 依据 |
+|---|---|---|---|
+| §四 顺序块 | 「重烤 AF 镜像（待窗）」 | 已烤过两次，仍差"把 HEAD 烤上去"那一轮 | 第 19 行 + `write_gate` 现读 + 祖先测试 |
+| §四 顺序块 | 「权威 sha b4b5d6bbe424…；首投 36fdf77a… 作废」 | 注明 b4b5d6bb… 实测是 **0.3.1** 那枚，现钉的是 0.3.2 `19bc83a6…fb5505` | `sha256(dist/homesdk-0.3.1-…whl)` 前缀 = `b4b5d6bbe424205b`（当场算） |
+| §5.1 表 v2.5 行 | 「✅ 本地全绿，**NAS 待烤**」 | 已烤、且在役面比那次又新，上界读不出 | 同上 |
+| §5.1 那条 10-04 注 | 「仍差窗内两件」 | 追加 09 现读追注：两件已不对称，只剩"桥没开"，EXEMPT 档继续成立 | ①②③ |
+| §5.2 | 标题「唯一的硬阻塞：NAS 镜像重烤」+ 正文「镜像未烤」 | 整节按三条现读改写，旧文字留指认不删档 | ①②③ |
+| §5.3 第 1、2 行 | 「合并窗」/「前置 1」 | 第 2 行改"已达成，今日复核 200"；第 1 行拆成"烤过两次 + 仍差两轮 + 待确认是谁烤的" | probe 原样读数 |
+
+### 四、门与腿
+
+```
+GATES_PYTHON=… bash gates.sh → GATES_RC=1
+  红两格与 §二之七十七/七十八 逐字相同：AST 未获批 2 条（`fake-ok-const` @ `af_api.py:984`/`:1005`）、计数棘轮 99 vs 97
+  绿 19 格（按输出逐段数，不是估）：全跑 21 个 `══` 段 = 2 红 + 19 绿；19 绿里 15 段打 `✓`（undefined-name 一段打两行 `✓`），
+  另外 4 段只出文字不出 `✓`——有界缓存注册表 / IR 运行时扩展键白名单（「校验通过」）/ 门禁装配覆盖门 / import 冒烟（这一段自己报「新增/未获批 0 条」，别把它当成 AST 门禁）。
+  本轮新踩的两格：
+  ✓ 计划表口径门干净（文档行 42 条、✅ 领头声明 34 条…）   ← 我改了计划里 5 处 ✅／阻塞文字，它仍判干净
+  ✓ 主题白名单门禁干净（7 处 topic 字面量全部在契约表内）
+```
+
+读数出处：`/tmp/gates79.out`（7888 字节，20:42 落盘）。段数用 `grep -c "^══"` = 21，`✓` 行用 `grep -c "^✓"` = 16，两者相减不等于"绿段数"——`✓` 按行数、段按标题数，所以逐段核过才敢写 19/2。
+
+`python -c` 直读模块算出的 `TZ_ENV_KEYS` / `TZ_FALLBACK_NAME` 是**现读模块常量**（`sys.path.insert(0,'src')` 后 import `af_time`，纯读、不碰状态），不是引用文档。本轮没有代码改动，也就没有新的变异腿；对①那句"在役代码 ≥ `488901c`"做的是**反证检查**：先确认 `write_gate` 这枚键在 `488901c` 之前不存在（`git log -S "write_gate" -- af_service.py` 只命中这一笔），否则推论不成立。
+
+### 五、记账位
+
+- 计划文件：本轮 5 处更正，继续按归属纪律不暂存（§七 是 DCD 未提交原文）。
+- 新增待确认一格（给出资人，不是给 DCD）：**部署机第二次烤镜像/挂载的执行人与源提交**。这一格不定住，"在役 = 哪个版本"永远是半句话。
+- 既有未闭格不变：#75 卡4 两格、#76 合并窗、#78/#79 等 DCD 回档、#80 等 0.3.3 发版。
+
+—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `e805ffb`
