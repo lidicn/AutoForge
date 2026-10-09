@@ -7163,10 +7163,10 @@ M5 是本轮**自查出来的缺口**，不是原计划：落码档写着"具名
 - 文档翻转的三处：知识文档 §八"安全旗子哪枚真有人在跑"那格从 `requires_confirm` **没有**运行期消费者翻成**有**；说明文档 §七 band↔执行闸那格加了"第三枚、与 band 正交"的段落；两份的 §十六/§十八 各加一格残余（知识 §十六 13 / 说明 §十八 B.14）。canary 一格的锚点随本批重钉（旧 `:545-556`/`:546-555`/`:557`/`:571-596` 全部作废，现读 `:646` / `:663-670` / `:671-680` / `:711` / `:243-331`）——本批写文档时先按插入前的行号钉过 `:800-823`/`:210-238`/`:595-598`/`:242-326` 四个错值，复核后逐条改成 `:864-891`/`:211-241`/`:657-659`/`:243-331`，**错值没留进仓**。
 - 新残余一格（B.14，不是本批引入、本批也没修）：`pending_asks` 只在 `af_executor.py:855`（ask）与 `:885`（confirm）写入，**恢复路径不重挂** ⇒ 崩溃重启后处于挂起的 ask/确认会话对 `/api/asks`、`/api/asks/pending`、`pending_asks.json`、`Runtime.stats()` 全部不可见、也无法应答。是 fail-closed（不会误下发），但**静默**。确认会话复用同一本账，就把这格从"ask 独有"扩成了"两种会话共有"，故单独点名登记。**（该格已由 §二之八十二 收口；本条按收口后的现读锚点重钉，原措辞不改——"本批也没修"在 §二之八十一 那一刻是真的。）**
 - 现读工作区多了三份不是我建的未跟踪产物：`docker-compose.api.yml.tmp`、`issued_tokens.json.tmp`（仓根的固定名 `.tmp`，正是 §三十四 那枚原子写门的形状）、`issued_tokens_clean.json`。**AF 不删、不动**（归属不明，可能是并发会话或测试落盘），点名请 owner／登录线确认。
-- 远端读数：本批未推，最新一格仍是 §二之八十 现读的 run 128 `completed/failure`。**未推的本地提交**：`31b6243 c93e468 69ed4a7 e805ffb 925f56e bb800bc 0300150` + 本批（`git log origin/main..HEAD` 现读 7 条）。推 GitHub 要 owner 点头；推上去 `quality-gates` 仍会因那 2 条 `fake-ok-const` 红，而修复窗口被裁定排在登录线之后——等，不是遗漏。
+- 远端读数：本批未推，最新一格仍是 §二之八十 现读的 run 128 `completed/failure`。**未推的本地提交**：`31b6243 c93e468 69ed4a7 e805ffb 925f56e bb800bc 0300150` + 本批（当时 `git log origin/main..HEAD` 现读 7 条；本批与 §二之八十二 后同格提交为 `ef9fc10`）。推 GitHub 要 owner 点头；推上去 `quality-gates` 仍会因那 2 条 `fake-ok-const` 红，而修复窗口被裁定排在登录线之后——等，不是遗漏。
 - #82 收口。#83/#84 不变（等登录线窗口与 owner）。
 
-—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `0300150` + 确认闸批次（未提交态）
+—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `0300150` + 确认闸批次（写字未提交，后随 `ef9fc10` 落仓）
 
 
 ## 二之八十二、§十八 B.14 / §十六 13 收口：崩溃恢复后把挂起的 ask／人工确认会话重挂回 `pending_asks`——看得见、答得了，但**绝不自动放行**；真凶不是"恢复侧缺代码"，是"标记没赶上落盘那一刻"
@@ -7245,8 +7245,8 @@ N6 的 11 条里还露出一格连带伤害：`resume` 对不是确认会话的�
 - 本轮改动清单（提交时进）：`src/autoforge/af_executor.py`、`src/autoforge/af_audit.py`、`src/autoforge/af_runtime.py`、`tests/unit/test_restore_pending_sessions.py`（新增）、`docs/architecture/AF完整架构与运行时说明.md`、`docs/architecture/AF完整知识文档.md`、`docs/reference/API_CONTRACT.md`、本执行记录；与 §二之八十一 同属未提交态，那一批另有 `tests/unit/test_requires_confirm_runtime.py`（新增）与 `tests/acceptance/test_case04_ask_timeout.py`（重写）。**不进**：`af_api.py`、`af_auth.py`、`docker/*`、`ui-user-mimo/*`、计划文档、FFL 提示词文档。
 - 枚举现读 **22 枚**；`atomic_write_sites`／有界缓存／`CHECKS=40` 三项计数本批一字未动。
 - 未跟踪产物现读四份（**AF 不删、不动**，归属不明）：`docker-compose.api.yml.tmp`、`issued_tokens.json.tmp`、`issued_tokens_clean.json`、以及本批新点名的一份 `docker/docker-compose.api-test.yml`（18:42 落盘，头部写明"FFL 测试专用、端口 8788、与生产 8787 隔离"，不是本轮任何测试建的）。
-- 远端读数：本批未推。**未推的本地提交**：`31b6243 c93e468 69ed4a7 e805ffb 925f56e bb800bc 0300150` + §二之八十一 与本批两格（`git log origin/main..HEAD` 现读 7 条，两批都在工作树里没提交）。推 GitHub 要 owner 点头；推上去 `quality-gates` 仍会因那 2 条 `fake-ok-const` 红——修复窗口按裁定排在登录线之后，等，不是遗漏。
+- 远端读数：本批未推。**本地提交**：§二之八十一 与本批两格已同格提交为 **`ef9fc10`**（`git log --oneline -1` 现读），**未推的本地提交**现为 `31b6243 c93e468 69ed4a7 e805ffb 925f56e bb800bc 0300150 ef9fc10`（`git log origin/main..HEAD` 现读 8 条）。推 GitHub 要 owner 点头；推上去 `quality-gates` 仍会因那 2 条 `fake-ok-const` 红——修复窗口按裁定排在登录线之后，等，不是遗漏。
 - B.14 收口后，常驻真机通道那三格照旧没清：Q2=甲（owner 逐条勾实体名单，UI/HTTP 脸在 `af_api.py` 归属窗口）、Q3 试演台账（#83）、现场写闸关回 0（#84）。**重启后问得出、也答得了，不等于通道可以开。**
 - #85 收口。DCD 那件（预演档口径 + 拒绝终态）仍在等裁定，本批没自决任何东西。
 
-—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `0300150` + 确认闸批次 + 恢复重挂批次（均未提交）
+—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `0300150`，两批同格提交为 `ef9fc10`（未推）
