@@ -6831,7 +6831,7 @@ python -m pytest tests/unit/test_serve_lease_single_writer.py::test_write_gate_i
 ### 六、点名还没闭的格（下一批接哪一格都在此有名字）
 
 1. **AST 那 2 条**：等 `20261009-AF-AST两条未获批的ok字面量归属` 回档；甲档落地后全量回 97、`未获批` 回 0，`quality-gates` 才会绿。**在此之前远端每次推送都会红这一格**，别把它读成"我这批改坏了"。
-2. **run 128（`aec8a23`）结论**：本批跑 `runs` 时仍 `in_progress`，没结论就不引读数；下批第一件事就是补这一格。
+2. **run 128（`aec8a23`）结论——本批稍后已补**：`status=completed conclusion=failure`，六 job 里只有 `quality-gates` 红（`failed_steps=['Run quality gates']`），`pytest` / `adm-linkage-contracts` / `ui-typecheck-build` / `layering-gates` / `ui-user-mimo-judgments` 全 `completed/success` ⇒ 与 run 127 同形，两枚提交的红都是 §二 那 2 条 `fake-ok-const`。上面 §一 那段 `in_progress` 是当时那一刻的原样读数，不改写、只在此追加。
 3. **CI log 级读数拿不到**（`/actions/runs/<id>/logs` ⇒ 404）：若要 log，得给那枚令牌加 Actions 读权限，属出资人侧动作。
 4. **卡4 的 HTTP 半边**（任务 #75）：`ADM_ERR_*` 要落进 `af_api.py` 的响应体，与登录线同一个文件 ⇒ 同一条归属纪律挡着，不抢。
 5. **NAS 合并窗**（#76）+ **DCD 三单**：都在等价于外部输入，不是 AF 能自决推进的。
