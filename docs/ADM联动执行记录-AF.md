@@ -6884,3 +6884,77 @@ python -m pytest tests/unit/test_inbox_adapter.py tests/unit/test_af_mqtt_bridge
 任务表里 #75 的口径也跟着改：原先叫"落卡4"，容易被读成"AF 少写几行就行"；现改成"剩余两格：`ma_query`（等卡2）与 HTTP 响应体（等 `af_api.py` 归属）"。
 
 —— AutoForge 开发 · 2026-10-09 · 基准 HEAD `31b6243`
+
+---
+
+## 二之七十八、计划 §5.3 那句"已提 DCD 请 0.3.3 给公开出口"其实早裁了；顺手把钉死的 wheel 从"sha 一证"升到"符号面二证"
+
+本轮也没有代码改动。做的是同一件事的另一种形状：把 DCD 侧**新落地的文书**与仓内**还在说旧话的文字**逐条对撞，并把 AF 依赖的库符号直读 wheel 内核一遍。
+
+### 一、DCD / homesdk 侧现读（按 mtime，不是凭记忆）
+
+```
+关键决策部/decisions  →  20261008-DB五件-裁定.md              2026-10-09 15:06
+                      →  20261008-ADM以AF为核心联动版本-裁定.md 2026-10-09 14:47
+E:\NAS\homesdk\doc    →  homesdk-0.3.2-规格.md                2026-10-09 15:08
+                      →  ADM联动主题注册表与消息契约.md        2026-10-09 14:46
+```
+
+`20261008-DB五件-裁定.md` 里 AF 只被提到一次（`grep -n "AF"` = 1 条命中，§三 那句 DCD 自纠）：
+
+> §三-4 那句"presence.advertise 签名不变"正是上一轮 AF 指正的同一族错误（spec 说"不变"、实际加了 `version`），一起清。
+
+**这对我方是"指正被收"而不是"新活"**：现读规格 `:97` 已写成「`presence.advertise` **新增可选 `version` 参数**、**status 载荷有意从字面量改为 JSON**」，`:102` 补了「消费侧必须走 `decode_status`，禁止再按字面量比 `adm/*/status`」。同批文书里给 AF 的动作项为 0。
+
+`20261008-ADM以AF为核心联动版本-裁定.md`（14:47）我逐行读了：§二 三条采纳全部已在仓内（卡1/卡3 已落，卡4 的三落点见 §二之七十七 第八节），§四 依赖链的下一环仍是 MA 三路径 MCP MVP ⇒ 本轮无新增 AF 动作，与上一批"无新材料"的结论一致，只是这次是按 mtime 现读得出的。
+
+### 二、wheel 的符号面二证（新读数，此前只钉字节）
+
+AF 一直按 sha256 钉 wheel，但"钉住的这份里到底有没有 AF 调的那个符号"这句没量过。本轮用 zipfile 直读 wheel 内部（不装、不 import、不碰工作树）：
+
+```
+python313 → zipfile 读 docker/homesdk/homesdk-0.3.2-py3-none-any.whl
+  presence.py   : HAS_read_status True / HAS_is_online True / advertise 带 version= True / INBOX_TOPICS True
+  adm/status.py : def encode_status( state, *, version, ts=None, degraded=None, reasons=None )  ← 与 AF 调用面逐字一致
+                  STATE_DEGRADED True
+  sha256(整份 wheel) = 19bc83a67a96931c4556caec52f29c190aaa03a0a7036e0b41c242a533fb5505
+  MATCHES_AUTHORITATIVE True   （权威串的真源是判据本身：tests/unit/test_mqtt_compose_env.py:163）
+```
+
+腿（当场跑，RC 实测）：
+
+```
+python -m pytest tests/unit/test_mqtt_compose_env.py -k wheel -q
+→ 3 passed, 4 deselected in 0.41s      RC=0
+```
+
+含义分两层：**字节层**（sha 相等）证"这份 wheel 就是 DCD 登记的那一份"；**符号层**（上面四组 True）证"AF 消费的 `encode_status(degraded=,reasons=)`、`STATE_DEGRADED`、`INBOX_TOPICS`、`read_status` 在钉住的那份里真的存在"。之前只写过第一层。
+
+### 三、计划 §5.3 一处过期文字：那格不是"待出口"，是"等发版"
+
+§5.3「交付状态」第 3 项原文：「`presence.advertise` 没有 `degraded=`/`reasons=`，主题名只能抄库的私有 `_topic` ⇒ 已提 DCD 请 0.3.3 给公开出口」。三处与现读不符，已按下面改写（计划文件仍**不进暂存**，理由同 §七 那条归属纪律）：
+
+1. **裁定早已到**：`20261007-DB凭据与AF降级面-裁定.md` §二（`:31`/`:34`/`:35`）——裁 **甲A**（0.3.3 给 `advertise` 加 `degraded: bool = False, reasons: Sequence[str] = ()`，同一条 retained 主题、同一套 `encode_status`），**甲B（公开 `status_topic`）明写"不必做"**，并裁 AF 现状「手拼主题 + `encode_status` 自编码」为**过渡合法**、0.3.3 落地后切甲A。本文件 §二之五十八 的 DCD 对账表（`:5018` 那行，行尾还写着"详见 §二之六十"）当时就把这条裁定记全了，是计划里那句没跟着改。
+2. **0.3.3 还没发版**（现读三条）：homesdk `pyproject.toml:7` 仍 `version = "0.3.2"`；`src/homesdk/presence.py:83-90` 的 `advertise` 参数表里没有 `degraded=`/`reasons=`；`dist/` 最新一份是 `homesdk-0.3.2-py3-none-any.whl`（2026-10-07 00:47）。⇒ `publish_degraded`（`af_mqtt_bridge.py:595-616`）原样留着，不提前切。
+3. **"只能抄库的私有 `_topic`"这句字面不成立**：`grep -rn "_presence\._topic\|presence\._topic" src scripts tests --include=*.py` ⇒ 无输出、**RC=1**。AF 从没调那个私有函数，是在 `af_mqtt_bridge.py:98` 自己 `STATUS_TOPIC = f"adm/{PRESENCE_NAME}/status"` 拼了一条——形状上是"第二份主题串"，不是"依赖私有实现"。措辞按实际形状改，否则读的人会以为 AF 已经踩了库的内壁。
+
+顺带把**申请面收窄**的一条事实记下：读侧的公开出口 0.3.2 就已经有了——`presence.read_status(client, name)`（wheel 内实测含此函数，库自己的 `adm/probe.py:36` 就走它）。所以 0.3.3 那件请求**只剩写侧**，而写侧已裁甲A ⇒ AF 不需要新申请。AF 这一面的验收探针 `scripts/verify_adm_window.py:216-246` 也已按合同判定（`decode_status` 解码、只有 `st.get("state") != STATE_ONLINE` 才 FAIL），全文件残留的那 1 处 `"online"` 字面量只出现在解释历史写法的 docstring 里（`grep -c` 实测 1），不是判据。
+
+### 四、docs/audit 侧：本轮无新增报告
+
+```
+find docs/audit -type f -newermt "2026-10-08 12:00"
+→ 仅 docs/audit/参考/FFL-200题测试提示词.md（2026-10-09 13:22）
+```
+
+那份不是缺陷报告，是给测试 Agent 的**题面**（「测试 AutoForge（AF）从自然语言到自动化的端到端能力」，AF 对它已在 `ecacff2` 交过两个真 bug）。该文件此刻仍躺着归属未证的脱敏改动 ⇒ 继续不暂存、不提交。
+
+### 五、未闭格：净增一格（且是"等发版"不是"等裁"）
+
+1. AST 那 2 条 `fake-ok-const`（#79，等 `20261009-AF-AST两条未获批的ok字面量归属` 回档）；
+2. 卡4 剩余两格（#75：`ma_query` 等卡2 / HTTP 落点等 `af_api.py` 归属）；
+3. NAS 合并窗的 `mosquitto_sub` 实测（#76，要点头 + 窗口）；
+4. 入向载荷进 DSL、用户视角到真机的常驻通道（#78，等 DCD）；
+5. **本轮新增 #80**：homesdk 0.3.3 一发版，把 `publish_degraded` 切到 `advertise(degraded=..., reasons=...)`，同时收掉 `:98` 那份第二主题串。这一格切法已由裁定钉死，属"发版即做"的排队项，不再挂"待裁"。
+
+—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `69ed4a7`
