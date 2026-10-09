@@ -6177,7 +6177,7 @@ COPY_REMOVED_OK
 | MCP 工具 | **31** | `len(af_mcp.TOOLS)` |
 | HTTP 路由（含 methods 的那批） | **90** | `app.routes` 逐条带 methods 计数 |
 | CLI 命令 | **18** | typer 命令表 |
-| 安全闸检查项 | **40**（现读 41，见 §二之八十三）| `len(af_scanner.CHECKS)`，注册表在 `af_scanner.py:38` |
+| 安全闸检查项 | **40**（现读 42，见 §二之八十三/八十四）| `len(af_scanner.CHECKS)`，注册表在 `af_scanner.py:38` |
 
 对撞结果：知识文档 §七 的分组表原列 **42 个名字**，多出的两个**不是检查项**：
 
@@ -6186,7 +6186,7 @@ COPY_REMOVED_OK
 
 收成 40 键后按脚本复测：表内去重 40、九个族分组求和 40、`表 − CHECKS = ∅`、`CHECKS − 表 = ∅`。
 
-顺带一个测量陷阱，写进文档免得下轮重踩：只按 `Diagnostic("字面量", …)` 的 AST 扫，会把 7 项判成"注册了却从不发出"——`ENTITY_DEP_CYCLE`/`CROSS_DEP_CYCLE`/`EMIT_SELF_LOOP` 走变量传码（`af_scanner.py:1096-1107`），`LIVE_*` 四项走模块级字符串常量（`:1236-1239`）。
+顺带一个测量陷阱，写进文档免得下轮重踩：只按 `Diagnostic("字面量", …)` 的 AST 扫，会把 7 项判成"注册了却从不发出"——`ENTITY_DEP_CYCLE`/`CROSS_DEP_CYCLE`/`EMIT_SELF_LOOP` 走变量传码（`af_scanner.py:1120-1131`），`LIVE_*` 四项走模块级字符串常量（`:1260-1263`）。
 
 ### 三、用户点名的三块遗漏，各自落在哪一节
 
@@ -7079,7 +7079,7 @@ AST 那两枚 `ok` 为什么本轮不动，取的是现读不是推测：`git di
 
 - 我的现读（Grep 工具，`src/**/*.py`）：`requires_confirm` **36 行 / 12 个文件**（`models.py` 2、`af_scanner.py` 8、`af_orchestrator.py` 9、`af_spec.py` 4、`af_closedloop/*` 7、其余 6）；`af_executor.py` **0 处**（`grep -c` 与逐文件计数两次一致）。
 - 裁定写的"全仓 27 处"与我这 36 行是**不同口径**（它数全仓、我数 `src` 下 Python 行）。载荷那一格两口径相同：**执行器 0 命中**。先前用 bash 全仓 `grep -rn` 想一次数清，超时被后台化 ⇒ 换成 Grep 工具的 count 模式重数，别引用那份没跑完的读数。
-- 编译期那三张脸现读在案：`af_ir/models.py:398/:439`（字段声明与反序列化）、`af_scanner.py:402-426`（L2 没标 = `L2_NEEDS_CONFIRM`；标了没配 canary = `L2_NEEDS_CANARY`）、`af_orchestrator.py:683/:793/:1597`（非 L1 动作自动补 `requires_confirm` + canary）。⇒ 正是判例 §六 3 说的「**编译期看见 ≠ 运行期兑现**」。
+- 编译期那三张脸现读在案：`af_ir/models.py:398/:439`（字段声明与反序列化）、`af_scanner.py:406-430`（§二之八十一 当时钉 `:401-423`，§二之八十三 改钉 `:402-426`，本行按 §二之八十四 现读再钉 `:406-430`——我先前在这行写过 `:405-429`，少算一行，已纠；L2 没标 = `L2_NEEDS_CONFIRM`；标了没配 canary = `L2_NEEDS_CANARY`）、`af_orchestrator.py:683/:793/:1597`（非 L1 动作自动补 `requires_confirm` + canary）。⇒ 正是判例 §六 3 说的「**编译期看见 ≠ 运行期兑现**」。
 - 落码档（下一步，#82）：`_do` 入口先判这枚旗——没拿到 yes 就**一次都不下发**；挂起复用现成的 `pending_asks` 与 `/api/asks`、`/api/asks/answer` 那张已有脸（不新开增长容器、不动 `af_api.py`）；唤醒时 yes ⇒ 就地重进同一节点执行一次；no / on_timeout ⇒ 具名审计 + fail-closed（不静默 done、不"当没这回事"）；on_cancel ⇒ 照旧走取消语义。预演档**不豁免**，否则预演看到的链不是真机那条链。这一档里"拒绝/超时落到哪个终态"若与 owner 预期有出入，按纪律再交 DCD，AF 不静默改安全语义。
 
 ### 五、追认、改口与一格口径差
@@ -7261,7 +7261,7 @@ N6 的 11 条里还露出一格连带伤害：`resume` 对不是确认会话的�
 | 层 | 本批前的现读形状 | 后果 |
 |---|---|---|
 | 目录查不到 | `len(CHECKS)=40`、`'L2_NEEDS_CANARY' in CHECKS` ⇒ **False**，而 `af_scanner.py` 以 **ERROR** 级真发这枚码 | 凡按注册表枚举检查面的消费面（文档、面板、"每类检查都有判据吗"这类审计）漏掉 L2 灰度这条硬门 |
-| **修法脸静默**（B.8 原文没写这一层） | `Diagnostic.__post_init__`（`af_scanner.py:171-173`）在 `hint` 空时回退 `CODE_HINT.get(self.code, "")`，而 `CODE_HINT` 也 0 命中这枚键 | 那条 ERROR 到 Agent 手上 `hint=""`——v1.2.0 立"一次往返就能自修正"的那张脸，**恰好对一枚硬门检查失效** |
+| **修法脸静默**（B.8 原文没写这一层） | `Diagnostic.__post_init__`（`af_scanner.py:171-173`，§二之八十四 现读 `:174-176`）在 `hint` 空时回退 `CODE_HINT.get(self.code, "")`，而 `CODE_HINT` 也 0 命中这枚键 | 那条 ERROR 到 Agent 手上 `hint=""`——v1.2.0 立"一次往返就能自修正"的那张脸，**恰好对一枚硬门检查失效** |
 
 为什么一直没红：`tests/unit/test_p1_2_confirm_policy.py:62` 用的是模糊谓词 `"CANARY" in d.code`——它验"报了个带 canary 的码"，不验"这枚码在目录里"；全仓没有任何判据把发出的诊断码对到 `CHECKS`/`CODE_HINT`（`grep CHECKS tests/` 只有 `test_v1_2_expect.py` 两处，且只查 `EXPECT_MISSING` 一枚）。所以本批的重点不是那两行键，是**把"发得出 ⇒ 必在目录"变成机器能判的事**。
 
@@ -7270,13 +7270,13 @@ N6 的 11 条里还露出一格连带伤害：`resume` 对不是确认会话的�
 | 落点 | 现读 | 内容 |
 |---|---|---|
 | `CHECKS` | `af_scanner.py:54`（紧跟 `L2_NEEDS_CONFIRM :53`） | `"L2_NEEDS_CANARY": "§8.1 P1-2 L2 动作只标 requires_confirm 而无 canary＝免费豁免，服务端策略表不放行"` |
-| `CODE_HINT` | `:107-108` | 「已标 `requires_confirm` 只算『问过人』，不等于『灰度过』：给该 L2 动作补 `canary`（`duration` + `auto_rollback`），否则 P1-2 服务端策略表按免费豁免拒绝。」——文案里真的出现 `canary`，判据按这个校验，不许写成套话 |
-| 诊断发出点 | `:419`（字面量行；旧文档钉的 `:415` 是 `Diagnostic(` 那一行，字面量本在 `:416`）——本批整体 **+3**：`CHECKS` 插 1 行、`CODE_HINT` 插 2 行 | 判断**一字未动**：`if level == "L2":`（`:403`）→ 没标确认报 `L2_NEEDS_CONFIRM`（`:405`）→ `elif not node.canary:`（`:415`）报 `L2_NEEDS_CANARY`，L2 策略表整段现读 `:402-426` |
+| `CODE_HINT` | `:107-108`（§二之八十四 现读 `:110-111`） | 「已标 `requires_confirm` 只算『问过人』，不等于『灰度过』：给该 L2 动作补 `canary`（`duration` + `auto_rollback`），否则 P1-2 服务端策略表按免费豁免拒绝。」——文案里真的出现 `canary`，判据按这个校验，不许写成套话 |
+| 诊断发出点 | `:419`（字面量行；旧文档钉的 `:415` 是 `Diagnostic(` 那一行，字面量本在 `:416`）——本批整体 **+3**：`CHECKS` 插 1 行、`CODE_HINT` 插 2 行 | 判断**一字未动**：`if level == "L2":`（`:403`）→ 没标确认报 `L2_NEEDS_CONFIRM`（`:405`）→ `elif not node.canary:`（`:415`）报 `L2_NEEDS_CANARY`，L2 策略表整段现读 `:402-426`。**§二之八十四 现读**（那批再 +4：两本目录 3 行 + `_scan_automation` 里 1 行调用点）：发出点 `:423`、`if level == "L2":` `:407`、没标确认那一支 `:408`（字面量 `:411`）、`elif not node.canary:` `:419`、整段 `:406-430` |
 | 判据文件 | `tests/unit/test_diagnostic_code_catalog.py`（新增，8 条腿） | 见 §三 |
 
-锚点 +3 的连锁重钉（这两本目录各插一行，把 `af_scanner.py` 后半段整体推后）：说明文档 §五 `--dry-live` 那组 `:1245/1272/1282-1283` → **`:1248/1275/1285-1286`**；知识文档 §七 `:415`→`:419`、`:1093-1104`→`:1096-1107`、`:1233`→`:1236-1239`，§八「L2 策略表 `:399-419`」→ **`:402-426`**。执行记录 §二之八十 那句 `af_scanner.py:401-423` 同批改钉 `:402-426`。
+锚点 +3 的连锁重钉（这两本目录各插一行，把 `af_scanner.py` 后半段整体推后）：说明文档 §五 `--dry-live` 那组 `:1245/1272/1282-1283` → **`:1248/1275/1285-1286`**；知识文档 §七 `:415`→`:419`、`:1093-1104`→`:1096-1107`、`:1233`→`:1236-1239`，§八「L2 策略表 `:399-419`」→ **`:402-426`**。执行记录 §二之八十 那句 `af_scanner.py:401-423` 同批改钉 `:402-426`。**§二之八十四 把这组再往前推**（新增检查方法在 `:503-521`，方法之后一律 +24；两本目录与调用点在方法之前，L2 那一族只 +4）：`:1248/1275/1285-1286`→`:1272/1299/1309-1310`、`:1096-1107`→`:1120-1131`、`:1236-1239`→`:1260-1263`、`:402-426`→`:406-430`、发出点 `:419`→`:423`。
 
-读数翻转：`len(CHECKS)` 40 → **41**、`len(CODE_HINT)` 40 → **41**（两本键集仍全等）。文档里那句"40 项"共 7 处翻成"41 项"（知识文档 4 处：§〇 两句、清单一句、§七 标题；说明文档 3 处：§〇 取证口径、§二 模块表、§三 运行链）。知识文档 §七 那条「看着像检查项其实不在 40 里」的说明改成两条**性质不同**的注记：`L2_NEEDS_CANARY`＝本批收口、`IR_SCHEMA`＝本来就不是扫描项（错误知识的分类键，`af_error_knowledge.py:60/81/115`）。
+读数翻转：`len(CHECKS)` 40 → **41**、`len(CODE_HINT)` 40 → **41**（两本键集仍全等）。文档里那句"40 项"共 7 处翻成"41 项"（知识文档 4 处：§〇 两句、清单一句、§七 标题；说明文档 3 处：§〇 取证口径、§二 模块表、§三 运行链）。知识文档 §七 那条「看着像检查项其实不在 40 里」的说明改成两条**性质不同**的注记：`L2_NEEDS_CANARY`＝本批收口、`IR_SCHEMA`＝本来就不是扫描项（错误知识的分类键，`af_error_knowledge.py:60/81/115`）。**这句"7 处"是漏的**：§二之八十四 现读 `086cf09` 那份说明文档，§〇 分工行还写着"安全闸 40 项"而下一行取证口径已写 `len(CHECKS)=41`——同一段引用块里自相矛盾，实际是 8 处。教训照抄在册：翻读数不能按"我记得哪几行"数，要按 `grep` 出来的**全部命中**逐条翻。
 
 ### 三、判据：八条腿里只有两条是点名的，六条是通用的
 
@@ -7332,3 +7332,109 @@ N6 的 11 条里还露出一格连带伤害：`resume` 对不是确认会话的�
 - 待办：#86 收口。新增 **#87**（裁定 §二 2.2 的编译期 WARN + 必进 `CHECKS`/`CODE_HINT` + 判据腿）。#83/#84 不变（等 owner 勾名单与部署机）；#79 等登录线窗口。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `8efc134` + 目录收口批次（未提交态）
+
+## 二之八十四、落裁定 20261009（第二份）§二 2.2：`requires_confirm` 缺拒绝出口＝编译期 WARN；同批把 Q1/Q2 两格按"零改动追认"记账
+
+> 现场：本机 · 2026-10-10 00:55–01:40 · 基准 HEAD `086cf09`（上一格 §二之八十三＝目录收口那批）
+> 触发物：`E:\NAS\关键决策部\decisions\20261009-AF确认闸预演档与拒绝终态-裁定.md` §二 2.2 原文——「**加一条 Scanner WARN**：`requires_confirm` 节点**没有 `no`/`on_timeout`/`default` 任一出口**时出诊断」＋「**必须注册进 `CHECKS`**，AF 点名的 `L2_NEEDS_CANARY`『发诊断却不注册』旧缺口，不许再造第二枚」。
+
+### 一、这一格补的是"图里读不出来"，不是"运行期会出错"
+
+甲裁定的运行期半边**本来就对**：拒绝/超时照既有边纪律选路，写了 `no`/`on_timeout`/`default` 就沿边走，没写就 `done`（`af_executor.py:333` 那一处 `pick_edge(node.id, {kind, "default"})`，与 `ask` 被答"不要"且无 `no` 边时**同一处代码**）。缺口在编译期：作者写了 `requires_confirm` 却忘了拒绝出口，这条走向只在运行期静默发生，`af show` 出来的图读不出"被拒以后去哪"。所以本批只加诊断，不动执行器一行。
+
+| 落点 | 现读 | 内容 |
+|---|---|---|
+| `CHECKS` | `af_scanner.py:55`（紧跟 §二之八十三 那枚 `L2_NEEDS_CANARY :54`） | `"CONFIRM_WITHOUT_DENY_PATH": "裁定 20261009 §二 2.2：requires_confirm 节点没有 no/on_timeout/default 任一出口，被拒后的走向只在运行期静默落 done"` |
+| `CODE_HINT` | `:97-98` | 三行文案里**逐字出现** `no` / `on_timeout` / `default` 三枚出口名（判据按这个校验，不许写成"建议补一条出口"这类套话） |
+| 调用点 | `:364`，`_scan_automation` 里紧跟 `self._check_suspension(...)` | `self._check_confirm_exit(auto, node, out)` |
+| 新方法 | `:503-521`（注释 503-505、`def` 506、码字面量 514、`WARNING` 515） | 五句：没标确认直接 `return`；`kinds = {e.kind for e in auto.outgoing(node.id)}`；`if kinds & {"no", "on_timeout", "default"}: return`；否则发 **WARN** |
+| 执行器 | **一字未动** | `:646` dry 旗 / `:651` 闸 / `:654-656` 真机挂起 / `:657-659` `confirm_skipped_dry_run` / `:231` `confirm_denied:{kind}` 痕 / `:333` 拒绝选路 / `:480-481` 超时→`resume(instance,"on_timeout")` / `:601` `{"no","default"}` |
+
+级别为什么是 WARN 不是 ERROR：甲裁定「无拒绝出口仍以 `done` 收场」是**合法形状**，把它做成 ERROR 等于在发布路上拦一个裁定允许的运行期。`ScanResult.ok` 只看 `self.errors` ⇒ 这条诊断不拦发布、也不拦演练场（判据 `TestDoesNotBlock` 钉的就是这一格）。
+
+### 二、锚点连锁：两本目录各 +1 行、调用点 +1 行、新方法 +19 行 ⇒ 方法之后一律 +24
+
+`af_scanner.py` 1303 → **1327 行**，CR **1327**（工作区仍是整份 CRLF；文档与判据文件 CR=0）。分段读数：
+
+| 段 | 旧钉 | 现读 | 位移 |
+|---|---|---|---|
+| `__post_init__` hint 回退 | `:171-173` | **`:174-176`** | +3（§二之八十三 已推的 3 行，本批不再动它） |
+| L2 策略表族 | `:402-426` | **`:406-430`** | +4＝两本目录 3 行 + `_scan_automation` 调用点 1 行 |
+| └ `if level == "L2":` | `:403` | `:407` | |
+| └ 没标确认那一支 | `:405`（字面量 `:407`） | `:408`（字面量 `:411`） | |
+| └ `elif not node.canary:` | `:415` | `:419` | |
+| └ `"L2_NEEDS_CANARY",` | `:419` | `:423` | |
+| 新方法 `_check_confirm_exit` | — | `:503-521` | 本批新增 |
+| `code = "CROSS_DEP_CYCLE"` | `:1096` | `:1120` | **+24**（方法 19 行 + 前面 5 行） |
+| `EMIT_SELF_LOOP` / `ENTITY_DEP_CYCLE` | `:1099` / `:1103` | `:1125` / `:1131` | +24 |
+| `LIVE_*` 常量 | `:1236-1239` | `:1260-1263` | +24 |
+| `--dry-live` 三处 | `:1248/1275/1285-1286` | `:1272/1299/1309-1310` | +24 |
+
+连锁重钉落在：知识文档 §七（发出点 `:423`、目录键 `:110`、变量传码段 `:1120-1131`、`LIVE_*` `:1260-1263`、新增一段本诊断的落点）、§八（L2 策略表 `:406-430` + 编译期 WARN 一句 + Q1 追认一句）；说明文档 §五（dry-live 三处，并写明"上一批 +3、本批再 +24"）、§七（那一格从"只有运行期知道"改成"编译期也喊得出来"）、§六、§十八 B.8 行；执行记录 §二之八十 那行（`:405-429` 是我先钉错的一枚，现改 `:406-430`）、§二之八十三 的 L2 那三行（加"§二之八十四 现读"的再钉，不改写它当时的正确读数）。
+
+### 三、判据：11 条腿，六条射程各自挡一种不同的塌法
+
+`tests/unit/test_confirm_exit_diagnostic.py`（新增）。文件头把裁定原文那两句、"为什么是 WARN"、以及**反例族**写全了。
+
+| 腿 | 挡什么 |
+|---|---|
+| `TestRegistration::test_code_is_in_both_catalogs_by_name` | 裁定点名那一格：两本目录任一缺席就红——这就是"不许造第二枚 `L2_NEEDS_CANARY`"的执行机制 |
+| `TestRegistration::test_hint_is_non_empty_and_bilingual` | `.strip()` 后非空，且 hint 文案里 `no`/`on_timeout`/`default` 三枚名字逐字在场 |
+| `TestEmission::test_warns_exactly_once_when_no_deny_exit` | 恰好 1 条、`level == WARNING`、`node_id=="d1"`、`diag.hint == CODE_HINT[CODE] != ""`、`str(diag)` 里看得见码名 |
+| `TestEmission::test_each_deny_exit_suppresses_the_warning[no/on_timeout/default]`（×3） | 三枚出口各自能压掉：少认一枚＝合法 IR 被误喊，多认一枚＝静默豁免回来 |
+| `TestEmission::test_exit_vocabulary_is_expressible_in_ir` | `DENY_KINDS <= set(EDGE_KINDS)`（`af_ir/models.py:85`）——不许要求作者写一条进不了图的边 |
+| `TestEmission::test_compiler_vocabulary_matches_executor_denypath` | 编译期与运行期同源：AST 取方法里那个全字符串 `ast.Set` 比对，再对 `af_executor.py` 钉三枚锚（`pick_edge(node.id, {kind, "default"})` / `resume(instance, "on_timeout")` / `{"no", "default"}`）。执行器改拒绝词汇 ⇒ 这条先红，WARN 不会悄悄落后 |
+| `TestEmission::test_no_warning_without_requires_confirm` | 没标确认不喊——否则是给所有 `do` 加税 |
+| `TestEmission::test_yes_exit_alone_still_warns` | 只有 `yes` 仍该喊。这一格同时是 Q1 裁甲的边界：**预演档跳过挂起闸，但编译期这条边不完整的诊断不跟着跳**，否则预演练的图和真机练的图不是同一份诊断口径 |
+| `TestDoesNotBlock::test_warning_keeps_scan_ok` | 甲的另一面：诊断进 `warnings` 不进 `errors`，`.ok` 不被它判红 |
+
+AST 取码那一腿先前写法错了（按 `ast.Compare` 的比较子找），实际集合挂在 `BinOp` 右操作数上 ⇒ 该腿直接红过一次；改成"在方法体内 walk 找全字符串 `ast.Set`"，并保留那句 `raise AssertionError("射程塌了，不是没问题")`。
+
+### 四、读数（当场真跑）
+
+| 判据 | 读数 | 出处 |
+|---|---|---|
+| BASE 腿（HEAD 的 `af_scanner.py` + 本批新判据 + 改过的目录判据，副本树） | **`7 failed, 12 passed in 15.99s`，`PYTEST_RC=1`** | `%TEMP%/afmut87` → 存证 `%TEMP%/mut87.log`。红的七条逐名：`both_catalogs_by_name`、`hint_is_non_empty_and_bilingual`、`warns_exactly_once_when_no_deny_exit`、`compiler_vocabulary_matches_executor_denypath`、`yes_exit_alone_still_warns`、`warning_keeps_scan_ok`、`catalog_size_reading_is_pinned`——判据不空转，它复现得出缺口 |
+| TGT 腿（同一副本树，装修后 scanner） | **`19 passed in 10.74s`，`PYTEST_RC=0`** | 与 BASE 同一集合逐字对撞（19 = 本文件 11 + 目录文件 8） |
+| 工作树定向（本批 11 + 目录 8 + P1-2 确认策略 4） | **`23 passed in 5.81s`** | `GATES_PYTHON` 无关，纯 pytest |
+| 相关面 `-k` 选择（confirm/canary/catalog/scanner/suspension 家族） | **`136 passed, 1 skipped`** | 同上 |
+| 全量整树（工作区混合态，含并发登录线） | **`6 failed, 3642 passed, 53 skipped, 1 warning, 65 subtests passed in 437.22s`，`FULL_RC=1`** | `%TEMP%/full87a.out`。passed 比 §二之八十三 的 3631 多 **11**＝本批新判据的十一条腿；六条红仍是登录线同名腿（`test_dcd_20261004_auth_limits` 2 / `test_v0_8_auth` 3 / `test_v1_4_token_expiry` 1），AF 不接手 |
+| 全部门禁（`GATES_PYTHON=python`，连跑两遍逐字对撞） | **`GATES_RC=1`（A、B 两遍同值），21 个 `══` 段 = 2 红 + 19 绿，`✓` 行 16；两遍各 7877 字节，`diff` 只报 exit code、正文零差异（`DIFF_RC=0`）** | `%TEMP%/gates87a.out` / `gates87b.out` / `gates87diff.txt`（空文件）。与 §二之八十三 那份 `gates86a.out` 对撞只差 **一处**：undefined-name 扫描 `205 → 206 个文件`（本批新增那份判据文件被数进去）；散文名字读数 **4051 → 4051 不变**（新文件读到的名字全是已被读过的，净零）。其余逐字相同 ⇒ 本批没引入新红 |
+
+### 五、变异自证（五枚，全在副本树 `%TEMP%/afmut87`，工作树没被注入过一字节）
+
+副本树 `af_scanner.py` 与工作树 md5 逐份相同（`1eeb4d1c831ac75a0268cf3d95fce075`），每腿跑完再对撞 ⇒ 全 `restored_same: true`。注入前核锚点 `count==1`、注入后 `ast.parse`，不合格拒写盘。
+
+| 腿 | 注入（原样） | 杀掉（逐名，存证 `%TEMP%/mut87.log`） | 这枚证明的是 |
+|---|---|---|---|
+| MU1 | `CHECKS` 里那枚键整行删除 | **3 failed**, 16 passed：`both_catalogs_by_name` / 通用主判据 `every_emitted_diagnostic_code_is_registered_in_CHECKS` / `catalog_size_reading_is_pinned` | "发诊断却不注册"这枚旧缺口**再造不出来**：点名腿与 §二之八十三 那条通用腿各挡一路，枚数腿第三路 |
+| MU2 | `CODE_HINT` 那格两段整删 | **5 failed**, 14 passed：`both_catalogs_by_name` / `hint_is_non_empty_and_bilingual` / `warns_exactly_once_when_no_deny_exit` / 通用 `..._carries_a_non_empty_hint` / `catalog_size` | 第二层后果真在：注册了却没 hint＝到 Agent 手上半张脸 |
+| MU3 | 出口集 `{"no", "on_timeout", "default"}` → 去掉 `"no"` | **2 failed**, 17 passed：`test_each_deny_exit_suppresses_the_warning[no]` / `compiler_vocabulary_matches_executor_denypath` | 出口词汇不是摆设——少认一枚就误喊合法 IR |
+| MU4 | `WARNING` → `ERROR` | **2 failed**, 17 passed：`warns_exactly_once_when_no_deny_exit` / `warning_keeps_scan_ok` | 甲的另一面（不拦发布）真在判 |
+| MU5 | 方法首行改成 `if True: return`（闸保留、发不出来） | **3 failed**, 16 passed：`warns_exactly_once_when_no_deny_exit` / `yes_exit_alone_still_warns` / `warning_keeps_scan_ok` | 行为面塌而**静态面不塌**：码字面量仍在源码里，所以 §二之八十三 的反向名单腿不会红——这条腿证明的是"判据的行为面独立于射程面存在"，也顺手把反向名单的**边界**登记清楚（它管"目录里有没有发得出的键"，不管"这一支真跑不跑到") |
+
+### 六、Q1 / Q2 两格：零改动追认，如实登记为"追认"而不是"落地"
+
+裁定 §一（Q1 dry 不挂起 + 留痕 `confirm_skipped_dry_run`）与 §二 2.1（Q2 拒绝/超时照边选路、无 `no`/`default` 落 `done`）**AF 现有落码就是这个形状**——`af_executor.py:657-659` 与 `:333-338`。本批对这两格**一行未改**，登记三件事：
+
+- §〇 那句"`requires_confirm` 运行期消费者已闭合"是对 §二之八十二 那格的追认，硬前置正式清掉。
+- §一 判例新增那条（「闸跳不跳过看有没有真动作要护；跳过了也必须记一句，否则就是静默豁免」）已抄进两份架构文档的口径位。§二之八十一 里那句"这是改口，如实登记"至此有了裁定背书。
+- `confirm_skipped_dry_run` 那一痕是 Q1 甲的**关键半边**，知识文档 §八 明写"不许省"——静默跳过与"跳过＋记痕"的差别就是预演诚不诚实。
+
+### 七、两处如实登记（一处上一批的漏、一处本批自己犯的）
+
+- **上一批（§二之八十三）翻"40→41"时漏了一处**：说明文档 §〇 的分工行仍写 40。本批翻读数时按 `grep` 全部命中逐条核才发现，一并改成 **42**，并在说明文档变更行登记"顺带发现并修掉一处上一批漏翻的副本读数"。教训已写进 §二之八十三：翻读数不能按"我记得哪几行"数，要按全部命中逐条翻。
+- **本批门禁第一次起手我跑错了**：`bash gates.sh` 没带 `GATES_PYTHON=python`，`gates.sh:23` 缺省 `python3`、`:25-30` 的前置检查当场退 **`GATES_RC=2`**（"homesdk 未安装"）。这不是产品红，是环境红，**不许把它记成绿、也不许因为它去动 `.gates-tally.txt`**。两遍重跑的读数在 §四 最后一行。
+- 文档↔注册表一致性另核：`tbl_check.py` 跑在**工作树**（不是副本树），证知识文档 §七 那族表 == `set(CHECKS)` 逐枚相等（42/42，两个方向差集都空）。这条是 §二之八十三 那条通用判据在文档面的对应物。
+
+### 八、记账位
+
+- 本轮改动清单（提交时进）：`src/autoforge/af_scanner.py`（两本目录各 +1 行、调用点 1 行、新方法 19 行）、`tests/unit/test_confirm_exit_diagnostic.py`（新增 11 条腿）、`tests/unit/test_diagnostic_code_catalog.py`（枚数 41→42 + 锚点重钉）、`docs/architecture/AF完整知识文档.md`、`docs/architecture/AF完整架构与运行时说明.md`（含 §〇 那处漏翻）。**不进**：`af_api.py`、`af_auth.py`、`docker/*`、`ui-user-mimo/*`、计划文档、FFL 提示词文档（在途/归属他人）。
+- 目录读数：`len(CHECKS)` 41 → **42**、`len(CODE_HINT)` 41 → **42**，两本键集仍全等。文档那句"42 项"的读数由 `test_catalog_size_reading_is_pinned` 钉住。
+- DCD 回执：`E:\NAS\关键决策部\inbox\20261010-AF-确认闸两问回执与§二2.2编译期WARN落地.md`——Q1/Q2 追认已落码（零改动）、§二 2.2 已落地且**注册进 CHECKS（42）**、判据与变异读数原样贴回。回执里请 DCD 认一条：三枚出口名与执行器拒绝词汇**同源钉死**，以后执行器加第四枚拒绝出口时这条腿会先红。
+- 门禁红两格仍是登录线那两条（AST `fake-ok-const` 未获批 2 条 + 棘轮 99/97），与 §二之七十七/七十八/八十/八十一/八十三 同形同因；本批没引入新红，动的只是计数面。不自上调 `.gates-tally.txt`、不塞 `.gates-baseline.txt`。
+- 仓根那四份未跟踪产物（`docker-compose.api.yml.tmp`、`issued_tokens.json.tmp`、`issued_tokens_clean.json`、`docker/docker-compose.api-test.yml`）不删不动（归属不明）。
+- 远端读数：本批未推。未推清单以 `git log origin/main..HEAD` 现读为准，不在散文里追写枚数。推 GitHub 要 owner 点头。
+- 待办：#87 收口。#83/#84 不变（等 owner 勾名单与部署机）；#79 等登录线窗口；#75/#76 等卡2 与 NAS 合并窗。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `086cf09` + 拒绝出口诊断批次（未提交态）
