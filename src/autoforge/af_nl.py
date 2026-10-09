@@ -203,6 +203,13 @@ _UNIT_TEXT = {
     "brightness": "",
 }
 
+#: 收件箱三个动作的中文说法 + 那句话在契约 §1.3 里的键名（`speak`→text、`notify`→title、`tv`→content）。
+_INBOX_TEXT = {
+    "speak": ("请音箱播报", "text"),
+    "notify": ("请手机通知", "title"),
+    "tv": ("请电视上屏", "content"),
+}
+
 
 def _action_text(node: Node) -> str:
     action = node.action or "?"
@@ -226,6 +233,11 @@ def _action_text(node: Node) -> str:
         return verb
     if node.adapter == "http":
         return f"请求外网地址 {params.get('url', '?')}"
+    if node.adapter == "inbox":
+        # 收件箱是"请 DB 表达"，不操作某台设备：走下面的通用模板会渲染成
+        # "调用 inbox.speak（无目标实体）"——用户读到的是故障语，不是这条自动化想干的事。
+        label, key = _INBOX_TEXT.get(str(action or "").rsplit(".", 1)[-1], ("请投递收件箱", "text"))
+        return f"{label}「{params.get(key) or params.get('text') or params.get('title') or '?'}」"
     return f"调用 {action}（{target_text or '无目标实体'}）"
 
 

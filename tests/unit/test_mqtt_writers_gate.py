@@ -6,7 +6,8 @@
 两条路各测一头 ⇒ 真实载荷和契约行不一样，而**没有一条测试红过**。本门钉的就是这个形状：
 出向消息只能有一个写者模块、事件只能由那一条路径产生、载荷必须经 `_envelope()` 组装。
 
-三条判据各自单独可红（A 桥外写 MQTT / B 桥外或观察者外的生产者 / C 手搓 dict），
+四条判据各自单独可红（A 桥外写 MQTT / B 桥外或观察者外的生产者 / C 手搓 dict / D 桥外碰
+`_presence` 这扇机制层的门——含 `getattr` 动态派发），
 射程外不判（内部总线 `bus.publish(...)` 不是 MQTT），豁免要带理由且单独计数。
 """
 from __future__ import annotations
@@ -20,6 +21,15 @@ SCRIPT = ROOT / "scripts" / "check_mqtt_writers.py"
 BRIDGE_HEAD = '''
 FIRED_TOPIC = "af/automation/fired"
 FAILED_TOPIC = "af/automation/failed"
+INBOX_PREFIX = "butler/inbox/"
+
+
+def inbox_publish(kind, *, fields=None, bridge=None, dry_run=False):
+    """桥内唯一的收件箱派发腿（D 判据认的就是这条 `getattr` 动态派发形状）。"""
+    func = getattr(_presence, str(kind))
+    client = _RecordingClient(bridge.client if bridge is not None else None)
+    func(client, *(fields or {}).values(), trace_id="t")
+    return client.records
 
 
 class Bridge:
@@ -37,6 +47,9 @@ class Bridge:
         payload = self._envelope(automation_id=automation_id, instance_id=instance_id, extra=extra)
         payload["error"] = error
         return self._publish(FAILED_TOPIC, payload)
+
+    def publish_inbox(self, kind, *, fields=None, dry_run=False):
+        return inbox_publish(kind, fields=fields, bridge=self, dry_run=dry_run)
 
     def observe_terminal(self, instance, state):
         if state == "done":
@@ -86,6 +99,41 @@ def test_presence_advertise_outside_the_bridge_is_red(tmp_path):
         "af_cli.py": 'def hello(client, name):\n    _presence.advertise(client, name)\n',
     })[0]
     assert len(findings) == 1 and "af_cli.py" in findings[0]
+
+
+def test_presence_entry_outside_the_bridge_is_red(tmp_path):
+    """D 判据：机制层 `_presence` 的**入口**只许在桥里被拿到（静态访问形态）。
+
+    A 判据只点名 `advertise()` 那一个方法；卡1 引入的收件箱投递走 `_presence.speak/notify/tv`，
+    逐个列函数名的话，库侧加第四个动作时本门会静默漏掉它。所以这里抓的是"谁碰了这扇门"。
+    """
+    findings = _scan(tmp_path, **{
+        "af_mqtt_bridge.py": BRIDGE_HEAD,
+        "af_live.py": 'def shout(client, text):\n    return _presence.speak(client, text, trace_id="t")\n',
+    })[0]
+    assert len(findings) == 1
+    assert "af_live.py" in findings[0] and "_presence.speak" in findings[0]
+
+
+def test_dynamic_dispatch_on_presence_outside_the_bridge_is_red(tmp_path):
+    """`getattr(_presence, kind)(…)` 这种派发写法必须同样进射程。
+
+    只按属性名匹配会放行整条动态派发路——而卡1 的桥内实现用的正是这个形状，
+    桥外照抄一份"看起来更通用"的代码就完全绕过门。
+    """
+    findings = _scan(tmp_path, **{
+        "af_mqtt_bridge.py": BRIDGE_HEAD,
+        "af_service.py": 'def dispatch(kind, client, fields):\n'
+                         '    return getattr(_presence, kind)(client, *fields)\n',
+    })[0]
+    assert len(findings) == 1 and "getattr(_presence, …)" in findings[0]
+
+
+def test_presence_entries_inside_the_bridge_are_not_red(tmp_path):
+    """桥自己有收件箱派发腿 ⇒ 计数但不判红（射程=桥外），且读数要真的数到它。"""
+    findings, stats = _scan(tmp_path, **{"af_mqtt_bridge.py": BRIDGE_HEAD})
+    assert findings == []
+    assert stats["presence_entries"] >= 1 and stats["presence_files"] == 1
 
 
 def test_advertise_inside_the_bridge_is_not_red(tmp_path):
@@ -218,6 +266,13 @@ def test_missing_observer_is_exit2(tmp_path):
     assert _main(tmp_path, BRIDGE_HEAD.replace("def observe_terminal", "def on_terminal")) == 2
 
 
+def test_missing_inbox_anchor_is_exit2(tmp_path):
+    """D 判据的两把锚点任一失踪都得 exit 2：删掉收件箱投递腿却继续报"干净"是最坏的形状。"""
+    assert _main(tmp_path, BRIDGE_HEAD.replace(
+        "INBOX_PREFIX = \"butler/inbox/\"", "INBOX_TOPIC = \"butler/inbox/\"")) == 2
+    assert _main(tmp_path, BRIDGE_HEAD.replace("def inbox_publish(", "def outbox_publish(")) == 2
+
+
 # ── 真实 src：绿，且绿色行的数字是实测不是形容词 ───────────────────
 
 def test_real_src_is_clean_with_measured_counts():
@@ -227,6 +282,8 @@ def test_real_src_is_clean_with_measured_counts():
     assert stats["writers"] >= 2 and stats["writer_files"] == 1
     assert stats["producers"] >= 2 and stats["producer_files"] == 1
     assert stats["payload_sites"] == stats["payload_ok"] >= 2
+    # 卡1 之后桥里多了收件箱派发腿：入口计数必须非零，否则 D 判据其实没在扫东西
+    assert stats["presence_entries"] >= 5 and stats["presence_files"] == 1
     assert stats["exempted"] == 0
 
 
@@ -239,4 +296,5 @@ def test_green_line_prints_the_counts_not_adjectives(tmp_path, capsys):
     out = capsys.readouterr().out
     _, stats = g.check(tmp_path)
     assert f"{stats['writers']} 处" in out and f"{stats['payload_ok']} 处" in out
+    assert f"{stats['presence_entries']} 处" in out, out
     assert "只在" not in out and "全部" not in out

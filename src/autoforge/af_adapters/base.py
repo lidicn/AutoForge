@@ -58,7 +58,10 @@ _L2_DOMAINS = frozenset({"lock", "cover", "climate", "alarm_control_panel", "val
 _L1_DOMAINS = frozenset(
     {"light", "switch", "fan", "input_boolean", "humidifier", "media_player", "vacuum", "scene", "script", "siren", "tts"}
 )
-_L0_DOMAINS = frozenset({"notify", "persistent_notification", "logbook"})
+#: `inbox`（AF 投 DB 公共收件箱）落 L0：它不动家中任何执行器，只是"请 DB 说话/推送/上屏"，
+#: 播不播仍由 DB 侧 Sentinel 闸门判（契约 §1.3），与 HA 的 `notify` 同形。
+#: 留在未知档会被保守判成 L2 ⇒ 每条播报都要配 canary，`do inbox inbox.speak` 连编译都过不去。
+_L0_DOMAINS = frozenset({"notify", "persistent_notification", "logbook", "inbox"})
 
 _DESTRUCTIVE_KEYWORDS = ("delete", "remove", "purge", "wipe", "format", "reset", "drop")
 
@@ -169,7 +172,12 @@ def classify_action(adapter: str, action: str, params: Mapping[str, Any] | None 
     lowered = action.lower()
     if is_destructive(lowered):
         return L3_DANGEROUS
-    domain = lowered.split(".", 1)[0] if "." in lowered else lowered
+    # domain 优先取 action 的 `<domain>.<service>` 前缀（HA 服务名自带实体域）。动作名不带点时
+    # 退回**适配器名**：DSL 的 `do d1 inbox.speak {…}` 会 partition 成 `adapter=inbox` +
+    # `action=speak`，只按动作名判会让所有非 HA 适配器落进"未知 domain ⇒ L2"的保守缺省档——
+    # 于是收件箱这类纯投递动作在扫描阶段就被判 `L2_NEEDS_CONFIRM`/`L2_NEEDS_CANARY`，
+    # 连编译都过不去。缺省档本身不动（不带点又不落在适配器名表里仍判 L2）。
+    domain = lowered.split(".", 1)[0] if "." in lowered else str(adapter or "").lower()
     if domain in _L3_DOMAINS:
         return L3_DANGEROUS
     if domain in _L2_DOMAINS:

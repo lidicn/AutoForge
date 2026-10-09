@@ -73,12 +73,12 @@
 | **第二道闸** | `af_vhass/`（`fake.py` 唯一效果真值表、`high_fidelity.py`）、`af_expect.py` | 双轨仿真 + 后置条件断言 |
 | **设计链** | `af_draft.py`（staging，进程内 TTL，不落盘）、`af_apply.py`、`af_premiere.py`、`af_pending.py`、`af_service.py` | 意图→IR→校验→仿真→（预演）→入队→试演期 |
 | **运行态** | `af_runtime.py`、`af_executor.py`、`af_scheduler.py`、`af_bus.py`、`af_state.py`、`af_registry.py`、`af_time.py` | 实例生命周期、事件总线、调度、状态源、时钟 |
-| **真机接线** | `af_live.py`、`af_tick_supervisor.py`、`af_adapters/`（base/ha/http/mock）、`af_watch.py` | SSE 订阅、tick 自愈、HA 适配、生产态证据聚合 |
+| **真机接线** | `af_live.py`、`af_tick_supervisor.py`、`af_adapters/`（base/ha/http/mock/inbox）、`af_watch.py` | SSE 订阅、tick 自愈、HA 适配、收件箱投递、生产态证据聚合 |
 | **治理** | `af_conf.py`、`af_shadow.py`、`af_canary.py`+`af_canary_supervisor.py`、`af_conflict.py`+`af_conflict_runtime.py`+`af_conflict_audit.py`、`af_intervention.py`、`af_undo.py`、`af_health.py`、`af_closedloop/` | 置信度 band、影子比对、金丝雀、冲突仲裁、人工干预、回滚、降级、自改进闭环 |
 | **插件装配** | `af_runtime_ext.py`、`af_runtime_plugins.py` | 把治理件挂到 executor/runtime 上（不改内核） |
 | **经验与观测** | `af_telemetry.py`、`af_experience.py`、`af_error_knowledge.py`、`af_preference.py`、`af_predict.py`、`af_pretrigger.py`、`af_insight_queue.py`、`af_proposal.py`、`af_feedback.py`、`af_metrics.py`、`af_evo.py` | 遥测、共现经验、错误知识库、预测触发、洞察队列、提案、反馈 |
 | **存储与凭据** | `af_store.py`、`af_persist.py`、`af_atomic.py`、`af_flock.py`、`af_secrets.py`、`af_auth.py`、`af_audit.py`、`af_fire_recorder.py`、`af_bounded_caches.py`、`af_config.py`、`af_env.py`、`af_conf.py` | 版本化归档、实例持久化、原子写、租约、密钥、令牌、审计、封顶注册表 |
-| **出向** | `af_mqtt_bridge.py` | ADM 联动桥（唯一出向生产者） |
+| **出向** | `af_mqtt_bridge.py` | ADM 联动桥（唯一出向生产者；`fired`/`failed`/retained status 与收件箱 `butler/inbox/*` 投递都从这一个模块出去） |
 | **面** | `af_api.py`、`af_mcp.py`、`af_cli.py`、`af_catalog.py`、`af_scene.py`、`af_fault.py`、`af_version.py`、`af_instance.py`、`af_vhass/` | 对外接口与设备目录 |
 
 **依赖方向是门禁**：`pyproject.toml` 的 import-linter 契约（例：`name = "Service boundary never imported by kernel"`）在 CI 里跑，跨层反向 import 直接判红。
@@ -118,8 +118,8 @@ HA 状态变化
   ↓ Runtime 匹配 trigger → 起实例（af_runtime.py / af_scheduler.py）
   ↓ NodeExecutor 逐节点走（on/if/do/ask/wait/set/pass/group）
   ↓ 【插件拦截链】冲突守卫 dispatch → shadow/ask band 路由 → canary 观察期 → adapter.call
-  ↓ HAAdapter（dry_run 或真实下发）
-  ↓ 终态 → af_mqtt_bridge.observe_terminal() 唯一出向写者（:442/:445）
+  ↓ HAAdapter / HTTPAdapter（dry_run 或真实下发）｜InboxAdapter（收件箱投递，dry_run 时零上线）
+  ↓ 终态 → af_mqtt_bridge.observe_terminal() 唯一出向事件写者（:673/:676）
   ↓ af_watch 聚合生产态证据 verified_in_prod
   ↺ tick：af_tick_supervisor（TRANSIENT/DEGRADED/FATAL 三-class :28-30，退避，连续 20 次 SAFE HALT）
 ```
@@ -161,11 +161,12 @@ HA 状态变化
 - **HTTP 面／用户视角界面到今天没有常驻真机通道**（2026-10-09 现场结论，之前文档把它写成"可真机"是错的）。`svc.start_watch` 只会拼两种命令：带 `--dry-live`，或什么真机旗子都不带；它**从不传** `--confirm`／`--live-allow`／`--entities`。前者只记意图，后者会被子进程自己拒启动并立即退出。所以返回值如实给两格：`tier`（`dry_live` / `live_unconfirmed`）与 `real_device`（**两档都是 `false`**）。要不要给 UI 开这条常驻通道归 DCD 裁（申请 `20261009-AF-用户视角到真机的常驻通道`）。判据钉在 `tests/unit/test_start_watch_identity.py`，其中一档是真跑 CLI 的：`forge watch` 不带 `--confirm` ⇒ `exit_code != 0` 且输出里出现 `--confirm`。
 - `ok=true` 现在**必须由 sidecar 证明是本次这份**（`af_service.py:2562-2630`）。旧形状只要 `watch.lock.info` 存在就回成功，而那是目录里唯一的一个文件——上一条 watch 的残留会被读成"本次启动成功"（现场实测：1.18 秒回 `ok=true`，带的是 9-29 另一条 IR 的路径）。现在要求 `sidecar.graph == 本次写出的 IR 路径`，认不上就分三种如实失败：`child_exited` / `coord_lock_held_by_other` / `not_registered`，成功时一并回 `acquired_at`。
 
-机制上只有**一个分岔点**：`HAAdapter(dry_run=…)`。
+机制上只有**一个分岔点**：`build_runtime(..., dry_run=…)`（`af_runtime.py:289-294` 把同一个旗子交给 `HAAdapter`/`HTTPAdapter`/`InboxAdapter`，所以不存在"某一面接不到真机、某一面接不到 DB"的分裂）。
 
 - `HAAdapter.__init__` 的 **缺省是 `dry_run: bool = True`**（`af_adapters/ha.py:227`）——默认构造就是安全档，要真下发必须显式给 False（`af_cli.py:304`、`af_service.py:1942/:2054`）。
 - `call()` 的顺序是**故障注入 → dry_run → transport**（`af_adapters/ha.py:253-268`）：注入的失败优先于 dry_run（`:241-251` 四件 `fail_next/timeout_next/drop_next/unavailable_next`），dry_run 只 append 意图并返回 `{"dry_run": True, …}`（`:258-266`），没注入 transport 又想真下发 = `AdapterError`（`:267-268`）。
 - `intents` 环形封顶 `INTENTS_MAX=200`（`af_adapters/ha.py:46`、`:259-261`）：常驻服务里 dry_run 也每次都记一条，不裁就只增不减。
+- **收件箱那一侧同形**（`af_adapters/inbox.py:47`）：`dry_run=True` 只经记录代理 `_RecordingInboxClient`（`af_mqtt_bridge.py:371`）留一条意图、**一个字节都不上线**，而记下来的 `payload` 是从"库侧真要发出去的那份 `body`"反解回来的，AF 不重拼第二遍——所以"预演说音箱播这句"与"音箱该收到这句"结构上不可能不一致。真发档缺桥＝缺通道，按 fail-closed 报 `ADM_ERR_AUTH_REQUIRED`（不是静默跳过）。意图环同封顶 200（`af_adapters/inbox.py:34`）。
 - **动作前快照（撤销）只在真实下发路径生效**：`undo_recorder` 在 `dry_run` 分支之后（`af_adapters/ha.py:266` 之后那段），且 `--dry-live` 不触发 recorder（`af_cli.py:305-308`）。
 - `--dry-live` 会自动放过 confirm 预检、并跳过写白名单检查（`af_scanner.py:1245/1272/1282-1283`）：**它不下发，所以不该被下发护栏拦**。
 
@@ -371,15 +372,19 @@ UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调
 
 | topic | 方向 | 唯一生产者 | 位置 |
 |---|---|---|---|
-| `af/automation/fired` | 出 | `observe_terminal()` | `af_mqtt_bridge.py:61`、`:422`、`:442` |
-| `af/automation/failed` | 出 | `observe_terminal()`（同处声明 sole writer） | `:62`、`:425`、`:445` |
-| `adm/autoforge/status`（retained，presence） | 出 | `advertise()` / `publish_degraded()` | `:67`、`:59`、`:335`、`:350-371` |
-| `ma/insights` | **入向 only** | 订阅白名单守卫拒任何出向尝试 | `:63`、`:456-457`、`:461`、`FORBIDDEN_SUBSCRIPTIONS :70` |
+| `af/automation/fired` | 出 | `observe_terminal()` → `publish_fired()` | `af_mqtt_bridge.py:71`（常量）、`:647`（发布者）、`:673`（唯一调用点） |
+| `af/automation/failed` | 出 | `observe_terminal()`（同处声明 sole writer） | `:72`、`:650`、`:676` |
+| `adm/autoforge/status`（retained，presence） | 出 | `advertise()` / `publish_degraded()` | `:77`、`:540`、`:555` |
+| `butler/inbox/speak\|notify\|tv` | 出（AF 只**投递**，不订阅、不决定播不播） | `inbox_publish()`（由 `InboxAdapter` 调） | `:82`（前缀真源）、`:328`（名单从 `_presence.INBOX_TOPICS` 派生）、`:405`（三道 fail-closed 都在这一个口）；适配器 `af_adapters/inbox.py:47` |
+| `ma/insights` | **入向 only** | 订阅白名单守卫拒任何出向尝试 | `:73`、`:684`/`:692`（`start()` 里唯一一次 subscribe）、`:700`/`:709`（`subscribe_topic`/`handle_message` 的禁订守卫）、`FORBIDDEN_SUBSCRIPTIONS :85` |
 
-- 载荷必经 `_envelope()`；错误码/状态名从 `homesdk.adm.errors` import，不手抄。
-- 这条"唯一生产者 + 必经信封"已升成静态门禁：`scripts/check_mqtt_writers.py`（`8b629b8`）。
+- 出向事件载荷必经 `_envelope()`（`:622`）；错误码/状态名从 `homesdk.adm.errors` import，不手抄。
+- **收件箱三条不走 `_envelope()`**：载荷由库侧 `homesdk.presence.<kind>` 生成（必填键、`text≤500`/`title≤80`/`body≤500`、`ts` 的 epoch 口径都在库侧，0.3.2 规格 §三.1"谁定 schema 谁把校验"）。AF 只做两件事：把 IR 作者填的字段按库侧签名铺成位置参数（`_inbox_fields` `:350`），以及**堵掉机制层入参**（`_INBOX_INTERNAL_ARGS :324`：`client`/`trace_id`/`qos` 不许 IR 手写——开放出去等于允许伪造事件号或降 QoS）。
+- **前缀只有一枚**：`INBOX_PREFIX`（`:82`）同时供投递名单派生与禁订守卫（`:700`/`:709`）。两处各写字面量的话，改一处会得到"AF 往新前缀发、却按旧前缀拒订"——护栏看着还在，实际管不到自己发出去的那一族。这条由 `tests/unit/test_inbox_contract_keys.py` 钉住（含"桥源码里该字面量只许出现一次"）。
+- **发布不许静默**：`homesdk.mqtt.publish` 把 paho 的 `rc` 原样交回，而库侧各家投递函数丢弃它；paho 在**没连上**时不抛异常、只回 `rc=MQTT_ERR_NO_CONN`。所以 `_raise_if_refused`（`:344`）把非零 `rc` 升成 `PublishRefused`（`:333`），失败统一进 `_account_publish_error`（`:578`）：计 `publish_errors` + `mark_degraded(ADM_ERR_BROKER_UNREACHABLE)` + retained status 转 degraded。ACL 拒绝与 broker 不可达目前**共用一个码**（原始 `rc=…` 在 message 里），是否拆码属 DCD 待问项。
+- 这条"唯一生产者 + 必经信封"已升成静态门禁：`scripts/check_mqtt_writers.py`（`8b629b8`），现为四条判据（A 写者点位只在桥内；B `fired`/`failed` 只在 `observe_terminal` 内；C `_publish` 载荷来自 `_envelope`；D 机制层 `_presence` 入口——含 `getattr(_presence, …)` 动态派发——只在桥内）。
 - 守卫失明半边仍走 retained `af/status`（`mark_degraded(ADM_ERR_INTERNAL)` + `publish_degraded()`）。
-- 洞察入向落盘：`PersistentInsightSink` → `{root}/insight_proposals`（`af_mqtt_bridge.py:182`），`af_insight_queue.py:75/:181` 是**不可部署**的队列（approve/reject 才进提案面，`af_proposal.py:125/:186`，无 deployer ⇒ 不自动上线）。
+- 洞察入向落盘：`PersistentInsightSink` → `{root}/insight_proposals`（`af_mqtt_bridge.py:196`），`af_insight_queue.py:75/:181` 是**不可部署**的队列（approve/reject 才进提案面，`af_proposal.py:125/:186`，无 deployer ⇒ 不自动上线）。
 
 ---
 
@@ -405,7 +410,9 @@ UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调
 | 门禁 | 判什么 | 位置 |
 |---|---|---|
 | `gates.sh` | 仓内质量门禁总入口（`GATES_PYTHON=<path>` 指定解释器） | `gates.sh` |
-| `scripts/check_mqtt_writers.py` | 出向唯一生产者 + 载荷必经 `_envelope` | `scripts/` |
+| `scripts/check_mqtt_writers.py` | 四条判据：A 出向写者点位只在桥内；B `fired`/`failed` 只在 `observe_terminal` 体内；C `_publish` 载荷来自 `_envelope`；D 机制层 `_presence` 入口（静态属性与 `getattr` 派发都算）只在桥内。锚点含 `INBOX_PREFIX`/`inbox_publish`，锚点读不到就 exit 2 | `scripts/` |
+| `tests/unit/test_inbox_contract_keys.py` | 收件箱名单与字段表**没有第二份抄本**：全部从 `homesdk.presence` 派生，含"前缀只有一枚"与风险分级反例腿 | `tests/unit/` |
+| `tests/unit/test_inbox_pipelines.py` | `adapter: inbox` 过编译（扫描无 `L2_*`）、过仿真、过 NL 渲染，且预演档零上线字节；含 `sms`/`send` 反例证明缺省档没被放松 | `tests/unit/` |
 | `scripts/check_bounded_caches.py` | 新增增长容器必须进注册表/固定键表/基线，或带豁免标记 | `scripts/` |
 | `scripts/check_mqtt_runtime_dep.py` | 镜像/开发/测试三面依赖一致（paho 必须在） | `scripts/` |
 | `scripts/verify_adm_window.py` | 停机窗当天验收入口，缺项读不成绿（PASS/FAIL/UNAVAILABLE 三态） | `scripts/` |
@@ -443,6 +450,7 @@ UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调
 | `tests/unit/test_ui_api_paths_gate.py::test_real_ui_and_src_are_clean_and_counted` | `(90-5)+2 == 85` 断言：参与匹配路由已从 85 涨到 90（新增 `/api/auth/*`） | 登录正规化 `e5b3fd5` 带来 5 条路由，未重钉 | 登录那条线自己收（重钉读数，不放宽扫描） |
 | `…::test_all_trees_of_this_repo_are_in_scope_and_green` | 期望 `ui-user-mimo 20`，现读 **22** | 同上（mimo 树多了 has-admin + register 两处调用点） | 同上 |
 | `tests/unit/test_pkg_markers_gate.py::test_real_repo_is_green_on_the_index_reading` | 仅副本树红（无 `.git` 索引） | **副本树环境所致，不是产品缺陷**；工作区里这条是绿的 | 记为测量口径，不修 |
+| `gates.sh` 的 AST 计数棘轮（不是 pytest 腿） | 全量 99 条 / 登记上限 97 条；差的两条是 `api_auth_has_admin`（HEAD `af_api.py:980`）与 `api_auth_register`（`:1001`）返回字面量 `ok=True`；`git archive HEAD` 副本树带基线复测同样 `新增/未获批 2 条`、`计数：except-pass-broad=20 \| fake-ok-const=79` | 登录正规化 `e5b3fd5` 上线后上限没重钉——与上面那族同一个成因 | 上调上限是**评审动作**（门自己的措辞），改成真校验派生属登录那条线的语义；本仓不顺手做 |
 
 > 说明：这 4 真 + 1 口径**都不是本轮文档改动引入的**，是"产物已上线、钉住的读数没重钉"这一族。工作区当前另有并发会话未提交的 `af_api.py`/`af_auth.py`/`ui-user-mimo/*`/`docker/*` 改动，所以重钉必须等那批落定后一次做，否则钉的是混合态。
 >
@@ -458,6 +466,8 @@ UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调
 6. `READONLY_DEGRADED:` 前缀在 homesdk 契约表的登记那一格在 DCD／homesdk 手里（现读两文档零命中）。
 7. `af_nl_parse` 有实现无产品调用方；NL→IR 自由文本属 F14 P2。
 8. `L2_NEEDS_CANARY` 在 `af_scanner.py:415` 真发 ERROR 诊断，却没登记进 `CHECKS`（`:38`，40 项）——判断在、目录里没有这一项 ⇒ 按注册表 enumerating 检查面（文档、面板、"每类检查都有判据吗"这类审计）会漏掉 L2 灰度这条硬门。补法是把键加进 `CHECKS` 与 `CODE_HINT`，不是把诊断删掉。
+9. 收件箱投递（计划 §七 卡1）的**上线可见那一半没在这台机器上验**：验收口径写的是 `mosquitto_sub` 能见，而 NAS 侧订阅+对撞属合并窗动作。仓内证到的是"上线字节由库侧生成、被记录代理原样接住并反解核对"（`tests/unit/test_inbox_adapter.py`），不是"broker 上真有这条主题"。同一条线上还差两件：契约 §1.3 护栏 3（按 source 限速）没实现；长度上限只在库侧 `_len_bounded` 把，**编译期不提前拒** >500 字符，于是这条 IR 要跑到执行才红。
+10. 发布失败目前只有一个码（`ADM_ERR_BROKER_UNREACHABLE`，`rc=…` 只在 message 文本里）：ACL 拒绝与 broker 不可达不区分，是否拆码归 DCD。
 
 ---
 
@@ -468,4 +478,5 @@ UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调
 | 2026-10-09 | HEAD `e5b3fd5` | 按现状整体重写：新增三面/两态拓扑、写侧四档 + `dry_run` 零写入清单、真机三档、band 三档、冲突三档与 fail-closed 站点表、证据五档与双轨、测试通道、前端三棵树与 `/mimo` 同源、登录正规化与令牌面、写闸与租约、出向唯一生产者、持久化拒写族、门禁体系、部署现状、HEAD 现读残余；删除明文 MCP 令牌；订正 12 条旧断言（§〇 表） |
 | 2026-10-09 | 工作区混合态（未提交，含并发批次的鉴权改动） | 现场回灌五件：`POST /api/watch/start` 假绿已修（sidecar 身份必须等于本次 IR，失败分三档）+ 档位如实命名 `tier`/`real_device`；**HTTP/用户视角到今天没有常驻真机通道**（申请 `20261009-AF-用户视角到真机的常驻通道`）；`/api/automations` 卡片改按 automation 级取数、`trial` 读不出就给 `null`、启停写侧走 `store.resave_raw`；订正 `forge watch` 没有 `--live`/`--vhass` 两枚旗子；记入 NAS `AUTOFORGE_LIVE_ENABLED=1` 与仓内缺省 0 的分歧；记入 `requires_confirm` 无运行期消费者、`canary` 有；重钉 12 处行号锚点 |
 | 2026-10-09 | 同上，保真复核 | 逐项对撞文档清单与代码注册表：`TOOLS=31`、`CHECKS=40`、含 methods 路由 `=90`、CLI 命令 `=18` 四项全等；安全闸表由 42 名收成正好 40 键（剔掉非注册表的 `IR_SCHEMA`、`L2_NEEDS_CANARY`）；时区键改为 `HOMESDK_TZ`（规范）/`AF_TZ`（别名）并给全序；新增残余 B.8（`L2_NEEDS_CANARY` 发诊断却未注册） |
+| 2026-10-09 | HEAD `e5b3fd5` + 收件箱批次（未提交态） | 计划 §七 卡1 落地并同步本文：§二 适配器表加 `inbox`、出向行改成"事件与收件箱投递都只从桥出去"；§四 运行链把分岔点如实写成 `build_runtime(dry_run=…)` 这一个口（HA/HTTP/Inbox 拿同一枚旗子，`af_runtime.py:289-294`）；§六 补收件箱在预演档的口径（零上线字节 + 缺桥 = 缺通道 ⇒ `ADM_ERR_AUTH_REQUIRED`）；§十四 主题表加 `butler/inbox/speak\|notify\|tv` 行、锚点按现读重钉（`observe_terminal` 调用点 `:673/:676`、`_envelope :622`、`inbox_publish :405`、`FORBIDDEN_SUBSCRIPTIONS :85`），并新增三条机制说明（收件箱不经过 `_envelope`、前缀只有一枚、发布不许静默＝`rc` 判据）；§十六 门禁表把 `check_mqtt_writers.py` 改成四条判据、加两份收件箱判据文件；§十八 残余加 B.9（`mosquitto_sub` 半边 / §1.3 限速 / 编译期长度）与 B.10（`rc` 单码待 DCD） |
 | 2026-09-24 | 当时 HEAD | 初版（端到端实测后） |

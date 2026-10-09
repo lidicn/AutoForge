@@ -22,7 +22,7 @@
 - 首演码 + 24h 试演期（premiere）
 - 常驻运行时（watch + tick 自愈 + SSE）
 - 治理面：conf/auto-shadow-ask/canary/conflict/undo/insights/evidence
-- ADM 联动出向（`af/automation/fired|failed`、`adm/autoforge/status`）
+- ADM 联动出向（`af/automation/fired|failed`、`adm/autoforge/status`、`butler/inbox/speak|notify|tv`——AF 只**投递**，播不播由 DB 的 Sentinel 判；AF **不订阅**这三条主题）
 - 两棵在用 WebUI：开发者控制台 `/ui`、**用户视角 `/mimo`**
 
 设计哲学没变：fail-closed 默认拒绝、安全闸优先、版本化可追溯、真机需三重闸（服务端开关 + confirm + 白名单）。**新增的一条是"证据分层"**：`ok=True` 只算"没抓到反例"，`fully_verified` / `verified_in_prod` 才算验过（§八）。
@@ -47,7 +47,7 @@
 |---|---|---|
 | `on` | 触发 | 5 类 trigger，见 3.4 |
 | `if` | 条件 | 表达式算子见 3.6 |
-| `do` | 动作 | 调 HA/HTTP 服务；`on_error` 边缺省直接 failed（检查项 `DO_WITHOUT_ON_ERROR`） |
+| `do` | 动作 | 走适配器：`ha`/`http`/`mock`/`inbox`（收件箱投递）。DSL 的 `do d1 inbox.speak {…}` 会被 partition 成 `adapter=inbox` + `action=speak`（`af_spec.py:286-287`，域名前缀不进 `action`）；`on_error` 边缺省直接 failed（检查项 `DO_WITHOUT_ON_ERROR`） |
 | `ask` | 挂起等人答 | 必须给 `on_timeout` 或 `default`（`MISSING_TIMEOUT_OR_DEFAULT`）；5 类 `ask.kind`，4 类 `session` 作用域 |
 | `wait` | 延时 | 到期自动走 `then` |
 | `set` | 写实例变量 | 变量需声明（`UNDECLARED_VAR`），4 种 `var_decl.type` |
@@ -249,6 +249,8 @@
 
 高风险面：`lock`（门锁）、`water_heater`、`climate` 等按 Tier 取最严（`DeviceGuardRegistry`，Tier-0 读取/写入都要人工审批）；`conf < 0.6` 只出 ask 提案、禁写设备。
 
+`classify_action(adapter, action)` 的 domain 取值有两条容易踩的规定（`af_adapters/base.py:165-190`）：① domain 优先取 `action` 的 `<domain>.<service>` 前缀，**动作名不带点时退回适配器名**——因为 DSL 的 `do d1 inbox.speak {…}` 会被 partition 成 `adapter=inbox` + `action=speak`，只按动作名判会让所有非 HA 适配器掉进"未知 domain ⇒ L2"，`af_scanner` 随即报 `L2_NEEDS_CONFIRM`/`L2_NEEDS_CANARY`，这条自动化连编译都过不去；② `inbox` 登记在 `_L0_DOMAINS`（IR §8.1 的"L0 只读/通知"）：AF 只把话交给 DB，播不播由 DB 的 Sentinel 判，AF 侧没有"动设备"的后果可言。缺省档（未知 domain ⇒ L2）与删除类关键字 ⇒ L3 的优先级都**没有**放宽，`tests/unit/test_inbox_contract_keys.py` 与 `tests/unit/test_inbox_pipelines.py` 各钉了一条反例腿。
+
 ---
 
 ## 八、执行档位速查：预演 / 仿真 / dry-live / 真机（**四组正交的档，别混**）
@@ -269,6 +271,8 @@
 - 返回值自带正面证据：`{"stage":"dry_run","dry_run":true,"would_enqueue":true,"pending_ref":null}`。
 
 读法：`would_enqueue=True` 说"真跑 `save` 就会入队"；`pending_ref=None` 说"此刻队列里确实没有它"。**这条档就是 DB 侧「拟→验→批→部署」里的"验"**，可以随便重复调。
+
+收件箱动作（`do d1 inbox.speak {"text": …}`）在这档同样**零上线**：`InboxAdapter(dry_run=True)` 走记录代理，只在进程内留一条意图，而留的就是库侧真要发出去的那份字节（`payload` 由上线的 `body` 反解回来，AF 不重拼第二遍）。所以"预演说音箱播这句"与"音箱该收到这句"结构上不可能不一致。
 
 仿真"跑对了吗"看两格：`expect.ok`（没抓到反例）与 `expect.fully_verified`（声明过断言且全验过）。证据强度：`verified_in_prod` > `fully_verified` > `verified` > `inferred` > `non_simulable` > `exempted`（详见架构文档 §九）。
 
@@ -342,7 +346,7 @@ API base：`VITE_API_BASE ?? 'http://localhost:8787/api'`。这三棵树的调�
 | `AUTOFORGE_TOKENS` | 空 | 多主体令牌表（**单数**，JSON，每条自报 subject+scopes） |
 | `AUTOFORGE_SECRET_DIR` | `/run/secrets` | secret 文件目录 |
 | `AUTOFORGE_SESSION_TTL_S` | 3600 | 会话 TTL |
-| `AUTOFORGE_INBOX_KEY` | 空 | ask 通道 HMAC（与 DB 共享同一 key；未设 ⇒ 读侧拒收全部 inbox 答案） |
+| `AUTOFORGE_INBOX_KEY` | 空 | ask 通道 HMAC（与 DB 共享同一 key；未设 ⇒ 读侧拒收全部 inbox 答案）。**不是收件箱投递的凭据**：计划 §七 卡1 说的"缺凭据拒发"在 AF 侧指**桥缺席**（`AUTOFORGE_MQTT=0` 或 `start()` 没成功）⇒ `ADM_ERR_AUTH_REQUIRED`，与这枚 key 无关，别拿它当投递门 |
 | `AUTOFORGE_MQTT` | 0 | 联动桥开关（空串/0/false/no/off 都读成"关"） |
 | `MQTT_HOST/PORT/KEEPALIVE/USER/PASSWORD` | 空 | 键名真源是烘进镜像的 wheel（`homesdk/mqtt.py`）；空 `MQTT_HOST` 抛 `MissingEnv` 而非匿名连出 |
 | `AUTOFORGE_CONFLICT_ARBITER` | `off` | 冲突守卫 `off/observe/enforce` |
@@ -462,6 +466,8 @@ PYTHONPATH=src <py313> -m pytest tests -q
 5. `af_test_clear` 的无守卫 `rmtree`（§九）。
 6. `_cooldown_pending` 未进有界容器注册表 ⇒ 整树判据 2 条红；路由/UI 计数未重钉 ⇒ 另 2 条红（现读 §十七）。
 7. `READONLY_DEGRADED:` 前缀在 homesdk 契约表的登记半边归 DCD／homesdk，现读两文档零命中。
+8. 收件箱投递（计划 §七 卡1）三管线（编译/仿真/NL）与 fail-closed 已绿，但**`mosquitto_sub` 那一半验收要在 NAS 上做**，属合并窗动作，本批只到"上线字节由库侧生成并被测试反解核对"为止。同一条未接的还有契约 §1.3 护栏 3（按 source 限速）与编译期的 >500 字符检查——长度上限现在由库侧 `_len_bounded` 把，编译期不提前报。
+9. publish 失败目前只归一个码（`ADM_ERR_BROKER_UNREACHABLE`，原始 `rc=…` 写在 message 里）：ACL 拒绝与 broker 不可达在 AF 侧不做区分，是否要独立码已列为 DCD 待问项。
 
 ---
 
@@ -512,4 +518,5 @@ FAILED tests/unit/test_ui_api_paths_gate.py::test_all_trees_of_this_repo_are_in_
 | 2026-10-09 | HEAD `e5b3fd5` | 全量重列四张清单（31 工具 / 90 路由 / 18 命令 / 40 检查项，均来自注册表现读）；订正节点·边·触发枚举；新增预演 `dry_run`、双轨仿真与五档证据、测试通道、用户视角 WebUI、登录正规化、部署 env 键名真源、HEAD 回归红态；删除明文 MCP 令牌；文档索引路径全部改为真实位置（旧索引 7 条里 6 条指向不存在的 `docs/` 顶层文件） |
 | 2026-10-09 | 工作区混合态（未提交，含并发批次的鉴权改动） | 现场回灌五件：`POST /api/watch/start` 假绿已修（sidecar 身份必须等于本次 IR，失败分三档）+ 档位如实命名 `tier`/`real_device`；**HTTP/用户视角到今天没有常驻真机通道**（申请 `20261009-AF-用户视角到真机的常驻通道`）；`/api/automations` 卡片改按 automation 级取数、`trial` 读不出就给 `null`、启停写侧走 `store.resave_raw`；订正 `forge watch` 没有 `--live`/`--vhass` 两枚旗子；记入 NAS `AUTOFORGE_LIVE_ENABLED=1` 与仓内缺省 0 的分歧；记入 `requires_confirm` 无运行期消费者、`canary` 有；重钉 12 处行号锚点 |
 | 2026-10-09 | 同上，保真复核 | 四项清单与注册表逐项对撞（31/90/18/40 全等）；§七 安全闸表 42 名收成 40 键，并写明 `IR_SCHEMA` 是错误知识分类、`L2_NEEDS_CANARY` 发诊断却未注册；§十二 时区键补 `HOMESDK_TZ`（规范）与全序 |
+| 2026-10-09 | HEAD `e5b3fd5` + 收件箱批次 | 计划 §七 卡1 落地：`adapter: inbox` 三动作（`speak`/`notify`/`tv`）走 `af_mqtt_bridge.inbox_publish`，载荷 schema 直接读 `homesdk.presence` 函数签名、不在 AF 重抄；`dry_run` 零字节上线；桥缺席＝缺凭据 ⇒ `ADM_ERR_AUTH_REQUIRED`。§七 补 `classify_action` 的「动作名不带点退回适配器名」段落（这是本批由漂移测试抓出的真 bug：DSL 会把 `inbox.speak` partition 成 `adapter=inbox`+`action=speak`，只按动作名判会落进未知 domain 的 L2 缺省档，扫描阶段就红）；§八 补收件箱在预演档下的口径。同时修掉 publish `rc` 被丢弃（bug D）：`rc≠0` 现在计 `publish_errors`、置 degraded、重发 status |
 | 2026-09-24 | 当时 HEAD | 初版（端到端实测后） |

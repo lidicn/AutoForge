@@ -6362,3 +6362,160 @@ HEAD_BC_RC=1   （同一处、同一读数：注册表 3 项 / 固定键 3 项 /
 5. 卡片 `trial` 仍回 `null`——首演台账按 `store_diff_sha256` 记（`af_apply.py:208` `af_premiere.enter_trial(store_diff_sha, hours=24)`），一次 store 差异一份试演，**没有 per-automation 的试演来源**；这不是取数层能修的，得先有 per-automation 来源才谈得上显示。前端 `trialMeta(null)` 已经如实落到 `available:false`。
 
 —— AutoForge 开发 · 2026-10-09 · 基准 HEAD `e5b3fd5`
+
+---
+
+## 二之七十五、计划 §七 卡1 落地：AF 开始往 `butler/inbox/*` 投递——顺带抓出两个真 bug（发布 `rc` 被丢弃、`classify_action` 把不带点的动作名判成 L2）
+
+### 一、卡1 的落形：DCD 写的是"三个节点"，AF 的 IR 只有一种出向动作
+
+卡片原文是「IR 新增 `inbox_speak`/`inbox_notify`/`inbox_tv` **节点**」。AF 侧不能照字面落：
+
+- `af_ir.NODE_KINDS = ("on","if","do","ask","wait","set","pass","group")`，出向动作只有 `do` + `adapter` + `action` 这一种形态；
+- 另立一族节点会同时破两样东西：`ir.schema.json` 的 `node.kind.enum`（前端、MCP、导出都要跟着改，且旧 IR 立刻读不进），以及 `classify_action` 的风险分级（新 kind 不在分级函数的射程里 = 未登记动作默认可发）。
+
+所以落形是 **`adapter: inbox`**，三条动作一一对应：
+
+```
+do d1 inbox.speak  {"text": "昨晚卧室空调开机 3 小时"}
+do d2 inbox.notify {"title": "…", "body": "…"}
+do d3 inbox.tv     {"content": "…", "duration_s": 8}
+```
+
+DSL 那侧 `af_spec.py:286-287` 做的是 `data["adapter"], _, data["action"] = adapter_action.partition(".")`，**域名前缀不进 `action`**——这一条直接引出了下面第四节那个 bug。
+
+### 二、投递面：schema 不在 AF 重抄，三道 fail-closed 收在同一个口
+
+| 件 | 位置 | 现读 |
+|---|---|---|
+| 前缀真源 | `af_mqtt_bridge.py:82` | `INBOX_PREFIX = "butler/inbox/"`，同一枚常量既拼可投名单也拼禁订族 |
+| 可投名单 | `:328` | `INBOX_KINDS` = `_presence.INBOX_TOPICS` 去前缀派生；库侧加第四个动作 AF 自动跟着长 |
+| 机制层入参黑名单 | `:324` | `_INBOX_INTERNAL_ARGS = {"client","trace_id","qos"}`：`trace_id` 由 AF 每次现场生成（裁定 20261004 §一 2 事件级），`qos` 由契约 §1.3 钉 1，都不给 IR 作者写 |
+| 字段表 | `:350` `_inbox_fields` | 用 `inspect.signature(_presence.<kind>)` 现读拆成 `(必填, 可选)`，**不在 AF 抄第二份** |
+| 投递口 | `:405` `inbox_publish` | 三道失败都在这里：载荷侧 `ADM_ERR_PAYLOAD_INVALID`、通道侧 `ADM_ERR_AUTH_REQUIRED`（桥缺席）、传输侧 `ADM_ERR_BROKER_UNREACHABLE` + retained status 转 degraded |
+| 适配器 | `af_adapters/inbox.py:47` | 单次调用、无重试、无降级；失败映射成 `CallResult.fail(code=…)` ⇒ 走 IR 的 `on_error`，无则实例 failed，**绝不把"没送出去"报成 done** |
+| 装配收口 | `af_runtime.py:289-294` | `build_runtime` 把同一枚 `dry_run` 旗子交给 HA/HTTP/Inbox ⇒ CLI/HTTP/MCP/仿真四面共用一份能力 |
+| NL 渲染 | `af_nl.py`（`node.adapter == "inbox"` 分支） | `请音箱播报「…」` / `请手机通知「…」` / `请电视上屏「…」`；未登记动作退化 `请投递收件箱`，不写"无目标实体" |
+
+长度上限（`text≤500`/`title≤80`/`body≤500`）与 `ts` 的 epoch 口径按 0.3.2 规格 §三.1「谁定 schema 谁把校验」留给库侧 `_len_bounded`；AF 只在越界**之前**把调用拒回去（拒的就是库侧会抛的那一份），并把它列进残余（编译期不提前报，见第九节）。
+
+`inbox` 登记进 `_L0_DOMAINS`（IR §8.1 的"L0 只读/通知"）：AF 只把话交给 DB，播不播由 DB 的 Sentinel 判，AF 侧没有"动设备"的后果可言。**缺省档 L2 与删除类关键字 L3 的优先级都没动**。
+
+### 三、真 bug（承接上批编号 D）：`client.publish()` 的 `rc` 在整条链上被丢弃
+
+形状：paho 在**没连上**的时候不抛异常，只回 `rc=MQTT_ERR_NO_CONN`；`homesdk.mqtt.publish` 把这个返回值原样交回；AF 原先 `_publish` 只看"有没有抛"。于是 broker 断线期间每条发布都记成成功——`counts["published"]` 涨、`degraded` 空、retained status 还挂着 `online`。这正是契约 §7.3 要消灭的静默失败。
+
+修法收在桥里（贴近线上那一侧，绕不过去）：`_raise_if_refused`（`af_mqtt_bridge.py:344`）把非零 `rc` 升成 `PublishRefused`（`:333`），失败统一进 `_account_publish_error`（`:578`）——计 `publish_errors` + `mark_degraded(ADM_ERR_BROKER_UNREACHABLE)` + `publish_degraded()`；成功侧 `_note_published`（`:596`）在传输回来时清降级位并重发 caps（不清就是让对端永远读旧病历；重发 caps 是因为对端不能看到"在线了但 caps 空了"）。
+
+同位反证（进程内 monkeypatch，把守卫摘掉再跑同一条腿）：
+
+```
+WITH-GUARD:    published=False  code=ADM_ERR_BROKER_UNREACHABLE  wire=['adm/autoforge/status']
+WITHOUT-GUARD: published=True   code=None  wire=[]  degraded=[]  publish_errors=0
+```
+
+`WITHOUT` 那一行就是修之前的产品形状：报成功、线上零字节、状态仍在线。
+
+### 四、真 bug（本批新抓，编号 E）：`classify_action` 只看动作名，把 inbox 判成 L2 ⇒ 卡1 自己的编译验收是红的
+
+这条不是设计评审看出来的，是**漂移测试**抓出来的：`tests/unit/test_inbox_contract_keys.py` 里有一条腿同时断言 `classify_action("inbox", "inbox.speak")` 与 `classify_action("inbox", "speak")` 都是 L0——前半句一直绿，后半句红。
+
+根因链：DSL partition 之后 `action` 里**没有点**（`speak`），而旧实现只从 `action` 取 domain：
+
+1. `domain = "speak"` ⇒ 不在任何 domain 表里 ⇒ 落进"未知 domain ⇒ L2_RISKY"的保守缺省档；
+2. `af_scanner.py:399-419` 把 L2 转成 ERROR 诊断 `L2_NEEDS_CONFIRM`/`L2_NEEDS_CANARY`；
+3. 于是 `do d1 inbox.speak {…}` **连编译都过不去**——卡1 验收的"编译管线过"当场就红。
+
+修法（`af_adapters/base.py:165-190`）：动作名不带点时**退回适配器名**求 domain；缺省档本身不动（不带点、又不落在适配器名表里，仍判 L2）。`inbox.speak` 这种带点写法继续按动作名前缀判，两条口径合流。
+
+反例腿（证明这不是把门调松）：`classify_action("sms","send")` 与 `("sms","sms.send")` 都仍 `L2_RISKY`；`tests/unit/test_inbox_pipelines.py` 里另有一条用 `adapter="sms", action="send"` 组 IR，断言 `scan.ok is False` 且 `L2_NEEDS_CONFIRM` 在诊断里。
+
+### 五、命名对账两处（卡片文字与仓内真名：同名同物 / 异名同物）
+
+| 卡片原文 | 仓内事实 | 处理 |
+|---|---|---|
+| `inbox_speak` 等三个"节点" | `do` + `adapter: inbox` + `action: inbox.speak\|notify\|tv` | 见第一节；两种写法都归一（`kind_of()` 剥前缀） |
+| 「缺凭据/`INBOX_KEY` fail-closed」 | `AUTOFORGE_INBOX_KEY` 是 **ask 通道的 HMAC key**（`af_api.py:922/:948`、`af_live.py:482`），与投递无关；投递侧的"缺凭据"= **桥缺席**（`AUTOFORGE_MQTT=0` 或 `start()` 没成）⇒ `ADM_ERR_AUTH_REQUIRED` | 已在知识文档 §十二 env 表钉住"这枚 key 不是投递门"，避免下一个人去配它来"打开投递" |
+
+### 六、本批顺手关掉的一处手抄缝
+
+`FORBIDDEN_SUBSCRIPTIONS` 的 `"butler/inbox/#"`/`"*"` 与两处 `startswith("butler/inbox/")` 原来各写各的字面量：改前缀时"投递名单派生"会跟着动、"拒订守卫"不会，结果是 AF 往新前缀发、却按旧前缀拒订——护栏看着还在，实际管不到自己发出去的那一族。现在 `INBOX_PREFIX` 上移到主题常量区（`:82`），族与守卫都从它拼。
+
+现读对撞（同一 needle 在两版桥源码里各数一次）：
+
+```
+HEAD      quoted_prefix=2  startswith(INBOX_PREFIX)=0  startswith("butler/inbox/")=2
+WORKTREE  quoted_prefix=1  startswith(INBOX_PREFIX)=3  startswith("butler/inbox/")=0
+```
+
+新腿 `test_subscription_guard_and_publish_share_one_prefix` 钉 `quoted_prefix == 1`，即 **HEAD 的形状在这条腿下是红的**。派生值本身不变（当场量：`INBOX_KINDS = ['notify','speak','tv']`，`FORBIDDEN = ('butler/inbox/notify','butler/inbox/speak','butler/inbox/tv','butler/inbox/#','butler/inbox/*')`）。
+
+### 七、判据与读数
+
+判据文件（新增三份 + 改一份）：
+
+| 文件 | 腿数 | 盖住什么 |
+|---|---|---|
+| `tests/unit/test_inbox_adapter.py` | 28 | dry_run 记意图且零上线；上线载荷 == dry_run 载荷（除 `trace_id`/`ts`，`ts` 是 `int`）；三 kind × 两写法；11 例载荷侧拒发（未知 kind、缺必填、`tet` 笔误、契约禁 `source`、IR 手写 `trace_id`/`qos`、非 str、四种越界）各归 `ADM_ERR_PAYLOAD_INVALID` 且零字节；缺桥 ⇒ `ADM_ERR_AUTH_REQUIRED`（适配器形与桥形各一条）；`rc≠0` ⇒ published False + `ADM_ERR_BROKER_UNREACHABLE` + `degraded==[code]` + `publish_errors==1` + 线上只剩 status；degraded 载荷可读且 retained/qos1；恢复清降级并重发 caps；异常与 `rc≠0` 共用一套记账；每条事件 12 位 hex `trace_id`；意图环封顶 200 裁头；桥按调用现取 |
+| `tests/unit/test_inbox_contract_keys.py` | 10 | 名单/字段表全部从 `homesdk.presence` 派生（测的是"根本没抄"，不是"抄得对不对"）；前缀不漂成空名单；每 kind 有可调用发布器；机制层入参不开放；L0 两条口径 + `sms` 反例 + 删除类关键字仍 L3；前缀单真源 |
+| `tests/unit/test_inbox_pipelines.py` | 14 | 三管线：`af_spec` 编译无需改语言；`graph_to_raw`→`load_graph`→`StaticScanner` 的 `scan.ok is True` 且无 `L2_*`；`sms`/`send` 反例仍红；`render_spec` 往返；CLI `spec compile` exit 0；`simulate` 实例 `[done]` 且 NL 含"请音箱播报"；`build_runtime` 注册 `inbox` 且 `dry_run=True`；三 kind 仿真零上线字节；NL 三种文案与未知 kind 退化 |
+| `tests/unit/test_mqtt_writers_gate.py` | 22 | 门从三条判据升到四条：D 认 `_presence` 入口，静态属性与 `getattr(_presence, …)` 动态派发都算；桥外出现即红（两条腿）、桥内出现不红（计数腿含 `presence_files == 1` 与 `stats["presence_entries"] >= 5`）；inbox 锚点读不到 ⇒ exit 2（改常量名 / 改函数名 各一条） |
+
+七份 MQTT/收件箱文件合跑（`test_af_mqtt_bridge` 47 + `test_inbox_adapter` 28 + `test_inbox_contract_keys` 10 + `test_inbox_pipelines` 14 + `test_mqtt_writers_gate` 22 + `test_mqtt_subscriptions_gate` 20 + `test_mqtt_runtime_dep_gate` 24）：`165 passed`，`PYTEST_RC=0`（当场 `> file 2>&1` 后取 `$?`）。
+
+> 订正本节先前那行 `147 passed`：那份读数没点明"三份 mqtt 门"是哪三份，按今天逐文件的收集数复算拼不出 147（最接近的一档是把 `runtime_dep` 换成 `compose_env` 得 148）。以上这行是**当场可复现**的口径，七份名单与逐份腿数都写全了，往后复跑照这份名单跑。
+
+### 八、门禁与回归读数（当场 `out=$(…); rc=$?`，不接管道）
+
+```
+check_topic_whitelist      rc=0  ✓ 主题白名单门禁干净（5 处 topic 字面量全部在契约表内）
+check_mqtt_subscriptions   rc=0  ✓ 入向订阅门禁干净（订阅点 2 处、1 个文件；INSIGHTS_TOPIC 1 处、动态主题且函数体内有禁订族守卫 1 处；豁免 0）
+check_mqtt_writers         rc=0  ✓ 出向写者门禁干净（写者 3 处/1 文件；生产者 2 处/1 文件；`_publish` 2 处、载荷来自 `_envelope` 2 处；`_presence` 入口 6 处/1 文件；豁免 0）
+check_imports              rc=0  ✅ Layer architecture clean；Baseline lock: 101 modules, 0 violations
+check_mqtt_runtime_dep     rc=0  ✓ paho 声明于 ['dev','mqtt']，交付/测试/工作流三面逐一核过
+check_gates_coverage       rc=0  盘上 19 个 `check_*.py`、`gates.sh` 覆盖 18、工作流覆盖 1
+check_plan_ui_claims       rc=0  文档行 42、✅ 声明 34 条全部落到调用点
+check_bounded_caches       rc=1  红：`af_conflict.py:183` 的 `ConflictArbiter._cooldown_pending`
+
+整树入口（同一次跑，`> file 2>&1` 后取 `$?`，不接管道）：
+GATES_RC=1     ← 两处红：上面那条有界缓存 + AST 计数棘轮（全量 99 / 登记上限 97）
+```
+
+`topic` 字面量从 9 处降到 5 处**是第六节那次去抄本的结果**（四条字面量改成从 `INBOX_PREFIX` 拼），不是扫描范围变窄——白名单门仍然只认契约表登记，读数口径不变。
+
+**订正上一节 §二之七十四 的一句话**：那里写的"唯一红：`_cooldown_pending`"**读数口径不完整**。本批跑整树时冒出第二处红——AST 计数棘轮（97→99），当场在 `git archive HEAD` 副本树带基线复测：
+
+```
+HEAD 副本树（带基线）：扫描完成 新增/未获批 2 条（error 0 / warn 2），基线内存量 97 条
+                       计数：except-pass-broad=20 | fake-ok-const=79      HEAD_WITH_BASELINE_RC=1
+工作树（同一门口径）：  扫描完成 新增/未获批 2 条（error 0 / warn 2），基线内存量 97 条
+                       计数：except-pass-broad=20 | fake-ok-const=79
+两棵树的 --no-baseline 全量：都是 99 条（error 1 / warn 98）
+```
+
+那 2 条是 `api_auth_has_admin`（HEAD `af_api.py:980`）与 `api_auth_register`（`:1001`）返回字面量 `ok=True`，属**登录正规化 `e5b3fd5` 自带**（HEAD 上就红，不是并发批次也不是本批引入；本批两棵树的分类计数逐位相同 ⇒ 新增违规 0 条）。上限从 97 上调到 99 是"评审动作"（门自己的措辞），把 `ok=True` 改成真校验派生又是登录那条线的语义，两样都不该由收件箱这一批顺手做掉 ⇒ **点名不修**，归登录那条线收。
+
+有界缓存那条红的归属重量过一次（`git archive HEAD` 副本树 vs 工作树）：HEAD 扫到 **126**、工作树 **128**，红的仍只有 `_cooldown_pending` 一处；+2 是本批新容器 `_RecordingInboxClient.records`（`af_mqtt_bridge.py:371`）与 `InboxAdapter.intents`（`af_adapters/inbox.py:52`），两处都带 `# bounded-cache: exempt(…)` 并写了理由（一个记"本会发什么"、一个记上线意图，都按 200 裁头，没有 TTL 腿——不该自行过期成"没发过"）。`test_bounded_caches_gate.py` 里钉的 `== 125` 在 HEAD 就红，属并发批次那一格，本批不重钉。
+
+整树 unit 现读（工作区混合态，含并发批次未提交改动）：
+
+```
+10 failed, 2819 passed, 43 skipped, 1 warning in 229.90s (0:03:49)
+```
+
+十条 FAILED 逐条归属：`test_bounded_caches_gate` 2 条（`_cooldown_pending` 同因，HEAD 既有）、`test_ui_api_paths_gate` 2 条（路由/调用点计数未重钉，HEAD 既有）、`test_dcd_20261004_auth_limits` 2 条 + `test_v0_8_auth` 3 条 + `test_v1_4_token_expiry` 1 条（并发会话那批鉴权改动，HEAD 单跑这四份文件是 `48 passed`）。**本批 52 条新腿与改过的 22 条门腿一条都没进 FAILED 名单**。
+
+> 读数口径如实记：这一跑的 `PYTEST_RC` 当场没拿到（管道尾是 `tail`，`$?` 读的是 `tail` 的 0），所以这里只引汇总行与 FAILED 名单，不引退出码。下一次整树跑批用 `set -o pipefail` 或直接重定向再取 `rc`。
+
+### 九、本批没收的，点名不谎报
+
+1. **`mosquitto_sub` 能见**这半条验收不在这台机器上：仓内证到的是"上线字节由库侧生成、被记录代理原样接住并反解核对"，不是"broker 上真有这条主题"。要等 NAS 合并窗。
+2. **契约 §1.3 护栏 3（按 source 限速）未实现**：AF 这一侧没有 per-source 计数。
+3. **长度上限没有编译期腿**：>500 字符要跑到执行才由库侧 `_len_bounded` 拒，`check`/`simulate` 档不提前报。
+4. **`rc` 语义只归一个码**：ACL 拒绝与 broker 不可达都回 `ADM_ERR_BROKER_UNREACHABLE`（原始 `rc=…` 在 message 文本里）。要不要给 ACL 独立码属裁定面，列为 DCD 待问。
+5. 卡 2（`ma_query`）与卡 5（端到端）外部阻塞：MA 三路径 MCP MVP 不在 AF 手里。卡 3（订阅 `ma/presence`+`ma/device-health` 并落独立持久队列）与卡 4 的另一半（`ADM_ERR_*` 三落点、`ma_query` 失败 ⇒ `ADM_ERR_UPSTREAM_TIMEOUT`）是本仓下一步，任务 #74/#75 已挂。
+6. `docs/ADM联动执行计划-AF.md` 的 §七 整段是 **DCD 原文**（署名在文末），AF 只在其下加了自记的 §7.4 进度表，没改 DCD 那五行验收格；这段至今**未提交**，是否由 AF 代提交归用户定。
+7. 工作区里并发会话那批未提交改动（`af_api.py`/`af_auth.py`/`docker/*`/`ui-user-mimo/*`）与四条杂散文件（`docker-compose.api.yml.tmp`、`issued_tokens.json.tmp`、`issued_tokens_clean.json`、`docker/docker-compose.api-test.yml`）**不在本批提交内**；`docs/audit/参考/FFL-200题测试提示词.md` 那处来源不明的令牌掩码同样排除在外。
+8. **AST 棘轮（`check_ast_gates.py`）这一红不在本批收**：§八 已给两树读数——HEAD 副本树与工作区都是 `新增/未获批 2 条 + 基线内存量 97 条`，`--no-baseline` 两树同为 99，即本批**新增 0 条**。那 2 条是 `af_api.py:980`/`:1001` 返回字面量 `ok=True`，登录正规化 `e5b3fd5` 自带（§八 有当场复测块）；上调登记上限是评审动作，把 `ok=True` 换成真校验派生又属登录那条线的语义 ⇒ 点名不修，归登录线收；同一口径已记进架构说明 §十八 A 表。
+
+—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `e5b3fd5`

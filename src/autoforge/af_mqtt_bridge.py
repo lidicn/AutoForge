@@ -3,10 +3,14 @@
 角色边界（`20260929-联动协议修订-事件流与收件箱`）：
 
 - AF 只发自己的语义主题 `af/automation/fired|failed`，**不 retained**（事件流不回放状态）；
+- AF **投** `butler/inbox/speak|notify|tv`：契约 §1.5（DCD 2026-10-08）把 AF 升为编排中枢，
+  收件箱是 DB **显式开放的公共入口**，所有权与校验权仍在 DB——AF 只投递，不替 DB 决定播不播
+  （DB 收到后仍过 Sentinel 闸门）；
 - AF 只读 `ma/insights`：读到后编译候选 → **进审批队列**，绝不自动部署
   （conf 封顶在 ask 档，与 `af_evo.ProposalSink.conf_cap` 同口径 0.59 < ask_max 0.60）；
-- AF **不订阅** `butler/inbox/*`——收件箱归 DB，AF 不替 DB 说话；本模块把这条做成
-  可断言的常量 `FORBIDDEN_SUBSCRIPTIONS`，而不是注释里的一句"我们不订阅"。
+- AF **不订阅** `butler/inbox/*`——**能投 ≠ 能订**：订阅了就等于 AF 在读自己投递的回执，
+  把"送达到 DB"这件事变成"AF 自己确认送达"。本模块把这条做成可断言的常量
+  `FORBIDDEN_SUBSCRIPTIONS`，而不是注释里的一句"我们不订阅"。
 
 连接与凭据一律交给机制层 `homesdk.mqtt`：缺 `MQTT_HOST` 即抛、缺凭据即抛、不匿名回退。
 构造期不联网——`AfMqttBridge` 接受任何鸭子类型 client，所以门禁在没有 broker、
@@ -15,6 +19,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -25,6 +30,7 @@ from uuid import uuid4
 from homesdk import mqtt as _mqtt
 from homesdk import presence as _presence
 from homesdk.adm.errors import (
+    ADM_ERR_AUTH_REQUIRED,
     ADM_ERR_BROKER_UNREACHABLE,
     ADM_ERR_INTERNAL,
     ADM_ERR_PAYLOAD_INVALID,
@@ -40,11 +46,15 @@ __all__ = [
     "FAILED_TOPIC",
     "INSIGHTS_TOPIC",
     "FORBIDDEN_SUBSCRIPTIONS",
+    "INBOX_KINDS",
+    "INBOX_PREFIX",
     "INSIGHT_CONF_CAP",
     "PRESENCE_NAME",
     "STATUS_TOPIC",
+    "PublishRefused",
     "caps_payload",
     "env_enabled",
+    "inbox_publish",
     "make_ask_sink",
     "make_client",
     "preflight",
@@ -66,10 +76,15 @@ INSIGHTS_TOPIC = "ma/insights"
 #: 常数去验应用"的自证，探针就再也读不出"AF 发错了主题"。
 STATUS_TOPIC = f"adm/{PRESENCE_NAME}/status"
 
+#: 收件箱主题前缀（投递面见本文件后段 `inbox_publish`）。禁订族与可投递名单都从它拼，
+#: 不在下面再抄一遍字面量——前缀改错时"派生名单"与"订阅护栏"必须一起漂移，不能一个跟着动、
+#: 一个停在旧值上（那样 AF 会一边往新主题发、一边继续按旧主题拒订）。
+INBOX_PREFIX = "butler/inbox/"
+
 #: 绝不订阅的主题族。inbox 的所有权与校验权在 DB（homesdk.presence.INBOX_TOPICS 就是那份白名单）。
 FORBIDDEN_SUBSCRIPTIONS: tuple[str, ...] = tuple(sorted(_presence.INBOX_TOPICS)) + (
-    "butler/inbox/#",
-    "butler/inbox/*",
+    f"{INBOX_PREFIX}#",
+    f"{INBOX_PREFIX}*",
 )
 
 #: MA 洞察入审批时的 conf 上限：落在 ask 档（< `af_proposal.SHADOW_LOW`=0.60），
@@ -300,6 +315,196 @@ def _failure_reason(instance: Any) -> str:
     return _clip(str(raw or "").strip() or NO_FAILURE_REASON, MAX_ERROR_CHARS)
 
 
+# ── 收件箱投递（`butler/inbox/*`，计划 §七 卡1，契约 §1.3/§1.5）───────────
+# 前缀常量 `INBOX_PREFIX` 在本文件顶部（禁订族与投递名单共用同一枚，见那里）。
+
+#: 库侧签名里**不给 IR 作者填**的入参：`client` 是机制层入参；`trace_id` 由 AF 每次现场生成
+#: （裁定 20261004 §一 2：事件级，一次部署的两条事件不必同号——让 IR 手写就等于伪造因果链）；
+#: `qos` 由契约 §1.3 钉 1，不在每个节点里重复一遍。
+_INBOX_INTERNAL_ARGS = frozenset({"client", "trace_id", "qos"})
+
+#: 可投递名单 = 库侧白名单去掉前缀（真源 `_presence.INBOX_TOPICS`，DB 那一份）：库侧加第四个动作时
+#: 这里自动跟着长，不留第二份可以各自漂移的表。
+INBOX_KINDS: frozenset[str] = frozenset(
+    topic[len(INBOX_PREFIX):] for topic in _presence.INBOX_TOPICS if topic.startswith(INBOX_PREFIX)
+)
+
+
+class PublishRefused(RuntimeError):
+    """broker 没收这条发布：`client.publish()` 回了非零 `rc`（未连接 / ACL 拒 / 协议错）。
+
+    paho 在**没连上**的时候不抛异常，只回 `rc=MQTT_ERR_NO_CONN`，而 `homesdk.mqtt.publish` 把这个
+    返回值原样交回、各家投递函数（含 `_presence._publish_inbox`）又把它丢弃。不查 rc，
+    "一条都没出去"与"已经送达"在 AF 侧就是同一个读数——契约 §7.3 要点名消灭的正是这种静默。
+    rc 的语义不在 AF 猜（没装 paho 的机器取不到那组常量），所以码统一给
+    `ADM_ERR_BROKER_UNREACHABLE`，原值进 message 供人分辨是 ACL 还是掉线。
+    """
+
+
+def _raise_if_refused(info: Any, topic: str) -> None:
+    rc = getattr(info, "rc", None)
+    if rc:
+        raise PublishRefused(f"{topic} 未被 broker 接受（publish rc={rc}）")
+
+
+def _inbox_fields(kind: str) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    """`(必填, 可选)` 字段名，读自 `homesdk.presence.<kind>` 的函数签名——AF 这一面零手抄 schema。
+
+    长度上限、`ts` 类型、字段形态同理全部由库侧把：`_presence` 先校验再 publish，所以校验失败
+    时线上一字节都没出（这是"载荷侧 fail-closed"能成立的根据，不是我们的修辞）。
+    """
+    func = getattr(_presence, kind, None)
+    if not callable(func):
+        return None
+    required: list[str] = []
+    optional: list[str] = []
+    for name, param in inspect.signature(func).parameters.items():
+        if name in _INBOX_INTERNAL_ARGS or param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+        (optional if param.default is not inspect.Parameter.empty else required).append(name)
+    return tuple(required), tuple(optional)
+
+
+class _RecordingInboxClient:
+    """一次投递的记录代理：`homesdk.mqtt.publish` 唯一用到的 duck 方法就是 `publish(...)`。
+
+    dry_run 与真发**共用同一条路**，区别只在 `target`：没 target ⇒ 只记录不上线；有 ⇒ 原样转给桥的
+    client。于是预演看到的载荷就是库侧 `json.dumps` 出来的那份上线字节，AF 不重拼第二遍——
+    「dry_run 的展示有证据价值」要求的是这个，而不是一个只存在于测试里的假形状。
+    实例按次创建、只装本次那一条，所以不是一条会增长的流水。
+    """
+
+    def __init__(self, target: Any = None) -> None:
+        self.target = target
+        # 按次创建、生命周期 = 一次投递，最多装那一条 ⇒ 有界性来自构造方式而不是裁剪代码
+        # （所以它不是"忘了设上限的缓存"：判据要的是"会不会只增不减"，不是"有没有 MAX 常量"）。
+        self.records: list[dict[str, Any]] = []  # bounded-cache: exempt(单次投递的记录代理：实例由 `inbox_publish` 每次调用新建、随调用返回即失引，结构上装不下第二条以远的记录；读侧是同函数里的 `records[-1]`)
+
+    @property
+    def _homesdk_qos(self) -> int:
+        # QoS 取**被代理那个 client** 配过的值：`homesdk.mqtt.publish` 就是靠这个属性定档，
+        # 在代理处重新默认一次等于把部署方的 QoS 覆盖掉。
+        return getattr(self.target, "_homesdk_qos", _mqtt.QOS)
+
+    def publish(self, topic: str, payload: Any = b"", *, qos: int = _mqtt.QOS, retain: bool = False) -> Any:
+        self.records.append({"topic": topic, "payload": payload, "qos": qos, "retain": retain})
+        if self.target is None:
+            return None
+        info = self.target.publish(topic, payload, qos=qos, retain=retain)
+        _raise_if_refused(info, topic)
+        return info
+
+
+def _inbox_defect(topic: str, code: str, error: str, **extra: Any) -> dict[str, Any]:
+    return {"published": False, "dry_run": False, "topic": topic, "code": code, "error": error, **extra}
+
+
+def inbox_publish(
+    kind: str,
+    *,
+    fields: Mapping[str, Any] | None = None,
+    bridge: "AfMqttBridge | None" = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """投一条 `butler/inbox/<kind>`。三道 fail-closed，缺一即不上线（永不抛给执行链）。
+
+    1. **载荷侧**：动作名、必填键、契约外的键、库侧长度/类型 ⇒ `ADM_ERR_PAYLOAD_INVALID`；
+    2. **通道侧**：真发必须有桥（只有桥的 client 连着 broker），没桥 ⇒ `ADM_ERR_AUTH_REQUIRED`，
+       这条就是计划验收点名的"缺凭据拒发"；`dry_run` 不需要桥（走记录代理）；
+    3. **传输侧**：发布抛或 `rc≠0` ⇒ 交回桥的 `_account_publish_error` **同一套**记账
+       （计数 + retained status 转 degraded + `ADM_ERR_BROKER_UNREACHABLE`）。
+
+    返回体恒带 `topic`，失败必带 `code`；成功时 `payload` 是从上线那份 `body` 解析回来的，
+    不是 AF 重拼的——所以"预演显示的内容"与"音箱该读到的内容"不可能长得不一样。
+    """
+    topic = INBOX_PREFIX + str(kind)
+    params = dict(fields or {})
+    if topic not in _presence.INBOX_TOPICS:
+        return _inbox_defect(
+            topic, ADM_ERR_PAYLOAD_INVALID, f"未知收件箱动作 {kind!r}（允许 {sorted(INBOX_KINDS)}）"
+        )
+    signature = _inbox_fields(str(kind))
+    if signature is None:
+        return _inbox_defect(
+            topic,
+            ADM_ERR_INTERNAL,
+            f"主题 {topic} 已登记，但 `homesdk.presence.{kind}` 缺席——AF 不猜它的载荷形态",
+        )
+    required, optional = signature
+    allowed = set(required) | set(optional)
+    extra = sorted(str(k) for k in params if k not in allowed)
+    if extra:
+        # 多余的键**一律拒**而不是忽略：`{"tet": "..."}` 这种拼错的键若被静默丢掉，IR 作者读到
+        # "动作执行成功"，音箱播的却是空文本——假绿的形状。
+        return _inbox_defect(
+            topic,
+            ADM_ERR_PAYLOAD_INVALID,
+            f"收件箱 {kind} 不接受这些键：{extra}（契约 §1.3 允许 {sorted(allowed)}）",
+        )
+    missing = [k for k in required if k not in params]
+    if missing:
+        return _inbox_defect(topic, ADM_ERR_PAYLOAD_INVALID, f"收件箱 {kind} 缺必填字段：{missing}")
+
+    trace_id = uuid4().hex[:12]
+    positional = [params[k] for k in required]
+    keyword = {k: params[k] for k in optional if k in params}
+
+    if dry_run:
+        client: Any = _RecordingInboxClient()
+    elif bridge is None:
+        return _inbox_defect(
+            topic,
+            ADM_ERR_AUTH_REQUIRED,
+            "MQTT 联动桥未上线（`AUTOFORGE_MQTT` 未开、broker 配置不齐或缺服务账号凭据）"
+            "——收件箱投递 fail-closed，不静默丢弃，也不假装已经播报",
+            trace_id=trace_id,
+        )
+    else:
+        client = _RecordingInboxClient(bridge.client)
+
+    func = getattr(_presence, str(kind))
+    try:
+        func(client, *positional, trace_id=trace_id, **keyword)
+    except (_presence.PresenceError, TypeError, ValueError) as exc:
+        return _inbox_defect(topic, ADM_ERR_PAYLOAD_INVALID, f"{type(exc).__name__}: {exc}", trace_id=trace_id)
+    except Exception as exc:  # noqa: BLE001 —— 传输侧失败不能把执行链拖崩，但必须留痕（假绿即缺陷）
+        if bridge is not None:
+            result = bridge._account_publish_error(topic, exc)
+        else:  # 代理不联网；真发必有桥。走到这里＝上面某道判据漏了，照实记账而不是报成功
+            logger.warning("[mqtt] 收件箱投递 %s 失败（未记账到桥）：%r", topic, exc)
+            result = {
+                "published": False,
+                "topic": topic,
+                "error": repr(exc),
+                "code": ADM_ERR_BROKER_UNREACHABLE,
+            }
+        result["trace_id"] = trace_id
+        return result
+
+    if not client.records:
+        # 库函数返回了却一次 publish 都没产生：AF 无法证明上线内容 ⇒ 如实判失败，不猜"应该发了"。
+        return _inbox_defect(
+            topic, ADM_ERR_INTERNAL, f"`presence.{kind}` 未产生任何 publish 调用", trace_id=trace_id
+        )
+    record = client.records[-1]
+    body = record["payload"]
+    if bridge is not None and not dry_run:
+        bridge._note_published(topic, body)
+    return {
+        "published": not dry_run,
+        "dry_run": dry_run,
+        "topic": topic,
+        "trace_id": trace_id,
+        "payload": json.loads(body),
+        "body": body,
+        "qos": record["qos"],
+        "retain": record["retain"],
+    }
+
+
 class AfMqttBridge:
     """把 AF 的终态事件发出去、把 MA 洞察收进来。client 由调用方注入（生产用 `make_client`）。"""
 
@@ -361,7 +566,7 @@ class AfMqttBridge:
             reasons=list(self.degraded),
         )
         try:
-            _mqtt.publish(self.client, STATUS_TOPIC, text, qos=1, retain=True)
+            _raise_if_refused(_mqtt.publish(self.client, STATUS_TOPIC, text, qos=1, retain=True), STATUS_TOPIC)
         except Exception as exc:  # noqa: BLE001 —— 降级播报失败不能把执行链拖崩，也不能反循环
             self.counts["publish_errors"] += 1
             self._keep(self.errors, f"{STATUS_TOPIC}: {type(exc).__name__}: {exc}")
@@ -370,22 +575,42 @@ class AfMqttBridge:
         self._keep(self.published, {"topic": STATUS_TOPIC, "payload": text})
         return {"published": True, "topic": STATUS_TOPIC, "payload": text}
 
+    def _account_publish_error(self, topic: str, exc: BaseException) -> dict[str, Any]:
+        """发布失败的**同一套**记账（`_publish` 与 `inbox_publish` 共用）。
+
+        分两处各写一遍＝两处可以各自决定"要不要标降级"，而"broker 断了却没人把 status 翻成
+        degraded"正是契约 §7.3 要消灭的静默失败。返回体带 `code`：失败必须带码（契约 §7.2 纪律）。
+        """
+        self.counts["publish_errors"] += 1
+        self._keep(self.errors, f"{topic}: {type(exc).__name__}: {exc}")
+        logger.warning("[mqtt] 发布 %s 失败（已计入 publish_errors）：%r", topic, exc)
+        self.mark_degraded(ADM_ERR_BROKER_UNREACHABLE)
+        self.publish_degraded()
+        return {
+            "published": False,
+            "topic": topic,
+            "error": repr(exc),
+            "code": ADM_ERR_BROKER_UNREACHABLE,
+        }
+
+    def _note_published(self, topic: str, payload: Any) -> None:
+        """发成功后的**同一套**收尾：进有界流水 + 传输回来了就清降级位重报在线（`_publish` 与收件箱共用）。
+
+        不清降级位等于让对端永远读着一张旧病历；不重发 caps 则恢复后对端看到的是
+        "在线了，但 caps 空了"——比降级更难读。
+        """
+        self._keep(self.published, {"topic": topic, "payload": payload})
+        if self.degraded:
+            self.degraded.clear()
+            self.advertise(caps=self.caps or None)
+
     def _publish(self, topic: str, payload: dict[str, Any]) -> dict[str, Any]:
         """发一条不 retained 的事件。发布失败**不冒到执行链**，但必须留痕（假绿即缺陷）。"""
         try:
-            _mqtt.publish(self.client, topic, payload, retain=False)
+            _raise_if_refused(_mqtt.publish(self.client, topic, payload, retain=False), topic)
         except Exception as exc:  # noqa: BLE001 —— broker 抖动不该让自动化崩
-            self.counts["publish_errors"] += 1
-            self._keep(self.errors, f"{topic}: {type(exc).__name__}: {exc}")
-            logger.warning("[mqtt] 发布 %s 失败（已计入 publish_errors）：%r", topic, exc)
-            self.mark_degraded(ADM_ERR_BROKER_UNREACHABLE)
-            self.publish_degraded()
-            return {"published": False, "topic": topic, "error": repr(exc)}
-        self._keep(self.published, {"topic": topic, "payload": payload})
-        if self.degraded:
-            # 发得出去＝这条腿真回来了。不清降级位就等于让对端永远读着一张旧病历。
-            self.degraded.clear()
-            self.advertise(caps=self.caps or None)
+            return self._account_publish_error(topic, exc)
+        self._note_published(topic, payload)
         return {"published": True, "topic": topic, "payload": payload}
 
     @staticmethod
@@ -426,6 +651,12 @@ class AfMqttBridge:
         payload = self._envelope(automation_id=automation_id, instance_id=instance_id, extra=extra)
         payload["error"] = str(error)
         return self._publish(FAILED_TOPIC, payload)
+
+    def publish_inbox(
+        self, kind: str, *, fields: Mapping[str, Any] | None = None, dry_run: bool = False
+    ) -> dict[str, Any]:
+        """实例方法形态的收件箱投递（记账与状态翻转都在桥上，见 `inbox_publish`）。"""
+        return inbox_publish(kind, fields=fields, bridge=self, dry_run=dry_run)
 
     def observe_terminal(self, instance: Any, state: str) -> dict[str, Any] | None:
         """`Runtime.add_terminal_observer` 的适配器：done→fired，failed→failed，其余不发。
@@ -468,7 +699,7 @@ class AfMqttBridge:
 
     def subscribe_topic(self, topic: str) -> bool:
         """唯一订阅入口：禁订族一律拒，并计数留痕。"""
-        if topic in FORBIDDEN_SUBSCRIPTIONS or topic.startswith("butler/inbox/"):
+        if topic in FORBIDDEN_SUBSCRIPTIONS or topic.startswith(INBOX_PREFIX):
             self.counts["forbidden_seen"] += 1
             self._keep(self.rejected, {"topic": topic, "reason": "forbidden_subscription"})
             return False
@@ -479,7 +710,7 @@ class AfMqttBridge:
         """paho 回调：只认 `ma/insights`，别的主题即使被误投也只是计数，不执行任何动作。"""
         topic = msg.topic.decode("utf-8", "replace") if isinstance(msg.topic, bytes) else str(msg.topic)
         if topic != INSIGHTS_TOPIC:
-            if topic in FORBIDDEN_SUBSCRIPTIONS or topic.startswith("butler/inbox/"):
+            if topic in FORBIDDEN_SUBSCRIPTIONS or topic.startswith(INBOX_PREFIX):
                 self.counts["forbidden_seen"] += 1
                 self._keep(self.rejected, {"topic": topic, "reason": "forbidden_topic_not_handled"})
             else:

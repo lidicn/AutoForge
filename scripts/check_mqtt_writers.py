@@ -8,7 +8,7 @@
 **没有任何一条测试红过，而真实载荷早就和契约行不一样了**。这是铁律 #5 的"测到 ≠ 覆盖到"，
 本门把它做成静态判据：射程不是"已知的这几个调用点"，而是"**下一个写者**"。
 
-三条判据（各自都能单独判红）：
+四条判据（各自都能单独判红）：
 - **A 写者唯一**：`_mqtt.publish(...)` / `_presence.advertise(...)` 的调用点只允许出现在
   `af_mqtt_bridge.py`。别处自己拿 client 发 = 绕过主题白名单门之外的那半（载荷形态、QoS、
   `ts` 口径、发布失败要留痕）——那半没有任何静态约束。
@@ -18,10 +18,18 @@
 - **C 载荷必经信封**：桥内 `self._publish(<topic>, payload)` 的 payload 实参必须是
   `self._envelope(...)` 的返回值（直接调用，或本函数内先由它赋值再补字段的变量）。
   手搓 dict = `ts` 的家庭墙钟口径、`ref`=实例 id、trace_id 的生成方式**一次全丢**。
+- **D 机制层入口唯一**：`homesdk.presence` 的成员访问（`_presence.speak` 这种写法）**和**
+  `getattr(_presence, …)` 这种动态派发，只允许出现在 `af_mqtt_bridge.py`。
+  第 3 条卡（计划 §七 卡1）把 AF 变成 `butler/inbox/*` 的正式投递方，而桥里的派发是
+  `getattr(_presence, kind)`——按名字判的 A 判据抓不到变量形态，正是本仓量过的测量陷阱
+  （`LIVE_*` 走模块常量、`ENTITY_DEP_CYCLE` 走变量传码）。D 判据抓的是**入口**而不是函数名，
+  所以既不需要在这里抄一份动作名单，也抓得到动态派发出来的那一条。
 
 锚点（读不到就 exit 2，不许静默全绿）：`af_mqtt_bridge.py` 里必须有模块级
 `FIRED_TOPIC`/`FAILED_TOPIC` 常量，且类里同时有 `_envelope` 与 `observe_terminal` 两个方法——
 本门的三条判据全都长在这两个符号上，改名/挪走会让门变成"永远干净"。
+D 判据另认两个锚点：模块级 `INBOX_PREFIX` 与 `inbox_publish()`，收件箱那条腿哪天被删，
+本门必须当场决定去留，不能悄悄少一条判据还报干净。
 
 现场豁免 `# mqtt-writers: exempt(理由)`，理由不能空，且**单独计入读数**（铁律 #5）。
 
@@ -42,8 +50,30 @@ PRODUCER_FUNC = "observe_terminal"
 ENVELOPE = "_envelope"
 INTERNAL_PUBLISH = "_publish"
 MQTT_WRITERS = {("_mqtt", "publish"), ("_presence", "advertise")}
+#: 机制层 `homesdk.presence` 在本仓的导入别名（D 判据认的是**入口**，不是函数名单）。
+PRESENCE_ALIAS = "_presence"
+#: A 判据已经点名的 presence 写者不重复计入 D，免得同一行报两条。
+PRESENCE_WRITER_ATTRS = frozenset(attr for obj, attr in MQTT_WRITERS if obj == PRESENCE_ALIAS)
 TOPIC_CONSTANTS = ("FIRED_TOPIC", "FAILED_TOPIC")
+#: D 判据的锚点：收件箱那条腿被删/改名时本门要当场红，不能少一条判据还报干净。
+INBOX_ANCHORS = ("INBOX_PREFIX", "inbox_publish")
+_DYNAMIC_DISPATCH = "getattr(_presence, …)"
 _EXEMPT = re.compile(r"mqtt-writers:\s*exempt\(\s*(\S[^)]*)\s*\)")
+
+
+def _presence_entry_sites(tree: ast.Module) -> list[tuple[int, str]]:
+    """`_presence.<成员>` 的静态访问 + `getattr(_presence, …)` 的动态派发，两种形态一起收。"""
+    out: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            if node.value.id == PRESENCE_ALIAS and node.attr not in PRESENCE_WRITER_ATTRS:
+                out.append((node.lineno, f"{PRESENCE_ALIAS}.{node.attr}"))
+            continue
+        if isinstance(node, ast.Call) and _call_name(node)[1] == "getattr" and node.args:
+            first = node.args[0]
+            if isinstance(first, ast.Name) and first.id == PRESENCE_ALIAS:
+                out.append((node.lineno, _DYNAMIC_DISPATCH))
+    return out
 
 
 def _call_name(node: ast.Call) -> tuple[str, str]:
@@ -116,7 +146,10 @@ def _findings_for(
     path: Path, rel: str, tree: ast.Module, lines: list[str]
 ) -> tuple[list[str], dict[str, int]]:
     hits: list[str] = []
-    stats = {"exempted": 0, "writers": 0, "producers": 0, "payload_sites": 0, "payload_ok": 0}
+    stats = {
+        "exempted": 0, "writers": 0, "producers": 0, "payload_sites": 0, "payload_ok": 0,
+        "presence_entries": 0,
+    }
     in_bridge = path.name == BRIDGE
     assigns = _assignments(tree)
 
@@ -178,13 +211,27 @@ def _findings_for(
                 f"`{ENVELOPE}()` 的产物——手搓 dict 会同时丢掉 `ts` 的家庭墙钟口径、"
                 f"`ref`=实例 id 与 trace_id 的生成方式"
             )
+
+    # D：机制层入口（含变量形态，A 判据按名字抓不到的那一条）
+    for line, form in _presence_entry_sites(tree):
+        stats["presence_entries"] += 1
+        if in_bridge:
+            continue
+        if exempt(line):
+            stats["exempted"] += 1
+            continue
+        hits.append(
+            f"{rel}:{line}: 桥外用 `{form}`——出向消息的主题白名单、QoS、`ts` 口径与"
+            f"发布失败留痕全在 `{BRIDGE}` 里收口，绕过它等于发一条没人验过的消息"
+        )
     return hits, stats
 
 
 def check(root: Path) -> tuple[list[str], dict[str, int]]:
     findings: list[str] = []
     totals = {"exempted": 0, "writers": 0, "writer_files": 0, "producers": 0,
-              "producer_files": 0, "payload_sites": 0, "payload_ok": 0}
+              "producer_files": 0, "payload_sites": 0, "payload_ok": 0,
+              "presence_entries": 0, "presence_files": 0}
     for path in sorted(root.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
@@ -200,6 +247,8 @@ def check(root: Path) -> tuple[list[str], dict[str, int]]:
             totals["writer_files"] += 1
         if st["producers"]:
             totals["producer_files"] += 1
+        if st["presence_entries"]:
+            totals["presence_files"] += 1
     return findings, totals
 
 
@@ -217,6 +266,11 @@ def anchor_ok() -> str | None:
     for needed in (ENVELOPE, PRODUCER_FUNC, *EVENT_PUBLISHERS):
         if needed not in funcs:
             return f"类里找不到 `{needed}()`（改名/挪走会让本门静默全绿）"
+    module_funcs = {f.name for f in tree.body if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    for needed in INBOX_ANCHORS:
+        if needed not in names and needed not in module_funcs:
+            return (f"收件箱锚点读不到 `{needed}`——D 判据判的就是桥里那条 `getattr(_presence, …)` "
+                    f"派发腿，它被删/改名时本门必须当场决定去留，不能少一条判据还报干净")
     return None
 
 
@@ -241,6 +295,8 @@ def main(argv: list[str]) -> int:
           f"{totals['writer_files']} 个文件；事件生产者 {totals['producers']} 处、分布在 "
           f"{totals['producer_files']} 个文件；桥内 `{INTERNAL_PUBLISH}(topic, payload)` "
           f"{totals['payload_sites']} 处，其中载荷来自 `{ENVELOPE}()` 的 {totals['payload_ok']} 处；"
+          f"机制层 `{PRESENCE_ALIAS}` 入口 {totals['presence_entries']} 处、分布在 "
+          f"{totals['presence_files']} 个文件（D 判据认入口也认 `getattr` 派发）；"
           f"现场豁免 {totals['exempted']} 处）")
     return 0
 

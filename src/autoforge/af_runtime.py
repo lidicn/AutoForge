@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from .af_adapters import HAAdapter, HTTPAdapter, MockAdapter, AdapterRegistry
+from .af_adapters import HAAdapter, HTTPAdapter, InboxAdapter, MockAdapter, AdapterRegistry
 from .af_audit import (
     INSTANCE_LEASE_HELD,
     INSTANCE_RESTORE_DROPPED,
@@ -289,6 +289,9 @@ def build_runtime(
     registry.register(MockAdapter())
     registry.register(HAAdapter(dry_run=dry_run))
     registry.register(HTTPAdapter(allowed_hosts=http_allowed_hosts, dry_run=dry_run))
+    # 收件箱投递：`build_runtime` 是唯一的适配器收口点，仿真 / `_replay` / `/api/live/run` 都从这里拿，
+    # 所以注册在这里 = 四面（CLI/HTTP/MCP/仿真）同一份能力，没有"某一面接不到 DB"的分裂。
+    registry.register(InboxAdapter(dry_run=dry_run))
 
     return Runtime(
         graph=graph,

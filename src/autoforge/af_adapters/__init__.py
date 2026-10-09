@@ -16,6 +16,7 @@ from .base import (
 )
 from .ha import DEFAULT_HA_URL, HAAdapter, HAStateProvider, HATransport
 from .http import HTTPAdapter, guarded_open, host_of
+from .inbox import InboxAdapter
 from .mock import MockAdapter
 
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "guarded_open",
     "host_of",
     "MockAdapter",
+    "InboxAdapter",
 ]
