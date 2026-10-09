@@ -180,7 +180,7 @@ class ConflictArbiter:
         self._cooldown_until: dict[str, float] = {}
         self._circuits: dict[str, _Circuit] = {}
         # DCD 20261008 裁定§五：冷却登记失败的实体进入"待补"态，登记成功前 AF 不写该实体
-        self._cooldown_pending: set[str] = set()
+        self._cooldown_pending: set[str] = set()  # bounded-cache: exempt(冷却登记待补的实体集：唯一写入口 `on_user_override()`——失败分支按实体 add、成功分支 discard，成员是实体 id 而非事件 ⇒ 同一实体反复失败不增长（`_expire()` 不清它，出口只有成功重登）。给它加硬上限等于把实体从 fail-closed 守卫里放出去，那正是裁定 20261008 §五 要防的"冷却没启动就改回用户刚设的状态"，所以既不封顶也没有 TTL 腿——不进 BOUNDED_CACHES 给一条不存在的腿盖章)
 
     # ------------------------------------------------------------------ #
     # 公开 API

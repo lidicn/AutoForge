@@ -78,6 +78,12 @@
 
 `trigger.op = and|or`（`group` 用）。AF **不用 `visited` 去环**，走的是"每绕一圈深度 +1 ⇒ 必然撞预算"的每站点预算路线（`af_ir/models.py:166` 的注释；对照口径见 `docs/architecture/HA_SEMANTIC_DIFF.md`）。
 
+**两个联动事件名走的就是上面这行 `event`，没有第六类 trigger**（计划 §七 卡3）：`{"type":"event","event":"ma_presence"}` 按"谁在家"触发、`{"type":"event","event":"ma_device_health"}` 按"哪台设备掉线/迁移"触发。它们的来源不是 HA 事件流，而是 MQTT 桥订 `ma/presence` / `ma/device-health` 后落进 `af_linkage_feed.LinkageFeed`（盘上队列），由**常驻 tick 线程**抽出来注入内部总线（`af_live.pump_linkage`）。三条口径要记住：
+
+- 只有 `forge watch` 会抽这条队列。**`serve` 没有 ticker**（它只起桥：入队、不触发），所以在 `serve` 里 `linkage.inbound.presence_in` 会涨、自动化却不会动 —— 不是 bug，是进程分工。
+- 队列里的条目**按年龄决定要不要当触发用**：`received_at` 距今 >`TRIGGER_MAX_AGE_S`（120 秒）只留档、不回放，水位线照样推进 ⇒ "重启不丢记录，重启不补触发"。开机瞬间拿一条小时级的旧掉线快照去真实下发设备，是这条闸要防的事。
+- 事件**载荷目前读不到节点里**。总线注入时带了 `subject`/`members`/`from_state` 等键，但 `on` 匹配后 IR 节点能拿到的只有 `_trigger_repr`（`af_instance.py:464-473`）那对 `{entity_id, state}`——"哪个人回家"这类判据还得等卡2 的变量绑定，别在 DSL 里假装已经能按成员名分支。
+
 ### 3.5 ask：`ask.kind` 5 种 + `session` 4 种
 
 `choice` / `entity` / `time_range` / `threshold` / `text`；`session ∈ room|device|user|global`（会话匹配消歧，见 `docs/architecture/IR_AND_RUNTIME.md` §5.2）。
@@ -369,6 +375,21 @@ API base：`VITE_API_BASE ?? 'http://localhost:8787/api'`。这三棵树的调�
  "tz": {...}}
 ```
 
+`linkage` 展开（`af_mqtt_bridge.linkage_status`，AF 不抄第四套状态词，`state` 取 `homesdk.adm.status` 三常量）：
+
+```json
+{"wired": true, "state": "online|degraded|offline", "degraded": true,
+ "reasons": ["ADM_ERR_BROKER_UNREACHABLE"],     // 与 retained status 载荷同一来源
+ "publish_errors": 0,
+ "inbound": {"subscribed": ["ma/presence", "ma/device-health"],  // subscribe_linkage=False ⇒ []
+             "presence_in": 12, "device_health_in": 3, "rejected": 1,
+             "feed": {"wired": true, "root": "…/linkage_events", "limit": 500,
+                      "ttl_s": 86400.0, "per_kind": {"presence": 12, "device_health": 3},
+                      "unreadable": [], "watermark": "1759996800123|presence|-9f3c1a2b.json"}}}
+```
+
+`inbound` 是卡3 那一半的读数面，四条都可证伪：`subscribed` 为空 ⇒ 这条进程根本没订（`--no-linkage-subscribe` 一类），不是"对端没发"；`feed.wired=false` ⇒ 桥在但没给落盘队列，于是每条入向事件都进 `rejected`、`presence_in` 恒零（这比"看着健康其实全丢了"好读）；`unreadable` 非空 ⇒ 盘上有读不出来的条目（诊断环形清单，最多 50 条，不参与任何判定）；`watermark` 是**已消费到哪一条**的水位，只随 tick 线程抽取而推进，`serve` 里它恒为空串（见 3.4）。
+
 **"readonly=true 但写面 200"不是矛盾**：前者是身份，后者看 `write_gate`。`no_lease` = 探不到租约状态，**绝不塌回 `open`**。
 
 ### 12.3 起停与验收
@@ -464,10 +485,13 @@ PYTHONPATH=src <py313> -m pytest tests -q
 3. `af_irreversible` 只有 NL 渲染侧调用方，执行面未接。
 4. `af_fidelity._canon` 仍是裸 `json.dumps`（与第十三轮修掉的 `_leaf_key` 同形），需要给 `FidelityReport` 加一档才能如实表达"无法比较"。
 5. `af_test_clear` 的无守卫 `rmtree`（§九）。
-6. `_cooldown_pending` 未进有界容器注册表 ⇒ 整树判据 2 条红；路由/UI 计数未重钉 ⇒ 另 2 条红（现读 §十七）。
+6. **本批（2026-10-09）已收，原先是 HEAD 上的 4 条红**：`_cooldown_pending` 没进有界容器注册表（现按"键空间是实体 id、同一实体反复失败不增长、给它封顶等于把实体放出 fail-closed 守卫"走就地豁免并写理由），路由/UI 计数棘轮没重钉（现钉 87 / 90 / mimo 22，两条新路由 `/api/auth/has-admin`、`/api/auth/register` 各有 `LoginView.vue` 里的真 fetch）。逐条定性与两树复测见执行记录 §二之七十六。**还剩的整树红只有 AST 棘轮 2 条**（`af_api.py:980`/`:1001` 返回字面量 `ok=True`，登录正规化 `e5b3fd5` 自带，上调登记上限属评审动作、改成真校验派生属登录那条线的语义 ⇒ 点名不修）。
 7. `READONLY_DEGRADED:` 前缀在 homesdk 契约表的登记半边归 DCD／homesdk，现读两文档零命中。
 8. 收件箱投递（计划 §七 卡1）三管线（编译/仿真/NL）与 fail-closed 已绿，但**`mosquitto_sub` 那一半验收要在 NAS 上做**，属合并窗动作，本批只到"上线字节由库侧生成并被测试反解核对"为止。同一条未接的还有契约 §1.3 护栏 3（按 source 限速）与编译期的 >500 字符检查——长度上限现在由库侧 `_len_bounded` 把，编译期不提前报。
 9. publish 失败目前只归一个码（`ADM_ERR_BROKER_UNREACHABLE`，原始 `rc=…` 写在 message 里）：ACL 拒绝与 broker 不可达在 AF 侧不做区分，是否要独立码已列为 DCD 待问项。
+10. 计划 §七 卡3（订阅 `ma/presence`/`ma/device-health` 并落独立持久队列）仓内半边已绿，**没收的三样点名写出**：① 对端实际载荷是否逐键符合契约 §1.2 那两行，只有 NAS 合并窗的 `mosquitto_sub` 能对撞，仓内证到的是"契约要求的必填项缺了就拒收并带 `ADM_ERR_*`"；② 面板上没有"入向联动"这一格，唯一读数面是 `/api/health` 的 `linkage.inbound`；③ 队列没有 per-source 限速（与第 8 条同一护栏）。
+11. 入向事件的**载荷读不进 DSL**：总线注入时带了 `subject`/`members`/`from_state`，但 `_trigger_repr`（`af_instance.py:464-473`）给节点的只有 `{entity_id, state}` ⇒ 现在只能"有 presence 事件就触发"，不能按成员/房间/哪台设备分支。按成员取值要等卡2 的变量绑定。
+12. `serve` 只入队、**不抽队**（该进程没有 ticker）：`linkage.inbound.presence_in` 会涨而自动化不动。分工不是缺陷，但读健康的人要知道这一格在 `serve` 里不代表"触发链活着"。
 
 ---
 
@@ -519,4 +543,5 @@ FAILED tests/unit/test_ui_api_paths_gate.py::test_all_trees_of_this_repo_are_in_
 | 2026-10-09 | 工作区混合态（未提交，含并发批次的鉴权改动） | 现场回灌五件：`POST /api/watch/start` 假绿已修（sidecar 身份必须等于本次 IR，失败分三档）+ 档位如实命名 `tier`/`real_device`；**HTTP/用户视角到今天没有常驻真机通道**（申请 `20261009-AF-用户视角到真机的常驻通道`）；`/api/automations` 卡片改按 automation 级取数、`trial` 读不出就给 `null`、启停写侧走 `store.resave_raw`；订正 `forge watch` 没有 `--live`/`--vhass` 两枚旗子；记入 NAS `AUTOFORGE_LIVE_ENABLED=1` 与仓内缺省 0 的分歧；记入 `requires_confirm` 无运行期消费者、`canary` 有；重钉 12 处行号锚点 |
 | 2026-10-09 | 同上，保真复核 | 四项清单与注册表逐项对撞（31/90/18/40 全等）；§七 安全闸表 42 名收成 40 键，并写明 `IR_SCHEMA` 是错误知识分类、`L2_NEEDS_CANARY` 发诊断却未注册；§十二 时区键补 `HOMESDK_TZ`（规范）与全序 |
 | 2026-10-09 | HEAD `e5b3fd5` + 收件箱批次 | 计划 §七 卡1 落地：`adapter: inbox` 三动作（`speak`/`notify`/`tv`）走 `af_mqtt_bridge.inbox_publish`，载荷 schema 直接读 `homesdk.presence` 函数签名、不在 AF 重抄；`dry_run` 零字节上线；桥缺席＝缺凭据 ⇒ `ADM_ERR_AUTH_REQUIRED`。§七 补 `classify_action` 的「动作名不带点退回适配器名」段落（这是本批由漂移测试抓出的真 bug：DSL 会把 `inbox.speak` partition 成 `adapter=inbox`+`action=speak`，只按动作名判会落进未知 domain 的 L2 缺省档，扫描阶段就红）；§八 补收件箱在预演档下的口径。同时修掉 publish `rc` 被丢弃（bug D）：`rc≠0` 现在计 `publish_errors`、置 degraded、重发 status |
+| 2026-10-09 | HEAD `2d92bb1` + 联动入向批次 | 计划 §七 卡3 落地（AF 侧半边）：桥订 `ma/presence` + `ma/device-health`，入向事件落**独立持久队列** `af_linkage_feed.LinkageFeed`（`{store}/linkage_events/{kind}/{13位毫秒}-{event_id}.json`，每类各 500 封顶 + 24h TTL，都裁最旧）；触发**复用 `on event`**（`ma_presence`/`ma_device_health` 两个事件名，不立第六类 trigger）；收/消费分线程——paho 回调只判形状＋原子写，常驻 tick 线程经 `af_live.pump_linkage` 抽水位线注总线（`EventBus` 没有锁），"重启不丢记录、不补触发"由 `TRIGGER_MAX_AGE_S=120` 那档分开。`/api/health` 的 `linkage.inbound` 是这一路的唯一读数面（`subscribed`/`presence_in`/`device_health_in`/`rejected`/`feed`，未新增路由）。顺手关掉 HEAD 上就红的 4 条计数棘轮（有界缓存 125→129、路由 85→87、routes 88→90、mimo 20→22），并给 `_cooldown_pending` 补上带理由的就地豁免 |
 | 2026-09-24 | 当时 HEAD | 初版（端到端实测后） |

@@ -64,7 +64,7 @@
 
 ---
 
-## 二、模块地图（按层，共 62 个顶层模块 + 5 个包）
+## 二、模块地图（按层；顶层 `.py` 现读 71 个（不含 `__init__.py`）+ 4 个包目录，含包内文件共 102 个 `.py`，import-linter 的基线锁读的就是这 102）
 
 | 层 | 模块 | 责任 |
 |---|---|---|
@@ -78,7 +78,7 @@
 | **插件装配** | `af_runtime_ext.py`、`af_runtime_plugins.py` | 把治理件挂到 executor/runtime 上（不改内核） |
 | **经验与观测** | `af_telemetry.py`、`af_experience.py`、`af_error_knowledge.py`、`af_preference.py`、`af_predict.py`、`af_pretrigger.py`、`af_insight_queue.py`、`af_proposal.py`、`af_feedback.py`、`af_metrics.py`、`af_evo.py` | 遥测、共现经验、错误知识库、预测触发、洞察队列、提案、反馈 |
 | **存储与凭据** | `af_store.py`、`af_persist.py`、`af_atomic.py`、`af_flock.py`、`af_secrets.py`、`af_auth.py`、`af_audit.py`、`af_fire_recorder.py`、`af_bounded_caches.py`、`af_config.py`、`af_env.py`、`af_conf.py` | 版本化归档、实例持久化、原子写、租约、密钥、令牌、审计、封顶注册表 |
-| **出向** | `af_mqtt_bridge.py` | ADM 联动桥（唯一出向生产者；`fired`/`failed`/retained status 与收件箱 `butler/inbox/*` 投递都从这一个模块出去） |
+| **联动：出向与入向** | `af_mqtt_bridge.py`、`af_linkage_feed.py` | 出向：ADM 联动桥是唯一出向生产者（`fired`/`failed`/retained status 与收件箱 `butler/inbox/*` 都从这一个模块出去）。入向：`ma/insights` 落提案队列，`ma/presence`/`ma/device-health` 落 `af_linkage_feed.LinkageFeed` 这条独立持久队列（卡3；只落盘，注总线由 `af_live.pump_linkage` 在 tick 线程做） |
 | **面** | `af_api.py`、`af_mcp.py`、`af_cli.py`、`af_catalog.py`、`af_scene.py`、`af_fault.py`、`af_version.py`、`af_instance.py`、`af_vhass/` | 对外接口与设备目录 |
 
 **依赖方向是门禁**：`pyproject.toml` 的 import-linter 契约（例：`name = "Service boundary never imported by kernel"`）在 CI 里跑，跨层反向 import 直接判红。
@@ -377,6 +377,14 @@ UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调
 | `adm/autoforge/status`（retained，presence） | 出 | `advertise()` / `publish_degraded()` | `:77`、`:540`、`:555` |
 | `butler/inbox/speak\|notify\|tv` | 出（AF 只**投递**，不订阅、不决定播不播） | `inbox_publish()`（由 `InboxAdapter` 调） | `:82`（前缀真源）、`:328`（名单从 `_presence.INBOX_TOPICS` 派生）、`:405`（三道 fail-closed 都在这一个口）；适配器 `af_adapters/inbox.py:47` |
 | `ma/insights` | **入向 only** | 订阅白名单守卫拒任何出向尝试 | `:73`、`:684`/`:692`（`start()` 里唯一一次 subscribe）、`:700`/`:709`（`subscribe_topic`/`handle_message` 的禁订守卫）、`FORBIDDEN_SUBSCRIPTIONS :85` |
+| `ma/presence` | **入向 only**（卡3） | AF 只消费：`ingest_linkage()` 落盘，**不转发、不出向** | `PRESENCE_TOPIC :86`、`start()` 的订阅环 `:737`、`ingest_linkage :866`（`LINKAGE_KIND_BY_TOPIC.get :881`） |
+| `ma/device-health` | **入向 only**（卡3） | 同上，同一张嘴 | `DEVICE_HEALTH_TOPIC :87`、`:737`、`:866` |
+
+- **入向两条主题名只有一枚真源**：`LINKAGE_TOPICS`（`:90`）+ `LINKAGE_KIND_BY_TOPIC`（`:91`），`start()` 的订阅环、`handle_message` 的分派、`linkage_status` 的 `inbound.subscribed` 三处都从它拼。`homesdk.presence` 里**没有** `ma/*` 主题符号，所以这两条常量归 AF 持有，同源由 `scripts/check_topic_whitelist.py` 对着契约表核（现读 7 处 topic 字面量全部在册）。
+- **收与消费在两个线程上，队列就是那条接缝**：paho 回调线程只做"判形状 + 原子写一条文件"（`ingest_linkage`），常驻 tick 线程经 `poll_linkage()`（`:931`）→ `af_live.pump_linkage()`（`af_live.py:364`）把新条目注进内部总线（`af_cli.py:623`，接在 `_tick()` 里 `runtime.tick()` 之后）。`EventBus` 没有锁，回调里直接 publish 等于把跨线程改状态这件事藏进 broker 的重试路径里。`serve` 那条进程**没有 ticker**（`af_api.py` 里 `start_ticker`/`.tick(` 现读 0 处），所以它只入队不触发。
+- **落盘形状与载荷裁剪分两半**：形状由 `af_linkage_feed.LinkageFeed`（`:153`）定——`{store}/linkage_events/{kind}/{13位毫秒}-{event_id}.json`，`append()`（`:177`）之后就地 `_trim()`（`:267`：先 TTL 删超龄、再按硬上限删最旧，**只由写触发**，所以"纯写不读"也被回收）；载荷键由桥按契约 §1.2 逐键白名单取（成员子键**不含 `via_raw`**、设备侧 `from` 另存 `from_state`），对端多发的私有字段不会经 AF 的归档扩散。
+- **水位线键把毫秒放在最前**（`_key`：`{ms}|{kind}|{后缀}`）。按 `{kind}/{文件名}` 排会得出一个静默失效的形状：`device_health` 整个目录永远排在 `presence` 前面，于是"先收一条在场、再收一条更晚的设备健康"时后者字典序更小、被当成已消费——那条掉线事件不触发，而盘上明明有。
+- **拒收只按契约，不按心情**：`trace_id` 非空、`members` 必须是数组（空数组合法）、`stable_id` 必须非空；`total` 只有真 `int` 才留（`"2"`/`True`/`2.5` 都丢）。没给队列（`linkage_sink=None`）⇒ `no_linkage_sink_wired` + `ADM_ERR_INTERNAL`，每条都进 `linkage_rejected` 计数——这比"看着健康其实全丢了"好读。入向计数**独立**（`presence_in`/`device_health_in`/`linkage_rejected`），不与洞察那套 `insights_rejected` 混用。
 
 - 出向事件载荷必经 `_envelope()`（`:622`）；错误码/状态名从 `homesdk.adm.errors` import，不手抄。
 - **收件箱三条不走 `_envelope()`**：载荷由库侧 `homesdk.presence.<kind>` 生成（必填键、`text≤500`/`title≤80`/`body≤500`、`ts` 的 epoch 口径都在库侧，0.3.2 规格 §三.1"谁定 schema 谁把校验"）。AF 只做两件事：把 IR 作者填的字段按库侧签名铺成位置参数（`_inbox_fields` `:350`），以及**堵掉机制层入参**（`_INBOX_INTERNAL_ARGS :324`：`client`/`trace_id`/`qos` 不许 IR 手写——开放出去等于允许伪造事件号或降 QoS）。
@@ -400,6 +408,8 @@ UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调
 | 原子写助手 | `atomic_write_text`（tmp + fsync + `os.replace`），21 个模块走它 | `af_atomic.py:27` |
 | 审计 | append-only journal（`open("a")`） | `af_audit.py:132-156` |
 | fire 日志 | `{store_dir}/fire_log.json`，rewrite 且原子；坏行容忍 | `af_fire_recorder.py:40-45`、`:55` |
+| 洞察提案队列 | `{root}/insight_proposals`，**满则拒收新提案**（丢一条＝"MA 从没投过"） | `af_mqtt_bridge.py:196`、`af_insight_queue.py:75/:181` |
+| 联动入向队列（卡3） | `{root}/linkage_events/{kind}/{13位毫秒}-{event_id}.json`，**满则裁最旧**（状态快照：旧的这条不值挡下新的这条）；每类各 500、TTL 24h、触发侧另有 120s 年龄闸；读不出的文件进 `unreadable` 环形清单（≤50）只记账不判红 | `af_linkage_feed.py:153/:177/:267`、`af_mqtt_bridge.py:222` |
 | 有界容器 | `BOUNDED_CACHES`/`FIXED_KEY_CACHES` 注册表（不落盘） | `af_bounded_caches.py:30-32` |
 | secrets | `/run/secrets/<NAME>`，`AUTOFORGE_SECRET_DIR` 覆盖 | `af_secrets.py:20-26` |
 
@@ -413,6 +423,9 @@ UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调
 | `scripts/check_mqtt_writers.py` | 四条判据：A 出向写者点位只在桥内；B `fired`/`failed` 只在 `observe_terminal` 体内；C `_publish` 载荷来自 `_envelope`；D 机制层 `_presence` 入口（静态属性与 `getattr` 派发都算）只在桥内。锚点含 `INBOX_PREFIX`/`inbox_publish`，锚点读不到就 exit 2 | `scripts/` |
 | `tests/unit/test_inbox_contract_keys.py` | 收件箱名单与字段表**没有第二份抄本**：全部从 `homesdk.presence` 派生，含"前缀只有一枚"与风险分级反例腿 | `tests/unit/` |
 | `tests/unit/test_inbox_pipelines.py` | `adapter: inbox` 过编译（扫描无 `L2_*`）、过仿真、过 NL 渲染，且预演档零上线字节；含 `sms`/`send` 反例证明缺省档没被放松 | `tests/unit/` |
+| `scripts/check_mqtt_subscriptions.py` | 入向订阅点位门禁：订阅只许出现在桥内、`INSIGHTS_TOPIC` 之外必须是登记过的动态主题且函数体内有禁订族守卫。卡3 加了两条主题后现读仍是"订阅点 2 处 / 1 个文件"（两条都走同一个 `subscribe_topic()`） | `scripts/` |
+| `tests/unit/test_linkage_feed.py` | 联动入向队列本体：落盘形状 `{kind}/{13位毫秒}-{event_id}.json`、重启后回读、**每类各自封顶不共享**、TTL 裁最旧、外来非毫秒文件名不误删、水位线跨类按毫秒优先排序（这条钉的是"设备健康被静默当成已消费"那个失效形状）、超龄只留档不回放、坏 JSON 记账不阻塞、`unreadable` 环封顶、成员键白名单与 `MEMBERS_LIMIT`/`TEXT_LIMIT` 裁剪 | `tests/unit/` |
+| `tests/unit/test_linkage_subscription.py` | 桥的入向半边：两主题各落各目录、契约必填项（`trace_id`/`members` 是数组/`stable_id` 非空）缺一个就拒收且每条带 `ADM_ERR_*`、无队列 ⇒ `no_linkage_sink_wired`、入向计数与洞察计数**互不共用**、`pump_linkage` 真把事件注进总线且只消费一次、`inbound` 那格读数形状 | `tests/unit/` |
 | `scripts/check_bounded_caches.py` | 新增增长容器必须进注册表/固定键表/基线，或带豁免标记 | `scripts/` |
 | `scripts/check_mqtt_runtime_dep.py` | 镜像/开发/测试三面依赖一致（paho 必须在） | `scripts/` |
 | `scripts/verify_adm_window.py` | 停机窗当天验收入口，缺项读不成绿（PASS/FAIL/UNAVAILABLE 三态） | `scripts/` |
@@ -445,14 +458,14 @@ UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调
 
 | 红腿 | 现场读数 | 根因 | 归口 |
 |---|---|---|---|
-| `tests/unit/test_bounded_caches_gate.py::test_real_repo_is_green` | `af_conflict.py:183` 的 `ConflictArbiter._cooldown_pending` 既不在注册表/固定键表/基线，也没豁免标记 | DCD 20261008 §二 那批改动的登记半边没做 | **需要裁定**：这一格是 fail-closed 的持有列表，给它硬上限/TTL 就是"丢了 pending 怎么办"的策略问题，不能顺手 `# exempt` |
-| `…::test_real_repo_measurements_are_pinned` | 扫到 126 个容器，钉的是 125 | 同上（一个站点带来两个红） | 同上 |
-| `tests/unit/test_ui_api_paths_gate.py::test_real_ui_and_src_are_clean_and_counted` | `(90-5)+2 == 85` 断言：参与匹配路由已从 85 涨到 90（新增 `/api/auth/*`） | 登录正规化 `e5b3fd5` 带来 5 条路由，未重钉 | 登录那条线自己收（重钉读数，不放宽扫描） |
-| `…::test_all_trees_of_this_repo_are_in_scope_and_green` | 期望 `ui-user-mimo 20`，现读 **22** | 同上（mimo 树多了 has-admin + register 两处调用点） | 同上 |
+| `tests/unit/test_bounded_caches_gate.py::test_real_repo_is_green` | `af_conflict.py:183` 的 `ConflictArbiter._cooldown_pending` 既不在注册表/固定键表/基线，也没豁免标记 | DCD 20261008 §二 那批改动的登记半边没做 | **本批已收（2026-10-09）**：走就地豁免并写理由——它的唯一写入口是 `on_user_override()`（失败分支 `add`、成功分支 `discard`），成员是**实体 id** 而非事件，所以同一实体反复失败不增长。不给它硬上限（那等于把实体从 fail-closed 守卫里放出去，正是该裁定要防的"冷却没启动就改回用户刚设的状态"），也不给它 TTL（`_expire()` 不清它，出口只有成功重登）——所以它**不进** `BOUNDED_CACHES`，那条 TTL 腿是给一条不存在的腿盖章。若 DCD 认为 pending 该有硬上限＋告警，那是策略面，本批不自主决定 |
+| `…::test_real_repo_measurements_are_pinned` | 扫到 126 个容器，钉的是 125（HEAD `2d92bb1` 复测已到 128） | 同一格 + 之后三批各带来新容器没重钉 | **本批已收**：钉到 129，四条增量逐条给出处（`InboxAdapter.intents`、`_RecordingInboxClient.records`、`ConflictArbiter._cooldown_pending`、`LinkageFeed.unreadable`，全部带就地豁免与封顶腿） |
+| `tests/unit/test_ui_api_paths_gate.py::test_real_ui_and_src_are_clean_and_counted` | `(90-5)+2 == 85` 断言：参与匹配路由已从 85 涨到 90（新增 `/api/auth/*`） | 登录正规化 `e5b3fd5` 带来 2 条装饰器路由（`GET /api/auth/has-admin`、`POST /api/auth/register`；88→90 那条读数里含 5 条挂载表），未重钉 | **本批已收**：重钉 87 / 90，两条路由各有 `ui-user-mimo/src/views/LoginView.vue` 里的真 `fetch` 调用点（第四张调用脸），扫描范围没放宽 |
+| `…::test_all_trees_of_this_repo_are_in_scope_and_green` | 期望 `ui-user-mimo 20`，现读 **22** | 同上（mimo 树多了 has-admin + register 两处调用点） | **本批已收**：钉到 22 |
 | `tests/unit/test_pkg_markers_gate.py::test_real_repo_is_green_on_the_index_reading` | 仅副本树红（无 `.git` 索引） | **副本树环境所致，不是产品缺陷**；工作区里这条是绿的 | 记为测量口径，不修 |
-| `gates.sh` 的 AST 计数棘轮（不是 pytest 腿） | 全量 99 条 / 登记上限 97 条；差的两条是 `api_auth_has_admin`（HEAD `af_api.py:980`）与 `api_auth_register`（`:1001`）返回字面量 `ok=True`；`git archive HEAD` 副本树带基线复测同样 `新增/未获批 2 条`、`计数：except-pass-broad=20 \| fake-ok-const=79` | 登录正规化 `e5b3fd5` 上线后上限没重钉——与上面那族同一个成因 | 上调上限是**评审动作**（门自己的措辞），改成真校验派生属登录那条线的语义；本仓不顺手做 |
+| `gates.sh` 的 AST 计数棘轮（不是 pytest 腿） | 全量 99 条 / 登记上限 97 条；差的两条是 `api_auth_has_admin`（HEAD `af_api.py:980`）与 `api_auth_register`（`:1001`）返回字面量 `ok=True`；`git archive HEAD` 副本树带基线复测同样 `新增/未获批 2 条`、`计数：except-pass-broad=20 \| fake-ok-const=79` | 登录正规化 `e5b3fd5` 上线后上限没重钉——与上面那族同一个成因 | 上调上限是**评审动作**（门自己的措辞），改成真校验派生属登录那条线的语义；本仓不顺手做。**这一条本批没碰**：`af_api.py` 此刻躺着并发会话未提交的改动，改它等于把别人 WIP 的一部分算进本批 |
 
-> 说明：这 4 真 + 1 口径**都不是本轮文档改动引入的**，是"产物已上线、钉住的读数没重钉"这一族。工作区当前另有并发会话未提交的 `af_api.py`/`af_auth.py`/`ui-user-mimo/*`/`docker/*` 改动，所以重钉必须等那批落定后一次做，否则钉的是混合态。
+> 说明：这 4 真 + 1 口径**都不是本轮文档改动引入的**，是"产物已上线、钉住的读数没重钉"这一族。工作区当前另有并发会话未提交的 `af_api.py`/`af_auth.py`/`ui-user-mimo/*`/`docker/*` 改动，所以重钉前先把"这批数字有没有混进未提交态"量掉：`git archive HEAD` 副本树单跑**这六份文件**（两份计数门 + 四份鉴权）得 `4 failed, 146 passed, 1 warning in 151.84s`，那 4 条恰好是上表前四行、读数与工作区**逐位相同**（路由 90、mimo 22、容器 128；本批只再加 `LinkageFeed.unreadable` 这一条 = 129）；四份鉴权文件在那棵树上**一条 FAILED 都没有**。⇒ 钉的是"已提交态 + 本批"，不是混合态；鉴权那族红只在带未提交改动的工作区里红，不由本批重钉也不由本批修。
 >
 > 2026-10-09 工作区混合态现读（**未提交态**整树跑批，含并发批次的鉴权改动 + 本批 A/C 修复）：`10 failed, 3504 passed, 53 skipped, 1 warning, 65 subtests passed in 887.87s`，`PYTEST_RC=1`。逐条归属：上表 4 条真红原样还在（同因）；**新增 6 条全在鉴权线**——`test_dcd_20261004_auth_limits`（owner 明文 / 第三方 write 令牌掩码 2 条）、`test_v0_8_auth`（legacy 单令牌兼容 / 多令牌分档 / 撤销即时生效 3 条）、`test_v1_4_token_expiry`（过期令牌 HTTP 侧读到 `400` 而非 `403`，`assert 400 == 403`）。这 6 条**不在 HEAD**：对 `git archive HEAD` 副本树单跑这四份鉴权文件得 `48 passed, 1 warning in 51.38s`（`PYTEST_RC=0`），它们只在带那批未提交改动的混合态里红。本批三份判据文件（`test_user_ui_card_and_toggle` / `test_start_watch_identity` / `test_atomic_write_sites_fixes`）在这一跑里全绿、一条都没进 FAILED 名单。
 
@@ -468,6 +481,9 @@ UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调
 8. `L2_NEEDS_CANARY` 在 `af_scanner.py:415` 真发 ERROR 诊断，却没登记进 `CHECKS`（`:38`，40 项）——判断在、目录里没有这一项 ⇒ 按注册表 enumerating 检查面（文档、面板、"每类检查都有判据吗"这类审计）会漏掉 L2 灰度这条硬门。补法是把键加进 `CHECKS` 与 `CODE_HINT`，不是把诊断删掉。
 9. 收件箱投递（计划 §七 卡1）的**上线可见那一半没在这台机器上验**：验收口径写的是 `mosquitto_sub` 能见，而 NAS 侧订阅+对撞属合并窗动作。仓内证到的是"上线字节由库侧生成、被记录代理原样接住并反解核对"（`tests/unit/test_inbox_adapter.py`），不是"broker 上真有这条主题"。同一条线上还差两件：契约 §1.3 护栏 3（按 source 限速）没实现；长度上限只在库侧 `_len_bounded` 把，**编译期不提前拒** >500 字符，于是这条 IR 要跑到执行才红。
 10. 发布失败目前只有一个码（`ADM_ERR_BROKER_UNREACHABLE`，`rc=…` 只在 message 文本里）：ACL 拒绝与 broker 不可达不区分，是否拆码归 DCD。
+11. 联动**入向**（计划 §七 卡3）的验收也差对端那半边：仓内证到的是"契约要求的必填项缺了就在拒收计数里带着 `ADM_ERR_*`"，而 MA 实际发出的载荷是否逐键符合契约 §1.2 那两行，只有 NAS 合并窗拿 `mosquitto_sub -t 'ma/#' -v` 对撞得出来。另外这一路**没有面板格**：唯一读数面是 `/api/health` 的 `linkage.inbound`（本批刻意不加新路由，路由计数因此没动），也没有 per-source 限速（与第 9 条同一护栏）。
+12. 入向事件**注进总线时带了载荷，节点却读不到**：`LinkageRecord.as_trigger_data()` 铺了 `subject`/`members`/`from_state`/`trace_id`，而 `_trigger_repr`（`af_instance.py:464-473`）给实例上下文的只有 `{entity_id, state}`（`event` 不是 `Mapping` 时走这条）。于是 DSL 现在只能"有 presence 事件就触发"，写不出"如果是妈妈回家才开灯"。按成员/房间取值属卡2 的变量绑定面，别在文档或面板里假装已经能分支。
+13. `forge serve` **不抽**联动队列（该进程没有 ticker，`af_api.py` 现读 `start_ticker`/`.tick(` 各 0 处）：入向事件照样落盘、`presence_in` 照样涨，但不会有自动化被驱动。设计分工，不是缺陷，却是最容易被误读成"接线没生效"的一格。
 
 ---
 
@@ -479,4 +495,5 @@ UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调
 | 2026-10-09 | 工作区混合态（未提交，含并发批次的鉴权改动） | 现场回灌五件：`POST /api/watch/start` 假绿已修（sidecar 身份必须等于本次 IR，失败分三档）+ 档位如实命名 `tier`/`real_device`；**HTTP/用户视角到今天没有常驻真机通道**（申请 `20261009-AF-用户视角到真机的常驻通道`）；`/api/automations` 卡片改按 automation 级取数、`trial` 读不出就给 `null`、启停写侧走 `store.resave_raw`；订正 `forge watch` 没有 `--live`/`--vhass` 两枚旗子；记入 NAS `AUTOFORGE_LIVE_ENABLED=1` 与仓内缺省 0 的分歧；记入 `requires_confirm` 无运行期消费者、`canary` 有；重钉 12 处行号锚点 |
 | 2026-10-09 | 同上，保真复核 | 逐项对撞文档清单与代码注册表：`TOOLS=31`、`CHECKS=40`、含 methods 路由 `=90`、CLI 命令 `=18` 四项全等；安全闸表由 42 名收成正好 40 键（剔掉非注册表的 `IR_SCHEMA`、`L2_NEEDS_CANARY`）；时区键改为 `HOMESDK_TZ`（规范）/`AF_TZ`（别名）并给全序；新增残余 B.8（`L2_NEEDS_CANARY` 发诊断却未注册） |
 | 2026-10-09 | HEAD `e5b3fd5` + 收件箱批次（未提交态） | 计划 §七 卡1 落地并同步本文：§二 适配器表加 `inbox`、出向行改成"事件与收件箱投递都只从桥出去"；§四 运行链把分岔点如实写成 `build_runtime(dry_run=…)` 这一个口（HA/HTTP/Inbox 拿同一枚旗子，`af_runtime.py:289-294`）；§六 补收件箱在预演档的口径（零上线字节 + 缺桥 = 缺通道 ⇒ `ADM_ERR_AUTH_REQUIRED`）；§十四 主题表加 `butler/inbox/speak\|notify\|tv` 行、锚点按现读重钉（`observe_terminal` 调用点 `:673/:676`、`_envelope :622`、`inbox_publish :405`、`FORBIDDEN_SUBSCRIPTIONS :85`），并新增三条机制说明（收件箱不经过 `_envelope`、前缀只有一枚、发布不许静默＝`rc` 判据）；§十六 门禁表把 `check_mqtt_writers.py` 改成四条判据、加两份收件箱判据文件；§十八 残余加 B.9（`mosquitto_sub` 半边 / §1.3 限速 / 编译期长度）与 B.10（`rc` 单码待 DCD） |
+| 2026-10-09 | HEAD `2d92bb1` + 联动入向批次（未提交态） | 计划 §七 卡3 落地并同步本文：§二 模块地图把"出向"行改成"联动：出向与入向"并加 `af_linkage_feed.py`，顶层模块/包计数改成现读口径（71 个顶层 `.py`（不含 `__init__.py`）+ 4 个包目录 / 全 102 个 `.py`，旧写的"62 + 5"两处都不对）；§十四 主题表加 `ma/presence`/`ma/device-health` 两行（入向 only）并新增四条机制说明（主题名单真源、收/消费跨线程接缝、落盘形状与载荷裁剪分两半、水位线毫秒优先那个静默失效形状、拒收只按契约）；§十五 持久化表加 `linkage_events` 行并写明它与 `insight_proposals` 的**淘汰策略相反**（提案满则拒收、快照满则裁最旧）；§十六 门禁表加 `check_mqtt_subscriptions.py` 与两份新判据文件；§十八 A 表四条计数棘轮红改判"本批已收"并留两树逐位对撞、AST 棘轮那条明确点名不碰（要改并发会话正躺着的 `af_api.py`），B 表加 11-13（对端载荷未对撞 / 事件载荷读不进节点 / `serve` 不抽队列） |
 | 2026-09-24 | 当时 HEAD | 初版（端到端实测后） |

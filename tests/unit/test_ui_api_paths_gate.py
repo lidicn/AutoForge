@@ -443,7 +443,14 @@ def test_changed_mount_table_shape_exits_2(tmp_path):
 
 def test_real_ui_and_src_are_clean_and_counted():
     """钉死真实计数（同 计数棘轮）：新增/删除调用点或路由都要动这两个数——
-    改跨层契约就得在测试里留一次名，这是故意的摩擦，不是脆弱。"""
+    改跨层契约就得在测试里留一次名，这是故意的摩擦，不是脆弱。
+
+    85 → 87 / 88 → 90（20261009 收，红在本批之前的 HEAD 上）：`e5b3fd5`（登录正规化）加了
+    `GET /api/auth/has-admin` 与 `POST /api/auth/register` 两条装饰器路由，却没动这里的锚点。
+    两条都有真调用方（`ui-user-mimo/src/views/LoginView.vue` 里直接 `fetch`，即第四张调用脸），
+    所以 `check(sites, routes)` 本来就判不出红——红的是计数这一格：跨层契约变了要留名。
+    同一批把 `ui-user-mimo` 的调用点从 20 抬到 22（就是这两条 fetch）。
+    """
     mod = _module()
     sites, unparsed = mod.collect_ui_sites(ROOT / "ui" / "src")
     routes, excluded, mount_errs, boundary = mod.collect_routes(ROOT / "src")
@@ -455,8 +462,8 @@ def test_real_ui_and_src_are_clean_and_counted():
     assert len(live) == 53 and len(sites) - len(live) == 1   # +1 = `api/client.ts` 的 `fetch` 包装
     mounted = sum(1 for r in routes if r["how"] == "add_api_route")
     assert mounted == 5                              # af_conflict_runtime._ROUTES
-    assert len(routes) - mounted + len(excluded) == 85   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（85 对 85；旧锚点 `grep -c "@app."` 把 @app.exception_handler 那行也数进来，HEAD 上就偏 1）
-    assert len(routes) == 88                          # 83 装饰器路由 + 5 挂载表（af_api 的装饰器行共 85＝83＋被排除的 /mcp 与 /{full_path:path}）
+    assert len(routes) - mounted + len(excluded) == 87   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（现读 87 对 87；旧锚点 `grep -c "@app."` 把 @app.exception_handler 那行也数进来，HEAD 上就偏 1）
+    assert len(routes) == 90                          # 85 条参与匹配的装饰器路由 + 5 挂载表（af_api 的装饰器行共 87＝85＋被排除的 /mcp 与 /{full_path:path}）
     assert boundary == ["src/autoforge/af_runtime_plugins.py"]
     assert sum(1 for s in sites if s["exempt"]) == 0
 
@@ -630,7 +637,7 @@ def test_all_trees_of_this_repo_are_in_scope_and_green(capsys):
     mod = _module()
     assert mod.main(["check_ui_api_paths.py", "--all"]) == 0
     out = capsys.readouterr().out
-    for name in ("ui 53", "ui-user 19", "ui-user-mimo 20"):
+    for name in ("ui 53", "ui-user 19", "ui-user-mimo 22"):
         assert name in out, out
     assert "传输层包装 3 处" in out, out
     assert "SSE 建流 2 处" in out, out

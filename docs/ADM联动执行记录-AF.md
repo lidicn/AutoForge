@@ -6519,3 +6519,176 @@ HEAD 副本树（带基线）：扫描完成 新增/未获批 2 条（error 0 / 
 8. **AST 棘轮（`check_ast_gates.py`）这一红不在本批收**：§八 已给两树读数——HEAD 副本树与工作区都是 `新增/未获批 2 条 + 基线内存量 97 条`，`--no-baseline` 两树同为 99，即本批**新增 0 条**。那 2 条是 `af_api.py:980`/`:1001` 返回字面量 `ok=True`，登录正规化 `e5b3fd5` 自带（§八 有当场复测块）；上调登记上限是评审动作，把 `ok=True` 换成真校验派生又属登录那条线的语义 ⇒ 点名不修，归登录线收；同一口径已记进架构说明 §十八 A 表。
 
 —— AutoForge 开发 · 2026-10-09 · 基准 HEAD `e5b3fd5`
+
+## 二之七十六、计划 §七 卡3 落地：AF 开始收 `ma/presence` 与 `ma/device-health` 并落持久队列——顺带收掉两处 HEAD 上就红的计数棘轮
+
+### 一、卡3 的落形：三处"没有新增"
+
+DCD 那行验收原文（计划 §7.2 第 3 行）是「收到 presence/device-health 事件落盘；自动化可按成员/设备状态触发」，要求的是「落 insight_proposals 同款**独立持久队列**（重启不丢）」。落形：
+
+| 卡片字样 | 仓内真名 | 为什么是这个形状 |
+|---|---|---|
+| "独立持久队列" | `src/autoforge/af_linkage_feed.py`（新模块，290 行）里的 `LinkageFeed`，队列根 `{store_root}/linkage_events/{kind}/`，每条一个文件 `{13 位毫秒}-{event_id}.json` | 与洞察队列同款的"文件即队列"，跟着 `store_root` 走 ⇒ 重启不丢不依赖任何进程内状态；`kind` 分目录 ⇒ 两类各有一套封顶与 TTL，presence 洪水不能把 device_health 挤没 |
+| "自动化可按成员/设备状态触发" | `TRIGGER_NAME = {presence: "ma_presence", device_health: "ma_device_health"}`（`af_linkage_feed.py:76-79`），走 IR 既有的 `trigger.type = event`（`on event.ma_presence`） | **没有新增触发族**。卡1 那条"别另立节点族"是同一课：另立一族会同时破 `ir.schema.json`、`classify_action` 分级与静态扫描器三处，而语义上没有任何一条现有 `event` 表达不出来 |
+| 面板/接口那半格 | 读数挂在既有 `/api/health` 的 `linkage_status()` 里（`af_mqtt_bridge.py:1038` 起的 `inbound` 块） | **没有新增路由**。这一条不是省事：路由计数是 UI↔路由门禁钉住的棘轮数，加一条路由就得同时加第一方调用点，否则反向判据红；卡3 需要的只是"这半边线可不可证伪"，health 面已经承载得起 |
+
+队列的两个上限是**相反**的政策，这一点必须在仓里写清而不是只记在这里：`insight_proposals` 满了是**拒收**（丢一条提案 = MA 从没发过它，代价小），`linkage_events` 满了是**裁最旧**（这是状态快照，堵新的 = 对家里正在发生的事装聋）。同一家族两种口径，是因为"丢了什么"的对端代价不同。
+
+### 二、线程接缝：为什么"收"和"消费"必须隔一条盘
+
+`EventBus` 没有锁。paho 回调线程直接 `runtime.publish()` 等于第三个线程写同一份总线状态（常驻 tick 线程 + API 线程已经在写）。所以：
+
+```
+paho 回调线程    ingest_linkage(af_mqtt_bridge.py:866) → 只判形状 + 原子写一条文件
+常驻 tick 线程   poll_linkage(af_mqtt_bridge.py:931) → af_live.pump_linkage(af_live.py:364) → runtime.publish(...)
+接线点           af_cli.py:1360 `linkage_sink=feed`（构造侧）· af_cli.py:623（每 tick 消费侧）
+```
+
+队列本身就是那条接缝，顺带把"重启不丢"从额外的持久化需求变成了副产品。桥**不构造**队列：`linkage_sink` 是鸭子类型注入（`af_mqtt_bridge.py:546/556`），缺席即拒收并计数（见第五节），这样"桥在、但生产入口忘了接线"这种状态在健康读数里是显形的，不是静默全收。
+
+### 三、水位线：键序把"时间优先"写进了文件名
+
+`_key()`（`af_linkage_feed.py:236-243`）返回 `f"{path.name[:13]}|{kind}|{path.name[13:]}"`——**13 位毫秒在前**。这条不是风格问题：若键长成 `{kind}/{文件名}`，排序先按 kind 字典序，presence 整类读完才读 device_health，于是一类洪水会把另一类的水位线**冻住**，那类事件在重启后被当成"未消费"整批补触发。`event_id` 是 `uuid4().hex[:12]`，同毫秒内以它定序，不靠文件系统顺序。
+
+### 四、超龄条目：记录不丢，触发不补
+
+`poll_linkage(max_age_s=TRIGGER_MAX_AGE_S=120)`（`af_mqtt_bridge.py:931-939`）对超龄条目**只推进水位线、不返回**。理由写在函数 docstring 里：一条小时级的旧掉线快照若在开机瞬间被当成触发，就会拿早已过期的事实去下发设备。所以"重启不丢"这句验收说的是**记录**（盘上还在、`stats()` 还数得到），不是**补触发**。这一条有独立判据腿，也有独立变异腿（L5）。
+
+同时 `TTL_S=86400` 让盘上不无限长：`_trim()`（`af_linkage_feed.py:267-290`）每 kind 各判 500 条封顶 + 24h 过期，`append()` 里无条件调用（"只写不读 = 永不回收"正是变异腿 L2 注入的缺陷形状）。
+
+### 五、拒收只有契约写死的那几条
+
+AF 不自添必填。自添必填的对端代价是"整条入向线静默不生效"，比收下半份更难查。现读 `ingest_linkage`：
+
+| 拒收码 | 依据 | `ADM_ERR_*` |
+|---|---|---|
+| `unknown_linkage_topic` | 由 `handle_message` 的表守住（`af_mqtt_bridge.py:758`），走到这里说明 `LINKAGE_KIND_BY_TOPIC` 被改坏 | `ADM_ERR_INTERNAL` |
+| `missing_trace_id` | 契约 §1.2 两行载荷都列了它；§1.3 护栏 4 跨仓排障靠它 | 默认 |
+| `members_not_list` | 在场快照没有成员集合会落成"家里没人"，按在场写的自动化会**反向**动作。**空数组是合法的**（真没人） | 默认 |
+| `missing_stable_id` | 契约 §1.2 明写**必须非空**，迁移类事件靠它认身份 | 默认 |
+| `no_linkage_sink_wired` | 生产入口没给队列 ⇒ 显式拒收并留码，而不是"收进空气里" | `ADM_ERR_INTERNAL` |
+
+`total` 不是整数**不拒收**（丢掉这一键照常收：它是展示项，不是身份也不是状态）。载荷侧的裁剪是白名单式的：`members_of()`/`device_data_of()` 逐键取、文本封顶 `TEXT_LIMIT=120`、成员数封顶 `MEMBERS_LIMIT=32`，`from` 在 Python 侧叫 `from_state`，**不带 `via_raw`**。
+
+订阅与处理共用同一份名单：`LINKAGE_TOPICS` / `LINKAGE_KIND_BY_TOPIC` 是唯一真源，两条入向主题的订阅都汇到唯一订阅入口 `subscribe_topic()`（`af_mqtt_bridge.py:746-753`）——那里就是禁订族判定与 `forbidden_seen` 留痕的所在地。所以入向订阅门 `check_mqtt_subscriptions` 的读数**仍是 2 处而不是 4 处**（`grep .subscribe(` 现读 `af_mqtt_bridge.py:733` 的 `INSIGHTS_TOPIC` 与 `:752` 的动态点）：门判的是 paho 调用点，两条联动线共用那一个口。
+
+### 六、健康面读数：四条都可证伪
+
+`linkage_status()`（`af_mqtt_bridge.py:1023-1054`）新增 `inbound` 块：`subscribed`（没开 `subscribe_linkage` 就是空表）、`presence_in` / `device_health_in` 两个独立计数、`rejected`、`feed`（`linkage_stats()`：没接线就是 `{"wired": False}`，接了就是 `{"wired": True, **feed.stats()}`）。读法：`feed.wired=False` 时每条入向事件都进 `rejected` 而 `presence_in` 恒零——这比"看着健康其实全丢了"好读。`state` 词汇取自 `homesdk.adm.status` 三常量，AF 不抄第四套；`reasons` 与 retained status 载荷同源，否则会出现"对端看到 degraded、本机 `/health` 说一切正常"。
+
+### 七、判据与读数
+
+| 文件 | 腿数 | 盖住什么 |
+|---|---|---|
+| `tests/unit/test_linkage_feed.py`（新，247 行） | 17 | 落盘/回收/水位线三件事各自独立：按 kind 分目录且 500 是**每类**封顶、无任何读取也裁头；TTL 过期裁掉；水位线跨 kind 目录按时间优先排序（反例就是 presence 洪水不能冻住 device_health）；超龄条目归档不重放；`unreadable` 环封顶 `UNREADABLE_MAX=50`；坏 JSON 一条不能拖死整次扫描 |
+| `tests/unit/test_linkage_subscription.py`（新，288 行） | 14 | 两条入向主题被订到且只订到这两条；缺 `trace_id` 必拒且带契约码；`members` 非数组拒、空数组收；`stable_id` 空拒；没接队列 ⇒ `no_linkage_sink_wired` + `ADM_ERR_INTERNAL` 且零落盘；超龄事件不重放；触发事件名是 `ma_presence`/`ma_device_health` |
+| `tests/unit/test_af_mqtt_bridge.py`（47 → 48） | 48 | 既有桥判据 + 本批新增那条：入向读数在 `linkage_status()` 里成形（`subscribed`/`presence_in`/`rejected`/`feed` 四键都在，值取自计数器与 `linkage_stats()`，不是写死的样例） |
+
+三份合跑（当场 `out=$(…); rc=$?`，不接管道尾）：`79 passed in 1.93s`，`PYTEST_RC=0`。17+14+48 = 79 与逐份收集数对得上。
+
+**变异自证**（跑在 `%TEMP%\af_linkage_mut` 副本树，绝不碰工作树；每条腿先 `ast.parse`，先断言 `autoforge.__file__` 落在副本树内，还原后再跑一遍必须转绿）：
+
+```
+解释器取到的包：C:\Users\lidicn\AppData\Local\Temp\af_linkage_mut\src\autoforge\__init__.py
+[对照] 零注入（三份文件全跑）→ 79 passed，rc=0
+[L1 水位线键退回 {kind}/{文件名}]        1 failed in 7.37s  → rc=1  红
+[L2 append 不再触发回收（只写不读）]      2 failed in 1.54s  → rc=1  红
+[L3 start() 不订两条入向主题]            2 failed in 1.11s  → rc=1  红
+[L4 缺 trace_id 也收下]                 1 failed in 1.08s  → rc=1  红
+[L5 超龄条目照样补触发]                  2 failed in 1.22s  → rc=1  红
+各腿还原后复跑：2 passed / 2 passed / 1 passed / 2 passed
+合计无效判据：0        MUT_RC=0
+```
+
+对照腿必须存在：没有"零注入为绿"这一档，上面五个 rc=1 只能证明"环境坏了"，不能证明判据有效。L3 一条注入同时打红两份文件（桥侧订阅判据 + 入向读数判据），这正是"订了两条却没接消费"和"根本没订"在读数上可分的原因。
+
+### 八、计数棘轮：两处 HEAD 上就红的，本批按名收口（任务 #77）
+
+上一批把这两处红**点名不修**，本批卡3 自己就撞在同一个口上（新容器 + 新读数），必须收。
+
+`tests/unit/test_bounded_caches_gate.py`：钉死数从 `== 125` 改成 `== 129`（基线仍 114），四个新容器逐个按**各自形状**登记，没有一条靠挪数字抹平：
+
+| 容器 | 出处 | 处置 | 封顶/过期腿 |
+|---|---|---|---|
+| `InboxAdapter.intents` | 卡1 | `BOUNDED_CACHES` 注册表项 | `tests/unit/test_inbox_adapter.py::test_intents_ring_is_capped`；无 TTL 腿（记的是"本会发什么"，不该自行过期成"没发过"） |
+| `_RecordingInboxClient.records` | 卡1 | 就地 `# bounded-cache: exempt(…)` | 按构造有界（测试替身），不是靠裁剪 |
+| `ConflictArbiter._cooldown_pending` | 裁定 20261008 §五 | 就地 exempt 标记 | 单一写缝（`on_user_override()` 失败分支 add / 成功分支 discard），键是 entity id ⇒ 不增长；加封顶反而会把一个实体从 fail-closed 守卫里放出去 |
+| `LinkageFeed.unreadable` | 卡3 | `BOUNDED_CACHES` 注册表项 | `tests/unit/test_linkage_feed.py::test_unreadable_ring_is_bounded`；无 TTL 腿（"盘上有一条读不出来"不该自愈） |
+
+`tests/unit/test_ui_api_paths_gate.py`：两枚数字按现读重钉，并写清口径来源——`len(routes) - mounted + len(excluded) == 87`（对撞 `grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py` 现读 87），`len(routes) == 90`（85 条参与匹配的装饰器路由 + 5 挂载表；装饰器行 87 = 85 + 被排除的 `/mcp` 与 `/{full_path:path}`）。旧锚点 `grep -c "@app."` 把 `@app.exception_handler` 那行也数进来，HEAD 上就偏 1——这句话留在测试注释里，防止下一个人再拿错口径对撞。前端三棵树计数 `ui 53 / ui-user 19 / ui-user-mimo 22` 同步重钉。
+
+两份计数门单独跑：`test_bounded_caches_gate.py` 34 passed、`test_ui_api_paths_gate.py` 50 passed。
+
+### 九、门禁与回归读数（当场 `out=$(…); rc=$?`）
+
+```
+check_topic_whitelist      rc=0  ✓ 主题白名单门禁干净（7 处 topic 字面量全部在契约表内）
+check_mqtt_subscriptions   rc=0  ✓ 入向订阅门禁干净（MQTT 订阅点 2 处、分布在 1 个文件；其中主题为 `INSIGHTS_TOPIC` 的 1 处、动态主题且函数体内有禁订族守卫的 1 处；现场豁免 0 处）
+check_mqtt_writers         rc=0  ✓ 出向 MQTT 写者门禁干净（出向写者调用点 3 处、分布在 1 个文件；…）
+check_mqtt_runtime_dep     rc=0  ✓ 联动桥依赖门禁干净（paho 声明于 ['dev', 'mqtt']）
+check_gates_coverage       rc=0  盘上 `check_*.py` 19 个，`gates.sh` 覆盖 18 个，工作流覆盖 1 个
+check_plan_ui_claims       rc=0  ✓（另有 4 行标 🔲／⚠️ 的登记，不判红）
+check_bounded_caches       rc=0  注册表 3 项双腿齐全且测试 id 被收集；固定键 3 项带理由；扫到 129 个（基线冻结 114、就地豁免 16）；死写容器 0 个（判据 E 全仓读到 4040 个名字）
+check_imports              rc=0  Baseline lock: 102 modules, 0 violations.
+```
+
+两处读数**变了且应当变**：`topic` 字面量 5 → **7**（两条入向主题名进的是同一份契约表口径），import-linter 基线 101 → **102** 模块（新增 `af_linkage_feed.py` 一个顶层模块）。`check_mqtt_subscriptions` 的 2 处不变，理由见第五节末段（共用唯一订阅入口），不是漏判。
+
+**整树唯一红仍是 AST 棘轮，且与卡3 无关**（两棵树各跑一次 `python -m homesdk.gates … --no-smoke`）：
+
+```
+HEAD 副本树（git archive HEAD = 2d92bb1，PYTHONPATH 指副本且 import 路径已自证）
+  WARN fake-ok-const src/autoforge/af_api.py:980  build_app.api_auth_has_admin
+  WARN fake-ok-const src/autoforge/af_api.py:1001 build_app.api_auth_register
+  新增/未获批 2 条（error 0 / warn 2），基线内存量 97 条，过期基线条目 0 条      HEAD_AST_RC=1
+工作树（同一门口径）：同样 2 条，行号漂到 :984 / :1005（并发批次的 af_api.py 改动所致）
+  上限 .gates-tally.txt cap=97，--no-baseline total=99 条                       GATES_RC=1
+```
+
+两树**分类计数逐位相同**（`except-pass-broad=20 | fake-ok-const=79`）⇒ 本批新增 0 条。那 2 条是登录正规化 `e5b3fd5` 自带的字面量 `ok=True`；上调登记上限是评审动作，把 `ok=True` 换成真校验派生属登录那条线的语义 ⇒ **仍点名不修**，归登录线收。
+
+**归属对撞（同一份六文件清单，两棵树各跑一次）**：
+
+```
+HEAD 副本树（2d92bb1）：4 failed, 146 passed, 1 warning in 57.77s    RC=1
+  FAILED test_bounded_caches_gate.py::test_real_repo_is_green
+  FAILED test_bounded_caches_gate.py::test_real_repo_measurements_are_pinned
+  FAILED test_ui_api_paths_gate.py::test_real_ui_and_src_are_clean_and_counted
+  FAILED test_ui_api_paths_gate.py::test_all_trees_of_this_repo_are_in_scope_and_green
+工作树（本批收口后，同六份）：2 failed, 148 passed, 1 warning in 46.47s   WT_RC=1
+  FAILED test_dcd_20261004_auth_limits.py::test_owner_face_still_sees_plaintext
+  FAILED test_dcd_20261004_auth_limits.py::test_third_party_write_token_gets_the_mask_not_the_code
+```
+
+HEAD 那 4 条计数棘轮腿在工作树里全绿，剩下的 2 条红落在并发批次那批未提交的鉴权改动里。
+
+整树 unit + contract（当场重跑，`> file` 后取 `$?`）：
+
+```
+10 failed, 2908 passed, 43 skipped, 1 warning in 202.98s (0:03:22)
+FULL_RC=1
+```
+
+十条 FAILED 全在鉴权/ask 那条线（`test_dcd_20261004_auth_limits` 2 + `test_v0_8_auth` 3 + `test_v1_4_token_expiry` 1 + `tests/contract/test_af_ask_contract` 4），**卡3 的 31 条新腿与改过的两份计数门一条都没进 FAILED 名单**。
+
+> 一处必须如实记下的**测量学现象**（不是推断，三档读数都在下面）：`test_af_ask_contract` 那 4 条红**只在整树跑批时出现**，单独跑不出来。
+> ```
+> tests/contract/test_af_ask_contract.py 单跑：18 passed，ASK_ONLY_RC=0
+> tests/contract 整目录单跑：57 passed，CONTRACT_ONLY_RC=0
+> tests/unit + tests/contract 合跑：这 4 条 FAILED，FULL_RC=1
+> ```
+> 也就是有一条 `tests/unit` 的腿把状态（令牌面/环境变量）漏进了后续进程，使 `/api/asks/pending` 的 fail-closed 分支在合跑时走了另一条路。这属并发批次那批未提交改动的测试隔离问题，**根因本批未采**（不在卡3 射程，也不该由我改别人的 WIP）。但它直接关系到"上一批说的『asks 面 fail-open』有多确定"，所以先前那句要按这三档读数来读：**合跑红、单跑绿**，不能写成"该端点无条件放行"。
+
+### 十、本批没收的，点名不谎报
+
+1. **"收到 presence/device-health 事件落盘"这半格在 NAS 上仍未验**：仓内证到的是"回调按契约形状判收、原子落盘、消费侧从盘上取并注入总线"，对端**真发**一条 presence 事件我没有读数。要等 NAS 合并窗（`mosquitto_sub -t 'ma/#'` 对撞载荷键名，任务 #76）。
+2. **载荷里最要紧的键，节点还写不出条件**：`_trigger_repr`（`af_instance.py:464-473`）对非 Mapping 事件只取 `{entity_id, state}`，而 `BusEvent.custom(name, data)` 走的是 Mapping 分支，所以 `subject`/`members`/`from_state` 能进触发上下文，但**按成员做条件**要等卡2 的变量绑定才能在 DSL 里写出来。卡3 交的是"能触发"，不是"能按成员条件决策"。
+3. **`serve` 不消费队列**：`grep -cE "start_ticker|\.tick\("` 在 `src/autoforge/af_api.py` 现读 **0** ⇒ HTTP 侧常驻时入向事件只落盘不触发，只有 `forge watch` 会泵。这与 §二之七十四 那条"用户视角到真机没有常驻通道"是同一根问题的两个面，申请已交 DCD（`20261009-AF-用户视角到真机的常驻通道`），不由本批自决。
+4. **没有面板格**：`inbound` 读数目前只在 `/api/health` 的 JSON 里，mimo 面板没有"入向事件"这一格。加格要同时动第一方调用点（UI↔路由门的双向判据），属面板批次。
+5. **契约 §1.3 护栏 3（按 source 限速）未实现**：入向侧也没有 per-source 计数，presence 洪水靠 500 条/类的裁剪兜住容量，兜不住"某一成员疯狂抖动"这种公平性问题。
+6. **对端载荷未对撞**：`members` 每项的键名、`device_data_of` 白名单外的键，都是按契约 §1.2 的字段表写的；MA 侧真发出来的形状与这份表是否逐键一致，同样等 NAS 合并窗那条 `mosquitto_sub`。
+7. **§7.4 卡3 那格已从「未落」改成本批落形**，但计划文件整段 §七 是 DCD 未提交原文，AF 只动自记的 §7.4，**该文件继续不提交**（是否代提交归用户）。
+8. **卡2 / 卡5 仍外部阻塞**：MA 三路径 MCP MVP 不在 AF 手里。卡4 另一半（`ma_query` 失败 ⇒ `ADM_ERR_UPSTREAM_TIMEOUT`、`ADM_ERR_*` 三落点）排在卡2 之后，任务 #75 已挂。
+9. 并发会话那批未提交改动（`af_api.py`/`af_auth.py`/`docker/*`/`ui-user-mimo/*`）与四条杂散文件（`docker-compose.api.yml.tmp`、`issued_tokens.json.tmp`、`issued_tokens_clean.json`、`docker/docker-compose.api-test.yml`）**不在本批提交内**；`docs/audit/参考/FFL-200题测试提示词.md` 那处来源不明的令牌掩码同样排除在外。第九节那 2 条鉴权红与第十节第 3 点的测试隔离现象都归那批，不由 AF 代收。
+
+—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `2d92bb1`

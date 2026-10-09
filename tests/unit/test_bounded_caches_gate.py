@@ -550,7 +550,7 @@ def test_real_repo_is_green(tmp_path):
 
 
 def test_real_repo_measurements_are_pinned():
-    """钉住本批实测：注册表 3 / 固定键 3 / 扫到 125 / 基线 114。
+    """钉住本批实测：注册表 3 / 固定键 3 / 扫到 129 / 基线 114。
 
     数字变了只有两种可能：新增了一个容器（那要走登记或豁免），或者有人动了基线。两者都不该
     悄悄发生——第六轮审计那句"四处现状已是两条腿"就是靠这种核对才没被本门照抄成假账。
@@ -582,7 +582,23 @@ def test_real_repo_measurements_are_pinned():
       `tests/unit/test_diagnostic_ring_bounds.py::test_bridge_degraded_ring_is_capped_without_reads`
       钉住（同一批：`_keep` 此前在全仓没有任何"纯写不读也被回收"的测试）。
 
-    工作树里若躺着未提交的 WIP 模块，扫到数会比 125 更大而基线仍是 114——那种红的意思是
+    扫到 125 → 129（20261009，计划 §七 卡1/卡3 两批 + 裁定 20261008 §五 的冷却守卫，共四个新容器，
+    逐条按各自形状登记，没有一条是靠挪数字抹平的）：
+    - `InboxAdapter.intents`（卡1，`af_adapters/inbox.py`）：dry_run 意图环形清单，唯一写入口
+      `_remember()` 按 `INTENTS_MAX` 裁头 ⇒ 就地豁免（没有 TTL 腿：dry_run 记的就是"本会发什么"，
+      不该自行过期成"没打算发"）。封顶腿是
+      `tests/unit/test_inbox_adapter.py::test_intents_ring_is_capped`。
+    - `_RecordingInboxClient.records`（卡1）：按次创建的记录代理，生命周期 = 一次投递 ⇒
+      有界性来自构造方式而不是裁剪代码，所以走就地豁免、不进 `BOUNDED_CACHES`。
+    - `ConflictArbiter._cooldown_pending`（裁定 §五，本批补上标记）：冷却登记待补态的实体集，
+      唯一写入口 `on_user_override()` 的失败分支 add / 成功分支 discard ⇒ 同一实体反复失败不增长。
+      给它加硬上限等于把实体从 fail-closed 守卫里放出去，正是该裁定要防的那件事。
+    - `LinkageFeed.unreadable`（卡3）：坏文件诊断环形清单，唯一写入口 `_load()` 就地按
+      `UNREADABLE_MAX` 裁头、只在读侧产生、不参与任何判定；封顶腿是
+      `tests/unit/test_linkage_feed.py::test_unreadable_ring_is_bounded`。同样不给 TTL——
+      "盘上有一条读不出来"不该自行愈合。
+
+    工作树里若躺着未提交的 WIP 模块，扫到数会比 129 更大而基线仍是 114——那种红的意思是
     "新容器没登记"，不是这行数字错了，登记处置归那一批自己，不许靠挪动这里的数字把它抹平。
     """
     gate = _gate()
@@ -591,7 +607,7 @@ def test_real_repo_measurements_are_pinned():
     containers, _lines, scan_errs = gate.scan(src)
     assert errs == [] and scan_errs == []
     assert len(bounded) == 3 and len(fixed) == 3
-    assert len(containers) == 125 and len(gate.BASELINE) == 114
+    assert len(containers) == 129 and len(gate.BASELINE) == 114
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"

@@ -614,7 +614,15 @@ def watch(
     stream = af_live.HAEventStream(base_url=ha_url, token=token, cfg=cfg)
     stop = threading.Event()
     typer.echo(f"\n── 常驻监听（forge watch）── 订阅 {ha_url}{af_live.SSE_STREAM_PATH}，Ctrl+C 退出")
-    ticker = af_live.start_ticker(runtime, max(tick_s, 0.1), stop, sidecar_dir=persist_dir or None)
+
+    from . import af_mqtt_bridge
+
+    def _tick() -> None:
+        runtime.tick()
+        # 联动入站事件由 tick 线程注总线，不在 paho 回调线程动运行时（`EventBus` 没有锁）
+        af_live.pump_linkage(runtime, af_mqtt_bridge.current_bridge())
+
+    ticker = af_live.start_ticker(runtime, max(tick_s, 0.1), stop, tick_fn=_tick, sidecar_dir=persist_dir or None)
 
     def _on(ev, _rt):
         typer.echo(f"  · {ev.entity_id} = {ev.state}")
@@ -1344,17 +1352,21 @@ def _start_linkage_bridge(clock=None, store_root=DEFAULT_STORE_ROOT):
 
     if not af_mqtt_bridge.env_enabled():
         return None
+    feed = af_mqtt_bridge.make_linkage_feed(store_root=store_root, clock=clock)
     bridge = af_mqtt_bridge.start_from_env(
         tools=[tool[0] for tool in TOOLS],
         version=af_mqtt_bridge.PRESENCE_CAPS_VERSION,
         proposal_sink=af_mqtt_bridge.make_durable_ask_sink(store_root=store_root, clock=clock),
+        linkage_sink=feed,
         clock=clock,
     )
     af_mqtt_bridge.attach(bridge)
     typer.echo(
         f"· MQTT 联动桥已上线：向 adm/{af_mqtt_bridge.PRESENCE_NAME}/status 发布在线态（retained），"
-        f"发 {af_mqtt_bridge.FIRED_TOPIC}|{af_mqtt_bridge.FAILED_TOPIC}，订 {af_mqtt_bridge.INSIGHTS_TOPIC}"
-        f"（洞察提案落 {Path(str(store_root)) / 'insight_proposals'}，只读不部署）"
+        f"发 {af_mqtt_bridge.FIRED_TOPIC}|{af_mqtt_bridge.FAILED_TOPIC}，"
+        f"订 {af_mqtt_bridge.INSIGHTS_TOPIC} + {af_mqtt_bridge.PRESENCE_TOPIC}|{af_mqtt_bridge.DEVICE_HEALTH_TOPIC}"
+        f"（洞察提案落 {Path(str(store_root)) / 'insight_proposals'}，只读不部署；"
+        f"在场/设备健康落 {feed.root}，只入队不触发——触发要 forge watch 的 ticker 来抽）"
     )
     return bridge
 

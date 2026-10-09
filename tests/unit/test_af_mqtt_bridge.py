@@ -22,13 +22,16 @@ from autoforge import af_mqtt_bridge
 from autoforge.af_audit import AuditLog
 from autoforge.af_conf import ConfidenceStore
 from autoforge.af_mqtt_bridge import (
+    DEVICE_HEALTH_TOPIC,
     FAILED_TOPIC,
     FIRED_TOPIC,
+    INBOX_PREFIX,
     INSIGHT_CONF_CAP,
     INSIGHTS_TOPIC,
     MAX_ERROR_CHARS,
     NO_FAILURE_REASON,
     PRESENCE_CAPS_VERSION,
+    PRESENCE_TOPIC,
     STATUS_TOPIC,
     AfMqttBridge,
     BridgeUnavailable,
@@ -40,6 +43,7 @@ from autoforge.af_mqtt_bridge import (
     current_observers,
     detach,
     env_enabled,
+    linkage_status,
     preflight,
 )
 from autoforge.af_instance import InstanceManager
@@ -630,18 +634,33 @@ def test_undecodable_payload_and_foreign_topics_are_dropped():
 
 
 def test_inbox_topics_are_never_subscribed_and_never_handled():
-    """收件箱归 DB。AF 既不去订，也不替 DB 处理。"""
+    """收件箱归 DB。AF 既不去订，也不替 DB 处理。
+
+    卡3 起订阅表是三条（洞察 + 在场 + 设备健康），所以这里锁的不再是"只订了一条"，
+    而是**inbox 族一条都不许出现**——那才是角色边界。族外主题的数量另行钉死，
+    少订/多订都会红。
+    """
     client = FakeClient()
     bridge = _bridge(client, proposal_sink=RecordingSink())
     bridge.start()
-    assert client.subscribed == [INSIGHTS_TOPIC]
+    assert client.subscribed == [INSIGHTS_TOPIC, PRESENCE_TOPIC, DEVICE_HEALTH_TOPIC]
 
     for topic in ("butler/inbox/speak", "butler/inbox/notify", "butler/inbox/tv"):
         assert bridge.subscribe_topic(topic) is False
-    assert client.subscribed == [INSIGHTS_TOPIC]
+    assert client.subscribed == [INSIGHTS_TOPIC, PRESENCE_TOPIC, DEVICE_HEALTH_TOPIC]
+    assert not [t for t in client.subscribed if t.startswith(INBOX_PREFIX)], client.subscribed
     dropped = bridge.handle_message(None, None, SimpleNamespace(topic="butler/inbox/speak", payload=b"{}"))
     assert dropped["handled"] is False
     assert bridge.counts["forbidden_seen"] == 4
+
+
+def test_linkage_subscriptions_can_be_turned_off():
+    """`subscribe_linkage=False` 那条腿也要有人按：整条入向线一次都不订。"""
+    client = FakeClient()
+    bridge = _bridge(client, subscribe_linkage=False)
+    bridge.start()
+    assert client.subscribed == [INSIGHTS_TOPIC]
+    assert linkage_status(bridge)["inbound"]["subscribed"] == []
 
 
 def test_insight_without_sink_is_refused_loudly():

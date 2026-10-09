@@ -43,6 +43,7 @@ __all__ = [
     "HAEventStream",
     "run_watch",
     "start_ticker",
+    "pump_linkage",
     "WatchCoordinator",
     "get_tick_supervisor",
     "get_ticker_thread",
@@ -358,6 +359,28 @@ def run_watch(
         "fired": total_fired,
         "stopped": bool(stop and stop.is_set()),
     }
+
+
+def pump_linkage(runtime: Any, bridge: Any) -> int:
+    """把落盘队列里未消费的在场/设备健康事件注入总线（计划 §七 卡3 的触发半边）。
+
+    为什么在 tick 线程而不是 MQTT 回调线程：`EventBus` 没有锁，回调里直接 publish 等于第三个线程
+    写同一份总线状态；队列把"收"与"消费"隔开，这里每个 tick 扫一次水位线之后的新条目。
+    自动化侧用的就是既有的 `on event.<name>` 通道（`ma_presence` / `ma_device_health`），
+    **没有新触发类型**——卡1 那条"别另立节点族"的同一课。
+
+    返回注入条数。桥为 None（未开 `AUTOFORGE_MQTT`）时零动作、不抛。
+    """
+    if bridge is None:
+        return 0
+    pumped = 0
+    for record in bridge.poll_linkage():
+        name = getattr(record, "trigger_name", "")
+        if not name:
+            continue  # 队列里出现没登记事件名的一类：不猜名字，交给判据侧的红
+        runtime.publish(BusEvent.custom(name, record.as_trigger_data()))
+        pumped += 1
+    return pumped
 
 
 def start_ticker(

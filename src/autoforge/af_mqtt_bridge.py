@@ -8,6 +8,8 @@
   （DB 收到后仍过 Sentinel 闸门）；
 - AF 只读 `ma/insights`：读到后编译候选 → **进审批队列**，绝不自动部署
   （conf 封顶在 ask 档，与 `af_evo.ProposalSink.conf_cap` 同口径 0.59 < ask_max 0.60）；
+- AF 读 `ma/presence` + `ma/device-health`（计划 §七 卡3，契约 §1.5）：只做"判形状 → 落盘 →
+  由常驻侧按事件名注入总线"，**回调里不碰运行时**（收与消费在两个线程上，`EventBus` 没有锁）；
 - AF **不订阅** `butler/inbox/*`——**能投 ≠ 能订**：订阅了就等于 AF 在读自己投递的回执，
   把"送达到 DB"这件事变成"AF 自己确认送达"。本模块把这条做成可断言的常量
   `FORBIDDEN_SUBSCRIPTIONS`，而不是注释里的一句"我们不订阅"。
@@ -38,6 +40,8 @@ from homesdk.adm.errors import (
 from homesdk.adm.status import STATE_DEGRADED, STATE_OFFLINE, STATE_ONLINE, encode_status
 from homesdk.config import MissingEnv
 
+from . import af_linkage_feed as _feed
+from .af_feedback import clock_now
 from .af_time import SystemTimeSource, TimeSource, to_house_iso
 
 __all__ = [
@@ -45,6 +49,9 @@ __all__ = [
     "FIRED_TOPIC",
     "FAILED_TOPIC",
     "INSIGHTS_TOPIC",
+    "PRESENCE_TOPIC",
+    "DEVICE_HEALTH_TOPIC",
+    "LINKAGE_TOPICS",
     "FORBIDDEN_SUBSCRIPTIONS",
     "INBOX_KINDS",
     "INBOX_PREFIX",
@@ -57,6 +64,7 @@ __all__ = [
     "inbox_publish",
     "make_ask_sink",
     "make_client",
+    "make_linkage_feed",
     "preflight",
     "start_from_env",
     "current_bridge",
@@ -71,6 +79,19 @@ PRESENCE_NAME = "autoforge"
 FIRED_TOPIC = "af/automation/fired"
 FAILED_TOPIC = "af/automation/failed"
 INSIGHTS_TOPIC = "ma/insights"
+#: 计划 §七 卡3（契约 §1.5，DCD 2026-10-08）新增的两条入向订阅。库侧没有这两个常量
+#: （`homesdk.presence` 只登记收件箱族），所以真源是契约表 §1.2 那两行 + 本仓白名单门
+#: `scripts/check_topic_whitelist.py` 的登记；这两条字面量在本文件里**各只出现一次**，
+#: 订阅、处理、判据都从常量走（卡1 那条"不许有第二份抄本"的课，同一形状）。
+PRESENCE_TOPIC = "ma/presence"
+DEVICE_HEALTH_TOPIC = "ma/device-health"
+#: 主题 → 队列 kind（`af_linkage_feed`）。**这张表是入向的两类之唯一入口**：
+#: 不在表里的主题一律走 `handle_message` 的"不是我的主题"分支，不会落盘、更不会触发。
+LINKAGE_TOPICS: tuple[str, ...] = (PRESENCE_TOPIC, DEVICE_HEALTH_TOPIC)
+LINKAGE_KIND_BY_TOPIC: dict[str, str] = {
+    PRESENCE_TOPIC: _feed.KIND_PRESENCE,
+    DEVICE_HEALTH_TOPIC: _feed.KIND_DEVICE_HEALTH,
+}
 #: `presence` 没有公开的主题拼装口（`_topic` 是私有的），所以本仓自己拼这一条。
 #: 它**不**复制进 `scripts/verify_adm_window.py`——那条是外部探针，共用常量就成了"读应用自己的
 #: 常数去验应用"的自证，探针就再也读不出"AF 发错了主题"。
@@ -196,6 +217,15 @@ def make_durable_ask_sink(*, store_root: Any, clock: TimeSource | None = None) -
     return PersistentInsightSink(
         InsightQueue(Path(str(store_root)) / "insight_proposals", clock=clock)
     )
+
+
+def make_linkage_feed(*, store_root: Any, clock: TimeSource | None = None) -> _feed.LinkageFeed:
+    """在场/设备健康的落点（计划 §七 卡3）：与 `make_durable_ask_sink` 同一族——**只落盘**。
+
+    目录与洞察队列分开（`linkage_events` vs `insight_proposals`）：前者是对端持续播的状态快照、
+    超龄要裁，后者是等人判定的提案、满了要拒收，两条回收策略不能共用一个目录。
+    """
+    return _feed.LinkageFeed(Path(str(store_root)) / "linkage_events", clock=clock)
 
 
 def caps_payload(
@@ -513,13 +543,20 @@ class AfMqttBridge:
         client: Any,
         *,
         proposal_sink: Any = None,
+        linkage_sink: Any = None,
         clock: TimeSource | None = None,
         subscribe_insights: bool = True,
+        subscribe_linkage: bool = True,
     ) -> None:
         self.client = client
         self.proposal_sink = proposal_sink
+        #: 在场/设备健康的落盘队列（`af_linkage_feed.LinkageFeed`，鸭子类型注入：桥不构造它，
+        #: 所以没有 broker、没有可写盘的机器上桥照样能真跑）。None = 没接线 ⇒ 拒收并留痕，
+        #: 不静默收下（契约 §7.2「禁止静默丢弃」）。
+        self.linkage_sink = linkage_sink
         self.clock: TimeSource = clock if clock is not None else SystemTimeSource()
         self.subscribe_insights = subscribe_insights
+        self.subscribe_linkage = subscribe_linkage
         self.started = False
         self.published: list[dict[str, Any]] = []
         self.rejected: list[dict[str, str]] = []
@@ -532,6 +569,9 @@ class AfMqttBridge:
             "failed": 0,
             "insights_in": 0,
             "insights_rejected": 0,
+            "presence_in": 0,
+            "device_health_in": 0,
+            "linkage_rejected": 0,
             "publish_errors": 0,
             "forbidden_seen": 0,
         }
@@ -680,16 +720,22 @@ class AfMqttBridge:
             )
         return None
 
-    # ── 入向：ma/insights ─────────────────────────────────────────────
+    # ── 入向：ma/insights + 在场/设备健康 ─────────────────────────────
     def start(self, *, caps: Mapping[str, Any] | None = None) -> None:
-        """上线：presence 广播 + 订阅洞察主题。订阅表在此收口，禁订族先判后订。"""
+        """上线：presence 广播 + 订阅洞察与联动入向主题。订阅表在此收口，禁订族先判后订。"""
         for topic in FORBIDDEN_SUBSCRIPTIONS:
             if topic == INSIGHTS_TOPIC:  # 白名单若被误改，宁可启动失败也不越界
                 raise BridgeUnavailable(f"{INSIGHTS_TOPIC} 不该出现在禁订清单里（请核对裁定）")
         self.advertise(caps=caps)
-        if self.subscribe_insights:
+        if self.subscribe_insights or self.subscribe_linkage:
             self.client.on_message = self.handle_message
+        if self.subscribe_insights:
             self.client.subscribe(INSIGHTS_TOPIC, qos=_mqtt.QOS)
+        if self.subscribe_linkage:
+            # 走 `subscribe_topic()`（唯一订阅入口）而不是裸 `client.subscribe`：禁订族判定与
+            # `forbidden_seen` 留痕都收在那里，两条入向线共用一个口才有办法一条腿判红。
+            for topic in LINKAGE_TOPICS:
+                self.subscribe_topic(topic)
         self.started = True
 
     def stop(self) -> None:
@@ -707,9 +753,9 @@ class AfMqttBridge:
         return True
 
     def handle_message(self, _client: Any, _userdata: Any, msg: Any) -> dict[str, Any]:
-        """paho 回调：只认 `ma/insights`，别的主题即使被误投也只是计数，不执行任何动作。"""
+        """paho 回调：只认 `ma/insights` 与两条联动入向主题，别的主题即使被误投也只是计数。"""
         topic = msg.topic.decode("utf-8", "replace") if isinstance(msg.topic, bytes) else str(msg.topic)
-        if topic != INSIGHTS_TOPIC:
+        if topic not in LINKAGE_TOPICS and topic != INSIGHTS_TOPIC:
             if topic in FORBIDDEN_SUBSCRIPTIONS or topic.startswith(INBOX_PREFIX):
                 self.counts["forbidden_seen"] += 1
                 self._keep(self.rejected, {"topic": topic, "reason": "forbidden_topic_not_handled"})
@@ -721,11 +767,18 @@ class AfMqttBridge:
             text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
             payload = json.loads(text)
         except Exception as exc:  # noqa: BLE001 —— 对端发坏 JSON 是常态，拒收并留痕
-            return self._reject("undecodable_payload", repr(exc))
+            if topic == INSIGHTS_TOPIC:
+                return self._reject("undecodable_payload", repr(exc))
+            return self._reject_linkage(topic, "undecodable_payload", repr(exc))
         if not isinstance(payload, Mapping):
-            return self._reject("payload_not_object", type(payload).__name__)
-        self.counts["insights_in"] += 1
-        return self.ingest_insight(payload)
+            detail = type(payload).__name__
+            if topic == INSIGHTS_TOPIC:
+                return self._reject("payload_not_object", detail)
+            return self._reject_linkage(topic, "payload_not_object", detail)
+        if topic == INSIGHTS_TOPIC:
+            self.counts["insights_in"] += 1
+            return self.ingest_insight(payload)
+        return self.ingest_linkage(topic, payload)
 
     def _reject(
         self, reason: str, detail: str = "", code: str = ADM_ERR_PAYLOAD_INVALID
@@ -810,6 +863,104 @@ class AfMqttBridge:
             "had_ir": suggested_ir is not None,
         }
 
+    def ingest_linkage(self, topic: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """在场 / 设备健康 → **落盘**。这里不碰总线、不触发任何自动化。
+
+        收在 paho 回调线程、消费在常驻 tick 线程，而 `EventBus` 没有锁——所以回调只做"判形状 +
+        原子写一条文件"，线程交接由 `poll_linkage()` 那条扫描完成（队列本身就是那条接缝，
+        顺带给了"重启不丢"）。
+
+        拒收口径只有**契约写死的**那几条（§1.2 两行 + 裁定 20261004 的 `trace_id` 事件级口径），
+        AF 不自添必填——自添必填的对端代价是"整条入向线静默不生效"，那比收下半份更难查：
+        - `trace_id` 空：两行载荷都列了它，跨仓排障靠它（§1.3 护栏 4）。
+        - `members` 不是数组：在场快照没有成员集合，落成"家里没人"会让按在场写的自动化
+          **反过来**动作，比丢一条更糟。**空数组是合法的**（真没人）。
+        - `stable_id` 空：契约 §1.2 明写**必须非空**，迁移类事件靠它认身份。
+        - `total` 不是整数：丢掉这一键照常收（它是展示项，不是身份也不是状态）。
+        """
+        kind = LINKAGE_KIND_BY_TOPIC.get(topic)
+        if kind is None:  # 由 handle_message 的表守住；走到这里说明那张表被改坏了
+            return self._reject_linkage(topic, "unknown_linkage_topic", repr(topic), ADM_ERR_INTERNAL)
+        trace_id = _clip(str(payload.get("trace_id") or "").strip())
+        if not trace_id:
+            return self._reject_linkage(topic, "missing_trace_id", "载荷没有 trace_id")
+        if kind == _feed.KIND_PRESENCE:
+            raw_members = payload.get("members")
+            if not isinstance(raw_members, (list, tuple)):
+                return self._reject_linkage(
+                    topic, "members_not_list", f"收到 {type(raw_members).__name__}"
+                )
+            members = _feed.members_of(raw_members)
+            data: dict[str, Any] = {"members": members}
+            total = payload.get("total")
+            if isinstance(total, int) and not isinstance(total, bool):
+                data["total"] = total
+            subject = _clip("，".join(
+                str(item["member_id"]) for item in members if item.get("member_id")
+            ))
+        else:
+            stable_id = str(payload.get("stable_id") or "").strip()
+            if not stable_id:
+                return self._reject_linkage(topic, "missing_stable_id", "契约 §1.2 要求非空")
+            data = _feed.device_data_of(payload)
+            subject = _clip(str(data.get("device_id") or data.get("entity_id") or ""))
+        if self.linkage_sink is None:
+            return self._reject_linkage(
+                topic, "no_linkage_sink_wired", "生产入口要给 af_linkage_feed.LinkageFeed",
+                ADM_ERR_INTERNAL,
+            )
+        record = _feed.LinkageRecord(
+            event_id=uuid4().hex[:12],
+            kind=kind,
+            topic=topic,
+            trace_id=trace_id,
+            received_at=clock_now(self.clock),
+            subject=subject,
+            data=data,
+        )
+        self.linkage_sink.append(record)
+        self.counts["presence_in" if kind == _feed.KIND_PRESENCE else "device_health_in"] += 1
+        return {
+            "handled": True,
+            "kind": kind,
+            "topic": topic,
+            "event_id": record.event_id,
+            "subject": subject,
+        }
+
+    def poll_linkage(self, *, max_age_s: float = _feed.TRIGGER_MAX_AGE_S) -> list[Any]:
+        """常驻侧取"本次进程还没消费过"的入向事件（tick 线程调，见 `af_cli` 的 watch 接线）。
+
+        超龄条目只推进水位线、**不返回**：一条小时级的旧掉线快照若在开机瞬间被当成触发，
+        就会拿着早已过期的事实去下发。"重启不丢"说的是记录，不是补触发。
+        """
+        if self.linkage_sink is None:
+            return []
+        return list(self.linkage_sink.poll_new(max_age_s=max_age_s))
+
+    def linkage_stats(self) -> dict[str, Any]:
+        """队列读数（`/api/health` 经 `linkage_status` 读这里）。没接线如实报 `wired: False`。"""
+        if self.linkage_sink is None:
+            return {"wired": False}
+        return {"wired": True, **self.linkage_sink.stats()}
+
+    def _reject_linkage(
+        self,
+        topic: str,
+        reason: str,
+        detail: str = "",
+        code: str = ADM_ERR_PAYLOAD_INVALID,
+    ) -> dict[str, Any]:
+        """联动入向的 fail-closed 拒收：带码、留痕、单独计数，不落盘（契约 §7.2 禁止静默丢弃）。
+
+        不共用 `_reject()`：那条记的是 `insights_rejected`。洞察与在场/健康是两条队列、两个对端契约，
+        混进同一枚计数就分不清"MA 的洞察坏了"和"整条入向线根本没接上"——后者是要立刻查的。
+        """
+        self.counts["linkage_rejected"] += 1
+        self._keep(self.rejected, {"topic": topic, "reason": reason, "detail": detail, "code": code})
+        logger.warning("[mqtt] 丢弃 %s：%s %s（code=%s）", topic, reason, detail, code)
+        return {"handled": False, "topic": topic, "reason": reason, "detail": detail, "code": code}
+
     def stats(self) -> dict[str, Any]:
         return {
             "started": self.started,
@@ -825,6 +976,7 @@ def start_from_env(
     tools: tuple[str, ...] | list[str] = (),
     version: str = PRESENCE_CAPS_VERSION,
     proposal_sink: Any = None,
+    linkage_sink: Any = None,
     clock: TimeSource | None = None,
     allow_anonymous: bool = False,
 ) -> AfMqttBridge | None:
@@ -839,7 +991,7 @@ def start_from_env(
     if not env_enabled():
         return None
     client = make_client(allow_anonymous=allow_anonymous)
-    bridge = AfMqttBridge(client, proposal_sink=proposal_sink, clock=clock)
+    bridge = AfMqttBridge(client, proposal_sink=proposal_sink, linkage_sink=linkage_sink, clock=clock)
     bridge.start(caps=caps_payload(tools=tools, version=version))
     return bridge
 
@@ -889,6 +1041,16 @@ def linkage_status(bridge: "AfMqttBridge") -> dict[str, Any]:
         "degraded": bool(reasons),
         "reasons": reasons,
         "publish_errors": bridge.counts.get("publish_errors"),
+        # 卡3 的入向半边：订了哪两条、收了多少、拒了多少、队列现在多重。
+        # `feed.wired=False` 就是"桥在、但没给落盘队列"——此时每条入向事件都在拒收计数里，
+        # 读数会显示 `rejected` 一路涨而 `presence_in` 恒零，这比"看着健康其实全丢了"好读。
+        "inbound": {
+            "subscribed": list(LINKAGE_TOPICS) if bridge.subscribe_linkage else [],
+            "presence_in": bridge.counts.get("presence_in"),
+            "device_health_in": bridge.counts.get("device_health_in"),
+            "rejected": bridge.counts.get("linkage_rejected"),
+            "feed": bridge.linkage_stats(),
+        },
     }
 
 
