@@ -199,6 +199,8 @@ class Runtime:
                     instance_id=instance_id,
                 )
             )
+        # §十八 B.14：挂起的 ask/确认会话必须重挂，否则实例在 `/api/asks` 上看不见、谁也答不了
+        self.executor.reseed_sessions(restored)
         return restored
 
     # ── 时间 ──────────────────────────────────────────────────────────

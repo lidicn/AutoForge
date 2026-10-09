@@ -41,7 +41,8 @@ Base：`http://<host>:8787`（NAS 部署：`http://192.168.2.200:8787`）
 - `diagnostics[].level`：`error` | `warning`；`diagnostics[].code` 见 `af_scanner.CHECKS`（如 `L3_ACTION` / `SHADOW_WRITES_DEVICE` / `LOW_CONF_WRITES_DEVICE` / `ENTITY_NOT_FOUND`）
 - `band`：`auto`（conf ≥ 0.85）| `shadow`（≥ 0.60）| `ask`（< 0.60）
 - `instances[].state`：`created|active|suspended|done|cancelled|failed|expired`
-- `audit[].type`：`entity_drift|action_failed|breaker_open|breaker_recover|quota_exceeded|instance_rejected|instance_expired`
+- `audit[].type`（真源 `af_audit.ALL_EVENT_TYPES`，现读 22 枚）：`entity_drift|action_failed|event_emitted|breaker_open|breaker_recover|quota_exceeded|instance_rejected|instance_expired|instance_debounced|instance_restored|instance_restore_dropped|instance_session_lost|write_conflict|instance_lease_held|handler_failed|premiere_issued|premiere_consumed|premiere_trial_started|premiere_trial_paused|trial_assert_failed|confirm_granted|confirm_denied`
+  - `confirm_granted` / `confirm_denied` 是裁定 20261009 §三 硬前置那批新增的：`requires_confirm` 节点的放行与拒绝各一条，拒绝侧不许只落在会被截断的实例 trace 里
 
 ## 启动方式
 

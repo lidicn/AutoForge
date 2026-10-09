@@ -32,6 +32,9 @@ INSTANCE_EXPIRED = "instance_expired"
 #: P1 实例持久化：崩溃恢复时成功挂回 / 因图变更被丢弃
 INSTANCE_RESTORED = "instance_restored"
 INSTANCE_RESTORE_DROPPED = "instance_restore_dropped"
+#: B.14：恢复出的挂起实例**重建不出一条可应答的会话**（挂起节点已不在当前图）。
+#: 不静默跳过——这条实例会一直 suspended 且在任何问句面上都看不见。
+INSTANCE_SESSION_LOST = "instance_session_lost"
 #: v0.9.0 跨进程：写入版本冲突（expect_version 不匹配）与恢复时租约仍属其他进程
 WRITE_CONFLICT = "write_conflict"
 INSTANCE_LEASE_HELD = "instance_lease_held"
@@ -43,6 +46,10 @@ PREMIERE_CONSUMED = "premiere_consumed"
 PREMIERE_TRIAL_STARTED = "premiere_trial_started"
 PREMIERE_TRIAL_PAUSED = "premiere_trial_paused"
 TRIAL_ASSERT_FAILED = "trial_assert_failed"
+#: 裁定 20261009 §三 硬前置：`requires_confirm` 的运行期确认。一次确认只放行一次下发，
+#: 所以"通过"与"未通过"都要各自留一条能对上节点与动作的账（拒绝侧不许只落在会被截断的 trace 里）。
+CONFIRM_GRANTED = "confirm_granted"
+CONFIRM_DENIED = "confirm_denied"
 
 ALL_EVENT_TYPES = (
     ENTITY_DRIFT,
@@ -56,6 +63,7 @@ ALL_EVENT_TYPES = (
     INSTANCE_DEBOUNCED,
     INSTANCE_RESTORED,
     INSTANCE_RESTORE_DROPPED,
+    INSTANCE_SESSION_LOST,
     WRITE_CONFLICT,
     INSTANCE_LEASE_HELD,
     HANDLER_FAILED,
@@ -64,6 +72,8 @@ ALL_EVENT_TYPES = (
     PREMIERE_TRIAL_STARTED,
     PREMIERE_TRIAL_PAUSED,
     TRIAL_ASSERT_FAILED,
+    CONFIRM_GRANTED,
+    CONFIRM_DENIED,
 )
 
 

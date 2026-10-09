@@ -22,7 +22,16 @@ from typing import Any, Iterable, Mapping
 _logger = logging.getLogger(__name__)
 
 from .af_adapters import AdapterRegistry, CallResult
-from .af_audit import ACTION_FAILED, ENTITY_DRIFT, EVENT_EMITTED, AuditEvent, AuditLog
+from .af_audit import (
+    ACTION_FAILED,
+    CONFIRM_DENIED,
+    CONFIRM_GRANTED,
+    ENTITY_DRIFT,
+    EVENT_EMITTED,
+    INSTANCE_SESSION_LOST,
+    AuditEvent,
+    AuditLog,
+)
 from .af_bus import ACCEPTED
 from .af_conf import ConfidenceStore
 from .af_instance import (
@@ -198,6 +207,38 @@ class NodeExecutor:
 
         if instance.state == SUSPENDED:
             self.instances.resume(instance)  # 恢复时重新取快照
+
+        # 人工确认（`requires_confirm`）的唤醒：yes ⇒ 重入同一个 do 节点真执行；
+        # no / on_timeout / on_cancel ⇒ 一条动作都不发（fail-closed），照旧按边选路。
+        pending_confirm = instance.ctx.context.pop("pending_confirm", None)
+        if pending_confirm is not None:
+            confirmed_action = str(pending_confirm.get("action") or "") or node.id
+            if kind == "yes":
+                granted = str(pending_confirm.get("node_id") or node.id)
+                instance.ctx.context["confirm_granted"] = granted
+                instance.ctx.current_node = granted
+                self.audit.add(
+                    AuditEvent(
+                        type=CONFIRM_GRANTED,
+                        at=self.clock.now(),
+                        message=f"人工确认通过，放行一次下发：{confirmed_action}（一次性授权，再走到还要再确认）",
+                        automation_id=instance.automation.id,
+                        instance_id=instance.instance_id,
+                        node_id=node.id,
+                    )
+                )
+                return self.run(instance)
+            instance.trace(node.id, note=f"confirm_denied:{kind}")
+            self.audit.add(
+                AuditEvent(
+                    type=CONFIRM_DENIED,
+                    at=self.clock.now(),
+                    message=f"人工确认未通过（{kind}），fail-closed：{confirmed_action} 一条动作都不下发",
+                    automation_id=instance.automation.id,
+                    instance_id=instance.instance_id,
+                    node_id=node.id,
+                )
+            )
 
         # P1-11：canary 观察期结束 → 检查漂移并回滚
         # P1-4 修复：pending_canary 现在是可序列化字典。崩溃恢复后据此重建 CanaryResult
@@ -463,6 +504,66 @@ class NodeExecutor:
         """`wait` 计时到点 → 走 `then` 正常继续（语义拍板 A：wait 是"等一会儿继续"，不是超时）。"""
         return self.resume(instance, "then")
 
+    def reseed_sessions(self, instances: Iterable[Instance]) -> int:
+        """崩溃恢复：把落盘时挂起的 `ask` / 人工确认会话重挂回 `pending_asks`（§十八 B.14）。
+
+        判据只用重启后仍然成立的三格：`state==suspended`、`ctx.context["pending_confirm"]`
+        （确认会话的唯一标记，唤醒时 pop）、`automation.node(ctx.current_node).kind == "ask"`。
+        **不能循 `timer.kind`**——未设 `timeout` 的 ask 挂起时 `timer` 就是 `None`
+        （`af_instance.py` 的 `suspend`），重启后没有任何计时器信号可循；`wait` /
+        `canary_observe` 既无 `pending_confirm`、节点也不是 `ask`，因此天然排除。
+
+        **只重挂、绝不放行**：这里不调 `resume`（重启不等于人已批过），实例保持 suspended，
+        必须等 `/api/asks`、sidecar 或 inbox 收到人的答复才动。问句一律按**当前图**的节点渲染，
+        因为唤醒后真下发的就是当前节点的 `action`——用落盘的旧动作名问人会说谎。
+        房间预算（`MAX_ASKS_PER_ROOM`）不在这里复查：那是"一轮多问"的挂起期纪律，恢复只是
+        把崩溃前已经问出口的话重新显示出来，不是新问一次。
+        """
+        reseeded = 0
+        for instance in instances:
+            if instance.state != SUSPENDED:
+                continue
+            node_id = instance.ctx.current_node
+            try:
+                node = instance.automation.node(node_id)
+            except KeyError:
+                self.audit.add(
+                    AuditEvent(
+                        type=INSTANCE_SESSION_LOST,
+                        at=self.clock.now(),
+                        message=(
+                            f"恢复不出可应答会话：实例 {instance.instance_id} 挂在节点 "
+                            f"{node_id!r}，该节点已不在当前图中（实例继续 suspended，零下发）"
+                        ),
+                        automation_id=instance.automation.id,
+                        instance_id=instance.instance_id,
+                        node_id=node_id,
+                    )
+                )
+                continue
+            pending_confirm = instance.ctx.context.get("pending_confirm")
+            if isinstance(pending_confirm, Mapping):
+                self.pending_asks[instance.instance_id] = AskSession(
+                    instance_id=instance.instance_id,
+                    node_id=node.id,
+                    room=node.room or instance.ctx.context.get("_ask_room"),
+                    created_at=self.clock.monotonic(),
+                    prompt=node.prompt or f"确认执行 {node.action or node.id}？",
+                )
+            elif node.kind == "ask":
+                self.pending_asks[instance.instance_id] = AskSession(
+                    instance_id=instance.instance_id,
+                    node_id=node.id,
+                    room=node.room,
+                    created_at=self.clock.monotonic(),
+                    prompt=node.prompt,
+                    ask_spec=node.ask,
+                )
+            else:
+                continue
+            reseeded += 1
+        return reseeded
+
     def cancel(self, instance: Instance, reason: str = "") -> Instance:
         """中断。优先级最高：抢占一切正常流程，走 `on_cancel` 分支。"""
         if instance.is_terminal:
@@ -542,10 +643,24 @@ class NodeExecutor:
         except Exception as exc:  # 适配器未注册
             return self._soft_fail(instance, node, exc)
 
+        dry_run = bool(getattr(adapter, "dry_run", False))
+
+        # 裁定 20261009 §三 硬前置：`requires_confirm` 的**运行期**消费者。此前这一格只有
+        # 编译期看得见（af_scanner 出诊断），执行器 0 处消费 ⇒ "需要确认"是断的承诺。
+        # 一次性授权：一次确认只放行一次下发，同一节点再次走到还要再确认。
+        if node.requires_confirm:
+            if instance.ctx.context.get("confirm_granted") == node.id:
+                instance.ctx.context.pop("confirm_granted")
+            elif not dry_run:
+                self._suspend_for_confirm(instance, node)
+                return None
+            else:
+                # 预演档一条上线字节都不发（与 canary 跳过 dry_run 同一口径），但记痕不留白
+                instance.trace(node.id, note="confirm_skipped_dry_run")
+
         # G4 canary：conf 处于 auto 带且节点标了 canary → 走灰度保护
         # ⚠️ dry-run 适配器（G1 默认不写真机）不改状态，会**永远**被判定为漂移，必须跳过
         canary = node.canary
-        dry_run = bool(getattr(adapter, "dry_run", False))
         use_canary = (
             canary
             and not dry_run
@@ -727,10 +842,16 @@ class NodeExecutor:
             self._soft_fail(instance, node, exc)
             return
 
+        if node.kind == "ask":
+            instance.ctx.context["_ask_rounds"] = int(instance.ctx.context.get("_ask_rounds", 0)) + 1
+            # 人工确认会话（`requires_confirm`）默认沿用本实例最近一次 ask 的 room：
+            # 房间维度应答（管家/`runtime.answer(room,…)`）因此能真的够到它，不会问而无门。
+            instance.ctx.context["_ask_room"] = node.room
+        # 落盘发生在状态转换那一刻（`_transition` → `Runtime._on_instance_change` → `persist.save`）：
+        # 挂起期要用、且重启后要据此重挂会话的上下文，必须在 `suspend()` **之前**写进 ctx。
         self.instances.suspend(instance, node.id, duration, kind=node.kind)
 
         if node.kind == "ask":
-            instance.ctx.context["_ask_rounds"] = int(instance.ctx.context.get("_ask_rounds", 0)) + 1
             self.pending_asks[instance.instance_id] = AskSession(
                 instance_id=instance.instance_id,
                 node_id=node.id,
@@ -739,6 +860,35 @@ class NodeExecutor:
                 prompt=node.prompt,
                 ask_spec=node.ask,
             )
+
+    def _suspend_for_confirm(self, instance: Instance, node: Node) -> None:
+        """把带 `requires_confirm` 的 `do` 挂成一次人工确认会话（裁定 20261009 §三 硬前置）。
+
+        复用 ask 已有的那条应答接缝（`pending_asks` → `resolve_ask`/`answer` → HTTP
+        `/api/asks*` 与 sidecar/inbox），**不给 `AskSession` 加字段、不新造第二套通道**：
+        确认会话在消费侧就是一条自由文本 ask，答"好"才放行这一次下发。
+        `timeout` 未设 ⇒ 无限期挂起（与不带 timeout 的 `ask` 同形），无人应答就永不下发。
+        """
+        duration: float | None = None
+        if node.timeout:
+            try:
+                duration = parse_duration(node.timeout)
+            except (ValueError, TypeError) as exc:
+                # 与 `_suspend` 同口径：配置非法就地软失效，不许冒泡停摆整个调度循环
+                self._soft_fail(instance, node, exc)
+                return
+
+        instance.ctx.context["pending_confirm"] = {"node_id": node.id, "action": node.action or ""}
+        instance.trace(node.id, note="confirm_wait")
+        # 同上：`pending_confirm` 是重启后重挂确认会话的唯一标记，必须赶在落盘那次转换之前写好
+        self.instances.suspend(instance, node.id, duration, kind="confirm")
+        self.pending_asks[instance.instance_id] = AskSession(
+            instance_id=instance.instance_id,
+            node_id=node.id,
+            room=node.room or instance.ctx.context.get("_ask_room"),
+            created_at=self.clock.monotonic(),
+            prompt=node.prompt or f"确认执行 {node.action or node.id}？",
+        )
 
     # ─────────────────────────────────────────────────────────────────
     # 终止

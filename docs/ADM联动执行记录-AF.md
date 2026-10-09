@@ -7097,3 +7097,156 @@ AST 那两枚 `ok` 为什么本轮不动，取的是现读不是推测：`git di
 - 给出资人的一格新问题（不是给 DCD）：**登录线什么时候提交？** 它压着三样东西——6 条 auth 测试红的归属、AST 两枚 `ok` 的落码窗口、以及 Q2/Q3 的 UI/HTTP 脸。
 
 —— AutoForge 开发 · 2026-10-09 · 基准 HEAD `bb800bc`
+
+## 二之八十一、裁定 20261009 §三 硬前置落码：`requires_confirm` 从"编译期看得见"变成"运行期真拦"，两枚具名审计补上，两处口径差不自决、交 DCD
+
+> 现场：本机 · 2026-10-09 21:40–22:40 · 基准 HEAD `0300150`（上一格 `bb800bc`）
+> 触发物：`decisions/20261009-DB一件与AF两件-裁定.md` §三 那条硬前置——"常驻真机通道开之前，`requires_confirm` 必须先有**运行期**消费者"。§二之八十 已把"执行器 0 命中"钉成读数，本轮补的就是这一格。
+
+### 一、落码：闸在 `_do` 入口，会话复用 `ask` 那张已有脸（`af_api.py` 一行未动）
+
+| 落点 | 现读位置 | 说明 |
+|---|---|---|
+| 取 dry 旗 | `af_executor.py:646` | `dry_run = bool(getattr(adapter, "dry_run", False))`——与 canary 跳过 dry 用的是同一枚读数，不新造旗子 |
+| 判旗 | `:648-659`（注释 `:648-650`、码 `:651-659`） | `if node.requires_confirm:` ⇒ 手上有一次性授权就**消费掉**再放行（`:652-653`）；否则非 dry 一律挂起（`:654-656`）；dry 走留痕档（`:657-659`） |
+| 挂成确认会话 | `_suspend_for_confirm :864-891` | `instances.suspend(..., kind="confirm")`（`:884`）、`pending_confirm`（`:881`）、`pending_asks[instance_id]`（`:885`）、room 回落 `node.room or context["_ask_room"]`（`:888`）、问句必须写清要下发的动作（`:890`） |
+| 唤醒 | `resume :211-241` | yes ⇒ `confirm_granted` 把手（`:218`）+ `current_node` 指回该节点 + `return self.run(...)`（`:230`）+ 放行审计（`:222`）；非 yes ⇒ trace `confirm_denied:<kind>`（`:231`）+ 拒绝审计（`:234`），之后**照既有边纪律**选路：`pick_edge(node.id, {kind,"default"})` 落空 ⇒ `_terminate` ⇒ `done`（`:333-338`） |
+| 具名审计 | `af_audit.py:51-52`，注册进 `ALL_EVENT_TYPES :75-76` | `confirm_granted` / `confirm_denied`；枚举现读 **21 枚**（本批枚数；下一批加 `instance_session_lost` 后现读 22 枚）。`docs/reference/API_CONTRACT.md` 的 `audit[].type` 从"抄一份名单"改成"指向真源 + 全列现读 21 枚"，抄名单这种形状以后不会再漂 |
+| HTTP 脸（零改动） | `af_api.py:653`（`/api/asks`，读进程内那本）、`:907`（`/api/asks/answer`） | 确认会话在消费侧就是一条自由文本 ask：`AskSession` 字段一字未加、不新开增长容器、`ask_spec=None`（不新造控件词汇）。那两处 `ok=True`（`:984`/`:1005`）仍归登录线，本轮不碰 |
+
+三条设计约束都是判据级的，不是口头承诺：授权**一次性**（同实例绕回同一节点还要再问，`test_grant_is_one_shot_so_second_entry_asks_again`）；**未确认 ⇒ 一条下发都没有**；非法 `timeout` 走既有 `_soft_fail`（`:878`），不许冒泡停摆整个调度循环。
+
+### 二、实际射程：这枚闸今天真拦在哪条路上（三格现读，避免"以为开了"）
+
+1. **与 band 正交**：`af_shadow.py:367-381` 在 `_do` 之前按运行时 band 分流（shadow 只写 `shadow_log`、ask 先开提案，其余才 `_orig`）⇒ **这枚闸实际只在 `auto` 带上真拦**。`af_conflict_runtime.py:321` 那句 `ask_band_requires_confirmation` 是一条 **REJECT（拒发）**，与"停下来问人"是两枚不同的闸，两枚都在。
+2. **谁带 `dry_run`**：`HAAdapter`（`af_adapters/ha.py:232` 落旗，构造点 `af_runtime.py:290`、`af_cli.py:304` watch 按 `--dry-live`、`af_cli.py:689` 与 `af_service.py:1942`/`:2054` 是真机档）、`HTTPAdapter`、`InboxAdapter`。`MockAdapter`（`af_adapters/mock.py:12`）与 `FakeHAAdapter`（`af_vhass/fake.py:263`）里 `dry_run` **0 命中** ⇒ `getattr(..., False)` 取到 False ⇒ 单测与仿真档里这枚闸**真拦**（这正是判据能跑的原因，也是"仿真看到的链=真机那条链"仅在非 dry 适配器下成立的那一格限定）。
+3. **闭合 ≠ 通道可以开**：裁定 §三 的 C 档还押着 Q2=甲（owner 逐条勾实体名单，UI/HTTP 脸在 `af_api.py` 归属窗口）与 Q3 试演台账（#83）、现场写闸关回 0（#84）。**运行期消费者这一格清了，另外三格没清，常驻真机通道照旧不开。**
+
+### 三、判据（每条当场跑，出处写明）
+
+| 判据 | 读数 | 出处 |
+|---|---|---|
+| 新判据文件 | **9 条腿**（`--collect-only` 得 `9 tests collected`） | `tests/unit/test_requires_confirm_runtime.py`（本批新增，先前不在 HEAD） |
+| 定向五文件（确认 + 验收 + ask 链 + 编译期策略） | `34 passed in 18.60s`，`BASE_RC=0` | 同上副本树 BASE 腿；工作树同集合 `34 passed in 3.28s`，`TGT_RC=0` |
+| 全量整树（工作区混合态，含并发登录线） | **`6 failed, 3612 passed, 53 skipped, 1 warning, 65 subtests passed in 473.47s (0:07:53)`，`PYTEST_RC=1`** | `/tmp/full_confirm2.out`。第一次同计数（517.39s）——那份日志尾部贴的 `PYTEST_RC=0` 是管道把 `$?` 吃掉的假读数，**不引**（本机老陷阱） |
+| 6 条红的归属 | `test_dcd_20261004_auth_limits`(2) / `test_v0_8_auth`(3) / `test_v1_4_token_expiry`(1) | **同一批四份文件在 `git archive HEAD` 干净树 `52 passed in 66.68s`，`HEAD_AUTH_RC=0`** ⇒ 六条红全来自并发未提交的 `af_api.py`/`af_auth.py` 在途改写，不是本批、也不是 HEAD。按归属纪律 AF 不接手 |
+| 全部门禁 | `GATES_RC=1`，21 个 `══` 段 = 2 红 + 19 绿，`✓` 行 16 | `/tmp/gates82b.out`（7877 字节）。与 `/tmp/gates83.out` 逐字对撞**只差两行**：undefined-name `202→203` 个文件（本批新判据文件被数进去）、散文名字 `4044→4049`（本批文档新写入的 5 个名字被读到）。红两格与 §二之七十七/七十八/八十 **同形同因**：AST `fake-ok-const` 未获批 2 条（`af_api.py:984`/`:1005`，基线内存量 97）+ 棘轮 `全量违规 99 条 / 登记上限 97 条` |
+| 锚点重钉 + 本节写完后复跑门禁 | **`GATES_RC=1`，21 段 = 2 红 + 19 绿，`✓` 行 16；与 `/tmp/gates82b.out` 逐字对撞 `diff` 空输出** | `/tmp/gates82c.out`。散文名字读数**没动**（仍 `4049`）、undefined-name 仍 `203` 个文件 ⇒ 本批后段的文档改动（四个错锚点重钉 + 本节记账）没有引入新名字、也没有让任何一格计数漂。红两格仍是那两条：AST `新增/未获批 2 条（error 0 / warn 2），基线内存量 97 条` + `全量违规 99 条 / 登记上限 97 条` |
+| 顺带现读（不修，只登记） | `CHECKS=40`，`'L2_NEEDS_CANARY' in CHECKS` ⇒ **False** | `af_scanner.py` 那格旧缺口（发 ERROR 诊断却不进目录，说明 §十八 B.8）按现读仍在。本批不顺手补：加键属"检查面目录扩容"，且 §三 Q2 那条"要不要给受确认节点加拒绝出口诊断"正押在 DCD 手里，同批动两处会把两件事搅在一起 |
+
+### 四、变异自证（六枚，全在副本树 `%TEMP%/afmut-confirm`，工作树没被注入过一字节）
+
+副本树七份相关文件与工作树 **md5 逐份相同**（`af_executor.py` c89443e3…、`af_audit.py` c6c25122…、四份判据文件），六腿跑完后再对撞 ⇒ `RESTORED_SAME`。每腿注入前核锚点 `count==1`、注入后 `ast.parse`，不合格就拒写。
+
+| 腿 | 注入（原样） | 杀掉几条 | 这枚证明的是 |
+|---|---|---|---|
+| M1 | `if node.requires_confirm:` → `if False and node.requires_confirm:` | **9 failed**, 25 passed，`PYTEST_RC=1` | 闸本体不是装饰：拆掉后零下发/一次性/终态/审计四组判据全塌 |
+| M2 | `instance.ctx.context.pop("confirm_granted")` → `pass` | **2 failed**, 32 passed | 一次性授权真被"用掉"；变永久后绕回同一节点白拿下发 |
+| M3 | `room=node.room or context.get("_ask_room")` → `room=node.room` | **2 failed**, 32 passed | 确认会话沿用最近一次 ask 的 room 真在挡事：拆掉后链式第二道门在房间里够不到 |
+| M4 | `if kind == "yes":` → `if kind in ("yes", "no"):` | **1 failed**, 33 passed | fail-closed 半边：把"不要"当"批"只被那条拒绝腿抓到（腿少恰恰说明这格只有一条判据在守，已按 §五 之外不再加特例） |
+| M5 | `type=CONFIRM_DENIED,` → `type=ACTION_FAILED,` | **2 failed**, 32 passed | 具名审计不是 trace 的别名：换名后两条审计断言红 ⇒ §三 判据里那句"落 `confirm_denied` 审计"真在校验事件名 |
+| M6 | `elif not dry_run:` → `elif True:`（= 落码档原措辞"预演档不豁免"那一档） | **1 failed**, 33 passed | 这是 Q1 的代价读数：**不豁免并不会让整树塌**，只有"预演档不挂起但要留痕"那条腿红（`test_dry_run_adapter_skips_gate_but_records_trace`）。原以为"不豁免是免费的"不成立——仿真/预演会挂起等不到人的应答而卡住 |
+
+M5 是本轮**自查出来的缺口**，不是原计划：落码档写着"具名审计"，第一版只落了 `instance.trace(..., note="confirm_denied")`。按"字段名要真出现在读数里"的口径复核 ⇒ trace 是实例私有痕、不在 `audit[].type` 枚举里，等于没具名 ⇒ 补两枚事件名 + 三条断言 + M5 这枚变异，才算把那一格兑现。
+
+### 五、两处口径差：AF 不自决，已交 DCD
+
+申请件：`E:\NAS\关键决策部\inbox\20261009-AF-确认闸在预演档与拒绝终态的口径-决策申请.md`（22:22 落盘）。
+
+- **Q1 预演档**：先前写下的落码档是"预演档**不豁免**，否则预演看到的链不是真机那条链"。落码时改为"dry 适配器不挂起、留 `confirm_skipped_dry_run` 痕"，与 canary 跳过 dry 同口径。**这是改口**，如实登记：不豁免的代价经 M6 = 那条腿红（其余 33 腿不受影响），但真机语义上 dry 档根本不会上线，挂起等于"问一个永远没人答的问句"，把预演跑成死等。**AF 建议追认现档（甲），乙档的读数一并交出**。
+- **Q2 拒绝终态**：`no` / `on_timeout` 落 `done`（走 `:333-338` 既有边纪律，无 `no`/`default` 边 ⇒ `_terminate`）。这与今日 `ask` 被拒完全同形。AF 不敢只给确认开特例（`on_error` / `failed`），那会让"边纪律"出现第二种口径 ⇒ **归 DCD**；同时问一句：要不要给编译期加一枚"受确认节点无拒绝出口"的诊断（若加，登记进哪个 `CHECKS` 键——B.8 那格 `L2_NEEDS_CANARY` 发 ERROR 却没进 `CHECKS` 的前车之鉴就摆在那）。
+- **裁定前不动的**：不改 dry 豁免档、不改终态语义、不给 `AskSession` 加字段、不加新路由、不碰 `af_api.py`/`af_auth.py`、不自签上调 `.gates-tally.txt`、不往 `.gates-baseline.txt` 塞条目。
+
+### 六、记账位
+
+- 本轮改动清单（提交时进）：`src/autoforge/af_executor.py`、`src/autoforge/af_audit.py`、`tests/unit/test_requires_confirm_runtime.py`（新增）、`tests/acceptance/test_case04_ask_timeout.py`（重写成双道门）、`docs/architecture/AF完整知识文档.md`、`docs/architecture/AF完整架构与运行时说明.md`、`docs/reference/API_CONTRACT.md`、本执行记录。**不进**：`af_api.py`、`af_auth.py`、`docker/*`、`ui-user-mimo/*`、计划文档、FFL 提示词文档（归他人或未收口）。
+- 文档翻转的三处：知识文档 §八"安全旗子哪枚真有人在跑"那格从 `requires_confirm` **没有**运行期消费者翻成**有**；说明文档 §七 band↔执行闸那格加了"第三枚、与 band 正交"的段落；两份的 §十六/§十八 各加一格残余（知识 §十六 13 / 说明 §十八 B.14）。canary 一格的锚点随本批重钉（旧 `:545-556`/`:546-555`/`:557`/`:571-596` 全部作废，现读 `:646` / `:663-670` / `:671-680` / `:711` / `:243-331`）——本批写文档时先按插入前的行号钉过 `:800-823`/`:210-238`/`:595-598`/`:242-326` 四个错值，复核后逐条改成 `:864-891`/`:211-241`/`:657-659`/`:243-331`，**错值没留进仓**。
+- 新残余一格（B.14，不是本批引入、本批也没修）：`pending_asks` 只在 `af_executor.py:855`（ask）与 `:885`（confirm）写入，**恢复路径不重挂** ⇒ 崩溃重启后处于挂起的 ask/确认会话对 `/api/asks`、`/api/asks/pending`、`pending_asks.json`、`Runtime.stats()` 全部不可见、也无法应答。是 fail-closed（不会误下发），但**静默**。确认会话复用同一本账，就把这格从"ask 独有"扩成了"两种会话共有"，故单独点名登记。**（该格已由 §二之八十二 收口；本条按收口后的现读锚点重钉，原措辞不改——"本批也没修"在 §二之八十一 那一刻是真的。）**
+- 现读工作区多了三份不是我建的未跟踪产物：`docker-compose.api.yml.tmp`、`issued_tokens.json.tmp`（仓根的固定名 `.tmp`，正是 §三十四 那枚原子写门的形状）、`issued_tokens_clean.json`。**AF 不删、不动**（归属不明，可能是并发会话或测试落盘），点名请 owner／登录线确认。
+- 远端读数：本批未推，最新一格仍是 §二之八十 现读的 run 128 `completed/failure`。**未推的本地提交**：`31b6243 c93e468 69ed4a7 e805ffb 925f56e bb800bc 0300150` + 本批（`git log origin/main..HEAD` 现读 7 条）。推 GitHub 要 owner 点头；推上去 `quality-gates` 仍会因那 2 条 `fake-ok-const` 红，而修复窗口被裁定排在登录线之后——等，不是遗漏。
+- #82 收口。#83/#84 不变（等登录线窗口与 owner）。
+
+—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `0300150` + 确认闸批次（未提交态）
+
+
+## 二之八十二、§十八 B.14 / §十六 13 收口：崩溃恢复后把挂起的 ask／人工确认会话重挂回 `pending_asks`——看得见、答得了，但**绝不自动放行**；真凶不是"恢复侧缺代码"，是"标记没赶上落盘那一刻"
+
+> 现场：本机 · 2026-10-09 22:45–23:25 · 基准 HEAD `0300150`（与 §二之八十一 同一未提交态）
+> 触发物：§二之八十一 刚登记的新残余 B.14（说明文档 §十八）／第 13 条（知识文档 §十六）。裁定 20261009 §三 把"常驻真机通道"整个押在 `requires_confirm` 拦得住上；而重启之后那条确认会话**四张读脸全看不见、谁也答不了**——闸从"拦下来问人"退化成"静默挂着"，与"没拦"只差一次下发，与"拦死了"差一个能应答的入口。
+
+### 一、真凶：`pending_confirm` 写在 `suspend()` **之后**，根本没进过盘
+
+第一批四条确认腿的红形是 `StopIteration` 与 `KeyError: '<instance_id>'`，不是"恢复代码没跑到"。现读落盘时机：
+
+`InstanceManager.suspend()`（`af_instance.py:280`，末行 `:293` 转状态）→ `_transition`（`:427`，`:446-447` 回调 `on_change`）→ `Runtime._on_instance_change`（`af_runtime.py:136`，落盘那一行在 `:143`）→ `PersistStore.save()`（`af_persist.py:171`）。
+
+⇒ 任何在 `suspend()` **之后**写进 `instance.ctx.context` 的键，都不会出现在那条落盘记录里。所以本批第一处改动不在恢复侧，而在挂起侧：
+
+| 位置 | 现读 | 改动 |
+|---|---|---|
+| `_suspend`（ask 侧） | `af_executor.py:845-849` 写 `_ask_rounds`／`_ask_room`，`:852` 才 `suspend` | 原先是 suspend 之后写 ⇒ 移到之前，并留一句"落盘发生在状态转换那一刻"的因由 |
+| `_suspend_for_confirm` | `:881-882` 写 `pending_confirm` + `confirm_wait` 痕，`:884` 才 `suspend` | 同上。**顺序错了，恢复侧无论怎么写都拿不到标记**（变异 N5 就是把顺序还原回去 ⇒ 4 条腿红） |
+
+### 二、落码：一张"只重挂、绝不放行"的表
+
+| 落点 | 现读位置 | 说明 |
+|---|---|---|
+| 重挂入口 | `af_executor.py:507-565`（`reseed_sessions`，59 行新方法，紧接 `resume_then`） | 只往 `pending_asks` 写 `AskSession`，**不调 `resume`**：实例仍 `suspended`，一条下发都不会有 |
+| 调用点 | `af_runtime.py:203`（`restore_persisted()` 返回前） | 恢复出的实例先重挂、再进 `tick()`；不新增第二本账 |
+| 重挂谓词 | `af_executor.py:524`（`state != SUSPENDED` 就跳过）+ `:545`（`isinstance(pending_confirm, Mapping)`）+ `:553`（`node.kind == "ask"`） | **不能用 `timer.kind`**：`af_instance.py:287-291` 对无限期挂起把 `timer` 置 `None` ⇒ 不带 `timeout` 的 ask 恢复后没有任何 timer 信号可依。`wait` 与 `canary_observe` 两条都不落（canary 的 `pending_confirm` 在唤醒时已 pop，其节点 `kind` 是 `do`）⇒ 不会被伪造成问句 |
+| 问句取词 | `:551`（`prompt=node.prompt or f"确认执行 {node.action or node.id}？"`） | 按**当前图**的节点渲染，不用落盘那份旧 `action`：放行时真下发的是当前图这条动作，拿旧动作问人等于对人说谎（变异 N3 造的就是这个谎：停机期间把 IR 动作从 `turn_on` 改成 `turn_off`，重挂的问句仍写 `turn_on` ⇒ 红） |
+| 恢复不出会话 | `af_executor.py:529-543`（`KeyError` 分支，事件名在 `:532`），事件名定义 `af_audit.py:35-37`、注册 `:66` | 挂起节点已不在当前图 ⇒ 落 `instance_session_lost` 并**继续 suspended、零下发**。这一格不许静默跳过：一条既看不见、审计里也没名字的实例，等于"没人知道它卡在哪" |
+| 会话形状 | 不给 `AskSession` 加字段、`ask_spec` 走原样（ask 带、confirm 为 `None`） | 与 §二之八十一 同一条纪律：确认会话在消费侧就是一条自由文本 ask，不新造控件词汇、不新开通道 |
+
+三格口径也是判据而不是口头承诺：**绝不自动放行**（腿 1/6 之外，腿 11 钉"恢复不出会话仍 suspended"）；**房间预算 `MAX_ASKS_PER_ROOM` 不在这里复查**——预算是"挂起那一刻"的纪律，恢复只是把已经问出口的话重新显示出来，重问一遍等于让重启把用户已经看得见的问句撤掉；`created_at` 取重挂时刻（`:550`／`:558`），仍早于此后任何新 ask ⇒ 房间优先排序不变。**过期 ask 不留幽灵**：重挂发生在 `tick()` 之前，`resume` 在 `:202` 无条件 `pop` 掉这本账的那条 entry ⇒ 到期就沿 `on_timeout` 腿走掉（腿 5 专门跑这一序）。
+
+### 三、四张读脸是同一条链的下游（钉了一张不等于四张都好）
+
+`/api/asks`（`af_api.py:653`）→ `svc.asks_pending()` → `af_service.py:1564` 直读 `runtime.executor.pending_asks`；`Runtime.stats()["pending_asks"]` → `af_runtime.py:238` 同一本账；`pending_asks.json` → `af_live.py:403-428` 每个 tick 从同一本账抄一份；`/api/asks/pending`（`af_api.py:663`）读的就是那份 sidecar ⇒ **要 watch/live 在跑才会出现**，进程内那两张脸才是即时可达的。本轮 11 条腿钉的是"这本账里有那条会话，且能按 `ask_id` 或 room 答下去"；sidecar 那张脸没单独钉（它是同一次遍历的下游，且落点不在这轮不碰的 `af_api.py`）。这一点如实登记，别写成"四张脸逐一实测过"。
+
+### 四、判据（每条当场跑，出处写明）
+
+| 判据 | 读数 | 出处 |
+|---|---|---|
+| 新判据文件 | **11 条腿**（`--collect-only` 得 `11 tests collected in 0.42s`） | `tests/unit/test_restore_pending_sessions.py`（本批新增）：ask 五腿（可见／yes 只放行一次／no 永不下发／按 room 可答／超时清掉重挂的会话）、confirm 四腿（问句带动作／拒绝仍走既有边纪律／沿用落盘的 `_ask_room`／问句跟当前图不跟旧动作）、边界两腿（`wait` 不重挂／节点查不出落具名审计） |
+| 定向三文件（工作树） | `34 passed in 1.93s`，`TGT_RC=0` | `test_restore_pending_sessions.py` + `test_requires_confirm_runtime.py` + `test_af_persist.py`；`/tmp/tgt85.out` |
+| 同一集合，副本树 BASE | `34 passed in 24.57s`，`BASE_RC=0` | `%TEMP%/afmut-reseed`（`cp -r src tests examples pyproject.toml`）。耗时被同期全量跑挤过，只作计数不作速度读数。注入作用在被测代码的自证：临时腿打印 `IMPORTED_FROM= C:\\...\\Temp\\afmut-reseed\\src\\autoforge\\af_executor.py`（打印用的一次性文件当场删除，没留在仓也没留在副本树） |
+| 副本树与工作树同源性 | 四份相关文件 md5 **逐份相同**：`af_executor.py 7b94e59b59d0a383f4f7fd04d70633c3`、`af_runtime.py dfb8baf439186098ade1b018395279de`、`af_audit.py c0fedd50b4ba019a673f2fdf99390907`、新判据文件 `c3599f6c0c68888e6a2285f2081a5c32`；六腿跑完再核 `af_executor.py` 仍 `7b94e59b…` ⇒ 工作树没被注入过一字节 | 当场 `md5sum` 对撞 |
+| 全量整树（工作区混合态，含并发登录线） | **`6 failed, 3623 passed, 53 skipped, 1 warning, 65 subtests passed in 569.65s (0:09:29)`，`FULL_RC=1`** | `/tmp/full85.out`。六条红与 §二之八十一 **同名同因**：`test_dcd_20261004_auth_limits`(2)／`test_v0_8_auth`(3)／`test_v1_4_token_expiry`(1)，全在并发未提交的 `af_api.py`/`af_auth.py` 在途改写里，AF 按归属纪律不接手 |
+| 门禁 | `GATES_RC=1`，21 个 `══` 段 = **2 红 + 19 绿**，`✓` 行 16 | `/tmp/gates85.out`（7888 字节）。与 `/tmp/gates82b.out` 逐字 `diff` **只有三处**：undefined-name 扫描 `203→204` 个文件（本批新判据文件被数进去）、有界缓存判据 E 的名字读数 `4049→4051`（`reseed_sessions`／`instance_session_lost` 两个名字被读到过）、以及本批把 `GATES_RC` 打进日志那一行。红两格仍同形同因：AST `fake-ok-const` 未获批 2 条（`af_api.py:984`/`:1005`，基线内存量 97）+ 棘轮 `全量违规 99 条 / 登记上限 97 条` |
+| 锚点重钉 + 本节写完后连跑两遍门禁 | **`/tmp/gates85b.out`、`/tmp/gates85c.out` 两份与 `/tmp/gates85.out` 逐字 `diff` 全空（`DIFF_RC=0`，三份都 7888 字节、21 段、`✓` 16 行、`GATES_RC=1`）** | 本节的 35 处重钉与整节新散文（含 `reseed_sessions`／`instance_session_lost`／`pending_confirm` 等名字）**没有引入任何新的门禁读数**——名字哨兵与判据 E 都没动，说明写的是现读而不是造名。红仍是那两条，同形同因 |
+| 顺带现读（不修，只登记） | `len(ALL_EVENT_TYPES)=22`、`CHECKS=40`、`'L2_NEEDS_CANARY' in CHECKS` ⇒ **False** | 枚数随本批 +1；§十八 B.8 那格旧缺口按现读仍在，本批照旧不顺手补（理由见 §二之八十一 §三 末行） |
+
+### 五、变异自证（六枚，全在副本树 `%TEMP%/afmut-reseed`，工作树零注入）
+
+每腿注入前核锚点 `count==1`、注入后 `ast.parse` 不过就拒写、跑完按字节还原并打印 `RESTORED_SAME`；六腿 `PYTEST_RC` 全为 1。
+
+| 腿 | 注入（原样） | 杀掉几条 | 这枚证明的是 |
+|---|---|---|---|
+| N1 | `for instance in instances:` → `for instance in []:` | **10 failed**, 24 passed | 恢复不重挂＝这批改动之前的行为：可见性、可应答、房间可达、拒绝选路、审计点名五组一起塌 |
+| N2 | `elif node.kind == "ask":` → `elif node.kind in ("ask", "wait"):` | **1 failed**, 33 passed | 谓词收紧真在挡事：`wait` 被伪造成一条问句，只有那条"不该重挂"的腿抓得到 |
+| N3 | `prompt=node.prompt or f"确认执行 {node.action or node.id}？"` → 取落盘旧 `action` 拼问句 | **1 failed**, 33 passed | 问句必须来自当前图：停机期间改过 IR 就对着人说谎（读数里 `assert 'climate.turn_off' in '确认执行 climate.turn_on？'`） |
+| N4 | `type=INSTANCE_SESSION_LOST,` → `type=ACTION_FAILED,` | **1 failed**, 33 passed | 具名审计不是别名：换名即红，"恢复不出会话"这一格真的在校验事件名 |
+| N5 | 把 `pending_confirm` + `confirm_wait` 痕挪回 `suspend()` **之后** | **4 failed**, 30 passed | §一 那格真凶的可执行证明：顺序一退，标记没赶上落盘，四条确认腿全废 |
+| N6 | `self.executor.reseed_sessions(restored)` → 对每个恢复实例 `resume(_i, "yes")` | **11 failed**, 23 passed | "恢复即放行"（把重启当人已批）红得最多——含 `test_af_persist.py` 那格终态断言（`assert 'done' == 'suspended'`）。**判据对这条方向最硬**：宁可看不见，也不许自动放行 |
+
+N6 的 11 条里还露出一格连带伤害：`resume` 对不是确认会话的实例走 `node` 解析 ⇒ `KeyError: 'q1'`（`af_ir/models.py:591`）。这不是判据设计的目标，但把"恢复时顺手放行"这条捷径的真实代价照了出来：它会把 ask 节点当确认节点推。
+
+### 六、文档翻转与本批自己的两次失手
+
+- **说明文档**（`AF完整架构与运行时说明.md`，现读 504 行）：§十八 残余第 14 条（B.14）删除；§十五 持久化表新增一行「恢复后重挂会话」（引 `af_runtime.py:203`、`af_executor.py:507-565`、`af_audit.py:35-37`）；§十九 changelog 加一行「HEAD `0300150` + 恢复重挂批次」。
+- **知识文档**（`AF完整知识文档.md`，现读 551 行）：§十六 残余第 13 条删除；§八"确认闸"那格补重挂 + 具名审计一句（并保持"这一格闭合 ≠ 常驻真机通道可以开"那句原样）；changelog 加一行。
+- **`docs/reference/API_CONTRACT.md`**：第 44 行 `audit[].type` 全列从"现读 21 枚"翻成"现读 22 枚"并补 `instance_session_lost`。
+- **锚点整体下移的连带**：本批在 `af_executor.py` 插了 59 行，§二之八十一 那张表的 **35 处行号**全部按现读重钉（脚本按"行号 + 出现次数==1"逐条核，不合格就整轮拒写），DCD 申请件另 10 处（含 `af_runtime.py:290`→`:292`），并在申请件末尾加了一句"只挪行号、两问各档内容一字未改"。**标明"旧／作废／错值"的历史读数不改**——那是记账，不是现状。
+- 两次失手如实登记：① 一次批量替换把「现读 21 枚」也打进了**上一批**的 changelog 行，等于用本批枚数改写历史 ⇒ 恢复成 21 并加"下一批 22"的前向注记；② 新判据文件里一度写进一条 `assert ... if False else True` 的占位断言（永真＝没断言），落盘前删掉。两处都是我自己查出来的，不是别人指出的。
+
+### 七、记账位
+
+- 本轮改动清单（提交时进）：`src/autoforge/af_executor.py`、`src/autoforge/af_audit.py`、`src/autoforge/af_runtime.py`、`tests/unit/test_restore_pending_sessions.py`（新增）、`docs/architecture/AF完整架构与运行时说明.md`、`docs/architecture/AF完整知识文档.md`、`docs/reference/API_CONTRACT.md`、本执行记录；与 §二之八十一 同属未提交态，那一批另有 `tests/unit/test_requires_confirm_runtime.py`（新增）与 `tests/acceptance/test_case04_ask_timeout.py`（重写）。**不进**：`af_api.py`、`af_auth.py`、`docker/*`、`ui-user-mimo/*`、计划文档、FFL 提示词文档。
+- 枚举现读 **22 枚**；`atomic_write_sites`／有界缓存／`CHECKS=40` 三项计数本批一字未动。
+- 未跟踪产物现读四份（**AF 不删、不动**，归属不明）：`docker-compose.api.yml.tmp`、`issued_tokens.json.tmp`、`issued_tokens_clean.json`、以及本批新点名的一份 `docker/docker-compose.api-test.yml`（18:42 落盘，头部写明"FFL 测试专用、端口 8788、与生产 8787 隔离"，不是本轮任何测试建的）。
+- 远端读数：本批未推。**未推的本地提交**：`31b6243 c93e468 69ed4a7 e805ffb 925f56e bb800bc 0300150` + §二之八十一 与本批两格（`git log origin/main..HEAD` 现读 7 条，两批都在工作树里没提交）。推 GitHub 要 owner 点头；推上去 `quality-gates` 仍会因那 2 条 `fake-ok-const` 红——修复窗口按裁定排在登录线之后，等，不是遗漏。
+- B.14 收口后，常驻真机通道那三格照旧没清：Q2=甲（owner 逐条勾实体名单，UI/HTTP 脸在 `af_api.py` 归属窗口）、Q3 试演台账（#83）、现场写闸关回 0（#84）。**重启后问得出、也答得了，不等于通道可以开。**
+- #85 收口。DCD 那件（预演档口径 + 拒绝终态）仍在等裁定，本批没自决任何东西。
+
+—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `0300150` + 确认闸批次 + 恢复重挂批次（均未提交）
