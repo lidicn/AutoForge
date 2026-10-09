@@ -6720,3 +6720,141 @@ trigger_repr: {'entity_id': 'event.ma_presence', 'state': ''}
 这半格不是"我再补三行就完"：它要么给 DSL 新增 `context.*` 公开键，要么给表达式求值层加嵌套路径（那条线有第十七轮 F6 / 第二十轮 F2 的预算事故形状），要么把"按成员"从卡3 的验收文字里摘给卡2。三样都改的是对外语义或验收边界 ⇒ **AF 不自决**，已递交：`E:\NAS\关键决策部\inbox\20261009-AF-入向事件载荷怎么进DSL-决策申请.md`（编号 `20261009-AF-入向事件载荷怎么进DSL`，三档甲/乙/丙 + 两个问题，Q1 选档、Q2 键名是否按契约 §1.2 直译）。未裁之前 `_trigger_repr` 与 `make_resolver` 都不动。
 
 —— AutoForge 开发 · 2026-10-09 · 基准 HEAD `2d92bb1`
+
+---
+
+## 二之七十七、把"整树唯一红是 AST 棘轮"从上一批的印象变成读数：那 2 条追到出处、远端按 job 级对撞、计划表两行过期文字按现读更正
+
+这一批没有新代码。三件都是"把话说成能被复核的样子"：上一批我在两份架构文档里写了"还剩的整树红只有 AST 棘轮 2 条、点名不修"，这句话当时是**推断**（从 `gates.sh` 的解析逻辑 + 一次带基线的运行推出来的），不是当场量出来的。本批把它量了、追到引入提交、并按门禁自己的文案判定"不该由 AF 自签"，于是交 DCD；顺带发现计划 §5.3 有两行验收文字已经过期（第 17、21 行还写着"待裁"，而裁定与落地都已在 HEAD 上）。
+
+### 一、远端读数：红只剩 `quality-gates` 一格，而且是**跑到一半才发现**和记忆里不一样
+
+`python scripts/gh_ci_status.py runs`（原样，含被 grep 掉的绿行摘要）：
+
+```
+total_count=128 listed=10
+success runs: [124, 123, 122, 121, 120, 119]
+run 128 id=37925478220 aec8a23 status=in_progress conclusion=None event=push
+run 127 id=37924594891 64308b5 status=completed conclusion=failure event=push
+run 126 id=37781847425 ecacff2 status=completed conclusion=failure event=push
+run 125 id=37780225922 c307bdf status=completed conclusion=failure event=push
+run 124 id=37779659897 68c30ae status=completed conclusion=success event=push
+```
+
+`… jobs 37924594891`（run 127，本线最后一次有结论的推送）：
+
+```
+adm-linkage-contracts: completed/success
+ui-typecheck-build: completed/success
+layering-gates: completed/success
+quality-gates: completed/failure job_id=113800389166 failed_steps=['Run quality gates']
+ui-user-mimo-judgments: completed/success
+pytest: completed/success
+```
+
+对照 run 126/125（`jobs 37781847425`、`jobs 37780225922`，只列非绿行）：
+
+```
+== run 37781847425      (ecacff2)
+pytest: completed/failure failed_steps=['Run tests']
+quality-gates: completed/failure failed_steps=['Run quality gates']
+== run 37780225922      (c307bdf)
+quality-gates: completed/failure failed_steps=['Run quality gates']
+pytest: completed/failure failed_steps=['Run tests']
+```
+
+读数含义不是"我猜的"：**`pytest` 那格在 run 125/126 是红的、到 run 127 转绿**，说明 `2979e77`→`64308b5` 这批把测试面收干净了；`quality-gates` 三连红且是 127 唯一红格。上一批我记的"125/126 的失败是 AST 棘轮从 `e5b3fd5` 带进来的"这句**不准确**，本批更正：`e5b3fd5` 是 125/126 **之后**的提交（`git log` 现读顺序 `9b9f336 → 68c30ae → c307bdf → ecacff2 → e5b3fd5 → 2979e77 → 2d92bb1 → 71f5682 → 64308b5 → aec8a23`），125/126 的红另有原因（`c307bdf`/`ecacff2` 当时带着 4 条计数棘轮红与 pytest 红，那 4 条由 §二之七十六 + `2979e77` 收掉）。**log 级读数取不到**：`gh_ci_status.py log <run> AST` ⇒ `urllib.error.HTTPError: HTTP Error 404: Not Found`（`_get_log` 走 302 签名地址那条，`jobs` 端点同一枚令牌可用），所以远端只引到 job 级，不假装看过 CI 的正文。
+
+### 二、那 2 条到底是"未获批"还是"存量肥化"——两个口径都得跑，结论不一样
+
+判据跑在 `git archive HEAD` 导出的干净树（工作树有并发未提交改动，跑在它上面得出的行数、计数都不是 HEAD 的读数）：
+
+| 口径 | 命令 | 原样输出 |
+|---|---|---|
+| 全量对上限 | `-m homesdk.gates <HEAD树> --no-baseline --no-smoke` | `扫描完成：… 新增/未获批 99 条（error 1 / warn 98），基线内存量 0 条，过期基线条目 0 条`；`计数：except-pass-broad=20 \| fake-ok-const=79`；`NB_RC=1` |
+| 带基线（真红判据） | `-m homesdk.gates <HEAD树> --no-smoke` | `新增/未获批 2 条（error 0 / warn 2），基线内存量 97 条，过期基线条目 0 条`；`WITHBASE_RC=1` |
+| 哪两条 | 同上输出前两行 | `WARN fake-ok-const src/autoforge/af_api.py:980 build_app.api_auth_has_admin 字面量 ok=True，不来自任何实际校验`<br>`WARN fake-ok-const src/autoforge/af_api.py:1001 build_app.api_auth_register 字面量 ok=True，不来自任何实际校验` |
+| 上限从哪来 | `.gates-tally.txt` | `97 # 2026-10-06 登记（AST 全量口径，--no-baseline --no-smoke）`，上一行注释记的是"2026-10-06 下调：except-pass-broad=20 \| fake-ok-const=77（合计 97）" |
+
+两口径一起看才说得清：`--no-baseline` 的 99 对上限 97 是**棘轮红**（`gates.sh` 里 `total > cap` 与 `total < cap` 都判红，只准降不准升），带基线的"未获批 2"是**新增红**。两者数的是同两格：`2f86af9` 登记时 `77` 条 fake-ok-const，今天 `79` ⇒ 涨的 2 条全在这一族，`except-pass-broad=20` 一格未动。**基线里 97 条把其余全挡住了，所以这不是"有人偷偷加豁免"，是登录正规化那批（`e5b3fd5`）新写了两处成功标记。**
+
+### 三、为什么这两条 AF 不自己修，也不自己上调上限
+
+三条都是现读，不是姿态：
+
+1. **门禁自己的文案把"上调"划给评审**（`gates.sh` 计数棘轮段，逐字）：「棘轮红：总数从 $cap 涨到 $total。要么修掉，要么在「.gates-tally.txt」写明为什么必须上调——上调本身要评审。」AF 替这 2 条签"上调"，正好是这条棘轮 2026-10-06 立起来要堵的动作（那次是**下调** 104→97，并写明"四处成功标记改成回读读数"）。
+2. **"修掉"要动别人正在改的函数体**：`git diff -- src/autoforge/af_api.py` 现读，未提交的第 3 个 hunk 是 `@@ -997,7 +1001,7 @@`，改的正是 `api_auth_register` 里 `registry.issue_for_agent("owner", …)` → `(body.username, …)`，而第 2 条违规就在同一个 `return` 块。并发那条线还带着 2 条红的 auth 腿（`test_dcd_20261004_auth_limits::test_owner_face_still_sees_plaintext`、`::test_third_party_write_token_gets_the_mask_not_the_code`），函数语义正在变。AF 不与他人未提交改动抢同一个函数。
+3. **丙档（塞进 `.gates-baseline.txt`）AF 明确不自用**：那份文件第 2 行逐字是「homesdk 质量门禁基线：只准减少，不准新增」。
+
+已递交：`E:\NAS\关键决策部\inbox\20261009-AF-AST两条未获批的ok字面量归属-决策申请.md`（编号 `20261009-AF-AST两条未获批的ok字面量归属`）。三档：**甲**（AF 建议）改成真校验派生，与 `2f86af9` 那批已有先例同形（`"ok": persisted` / `"ok": verified` / `"ok": applied == body.accepting`）；**乙**上调上限并写理由；**丙**入基线（AF 反对）。另带 **Q2**：`GET /api/auth/has-admin` 这类纯查询端点能不能直接**不写 `ok` 键**——现读唯一调用点 `ui-user-mimo/src/views/LoginView.vue:30-33` 读的是 `data.has_admin`，注册那条读的是 HTTP 层 `res.ok`（`:63-69`），**没有任何调用点读响应体的 `ok`**。申请里同时钉了一句：AF 不接受 `ok: <恒真表达式>` 这种骗过 AST 门的写法（第十七/十八轮判过的"假绿门"形状）。
+
+裁定前不动 `af_api.py` 那两处、不动 `.gates-tally.txt`、不动 `.gates-baseline.txt`、不动 homesdk 规则本体。
+
+### 四、计划 §5.3 有两行文字过期了，按现读更正（只改 AF 自己那半格）
+
+| 行 | 表上原写 | 现读（HEAD） |
+|---|---|---|
+| 第 17 行（冲突内省 fail-open） | 「已投件 `20261008-AF-conflict-introspect-fail-open`，待裁」 | 已裁已落。裁定在 `decisions/20261008-AF两件与MA四回执-裁定.md` §二「AF 冲突内省失败照常执行 → **A（内省异常一律 fail-closed）+ 挖不出实体放行 + Q2 是**」，回执追认在 `decisions/20261008-AF冲突守卫内层与band缺省-裁定.md` §二（把同族推广到 `request` 站、内层仲裁器、`band` 缺省、冷却登记）。代码：`af_conflict_runtime.py:19` 模块口径逐字「内省 / request 自身抛异常 -> fail-closed 拒绝 + 落审计 + owner 可见通知（裁定 20261008 §二 裁 A①）」；`:296-302` 是内省站的拒绝路径（`:300` 调 `_notify_guard_blind`），`:470` 注明"拒绝不能只躺在日志里"，`_audit_degraded` 的 docstring（`:530`）记着 `introspect` / `request` 两站现在 fail-closed（记 `False`） |
+| 第 21 行（`/api/health` 的 `readonly` 与真写闸分叉） | 「DCD 裁定：已投件…，裁定前 AF 不新造对外键」 | 已裁已落：`af_service.py:217 def write_gate(store, *, readonly)`，`:210` 起注明三档口径与"裁定 20261008 §一 B"，`:293-295` 健康面新增 `write_gate` 键、旧 `readonly` 语义不动；`:58` 把 `write_gate` 登记进键表 |
+
+两行的腿都当场跑过（工作树带并发未提交改动，但这些腿不碰 auth 面）：
+
+```
+python -m pytest tests/test_af_conflict_runtime.py -k "introspect or guard_blind" -v
+→ collected 24 items / 20 deselected / 4 selected
+  test_introspect_exception_refuses_the_action                       PASSED
+  test_introspect_success_without_entities_still_executes            PASSED
+  test_guard_blind_refusal_is_resident_evidence_in_the_monitor_view  PASSED
+  test_guard_blind_refusal_publishes_the_outbound_degraded_snapshot  PASSED
+→ 4 passed, 20 deselected in 0.26s          RC=0
+
+python -m pytest …::test_the_two_allow_points_are_separated_in_source …::test_observe_mode_observes_even_when_the_guard_is_blind -q
+→ 2 passed in 0.14s                          RC=0
+
+python -m pytest tests/unit/test_serve_lease_single_writer.py::test_write_gate_is_driven_by_the_flag_not_a_constant -q
+→ 1 passed in 10.60s                         RC=0
+```
+
+**这里有一次读数形状骗人，记下来**：我第一次把 `write_gate` 那条具名 node id 和 `-k "introspect or guard_blind"` 写进同一条命令，拿到的是 `4 passed, 21 deselected`——数字像"具名那条也跑到了"，其实 `-k` 是**全局过滤器**，把特意点名的腿一起 deselect 掉（那次 collected=25 = 冲突文件 24 + 具名那条 1）。要同时跑"具名腿 + 一批关键字腿"得分两条命令，或把 `-k` 写成 `introspect or guard_blind or write_gate`。
+
+腿名点名（行号按 `grep -n "^def test_"` 现读）：`tests/test_af_conflict_runtime.py:458 test_introspect_exception_refuses_the_action`（`:466` 断 `reason == "introspect_failed:TypeError"`、`:470` 断审计相位的 `phase == "introspect"`）、`:487 test_introspect_success_without_entities_still_executes`（**内省成功但没有实体仍放行**——裁定把它和第 1 条分成两条放行点，这一档不能顺手一起改成 fail-closed，否则空实体自动化全废）、`:500 test_observe_mode_observes_even_when_the_guard_is_blind`、`:526 test_the_two_allow_points_are_separated_in_source`（AST 结构腿，`:536` 取的正是 `extract_entity_ids(` 那次调用的 `handlers[0]` 源码；追认件原话"这是本轮最值钱的一条腿"，防的就是"注释改了代码没改"）、`:566 test_guard_blind_refusal_is_resident_evidence_in_the_monitor_view`（`:589` 断 `guard_blind` + `phase == "introspect"`）；`test_serve_lease_single_writer.py:360` 断 `write_gate` 由真开关驱动而不是常量。
+
+**第 21 行还有一格没闭，且不归 AF**：裁定问 2「命名口径是否入契约表」——现读 `grep -n "write_gate" E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md` ⇒ **0 命中**（与第 7 行 `READONLY_DEGRADED:` 那格同一形状：AF 仓侧已落，对外登记属 DCD／homesdk 动作）。
+
+改的是这两行"AF 半边/残留"那一格里的过期陈述（**DCD 写的验收列一字不动**）。计划文件照旧**不进版本库**——§七 整段是 DCD 未提交原文，是否代提交归用户定，这条口径没变。
+
+### 五、审计侧与裁定侧的"有没有新东西"，本轮读数都是"没有"
+
+- `docs/audit`：`ls -t 归档` 最新一份是 `AutoForge_第二十轮审计报告_最终轮.md`（mtime `10-07_18:48`），`index.md` 是 `10-08_10:48`；整个目录树里 10-09 只有一份 `参考/FFL-200题测试提示词.md`（`10-09_13:22`，并发会话在改，按归属纪律不进我的提交）。⇒ **本轮没有新轮次报告要分诊**，"审计会不断新增"这句现在的读数是"暂时没新增"，不是"我看漏了"。
+- DCD：`ls -t decisions` 最新是 20261008 那批（`DB五件` / `ADM以AF为核心联动版本` / `DB孤儿资产处置` / `MA三路径架构立项` / `AF冲突守卫内层与band缺省` / `AF两件与MA四回执`），**20261009 零份**。⇒ 我名下两单仍在等回档：`20261009-AF-入向事件载荷怎么进DSL`、`20261009-AF-用户视角到真机的常驻通道`，加上本批这单共三单。
+
+### 六、点名还没闭的格（下一批接哪一格都在此有名字）
+
+1. **AST 那 2 条**：等 `20261009-AF-AST两条未获批的ok字面量归属` 回档；甲档落地后全量回 97、`未获批` 回 0，`quality-gates` 才会绿。**在此之前远端每次推送都会红这一格**，别把它读成"我这批改坏了"。
+2. **run 128（`aec8a23`）结论**：本批跑 `runs` 时仍 `in_progress`，没结论就不引读数；下批第一件事就是补这一格。
+3. **CI log 级读数拿不到**（`/actions/runs/<id>/logs` ⇒ 404）：若要 log，得给那枚令牌加 Actions 读权限，属出资人侧动作。
+4. **卡4 的 HTTP 半边**（任务 #75）：`ADM_ERR_*` 要落进 `af_api.py` 的响应体，与登录线同一个文件 ⇒ 同一条归属纪律挡着，不抢。
+5. **NAS 合并窗**（#76）+ **DCD 三单**：都在等价于外部输入，不是 AF 能自决推进的。
+
+### 七、本轮只动文档，全套门复跑一遍把"没动坏"这句也变成读数
+
+`GATES_PYTHON=…Python313 python.exe bash gates.sh`（工作树，含并发未提交改动）⇒ `GATES_RC=1`，红只有同源那两格：
+
+```
+[门禁分类] RC=1：依赖门禁判红（rc=1），且输出里没有崩溃签名——这一条是真违规
+棘轮红：总数从 97 涨到 99。要么修掉，要么在「.gates-tally.txt」写明为什么必须上调——上调本身要评审。
+结论：AST 门禁红（exit=1）。修，或在 .gates-baseline.txt 里逐条写明放行理由。
+```
+
+其余 16 条逐条 ✓（挑几条会被文档改动误伤的报在这里）：
+
+- `✓ 主题白名单门禁干净（7 处 topic 字面量全部在契约表内）`
+- `✓ UI↔路由契约门禁干净（UI 调用点 94 处（ui 53、ui-user 19、ui-user-mimo 22）… 服务端参与匹配路由 90 条（装饰器 85、add_api_route 挂载表 5）… 反向读数跨 3 棵树仍未被调用 15 条）`——§二之七十六 重钉的那三个数没被本轮文档改动挪动
+- `✓ 计划表口径门干净（文档行 42 条、✅ 领头声明 34 条…）`，`PLAN_RC=0`（本轮改了计划表 §5.3 第 17/21 行文字，这条门判的是 ✅ 声明与认领读数的对账，仍绿）
+- `[有界缓存] 注册表 3 项…扫到增长容器 129 个，其中基线冻结 114 个、就地豁免标记 16 处；死写容器 0 个（判据 E … 4040 个名字被读到过）`
+- `门禁装配覆盖门干净（盘上 check_*.py 19 个，gates.sh 覆盖 18 个，工作流覆盖 1 个…echo 文案 65 行无未转义反引号）`
+- `✓ 入向订阅门禁干净（MQTT 订阅点 2 处…）`（§二之七十六 解释过那条"为什么是 2 处不是 4 处"的口径）
+
+**结论按口径分开写**：本轮**没有新增红**（红格数与 §二之七十六 相同、来源相同），但**整树仍不绿**，卡的就是 §二 那 2 条 `fake-ok-const`。所以"门绿"这句在裁定回来之前不能写进任何验收文字。
+
+—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `aec8a23`
