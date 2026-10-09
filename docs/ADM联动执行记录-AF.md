@@ -7028,3 +7028,72 @@ GATES_PYTHON=… bash gates.sh → GATES_RC=1
 - 既有未闭格不变：#75 卡4 两格、#76 合并窗、#78/#79 等 DCD 回档、#80 等 0.3.3 发版。
 
 —— AutoForge 开发 · 2026-10-09 · 基准 HEAD `e805ffb`
+
+---
+
+## 二之八十、裁定 20261009 两份都回了：§四 甲当批落码（三枚触发平键），§三 被钉成"必须先有运行期消费者"，§一 那两枚 `ok` 裁定自己把窗口排在登录线之后
+
+> 现场：本机 · 2026-10-09 21:05–21:35 · 基准 HEAD `bb800bc`（上一格 `925f56e`）
+> 触发物：`decisions/20261009-DB一件与AF两件-裁定.md`（20:44 落盘，六格）与 `decisions/20261009-AF两件ok字面量与平键登记-裁定.md`（21:15 落盘，两份申请各一回）。两份都按 mtime 扫出来，不是等投喂。
+
+### 一、格子对撞表（裁定 → 本轮处置）
+
+| 裁定格 | 裁定 | 本轮处置 |
+|---|---|---|
+| 第一份 §四 Q1 / Q2（入向事件载荷进 DSL） | **甲**（补平键，解析器不动）+ **直译** | **已落码 `bb800bc`**，见 §二 |
+| 第一份 §三 Q1（常驻通道） | **C**（开但限定）+ 一条硬前置 | **没开**。硬前置现读仍未满足：执行器 0 命中，见 §四 |
+| 第一份 §三 Q2 | **甲**（owner 每次起监听逐条勾） | 没做。UI/HTTP 脸正躺在并发在途的 `af_api.py` ⇒ 卡在归属，不卡在设计（#83） |
+| 第一份 §三 Q3 | **是**（首演码 + 24h 试演期适用；AF 另落按归档名/自动化 id 的试演台账） | 没做。`af_premiere` 口径变更按裁定要**单独追补回执**（#83） |
+| 第一份 §三 Q4 | **否**（现场漂移且无登记 ⇒ 先关回 0） | 没做，属部署机动作 ⇒ 要 owner 点头；owner 回一句"是"则改走注册（#84） |
+| 第一份 §一 / §二（DB 两件） | 丙 / 丙 | 归 DB，AF 侧零动作 |
+| 第二份 §一（AST 两枚 `ok`） | Q1=**甲**、Q2=**允许删** | **本轮不动**——裁定自己钉了"由登录线提交后（或该线提交后的窗口）落码，不抢在途函数"（见 §三末） |
+| 第二份 §二（平键） | **追认** + 主标识 **甲A** + 契约表 §1.6 已登记 | 词汇与口径同步进三份架构文档（#本节 §五） |
+
+### 二、落码：三枚 `context.*` 触发平键（`bb800bc`，6 文件 +152/−3）
+
+| 落点 | 现读位置 | 说明 |
+|---|---|---|
+| 名单真源 `TRIGGER_FLAT_KEYS` | `af_instance.py:479` | 三枚键名 = 公开词汇，别处不再抄第二份 |
+| 摊平键的函数 `_trigger_flat_keys` | `af_instance.py:482-507` | 取值逐字直译契约 §1.2；`entity_id` 优先当主标识 |
+| 注入点 | `af_instance.py:264`（`spawn` 建 `context` 那张平表） | 与 `trigger_time`/`trigger` 同表并列，不改 `_trigger_repr` |
+| 解析器 | `af_state.py:157-182` **一字未动** | 甲的边界：只做平键，不碰嵌套路径 |
+
+取值口径（与契约表 §1.6 的三行对撞，DCD 现读 `ADM联动主题注册表与消息契约.md:141-152`）：`trigger_entity_id` ↔ 载荷 `entity_id`（presence 那行没有它就落空串）；`trigger_subject` ↔ 事件主标识，**DSL 侧 `entity_id` 优先**、presence 才落 `subject`（那格正是 `member_id` 串）；`trigger_kind` ↔ 事件类型。**三枚恒定在场**（缺的那格是空串不是缺席）——`make_resolver` 对不在表里的 `context.*` 直接抛「未知系统变量」，少一枚就是运行期整段失败，不是少个装饰。
+
+### 三、判据（每条当场跑，出处写明）
+
+| 判据 | 读数 | 出处 |
+|---|---|---|
+| 平键两文件单测 | `29 passed`，`RC=0` | `pytest tests/unit/test_af_instance.py tests/unit/test_linkage_subscription.py -q`（12 + 17） |
+| HEAD 副本树触发链四腿 | `85 passed` | `$TEMP/afhead83`（`git archive HEAD`）里跑 instance/联动/仿真保真/桥四文件 |
+| HEAD 副本树整树 | **`1 failed, 3608 passed, 53 skipped, 65 subtests passed in 434.91s`，`PYTEST_RC=1`** | `/tmp/headfull83.out` |
+| 那 1 条红的性质 | `test_pkg_markers_gate.py::test_real_repo_is_green_on_the_index_reading`，断言体原样报「拿不到 git 索引……环境不对就是 RC=2」 | **副本树的形状不是代码**：`git archive` 出来的树没有 `.git`，门按自己的措辞拒绝用弱口径冒充"干净"（§二之六十四那条降级路径在这儿正好反用了一次） |
+| 工作区整树（含并发 WIP） | `6 failed, 3603 passed, 53 skipped`，`PYTEST_RC=1` | `/tmp/full83.out` |
+| 6 条红的归属 | `test_dcd_20261004_auth_limits`(2) / `test_v0_8_auth`(3) / `test_v1_4_token_expiry`(1)，同一批 auth 面；**在 HEAD 副本树里这三份文件 `48 passed`、`RC=0`** | ⇒ 红来自并发会话未提交的 `af_api.py`/`af_auth.py` 在途改写，不是本批、也不是 HEAD。AF 按归属纪律不接手改 |
+| 全部门禁 | `GATES_RC=1`，21 个 `══` 段 = 2 红 + 19 绿，`✓` 行 16 | `/tmp/gates83.out`（7888 字节）与 `/tmp/gates79.out` 逐字对撞：**只差一行**（散文名字读数 `4040`→`4044`）。红两格与 §二之七十七/七十八 同形：AST `fake-ok-const` 未获批 2 条 + 棘轮 99/上限 97 |
+| 变异自证（副本树，工作树不动） | 平键值改恒空串 ⇒ **3 failed**；删 `spawn` 那行合并 ⇒ **7 failed**，报的正是 `KeyError: 'trigger_entity_id'` | `%TEMP%` 的 `afmut-flatkeys` 注入树。前者证明"读出的值真会改分支"，后者证明"恒定在场"真在挡东西 |
+
+AST 那两枚 `ok` 为什么本轮不动，取的是现读不是推测：`git diff -U0 -- src/autoforge/af_api.py` 的 hunk 头里就有 `@@ -1000 +1004 @@ def build_app(`，落在裁定点名的 `api_auth_has_admin`/`api_auth_register`（`:981-1009`）区间。裁定 §一 的归属那句与此对撞 ⇒ **等登录线提交后的窗口**，#79 已按此改名。
+
+### 四、`requires_confirm`：0 命中是真的，两口径的差也写清
+
+- 我的现读（Grep 工具，`src/**/*.py`）：`requires_confirm` **36 行 / 12 个文件**（`models.py` 2、`af_scanner.py` 8、`af_orchestrator.py` 9、`af_spec.py` 4、`af_closedloop/*` 7、其余 6）；`af_executor.py` **0 处**（`grep -c` 与逐文件计数两次一致）。
+- 裁定写的"全仓 27 处"与我这 36 行是**不同口径**（它数全仓、我数 `src` 下 Python 行）。载荷那一格两口径相同：**执行器 0 命中**。先前用 bash 全仓 `grep -rn` 想一次数清，超时被后台化 ⇒ 换成 Grep 工具的 count 模式重数，别引用那份没跑完的读数。
+- 编译期那三张脸现读在案：`af_ir/models.py:398/:439`（字段声明与反序列化）、`af_scanner.py:401-423`（L2 没标 = `L2_NEEDS_CONFIRM`；标了没配 canary = `L2_NEEDS_CANARY`）、`af_orchestrator.py:683/:793/:1597`（非 L1 动作自动补 `requires_confirm` + canary）。⇒ 正是判例 §六 3 说的「**编译期看见 ≠ 运行期兑现**」。
+- 落码档（下一步，#82）：`_do` 入口先判这枚旗——没拿到 yes 就**一次都不下发**；挂起复用现成的 `pending_asks` 与 `/api/asks`、`/api/asks/answer` 那张已有脸（不新开增长容器、不动 `af_api.py`）；唤醒时 yes ⇒ 就地重进同一节点执行一次；no / on_timeout ⇒ 具名审计 + fail-closed（不静默 done、不"当没这回事"）；on_cancel ⇒ 照旧走取消语义。预演档**不豁免**，否则预演看到的链不是真机那条链。这一档里"拒绝/超时落到哪个终态"若与 owner 预期有出入，按纪律再交 DCD，AF 不静默改安全语义。
+
+### 五、追认、改口与一格口径差
+
+- **追认**：第二份 §2.1 认可了判据形态（983 passed + 两枚变异）。回执里引的 `:482-508` 在同一批清掉一枚"赋值后不读"的死变量后是 `:482-507`；**DCD 的契约表登记的是键名不是行号** ⇒ 不回改 DCD 文档，仓内三份文档锚点已重钉。
+- **甲A**：DSL 主标识 `entity_id` 优先、盘上 `LinkageRecord.subject` 维持 `device_id` 优先（`af_mqtt_bridge.py:906` 不改）。我的落码本来就是"有 `entity_id` 先取它"⇒ **零改动**，只是把"两格并存、各有用途"写进文档，避免下一个人以为其中一格写错了。
+- **契约表 §1.6 已登记**（现读 `:141-152`）：恒定在场 / 两格并存 / 结构级留给卡2 三条口径与仓内实现逐条对得上；`IR_AND_RUNTIME.md:77` 的命名空间行加上了这枚出处。
+- 仍堵的那半边照旧写死：`context.trigger.members` 这类嵌套路径读不出（平表 + `partition(".")`），**别在 DSL 里假装能按成员名分支**。
+
+### 六、记账位
+
+- 提交：`bb800bc`（`feat(裁定20261009 §四甲)`，6 文件）。计划文件继续按归属纪律不暂存；并发在途（`af_api.py`、`af_auth.py`、`docker/*`、`ui-user-mimo/*`）一件不进。
+- **未推的本地提交**现在是 `31b6243 c93e468 69ed4a7 e805ffb 925f56e bb800bc` + 本条记账。推 GitHub 要 owner 点头（`git push origin master:main` + `ls-remote` 自证）；推上去 `quality-gates` 会因那 2 条 `fake-ok-const` 保持红，而这两条红的**修复窗口被裁定排在登录线之后**——这不是遗漏，是等。
+- 本轮新增三格待办：#82（硬前置：运行期消费者）、#83（Q2=甲 逐条勾 + Q3 试演台账，含 `af_premiere` 口径追补回执）、#84（Q4=否，现场 `AUTOFORGE_LIVE_ENABLED` 关回 0，部署机动作）。#78 收口，#79 换成"等登录线提交窗口"。
+- 给出资人的一格新问题（不是给 DCD）：**登录线什么时候提交？** 它压着三样东西——6 条 auth 测试红的归属、AST 两枚 `ok` 的落码窗口、以及 Q2/Q3 的 UI/HTTP 脸。
+
+—— AutoForge 开发 · 2026-10-09 · 基准 HEAD `bb800bc`
