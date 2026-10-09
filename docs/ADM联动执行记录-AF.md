@@ -7429,7 +7429,7 @@ AST 取码那一腿先前写法错了（按 `ast.Compare` 的比较子找），�
 
 ### 八、记账位
 
-- 本轮改动清单（提交时进）：`src/autoforge/af_scanner.py`（两本目录各 +1 行、调用点 1 行、新方法 19 行）、`tests/unit/test_confirm_exit_diagnostic.py`（新增 11 条腿）、`tests/unit/test_diagnostic_code_catalog.py`（枚数 41→42 + 锚点重钉）、`docs/architecture/AF完整知识文档.md`、`docs/architecture/AF完整架构与运行时说明.md`（含 §〇 那处漏翻）。**不进**：`af_api.py`、`af_auth.py`、`docker/*`、`ui-user-mimo/*`、计划文档、FFL 提示词文档（在途/归属他人）。
+- 本轮改动清单（**已随 `60600df` 提交**）：`src/autoforge/af_scanner.py`（两本目录各 +1 行、调用点 1 行、新方法 19 行）、`tests/unit/test_confirm_exit_diagnostic.py`（新增 11 条腿）、`tests/unit/test_diagnostic_code_catalog.py`（枚数 41→42 + 锚点重钉）、`docs/architecture/AF完整知识文档.md`、`docs/architecture/AF完整架构与运行时说明.md`（含 §〇 那处漏翻）。**不进**：`af_api.py`、`af_auth.py`、`docker/*`、`ui-user-mimo/*`、计划文档、FFL 提示词文档（在途/归属他人）。
 - 目录读数：`len(CHECKS)` 41 → **42**、`len(CODE_HINT)` 41 → **42**，两本键集仍全等。文档那句"42 项"的读数由 `test_catalog_size_reading_is_pinned` 钉住。
 - DCD 回执：`E:\NAS\关键决策部\inbox\20261010-AF-确认闸两问回执与§二2.2编译期WARN落地.md`——Q1/Q2 追认已落码（零改动）、§二 2.2 已落地且**注册进 CHECKS（42）**、判据与变异读数原样贴回。回执里请 DCD 认一条：三枚出口名与执行器拒绝词汇**同源钉死**，以后执行器加第四枚拒绝出口时这条腿会先红。
 - 门禁红两格仍是登录线那两条（AST `fake-ok-const` 未获批 2 条 + 棘轮 99/97），与 §二之七十七/七十八/八十/八十一/八十三 同形同因；本批没引入新红，动的只是计数面。不自上调 `.gates-tally.txt`、不塞 `.gates-baseline.txt`。
@@ -7437,4 +7437,4 @@ AST 取码那一腿先前写法错了（按 `ast.Compare` 的比较子找），�
 - 远端读数：本批未推。未推清单以 `git log origin/main..HEAD` 现读为准，不在散文里追写枚数。推 GitHub 要 owner 点头。
 - 待办：#87 收口。#83/#84 不变（等 owner 勾名单与部署机）；#79 等登录线窗口；#75/#76 等卡2 与 NAS 合并窗。
 
-—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `086cf09` + 拒绝出口诊断批次（未提交态）
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `086cf09` + 拒绝出口诊断批次（提交态现读：代码面 `60600df`、本格记账 `0862b81`）
