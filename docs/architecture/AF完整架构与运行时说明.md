@@ -4,8 +4,8 @@
 > **本文回答什么**：AF **怎么搭的、怎么跑的、每道闸在哪个文件哪一行**。用法、清单、命令速查在《AF完整知识文档.md》。
 > **两文档分工**（避免同一事实长两处、改一处漏一处）：
 > - 本文 = 机制与不变量（档位语义、闸门位置、失败面、出向唯一生产者）。
-> - 知识文档 = 面与清单（MCP 31 工具表、HTTP 路由表、CLI 18 命令、IR 语言参考、安全闸 40 项）。
-> **取证口径**：所有 `file:line` 均可用 `git show HEAD:<file>` 复核；行数是当场用注册表/枚举读出来的（`len(TOOLS)=31`、`len(CHECKS)=41`、`len(app.routes 含 methods)=90`、`forge --help` 命令表 18 条），不是手抄。
+> - 知识文档 = 面与清单（MCP 31 工具表、HTTP 路由表、CLI 18 命令、IR 语言参考、安全闸 42 项）。
+> **取证口径**：所有 `file:line` 均可用 `git show HEAD:<file>` 复核；行数是当场用注册表/枚举读出来的（`len(TOOLS)=31`、`len(CHECKS)=42`、`len(app.routes 含 methods)=90`、`forge --help` 命令表 18 条），不是手抄。
 
 ---
 
@@ -69,7 +69,7 @@
 | 层 | 模块 | 责任 |
 |---|---|---|
 | **IR 与编译** | `af_ir/`（models/schema/condition_norm/…）、`af_spec.py`、`af_nl.py`、`af_nl_parse.py`、`af_nl_build.py`、`af_fidelity.py` | 图模型、JSON Schema、AF-Spec 文本⇄IR、NL 渲染与解析、往返保真 |
-| **第一道闸** | `af_scanner.py`（`CHECKS` 41 项、`live_preflight`、`DeviceGuardRegistry`）、`af_irreversible.py` | 编译期静态安全闸、L2/L3 不可逆字段标注 |
+| **第一道闸** | `af_scanner.py`（`CHECKS` 42 项、`live_preflight`、`DeviceGuardRegistry`）、`af_irreversible.py` | 编译期静态安全闸、L2/L3 不可逆字段标注 |
 | **第二道闸** | `af_vhass/`（`fake.py` 唯一效果真值表、`high_fidelity.py`）、`af_expect.py` | 双轨仿真 + 后置条件断言 |
 | **设计链** | `af_draft.py`（staging，进程内 TTL，不落盘）、`af_apply.py`、`af_premiere.py`、`af_pending.py`、`af_service.py` | 意图→IR→校验→仿真→（预演）→入队→试演期 |
 | **运行态** | `af_runtime.py`、`af_executor.py`、`af_scheduler.py`、`af_bus.py`、`af_state.py`、`af_registry.py`、`af_time.py` | 实例生命周期、事件总线、调度、状态源、时钟 |
@@ -92,7 +92,7 @@
    ↓ af_draft(intent)                    进程内 staging（TTL，不落盘）af_draft.py:51
    ↓ 返回 ref（IR 永不回传，防上下文炸）
    ↓ af_apply(ref, stage=?)              af_apply.py:72
-   ├── build   → StaticScanner 41 项 CHECKS
+   ├── build   → StaticScanner 42 项 CHECKS
    ├── simulate→ af_service.simulate / simulate_track（双轨）
    ├── [dry_run] → 到此为止，零写入            af_apply.py:189-193
    └── save    → submit_pending 入待批队列      af_apply.py:196-204
@@ -168,7 +168,7 @@ HA 状态变化
 - `intents` 环形封顶 `INTENTS_MAX=200`（`af_adapters/ha.py:46`、`:259-261`）：常驻服务里 dry_run 也每次都记一条，不裁就只增不减。
 - **收件箱那一侧同形**（`af_adapters/inbox.py:47`）：`dry_run=True` 只经记录代理 `_RecordingInboxClient`（`af_mqtt_bridge.py:371`）留一条意图、**一个字节都不上线**，而记下来的 `payload` 是从"库侧真要发出去的那份 `body`"反解回来的，AF 不重拼第二遍——所以"预演说音箱播这句"与"音箱该收到这句"结构上不可能不一致。真发档缺桥＝缺通道，按 fail-closed 报 `ADM_ERR_AUTH_REQUIRED`（不是静默跳过）。意图环同封顶 200（`af_adapters/inbox.py:34`）。
 - **动作前快照（撤销）只在真实下发路径生效**：`undo_recorder` 在 `dry_run` 分支之后（`af_adapters/ha.py:266` 之后那段），且 `--dry-live` 不触发 recorder（`af_cli.py:305-308`）。
-- `--dry-live` 会自动放过 confirm 预检、并跳过写白名单检查（`af_scanner.py:1248/1275/1285-1286`，本批在两份目录各插一行后整体 +3）：**它不下发，所以不该被下发护栏拦**。
+- `--dry-live` 会自动放过 confirm 预检、并跳过写白名单检查（`af_scanner.py:1272/1299/1309-1310`，上一批因两本目录各插一行 +3，本批因新增检查方法再 +24）：**它不下发，所以不该被下发护栏拦**。
 
 服务端总开关 `AUTOFORGE_LIVE_ENABLED`（`af_service.py:1768`）：没开 ⇒ `live_run` 抛 403（`:1889`）、undo 抛（`:2045`）。仓内 compose 缺省 **0**（`docker/docker-compose.api.yml:45`），**NAS 那侧被宿主 env 注入成了 1**——两档读数相反，判部署事实要看 `/api/live/status` 而不是仓内默认值。
 
@@ -191,9 +191,9 @@ band 是**运行时置信度**（`ConfidenceStore`）映射出来的自主级别
 
 达标转正：连续 `streak_to_promote` 次命中（或 conf 自己爬到 `AUTO_MIN`）→ `conf.promote()`，并回调 `on_promote` 重挂 canary + 启动 `CanarySupervisor` 观察期。`shadow_log.json` 独立存放，与正常运行日志隔离；重启时会回放日志，**日志损坏会在 `replay_load_error` 上留痕**，不会把"历史判定丢了"读成"回放一切正常"（`af_shadow.py:360-366`）。
 
-band 与执行闸的联动在两处：编译期 `SHADOW_WRITES_DEVICE`/`LOW_CONF_WRITES_DEVICE`（`af_scanner.CHECKS`），运行期 `af_conflict_runtime.py:317-321`（shadow 不参与抢锁、ask 一律拒自动下发）。**另有一枚与 band 正交的运行期闸**：节点级 `requires_confirm`（裁定 20261009 §三 硬前置）在 `_do` 入口 `af_executor.py:648-659` 判旗，未授权就挂成人工确认会话（`_suspend_for_confirm` `:864-891`，走 `pending_asks` → `/api/asks`（`af_api.py:653`，读进程内那本）/ `/api/asks/answer`（`:907`）/ sidecar / inbox 这张已有脸），唤醒在 `resume` `:211-241`（yes ⇒ 一次性把手 + 重进同一节点执行一次；no/超时 ⇒ 零下发 + `confirm_denied` 审计，终态照既有边纪律选路：无 `no`/`default` 边就在 `:333-338` 落 `done`，与 `ask` 被拒同一条路，不为确认单开特例）。它不看 conf，只看这枚旗——但 `af_shadow.py:367-381` 是按 band 决定要不要真进 `_do` 的：shadow 档只写 `shadow_log`、ask 档先开提案，所以**这枚闸实际只在 `auto` 带上真拦**；`af_conflict_runtime.py:319-321` 那句 `ask_band_requires_confirmation` 是一条**拒发**（REJECT），与这枚"停下来问人"的闸不是一回事，两枚都在。
+band 与执行闸的联动在两处：编译期 `SHADOW_WRITES_DEVICE`/`LOW_CONF_WRITES_DEVICE`（`af_scanner.CHECKS`），运行期 `af_conflict_runtime.py:317-321`（shadow 不参与抢锁、ask 一律拒自动下发）。**另有一枚与 band 正交的运行期闸**：节点级 `requires_confirm`（裁定 20261009 §三 硬前置）在 `_do` 入口 `af_executor.py:648-659` 判旗，未授权就挂成人工确认会话（`_suspend_for_confirm` `:864-891`，走 `pending_asks` → `/api/asks`（`af_api.py:653`，读进程内那本）/ `/api/asks/answer`（`:907`）/ sidecar / inbox 这张已有脸），唤醒在 `resume` `:211-241`（yes ⇒ 一次性把手 + 重进同一节点执行一次；no/超时 ⇒ 零下发 + `confirm_denied` 审计，终态照既有边纪律选路：无 `no`/`default` 边就在 `:333-338` 落 `done`，与 `ask` 被拒同一条路，不为确认单开特例；**这一格现在编译期也喊得出来**——受确认节点缺 `no`/`on_timeout`/`default` 任一出口时出 `CONFIRM_WITHOUT_DENY_PATH` **告警**，`af_scanner.py:503-521`，42 项之一，裁定 20261009（第二份）§二 2.2：不拦发布，只把"被拒后走向"从运行期静默挪到图里可读）。它不看 conf，只看这枚旗——但 `af_shadow.py:367-381` 是按 band 决定要不要真进 `_do` 的：shadow 档只写 `shadow_log`、ask 档先开提案，所以**这枚闸实际只在 `auto` 带上真拦**；`af_conflict_runtime.py:319-321` 那句 `ask_band_requires_confirmation` 是一条**拒发**（REJECT），与这枚"停下来问人"的闸不是一回事，两枚都在。
 
-`af_canary.py` / `af_canary_supervisor.py` **不是仿真档**：`auto_rollback`（`af_canary.py:145`）与 `demote_below`（`af_canary_supervisor.py:68`）是真机路径上的护栏策略；适配器是 dry 时执行器会跳过 canary 接线（`af_executor.py:646` 取 `dry_run`、`:663-670` 的 `use_canary` 里带 `not dry_run`）。`requires_confirm` 对 dry 适配器走同一口径（不挂起、留 `confirm_skipped_dry_run` 痕，`:657-659`）。历史上 `suspend→resume` 接缝丢过 `auto_rollback=false` 旗子（`af2ee56`）。
+`af_canary.py` / `af_canary_supervisor.py` **不是仿真档**：`auto_rollback`（`af_canary.py:145`）与 `demote_below`（`af_canary_supervisor.py:68`）是真机路径上的护栏策略；适配器是 dry 时执行器会跳过 canary 接线（`af_executor.py:646` 取 `dry_run`、`:663-670` 的 `use_canary` 里带 `not dry_run`）。`requires_confirm` 对 dry 适配器走同一口径（不挂起、留 `confirm_skipped_dry_run` 痕，`:657-659`）——**这一口径已由裁定 20261009（第二份）§一 追认为甲**：确认闸防的是"不可逆真写要人点头"，预演档零字节上线就没有可确认的实体；裁的是"跳过 + 记痕"而不是"静默跳过"，所以那枚痕是这条裁定的关键半边，撤掉它＝预演不再诚实。历史上 `suspend→resume` 接缝丢过 `auto_rollback=false` 旗子（`af2ee56`）。
 
 ---
 
@@ -479,7 +479,7 @@ UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调
 5. 语义泛化/审计工具的四个缺口（semgrep / detect-secrets / pip-audit / mutation）仍是射程缺口，未变成门禁。
 6. `READONLY_DEGRADED:` 前缀在 homesdk 契约表的登记那一格在 DCD／homesdk 手里（现读两文档零命中）。
 7. `af_nl_parse` 有实现无产品调用方；NL→IR 自由文本属 F14 P2。
-8. ~~`L2_NEEDS_CANARY` 没登记进 `CHECKS`~~ **已由执行记录 §二之八十三 收口**（编号保留、不再占残余格，免得后面 9-13 全部重号）：键进了 `CHECKS`（`af_scanner.py:54`）与 `CODE_HINT`（`:107`），诊断发出点现读 `:419`；按注册表枚举检查面的消费面从此不漏这枚硬门，且那条 ERROR 到 Agent 手上 `hint` 非空（`Diagnostic.__post_init__ :171-173` 的回退以前对这枚码是空串）。防复发是通用判据而非点名：`tests/unit/test_diagnostic_code_catalog.py` 拿 AST 扫全仓 `Diagnostic("X")` 字面量，要求 X 两本目录都在、hint 非空，另有一枚反向棘轮（除点名名单里那 7 枚走变量/常量传码的键之外，目录里不许有谁也发不出的幽灵键）。
+8. ~~`L2_NEEDS_CANARY` 没登记进 `CHECKS`~~ **已由执行记录 §二之八十三 收口**（编号保留、不再占残余格，免得后面 9-13 全部重号）：键进了 `CHECKS`（`af_scanner.py:54`）与 `CODE_HINT`（`:110`），诊断发出点现读 `:423`；按注册表枚举检查面的消费面从此不漏这枚硬门，且那条 ERROR 到 Agent 手上 `hint` 非空（`Diagnostic.__post_init__ :174-176` 的回退以前对这枚码是空串）。防复发是通用判据而非点名：`tests/unit/test_diagnostic_code_catalog.py` 拿 AST 扫全仓 `Diagnostic("X")` 字面量，要求 X 两本目录都在、hint 非空，另有一枚反向棘轮（除点名名单里那 7 枚走变量/常量传码的键之外，目录里不许有谁也发不出的幽灵键）。
 9. 收件箱投递（计划 §七 卡1）的**上线可见那一半没在这台机器上验**：验收口径写的是 `mosquitto_sub` 能见，而 NAS 侧订阅+对撞属合并窗动作。仓内证到的是"上线字节由库侧生成、被记录代理原样接住并反解核对"（`tests/unit/test_inbox_adapter.py`），不是"broker 上真有这条主题"。同一条线上还差两件：契约 §1.3 护栏 3（按 source 限速）没实现；长度上限只在库侧 `_len_bounded` 把，**编译期不提前拒** >500 字符，于是这条 IR 要跑到执行才红。
 10. 发布失败目前只有一个码（`ADM_ERR_BROKER_UNREACHABLE`，`rc=…` 只在 message 文本里）：ACL 拒绝与 broker 不可达不区分，是否拆码归 DCD。
 11. 联动**入向**（计划 §七 卡3）的验收也差对端那半边：仓内证到的是"契约要求的必填项缺了就在拒收计数里带着 `ADM_ERR_*`"，而 MA 实际发出的载荷是否逐键符合契约 §1.2 那两行，只有 NAS 合并窗拿 `mosquitto_sub -t 'ma/#' -v` 对撞得出来。另外这一路**没有面板格**：唯一读数面是 `/api/health` 的 `linkage.inbound`（本批刻意不加新路由，路由计数因此没动），也没有 per-source 限速（与第 9 条同一护栏）。
@@ -502,4 +502,5 @@ UI↔路由门禁把三棵树全扫（`9c32ea0`），读数现在长这样：调
 | 2026-10-09 | HEAD `0300150` + 确认闸批次（未提交态） | 裁定 20261009 §三 硬前置落地：`requires_confirm` 的运行期消费者——`af_executor.py:648-659` 在 `_do` 入口判旗（未授权一次都不下发）、`:864-891` 挂成人工确认会话（复用 `pending_asks` → `/api/asks*` / sidecar / inbox 这张已有脸，`AskSession` 不加字段、`af_api.py` 不动）、`:211-241` 唤醒（yes ⇒ `confirm_granted` 一次性把手 + 重进同一节点执行一次；no / `on_timeout` ⇒ fail-closed）。新增两枚具名审计 `confirm_granted`/`confirm_denied`（`af_audit.py:51-52`、`ALL_EVENT_TYPES :75-76`），确认会话沿用本实例最近一次 ask 的 room（`:845-849`）。§七 两段随本批重钉锚点（canary 的 dry 跳过从 `:546-555` 挪到 `:646` + `:663-670`），并写清这枚闸与 band 正交、实际只在 `auto` 带上真拦。口径差一处：dry 适配器不挂起、只留 `confirm_skipped_dry_run` 痕，与先前落码档「预演档不豁免」不同，理由与代价见执行记录 §二之八十一，已交 DCD 追认 |
 | 2026-10-09 | HEAD `0300150` + 恢复重挂批次（未提交态，叠在确认闸批次之上） | §十八 残余第 14 条收口：崩溃恢复后挂起的 `ask` / 人工确认会话重挂回 `pending_asks`（`af_executor.py:507-565` 新增 `reseed_sessions`，`af_runtime.py:203` 调用）。同批查出真凶：`pending_confirm` 原先写在 `instances.suspend()` **之后**，而落盘恰好发生在那次状态转换里 ⇒ 盘上记录永远缺这枚标记（现在 `:881-884`、`:845-852` 都改成先写再挂）。新增具名审计 `instance_session_lost`（`af_audit.py:35-37`、注册 `:66`，枚举现读 **22 枚**）。判据 `tests/unit/test_restore_pending_sessions.py` 11 条；变异六枚分别杀 10 / 1 / 1 / 1 / 4 / 11 条红（不重挂、见挂起就重挂、问句用落盘旧动作名、静默跳过、标记写在落盘之后、恢复即放行）。确认闸那批的锚点因本批在执行器前部插入而整体后移，两份架构文档 + 契约 + 执行记录已按现读重钉 |
 | 2026-10-10 | HEAD `8efc134` + 目录收口批次（未提交态） | 收 §十八 B.8：`L2_NEEDS_CANARY` 登记进 `CHECKS`（`af_scanner.py:54`）与 `CODE_HINT`（`:107`），检查面读数从 40 项翻成 **41 项**（本文 §〇/§二/§三 三处与知识文档四处同步）；新增通用判据 `tests/unit/test_diagnostic_code_catalog.py`（8 条腿：字面量发出的码必在两本目录、hint 非空、反向幽灵键棘轮、L2 两分支各判一次、目录枚数现读）；本文 §五 `--dry-live` 那组锚点因两本目录各插一行整体 +3（`:1248/1275/1285-1286`），残余 B.8 改写为"已收口"并保留编号 |
+| 2026-10-10 | HEAD `086cf09` + 拒绝出口诊断批次（未提交态） | 落裁定 20261009（第二份）§二 2.2：新增第 42 项 `CONFIRM_WITHOUT_DENY_PATH`（**WARNING 级、不进 `ScanResult.ok` 的判红**），检查方法 `af_scanner.py:503-521`、调用点 `:364`、`CHECKS :55`、`CODE_HINT :97-98`；§六 的 dry-live 锚点随本批 +24（`:1272/1299/1309-1310`）；§七 那格补两句——被拒后落 `done` 是 Q2 裁的甲、诊断只把这条走向挪到编译期可见，以及 dry 适配器不挂起 + 留痕的口径**已由 §一 追认**（痕是关键半边，撤掉＝预演不诚实）。顺带发现并修掉一处上一批漏翻的副本读数：本文 §〇 分工行还写着"安全闸 40 项"（那时已经是 41）。新增判据 `tests/unit/test_confirm_exit_diagnostic.py`（11 条腿）、`test_diagnostic_code_catalog.py` 目录枚数腿 41→42 |
 | 2026-09-24 | 当时 HEAD | 初版（端到端实测后） |
