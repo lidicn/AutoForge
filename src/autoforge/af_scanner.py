@@ -51,6 +51,7 @@ CHECKS: dict[str, str] = {
     "ENTITY_NOT_FOUND": "⑫ 引用了不存在的实体",
     "ENTITY_WRITE_CONFLICT": "③ 跨自动化写同一实体且无优先级",
     "L2_NEEDS_CONFIRM": "§8.1 L2 动作（门锁/窗帘/空调）强制 canary + 人工确认",
+    "L2_NEEDS_CANARY": "§8.1 P1-2 L2 动作只标 requires_confirm 而无 canary＝免费豁免，服务端策略表不放行",
     "LOW_CONF_WRITES_DEVICE": "§10 conf<0.6 只出 ask 提案，禁止写设备",
     "DO_WITHOUT_ON_ERROR": "§6 do 建议有 on_error（缺省直接 failed）",
     "NESTED_SUSPEND_IN_CANCEL": "§5.3 on_cancel 分支内禁止再次挂起（禁止嵌套中断）",
@@ -103,6 +104,8 @@ CODE_HINT: dict[str, str] = {
     "ENTITY_NOT_FOUND": "先用 `af_resolve_entity`（或 `forge entities resolve`）拿真实 entity_id；实体 ID 可能已漂移。",
     "ENTITY_WRITE_CONFLICT": "两条自动化写同一实体时，必须声明优先级（`conf`）或合并为一条。",
     "L2_NEEDS_CONFIRM": "L2 动作（门锁/窗帘/空调）补 `requires_confirm: true` 与 `canary`。",
+    "L2_NEEDS_CANARY": "已标 `requires_confirm` 只算「问过人」，不等于「灰度过」：给该 L2 动作补 `canary`"
+                       "（`duration` + `auto_rollback`），否则 P1-2 服务端策略表按免费豁免拒绝。",
     "LOW_CONF_WRITES_DEVICE": "conf<0.6 只允许出 `ask` 提案；先提升置信度或改为询问。",
     "DO_WITHOUT_ON_ERROR": "给该 `do` 节点补一条 `on_error` 边（缺省直接 failed，没有兜底）。",
     "NESTED_SUSPEND_IN_CANCEL": "`on_cancel` 分支内不要再放 ask/wait（禁止嵌套中断）。",
