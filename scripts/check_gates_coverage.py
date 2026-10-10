@@ -5,7 +5,7 @@ r"""门禁装配覆盖门：`scripts/check_*.py` 必须真被某条链跑到，�
 `gates.sh` 里没有 ⇒ 本机 `bash gates.sh` 绿、推上去 CI 红。这类不对称不会让任何东西变红，
 只会让"该红的不红"，与包标记门（`check_pkg_markers.py`，为一次 `.gitignore` 事故立的复发门）同族。
 
-六条判据（全部静态可判）：
+七条判据（全部静态可判）：
 - **漏跑**：盘上某个 `check_*.py` 既不在 `gates.sh`、也不在任一工作流里 ⇒ 本门**射程里有它**，
   没有任何一条链跑它 ⇒ 判红。（"写了没接"比"没写"更坏：它看起来是一道门。）
 - **远端有、本机没有**：工作流里引用的 `check_*.py` 不在 `gates.sh`，且不在 `CI_ONLY_EXEMPT` ⇒ 判红。
@@ -22,9 +22,15 @@ r"""门禁装配覆盖门：`scripts/check_*.py` 必须真被某条链跑到，�
   开发者读到的是作者没写的那句话（本仓真发生过：`计划表口径门（`docs/plan` 那份表…）` 打出来变成
   `计划表口径门（ 那份表…）`），而**退出码照旧对**，所以这条不对称不会让任何东西变红。
   只数 `echo "` 开头的行（整行 `#` 注释不执行，不算）；`\`` 的写法不算（现仓二十多条结论文案都在用）。
+- **基线里有硬错误条目**（§二之九十五 / 第六轮审计 ARCH-01）：`.gates.toml` 的 `critical_globs` 段自己写着
+  "这里的 `except Exception: pass` 是硬错误，不许进基线"，而基线是 `--update-baseline` 盲生成的、它不看这份名单
+  ⇒ 口径与台账能长期互相矛盾（现网就矛盾过一条：`af_service.py#except-pass-broad#health`，而 `af_service.py` 在名单里）。
+  本判据把两边当一句话对账：基线指纹命中 `critical_globs` × `CRITICAL_HARD_RULES` 即判红。
+  名单与 glob 语义取 `homesdk.gates.config` 那份实现，不在这里重抄（重抄就是 ARCH-09 点名的"名单手抄"）。
 - **射程塌了不许报干净**：`gates.sh` 或 `.github/workflows/` 读不到、或 `gates.sh` 里一个
   `check_*.py` 都没数到、或工作流里数不出**任何一个 job**、或 `gates.sh` 里数不出一批
-  `echo "…"` 行（判据 ⑥ 的下限）⇒ `exit 2`（"没有发现"不等于"没有问题"）。
+  `echo "…"` 行（判据 ⑥ 的下限）、或 `.gates.toml`／`.gates-baseline.txt` 任一份读不到、
+  或 `critical_globs` 数不出任何一条（判据 ⑦ 的名单空着＝一条都不会命中，那是空集给的干净）⇒ `exit 2`（"没有发现"不等于"没有问题"）。
 
 判据⑤能判的是"引用的东西真不真"，**判不了"这句话是不是那条前置差的正确解释"**——那需要人读。
 所以它挡住的是空话与假锚点，剩下的语义对不对仍归 §二 的记录与复核。
@@ -35,12 +41,17 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tempfile
+import tomllib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 GATES_SH = REPO / "gates.sh"
 WORKFLOWS = REPO / ".github" / "workflows"
 SCRIPTS = REPO / "scripts"
+#: 判据 ⑦ 的两份台账：名单在 `.gates.toml`，欠债条目在 `.gates-baseline.txt`（测试把这两根指到沙箱树）。
+GATES_TOML = REPO / ".gates.toml"
+GATES_BASELINE = REPO / ".gates-baseline.txt"
 #: 判据⑤ 的"前置差锚点"按这里为根做存在性核对（测试把这根指向沙箱树）。
 PATH_ROOT = REPO
 
@@ -251,6 +262,58 @@ def echo_quoting_problems(text: str, label: str) -> tuple[list[str], int]:
     return problems, n_echo
 
 
+#: 第六轮审计 ARCH-01：`.gates.toml` 的 `critical_globs` 段开头写的是"这里的
+#: `except Exception: pass` 是硬错误，不许进基线"，而基线是 `--update-baseline` 盲生成的、
+#: 它不看这份名单 ⇒ 口径与台账可以长期互相矛盾（现网就矛盾过：基线里有一条
+#: `af_service.py#except-pass-broad#health`，而 `af_service.py` 在名单里）。
+#: 只有 `except-pass-broad` 这条规则在扫描器里按 `is_critical` 升 error（`scan.py:177`），
+#: 所以今天能机械判出的"硬错误"就只有这一族；扫描器若新增按关键模块升级的规则，这一格要同批改。
+CRITICAL_HARD_RULES = frozenset({"except-pass-broad"})
+
+
+def _load_gate_config(cfg_path: Path, baseline_path: Path):
+    """名单与基线条目都从 `homesdk.gates.config` 那一份实现取——glob 语义、条目切分都不在这里重抄。"""
+    from homesdk.gates.config import GateConfig
+
+    return GateConfig.load_file(cfg_path, baseline_path)
+
+
+def baseline_critical_problems(cfg) -> list[str]:
+    """基线指纹里不许有关键模块的硬错误条目（ARCH-01 建议的那条一致性自检）。
+
+    收的是 `GateConfig`（不是路径）：main 与自测档共用同一份加载通道，避免"自测跑的其实是另一套解析"。
+    """
+    from homesdk.gates.config import matches_glob
+
+    problems: list[str] = []
+    for entry in sorted(cfg.baseline):
+        parts = entry.split("#")
+        if len(parts) < 2:
+            continue
+        path, rule = parts[0], parts[1]
+        if rule in CRITICAL_HARD_RULES and matches_glob(path, cfg.critical_globs):
+            problems.append(
+                f"基线里有硬错误条目：{entry} —— `.gates.toml` 的 `critical_globs` 声明"
+                f"{path} 咽下 Exception 是硬错误、不许进基线。改站点留痕或删这条指纹，"
+                f"别把模块移出名单（移出名单=把口径改成追认缺陷）"
+            )
+    return problems
+
+
+def _self_test_baseline_legs(tmp_root: Path) -> tuple[list[str], list[str]]:
+    """自测档：现场搭两份小台账，证明 ⑦ 真能红（命中）也真不误伤（同规则但不在名单）。"""
+    hit = tmp_root / "hit"
+    miss = tmp_root / "miss"
+    for d, entry in ((hit, "src/pkg/critical.py#except-pass-broad#f"),
+                     (miss, "src/pkg/innocent.py#except-pass-broad#f")):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / ".gates.toml").write_text(
+            'critical_globs = [\n    "src/pkg/critical.py",\n]\n', encoding="utf-8")
+        (d / ".gates-baseline.txt").write_text(entry + "\n", encoding="utf-8")
+    return (baseline_critical_problems(_load_gate_config(hit / ".gates.toml", hit / ".gates-baseline.txt")),
+            baseline_critical_problems(_load_gate_config(miss / ".gates.toml", miss / ".gates-baseline.txt")))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -281,8 +344,30 @@ def main() -> int:
         )
         return 2
 
+    # 判据 ⑦ 的射程核对：名单或基线读不到 ⇒ 没有可对账的两本台账；名单空着 ⇒ "一条都没命中"是空集给的干净。
+    try:
+        gates_cfg = _load_gate_config(GATES_TOML, GATES_BASELINE)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        print(f"[gates-coverage] 读不出（exit 2）：门禁台账读不到或解析不了"
+              f"（{type(exc).__name__}: {exc}）——判据 ⑦ 此刻没有射程")
+        return 2
+    if not GATES_BASELINE.is_file():
+        print(
+            f"[gates-coverage] 读不出（exit 2）：`{GATES_BASELINE.name}` 不在盘上——"
+            f"判据 ⑦ 没有可对账的欠债台账（`--update-baseline` 还没跑过？）"
+        )
+        return 2
+    if not gates_cfg.critical_globs:
+        print(
+            f"[gates-coverage] 读不出（exit 2）：`{GATES_TOML.name}` 的 `critical_globs` 数不出任何一条——"
+            f"判据 ⑦ 此刻没有射程（名单空着，基线里当然一条都不会命中）"
+        )
+        return 2
+
     if args.self_test:
-        # 六类判红各注入一次，证明检测器本体真能抓到（反空洞自证）。
+        with tempfile.TemporaryDirectory() as td:
+            bl_hit, bl_miss = _self_test_baseline_legs(Path(td))
+        # 七类判红各注入一次，证明检测器本体真能抓到（反空洞自证）。
         legs = {
             "漏跑": check(on_disk | {"check_unwired.py"}, gates_refs, ci_refs, jobs),
             "远端有、本机没有": check(on_disk, gates_refs, ci_refs | {"check_ci_only.py"}, jobs),
@@ -300,6 +385,8 @@ def main() -> int:
             # 本门抓到的那条**真缺陷**的形状（§二之五十二）：标题里的路径没转义 ⇒ bash 执行了它。
             "echo 未转义反引号": echo_quoting_problems(
                 'echo "══ 计划表口径门（`docs/plan` 那份表）══"\n', "`gates.sh`")[0],
+            # §二之九十五 抓到的那条真缺陷的形状：关键模块的 `except-pass-broad` 进了基线。
+            "基线命中关键模块": bl_hit,
         }
         for k, v in legs.items():
             if not v:
@@ -315,11 +402,17 @@ def main() -> int:
             print(f"[self-test] FAIL：反例档被误伤（n_echo={n_esc}，问题 {len(escaped)} 条）："
                   f"{'；'.join(escaped) or '行号核对不住'}")
             return 1
+        # ⑦ 的反例档：同一条规则、模块却不在名单里 ⇒ 不许红（红了就等于逼着把名单抄成"全部模块"）。
+        if bl_miss:
+            print(f"[self-test] FAIL：⑦ 的反例档被误伤（不在 `critical_globs` 里的模块被判红）："
+                  f"{'；'.join(bl_miss)}")
+            return 1
         print(f"[self-test] OK：{len(legs)} 档注入全部被检出（{sum(len(v) for v in legs.values())} 条问题），"
-              f"反例档（\\` 转义 + 注释行）零误伤")
+              f"反例档（\\` 转义 + 注释行 + 名单外模块）零误伤")
         return 0
 
-    problems = check(on_disk, gates_refs, ci_refs, jobs) + echo_problems
+    problems = check(on_disk, gates_refs, ci_refs, jobs) + echo_problems \
+        + baseline_critical_problems(gates_cfg)
     if problems:
         print("门禁装配覆盖门未通过：")
         for p in problems:
@@ -327,14 +420,17 @@ def main() -> int:
         print(
             f"（在册 {len(on_disk)} 个 / `gates.sh` 跑 {len(on_disk & gates_refs)} 个 / "
             f"工作流跑 {len(on_disk & ci_refs)} 个 / 豁免 {len(CI_ONLY_EXEMPT)} 格 / 作业 {len(jobs)} 条 / "
-            f"`gates.sh` echo 文案 {n_echo} 行）"
+            f"`gates.sh` echo 文案 {n_echo} 行 / 基线 {len(gates_cfg.baseline)} 条 / "
+            f"关键模块名单 {len(gates_cfg.critical_globs)} 格）"
         )
         return 1
     print(
         f"门禁装配覆盖门干净（盘上 `check_*.py` {len(on_disk)} 个，"
         f"`gates.sh` 覆盖 {len(on_disk & gates_refs)} 个，工作流覆盖 {len(on_disk & ci_refs)} 个，"
         f"独立作业豁免 {len(CI_ONLY_EXEMPT)} 格且两个锚点都核对得住——作业真引用了该脚本、路径真在盘上；"
-        f"echo 文案 {n_echo} 行无未转义反引号）"
+        f"echo 文案 {n_echo} 行无未转义反引号；"
+        f"基线 {len(gates_cfg.baseline)} 条里没有一条落在关键模块名单（{len(gates_cfg.critical_globs)} 格）的"
+        f"硬错误规则上）"
     )
     return 0
 

@@ -283,7 +283,8 @@ def health(
             ticker_alive = th.is_alive()
             tick_exit_reason = get_tick_exit_reason()
     except Exception:
-        pass  # tick_health is best-effort, must not break /api/health
+        # 探测失败不能带崩 /api/health，但也不许咽得无声：具名码 + exc_info，与 EXPERIENCE_OBSERVE_SKIPPED 同族。
+        logger.debug("TICK_HEALTH_PROBE_SKIPPED", exc_info=True)
     from .af_time import house_tz_status
     return {
         "ok": ok,

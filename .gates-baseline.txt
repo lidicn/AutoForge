@@ -14,7 +14,6 @@ src/autoforge/af_orchestrator.py#except-pass-broad#IntentParser.parse
 src/autoforge/af_orchestrator.py#except-pass-broad#_extract_json
 src/autoforge/af_runtime_plugins.py#except-pass-broad#install._tick_conflict
 src/autoforge/af_runtime_plugins.py#except-pass-broad#install_api
-src/autoforge/af_service.py#except-pass-broad#health
 src/autoforge/af_time.py#except-pass-broad#load_tz
 src/autoforge/af_version.py#except-pass-broad#_audit
 src/autoforge/af_version.py#except-pass-broad#_now

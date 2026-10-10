@@ -8530,3 +8530,70 @@ M99b_synonymous_truthful_reword RC=0 :: 134 passed, 2 skipped, 1 warning in 39.9
   **回填该由谁写**：补正要求的是把《执行回填》补进 DCD 的裁定文件末尾，而 `E:\NAS\关键决策部` **不是 git 仓**（现读 `git rev-parse` ⇒ `not a git repository`），AF 直接往对方台账里写字没有回退路径 ⇒ 这一格按"跨仓共享台账"处理，等 owner 点头后再动（要么 AF 追加、要么由 DCD 自己回填、AF 只递一份可直接粘贴的回填稿）。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `219dd93`、本批落码后现读 `2724c4f`（本批六份落码文件 `af_persist.py`／`af_cli.py`／`af_service.py`／`af_live.py`／`af_bus.py`／`af_time.py`（后两份只改声明面措辞：FIFO／`time` 模块在场性，控制流一个字节没动）＋ 判据三份 `test_v0_9_multiproc.py`／`test_atomic_write_sites_fixes.py`／`test_event_dedup.py`，共 5 条新腿；九案变异：M0＋M99b 全绿、七案被杀；门禁四遍逐字节相同 7877 字节、`GATES_RC=1`，两条红仍归登录线，未动 tally／baseline；未推 GitHub——推要 owner 点头）
+
+## 二之九十五、收第六轮审计 ARCH-01（关键模块的基线指纹与 `.gates.toml` 的口径互相打脸）：复测两格——矛盾那格成立、"86 条"那格是报告把行数当成了条数；三格动作＝修站点／删过期指纹／给覆盖门加一条"台账对台账"的判据；44 条判据腿 + 八案变异；HEAD 上那条"全量 98 > 上限 97"的棘轮红因此转绿，`tally` 一个数字都没动
+
+授权口径同 §二之九十三／九十四（`decisions/20261010-AF与DB与DPP十件-裁定.md` §五 Q4 甲：落在 AF 可动文件的条目由 AF 逐条复测后自行收口）。本批动到的五份文件全在 AF 职权内（`src/autoforge/af_service.py`／`.gates-baseline.txt`／`scripts/check_gates_coverage.py`／`tests/unit/test_gates_coverage_gate.py`／`tests/unit/test_arch01_health_trail.py`），不涉及跨仓词汇，因此不需要新的申请。**要交裁的那半句不在这批里**：报告标题前半句"自建门禁体系冻结了 86 条已承认的缺陷"是一句**评审口径判断**（基线里那 82 条算不算欠债、该不该限期清零），不是机械可判的缺陷——按 §六 Q3 那个"同一形状一律交裁、不得在架构文档里自决记为按设计"的纪律，本批不改口径、不上调 tally、也不把它写成"按设计"，只在下面 §六 如实登记为待裁。
+
+### 一、复测：报告给了两句话，一句成立、一句是它自己的取证口径错了
+
+**成立的那句（活矛盾，两处可直接核对）**：`.gates.toml:14` 那行注释写的是「关键模块：这里的 `except Exception: pass` 是硬错误，不许进基线」，`:16` 的 `critical_globs` 现读 **11 格**、里面确实有 `src/autoforge/af_service.py`（注释给的理由是"会话与仿真编排"）；而 `.gates-baseline.txt`（HEAD `025616d` 那份）**第 17 行**就是 `src/autoforge/af_service.py#except-pass-broad#health`。⇒ 一份台账说这形状在关键模块里是硬错误、另一份台账把它供着，两份同时在场。
+
+**为什么"硬错误"机械上只等于 `except-pass-broad`**（这决定了新判据为什么不能写成通用规则）：严重度来自 `homesdk/gates/scan.py:145` 的 `self.is_critical = matches_glob(rel_path, config.critical_globs)`，而 `:177-180` 是全仓**唯一**按 `is_critical` 抬级的分支——`except-pass-broad` 在关键模块里落 `RULE_ERROR`、 elsewhere 落 `RULE_WARN`。其余规则（`fake-ok-const` 等）根本不看这一旗。所以新判据里的硬错误集合就写死成 `CRITICAL_HARD_RULES = frozenset({"except-pass-broad"})`，并在 `check_gates_coverage.py` 的注释里点名它的出处，**不是**我另立的一份名单。
+
+**行为面也跟着成立，不是纯口径问题**：`af_service.py:246 def health(` 里那段 tick 健康探测（`get_tick_supervisor`／`get_ticker_thread`／`get_tick_exit_reason` 三枚取数）修前收在 `:285` 的 `pass  # tick_health is best-effort, must not break /api/health`。后果是 `/api/health` 的 `tick_health`／`ticker_alive`／`tick_exit_reason` 三格在**探测抛穿**时静默停在 `None`，而读数面区分不了"没有在跑"与"探测本身炸了"——这与 §二之九十三 登记的那条 DCD 候选（`af_conflict_runtime.dispatch()` 把内省包在宽捕里）同族，只是这一格落在 AF 职权内、可以自己收。
+
+**不成立的那句要更正（报告数错了口径）**：它写"实测该文件当前有 86 条生效条目"，并按 `fake-ok-const 66 + except-pass-broad 17` 分类。现读是 **86 行／83 条生效**——文件头两行是 `#` 注释（口径说明与指纹格式），报告把**行数当成了条数**；而它自己的两张分类表相加是 83，跟 86 差的就是那两行注释加一行空行。数字本身不影响矛盾那格成立，登记在此是因为这批之后所有引用都以"行／条"两口径分开写。
+
+### 二、三格动作，以及为什么不是"把模块移出名单"
+
+按裁定给的顺序，先修站点、再让门禁自己承认那条指纹过期、最后补上"两份台账从没互相对过账"这个门自己的盲区：
+
+1. **修站点**（`af_service.py:286-287`）：`pass` 换成 `logger.debug("TICK_HEALTH_PROBE_SKIPPED", exc_info=True)`，行为一寸没动——探测失败仍不许带崩 `/api/health`，`ok` 照 `True`、三格照 `None`，只是不再咽得无声。具名码命名与仓内既有同族一致（`EXPERIENCE_OBSERVE_SKIPPED`、`ENTITY_HEALTH_MAP_SKIPPED`，本模块内两处 debug 留痕），注释里不写行号锚点免得腐烂。
+2. **删掉那条指纹**（`.gates-baseline.txt` 少 1 行：86 行／83 条 ⇒ **85 行／82 条**，`except-pass-broad` 17⇒16、`fake-ok-const` 66 不动）：依据不是我自己判的，是**门禁自己报的**——站点修好后带基线跑一遍报「过期基线条目 1 条」，而 `Report.is_red = bool(active) or bool(stale)` 让过期条目本身就判红。⇒ 本批对 `.gates-tally.txt` 一个数字没动、对基线**只减不增**、没有新增任何豁免。
+3. **给覆盖门加判据 ⑦**（`scripts/check_gates_coverage.py`）：矛盾能长期存在的原因是**没有一条门拿两份台账对撞**——AST 门只管"新增不许超基线"，覆盖门只管"`check_*.py` 有没有被某条链跑到"，`critical_globs` 与基线存量条目的交集从没人看过。判据 ⑦ 就是这一格：基线里任何一条 `except-pass-broad` 指纹，其路径若命中 `critical_globs`，判红，并把修法钉死在文案里（"改站点留痕或删这条指纹，别把模块移出名单——移出名单＝把口径改成追认缺陷"）。实现**复用库侧那份**（`GateConfig.load_file` 取名单与基线、`matches_glob` 判命中），AF 侧不再手抄第二份 `critical_globs`、不再自己解析 TOML/基线格式（ARCH-09 那族"名单手抄"，本批顺手减一处）。
+   - 三条**射程下限**（`exit 2`，"没有发现"不等于"没有问题"）：`critical_globs` 为数 0、`.gates-baseline.txt` 不在盘上、`.gates.toml` 解析不了——任一情形都不许报干净。
+   - 判据红白两面各自可判：只按规则不看名单 ⇒ 误伤；只按名单不看规则 ⇒ 把 `fake-ok-const` 也判红。所以反向腿和误伤腿都各钉了一条（见 §三）。
+   - 反空洞自测随之加档：`--self-test` 现在多一档"基线命中关键模块"必须被检出，另配一档反例（结论文案里 `\`` 转义、整行 `#` 注释、名单外模块）要求**零误伤**。
+
+### 三、读数（修前／修后逐字，全部落盘在 `E:\tmp\`）
+
+修前（`arch01_pre.txt`，工作树带登录线在途改动）：第 99 行 `扫描完成：AutoForge  新增/未获批 98 条（error 1 / warn 97），基线内存量 0 条，过期基线条目 0 条`、第 100 行 `计数：except-pass-broad=20 | fake-ok-const=78`，第 66 行就是那枚 ERROR 本体：`ERROR except-pass-broad        src/autoforge/af_service.py:285                              health  关键模块（鉴权/回滚/闸门/快照）咽下 Exception`。
+
+修后（`arch01_post_full.txt` 第 98／99 行）：`扫描完成：AutoForge  新增/未获批 97 条（error 0 / warn 97）…` ＋ `计数：except-pass-broad=19 | fake-ok-const=78`。⇒ **error 面 1→0、except-pass-broad 20→19、全量 98→97**，而 `.gates-tally.txt` 的登记上限是 97，所以 §十八 A 表里那条"全量 98 > 上限 97"的棘轮红**在这一格上自己转绿了**（转绿的成因是消掉了一条真违规，不是抬了上限——这一句必须写清楚，否则下一个人会以为棘轮可以靠数字解决）。
+
+带基线两读（同一份工作树，差别只在删指纹前后）：`新增/未获批 2 条（error 0 / warn 2），基线内存量 95 条，过期基线条目 1 条` ⇒ `…过期基线条目 0 条`。**门禁整体仍 `RC=1`**（那 2 条新增是登录线在途的 `af_api.py:984`／`:1005` 两枚字面量 `ok=True`，归属和窗口都在 #79，本批不碰、也不据此动基线）。本批定稿前又按现读复取了一遍两条命令的真实退出码（不接管道，避免 `\| tail` 把 `$?` 吃掉）：`FULL_RC=1`／`BASE_RC=1`。
+
+覆盖门那一站的新读数（现在真跑，`COV_RC=0`）：`门禁装配覆盖门干净（盘上 \`check_*.py\` 19 个，\`gates.sh\` 覆盖 18 个，工作流覆盖 1 个，独立作业豁免 1 格且两个锚点都核对得住——作业真引用了该脚本、路径真在盘上；echo 文案 65 行无未转义反引号；基线 82 条里没有一条落在关键模块名单（11 格）的硬错误规则上）`。自测档（`SELFTEST_RC=0`）：`[self-test] OK：7 档注入全部被检出（9 条问题），反例档（\` 转义 + 注释行 + 名单外模块）零误伤`。
+
+### 四、判据 44 条腿与八案变异
+
+`tests/unit/test_gates_coverage_gate.py` **40 条**（本批 +9：判据⑦ 命中／只看名单不误伤 `fake-ok-const`／指纹缺函数后缀也判红／基线缺席 `exit 2`／名单为空射程塌／`.gates.toml` 解析不了 `exit 2`／`--self-test` 能验出瞎的基线检测器／真仓基线干净且射程非空／**ARCH-01 那枚历史指纹拿真名单对撞必须判红**）＋ `tests/unit/test_arch01_health_trail.py` **4 条**（`BareSwallowProbe` 形状由 `scan_source` 现取，不手抄违规列表）：探测抛穿 ⇒ `/api/health` 照答、`tick_health` 留 `None`、日志里必须有具名码；探测成功 ⇒ `tick_health` 照填（防止"加日志"被写成"必答"，行为面反向也要红）；`af_service.py` 不再有任何裸咽；把修前那行 `pass` 种回去必须被扫出（证明这条腿不是空集给的干净）。合跑 `44 passed in 7.79s`。
+
+副本树八案（`mutation_arch01.result.txt`，1996 字节；每案一份 `E:/tmp/mut_arch01/tree_<案>`，跑完即删，工作树全程未被改写）：
+
+| 案 | 注入 | 读数 |
+|---|---|---|
+| M0 | 空注入 | `rc=0 GREEN 44 passed in 4.26s` |
+| M30 | 站点退回 `pass`（＝修前形状） | `rc=1 KILLED 3 failed`——杀它的三条：抛穿留痕腿／无裸咽残留腿／种回形状必须被扫出腿 |
+| M31 | `CRITICAL_HARD_RULES` 清空（＝判据⑦ 失效） | `rc=1 KILLED 4 failed`（含真仓对撞腿） |
+| M32 | 只看名单不看规则（＝误伤 `fake-ok-const`） | `rc=1 KILLED 2 failed`：反向不误伤腿／真仓干净腿 |
+| M33 | 基线遍历空转（＝永远绿的检测器） | `rc=1 KILLED 4 failed` |
+| M34 | 撤掉"名单为空"射程下限 | `rc=1 KILLED 1 failed` |
+| M35 | 撤掉"基线缺席"射程下限 | `rc=1 KILLED 1 failed` |
+| M99b | 只把红字文案同义改写（判定不动） | `rc=0 GREEN 44 passed in 4.35s` |
+
+M31 与 M33 各杀 4 条但方向不同：前者证明这条判据真的在按规则集合判，后者证明它真的在遍历台账（不是硬编码那一条历史指纹）。M32 是反向腿——把判据放宽成"名单内一律判红"必须红，否则这条门会把 66 条 `fake-ok-const` 一起拖进来，逼人把名单改小。M99b 钉的是"判的是判定不是字"。
+
+### 五、门禁六遍与整树单测（登录线在途那 6 条不在本批文件里）
+
+`gates.sh` **六遍**（a／b 跑在代码改动之后、两份文档初稿之前；c／d 跑在初稿定稿之后；e／f 跑在末轮措辞——遍数本身、存证清单、§三 那两处补正——改完之后，其中 f 是本批最后一次取证）：本体逐字节相同——**7824 字节、md5 `89a4b43f53f8f07120ac97a4ea39d284`**。要说清一处测量口径：a／b 那两遍的输出末尾**没有**驱动写的 RC 标签行（整份文件就是 7824 字节的本体），c／d 各 7835 字节＝同一份本体＋一行 `GATES_RC=1`，去掉那一行后与 a／b 逐字节相同 ⇒ 本批新写的散文没有移动门禁一个字节。门禁里的两行关键读数（c／d 同一形状）：AST 站 `扫描完成：AutoForge  新增/未获批 2 条（error 0 / warn 2），基线内存量 95 条，过期基线条目 0 条`，棘轮站 `全量违规 97 条 / 登记上限 97 条`。本批早前那两枚 `.body` 文件是"去掉末行"切的，对 a／b 恰好削掉的是结论行而不是 RC 行，所以当时记的 md5（`45bbb14c…`）是"削错行仍两边相同"的读数——留在此处是因为它会被下一个人当成"两遍的第三处差"，按本段的四遍 md5 为准。整树单测（`unit_arch01.txt`，`UNIT_RC=1`）：`6 failed, 3028 passed, 43 skipped, 1 warning in 284.57s (0:04:44)`。6 条逐一点名——`test_dcd_20261004_auth_limits.py::test_owner_face_still_sees_plaintext`／`::test_third_party_write_token_gets_the_mask_not_the_code`、`test_v0_8_auth.py::test_legacy_single_token_backward_compat`／`::test_multi_token_scope_grading`／`::test_revocation_immediate_over_http`、`test_v1_4_token_expiry.py::test_expired_token_is_403_over_http`（现场断言 `assert 400 == 403`）。**这六条与 §十八 A 表 2026-10-09 混合态追注里那六条同名同因**，全在并发登录线未提交的 `af_api.py`／`af_auth.py` 上；本批五份文件一条都不在 FAILED 名单里（两份判据文件 44 条腿全绿，见上）。⇒ 本批不替登录线背这六条，也不据此动基线。
+
+### 六、任务位与残余
+
+- #102 收口（ARCH-01 的 AF 职权内半边）。架构文档 §十八 加第 20 条、§十九 加一行。
+- **ARCH-01 还剩的不是代码格**：报告标题"冻结了 86 条已承认的缺陷"那半句——基线现读 82 条（`fake-ok-const` 66／`except-pass-broad` 16）算不算欠债、要不要给一个限期清零的口径，属评审政策。AF 不自决：既不上调 tally，也不宣布"这些不是缺陷"。要改口径得裁。
+- #98 还剩：ARCH-02～11 逐条复测（ARCH-02＝版本单一真源缺失：现读 `pyproject.toml` `0.1.0`／`__init__.py:7`／`af_service.py:127 API_VERSION`／README `v2.4`／`IR_VERSION` 两处，五枚版本号没有一处同源，另有 git tag 0 枚、无 CHANGELOG）；BUG-02/03/08/09/15 五格随登录线同窗（#79）。
+- 存证（`E:\tmp\`，不进仓）：`arch01_pre.txt`（15751 B，第 66／99／100 行是上文引的三处原文）／`arch01_post_full.txt`（15588 B）／`arch01_post_base.txt`（795 B）／`_base_head.txt`（5488 B，HEAD 那份对照读）／`gates_arch01_a.txt`＋`gates_arch01_b.txt`（各 7824 B＝本体，末尾无 RC 标签）＋`gates_arch01_c.txt`／`gates_arch01_d.txt`／`gates_arch01_e.txt`／`gates_arch01_f.txt`（各 7835 B＝同一本体＋`GATES_RC=1`；c／d 在两份文档初稿后、e／f 在末轮措辞后复跑；六遍本体 md5 `89a4b43f53f8f07120ac97a4ea39d284`）／`run_gates_arch01_cd.sh`（两遍驱动）／`mutation_arch01.result.txt`（1996 B）／`unit_arch01.txt`（整树跑批）。变异驱动已挪出仓根，存为 `E:\tmp\mutate_arch01.py`，仓内不留未跟踪件。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `025616d`（本批五份文件：`af_service.py` 一处站点＋`.gates-baseline.txt` 按门禁自报过期删 1 条（86 行／83 条 ⇒ 85 行／82 条）＋`check_gates_coverage.py` 判据 ⑦ 与三条射程下限＋判据两份 44 条腿（新 13 条）；八案变异副本树量：M0／M99b 全绿、六案被杀；AST 全量 98→97、error 1→0、except-pass-broad 20→19 ⇒ HEAD 上那条"98 > 上限 97"的棘轮红转绿，**`.gates-tally.txt` 未动一个数字**；门禁六遍（a／b 落码后、c／d 两份文档初稿后、e／f 末轮措辞后）本体逐字节相同 7824 字节／md5 `89a4b43f53f8f07120ac97a4ea39d284`，`GATES_RC=1` 的两枚红仍是登录线在途的 `af_api.py:984/:1005`，棘轮站现读 `全量违规 97 条 / 登记上限 97 条`；整树 `6 failed, 3028 passed, 43 skipped`，六条全部同名同因归登录线；未推 GitHub——推要 owner 点头）

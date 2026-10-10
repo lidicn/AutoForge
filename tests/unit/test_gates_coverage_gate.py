@@ -4,12 +4,14 @@
 （`bash gates.sh` 的**下一步**、前置完全相同），`gates.sh` 里没有 ⇒ 本机绿、推上去 CI 红。那种不对称
 不会让任何东西变红，只会让"该红的不红"。本门把"盘上的门 = 某条链真跑过的门"钉成静态判据。
 
-六条判据各自单独可红：① 漏跑（盘上有、两条链都不跑）② 远端有本机没有（工作流引用而 `gates.sh` 没跑、
+七条判据各自单独可红：① 漏跑（盘上有、两条链都不跑）② 远端有本机没有（工作流引用而 `gates.sh` 没跑、
 又没豁免）③ 豁免过期（登记了却没工作流引用）④ 豁免空理由 ⑤ 豁免理由的锚点核对不住（点名的作业没在引用
 这个脚本 / 没有路径锚点 / 路径是编的）⑥ `gates.sh` 的 `echo "…"` 文案里有**未转义反引号**（bash 会把那段
-当命令替换执行一遍，打印的不是作者写的那句话，而退出码照旧对——⑤ 抓到过真猎物，见 §二之五十二）。
+当命令替换执行一遍，打印的不是作者写的那句话，而退出码照旧对——⑤ 抓到过真猎物，见 §二之五十二）
+⑦ 基线里有关键模块的硬错误条目（`.gates.toml` 的名单与 `.gates-baseline.txt` 的欠债台账互相矛盾，§二之九十五）。
 反空洞档同样单独可红：读不到 `gates.sh`／读不到 `workflows/`／盘上 0 个脚本／`gates.sh` 里 0 条调用／
-引用了盘上不存在的脚本／工作流数不出任何一个 job／`gates.sh` 里 `echo "` 行数掉到下限以下 ⇒ 一律 `exit 2`，
+引用了盘上不存在的脚本／工作流数不出任何一个 job／`gates.sh` 里 `echo "` 行数掉到下限以下／
+`.gates.toml` 解析不了／`.gates-baseline.txt` 不在盘上／`critical_globs` 数不出任何一条 ⇒ 一律 `exit 2`，
 "没有发现"不等于"没有问题"。
 
 本文件最要害的一族是**注释不算覆盖**：往工作流里加一行 `# 见 check_x.py`、或把 `gates.sh` 的调用行
@@ -70,6 +72,15 @@ GOOD_REASON = "跑在 `layering` 独立作业：前置差见 `anchor.txt`"
 #: 哨兵：这一档要的是「workflows/ 目录根本不存在」，不能和 None（= 用默认最小工作流）混用。
 NO_DIR = object()
 
+#: 哨兵：判据 ⑦ 的台账「文件根本不在盘上」（≠ 空字符串=有文件但零条目）。
+NO_LEDGER = object()
+
+#: 沙箱名单：只有一格，且那一格对应的模块沙箱里并不存在——⑦ 判的是"基线条目的路径命中名单"，
+#: 它读的是台账本身，不需要源文件在场（这正是它能当"两本台账对账"用的原因）。
+TOML_MIN = 'critical_globs = [\n    "src/pkg/critical.py",\n]\n'
+#: 沙箱基线默认条目：同一条规则，但模块**不在名单里** ⇒ 不该红（红了就等于逼着把名单抄成"全部模块"）。
+BASELINE_MIN = "src/pkg/innocent.py#except-pass-broad#f\n"
+
 
 def _module():
     spec = importlib.util.spec_from_file_location("check_gates_coverage", SCRIPT)
@@ -97,8 +108,14 @@ def _tree(
     gates_sh: str | None = GATES_A,
     workflows: dict[str, str] | None = None,
     exempt: dict[str, str] | None = None,
+    gates_toml: str = TOML_MIN,
+    gates_baseline: str = BASELINE_MIN,
 ) -> None:
-    """搭一棵假仓：scripts/ + gates.sh + .github/workflows/，然后把模块的射程指过去。"""
+    """搭一棵假仓：scripts/ + gates.sh + .github/workflows/，然后把模块的射程指过去。
+
+    判据 ⑦ 需要两份台账才有射程，缺文件会被判 `exit 2`（"读不到"≠"没问题"），所以沙箱默认就带上：
+    名单里只有 `src/pkg/critical.py`，默认基线里那条是**名单外**模块的 ⇒ 既有各档测试照旧走它们自己的判红路径。
+    """
     if workflows is None:
         workflows = {"ci.yml": WF_MIN}
     if exempt is None:
@@ -118,11 +135,19 @@ def _tree(
     mod = _module()
     # 判据⑤ 的路径锚点按 PATH_ROOT 核对：沙箱树里写一个真文件，并把根指到沙箱。
     (tmp_path / "anchor.txt").write_text("前置差锚点（合成）\n", encoding="utf-8")
+    toml_p = tmp_path / ".gates.toml"
+    if gates_toml is not NO_LEDGER:
+        toml_p.write_text(gates_toml, encoding="utf-8")
+    base_p = tmp_path / ".gates-baseline.txt"
+    if gates_baseline is not NO_LEDGER:
+        base_p.write_text(gates_baseline, encoding="utf-8")
     for attr, value in (
         ("GATES_SH", gates),
         ("WORKFLOWS", wf_dir),
         ("SCRIPTS", scripts_dir),
         ("PATH_ROOT", tmp_path),
+        ("GATES_TOML", toml_p),
+        ("GATES_BASELINE", base_p),
     ):
         monkeypatch.setattr(mod, attr, value)
     if exempt is not None:
@@ -542,3 +567,89 @@ def test_bash_really_runs_the_loose_backticks_and_prints_something_else():
     assert escaped.returncode == 0, escaped.stderr
     assert "docs/plan" in escaped.stdout, escaped.stdout
     assert escaped.stderr == "", escaped.stderr
+
+
+# ── 判据 ⑦：基线里有硬错误条目（§二之九十五 / 第六轮审计 ARCH-01）──────────
+#
+# 起因是两本台账的直接对账：`.gates.toml` 的 `critical_globs` 段开头写着"这里的
+# `except Exception: pass` 是硬错误，不许进基线"，而基线里就躺着一条
+# `src/autoforge/af_service.py#except-pass-broad#health`。扫描器按名单把它升成 error，
+# 基线又按指纹把它吸收掉 ⇒ 门禁照绿、口径照说"不许"。下面这几条腿钉的是"下一次别再靠人翻台账发现"。
+
+def test_baseline_entry_inside_critical_list_goes_red(tmp_path, monkeypatch):
+    """名单里有这个模块、基线里也有它的 `except-pass-broad` ⇒ 两本台账互相矛盾，必须红。"""
+    _tree(tmp_path, monkeypatch,
+          gates_baseline="src/pkg/critical.py#except-pass-broad#health\n")
+    rc, out = _run(_tree.mod)
+    assert rc == 1 and "硬错误条目" in out, out
+    assert "src/pkg/critical.py#except-pass-broad#health" in out, out
+
+
+def test_other_rule_in_critical_module_is_not_red(tmp_path, monkeypatch):
+    """同模块、别的规则 ⇒ 不许红：名单今天只对 `except-pass-broad` 升 error（`scan.py:177`）。
+    红了就等于把整张名单读成"关键模块一律不许进基线"，那会一次红掉一堆合法存量，
+    逼出来的动作是**抄小名单**——正好是 ARCH-09 点名要防的方向。"""
+    _tree(tmp_path, monkeypatch,
+          gates_baseline="src/pkg/critical.py#fake-ok-const#save\n")
+    rc, out = _run(_tree.mod)
+    assert rc == 0, out
+
+
+def test_fingerprint_without_function_suffix_goes_red(tmp_path, monkeypatch):
+    """指纹第三段（函数限定名）可缺 ⇒ 只按前两段判。按"必须三段"判会漏掉一整族写法。"""
+    _tree(tmp_path, monkeypatch, gates_baseline="src/pkg/critical.py#except-pass-broad\n")
+    rc, out = _run(_tree.mod)
+    assert rc == 1 and "硬错误条目" in out, out
+
+
+def test_missing_gates_baseline_exits_2(tmp_path, monkeypatch):
+    """没有欠债台账 ⇒ 没有可对账的东西，`exit 2` 而不是"一条都没命中"的假干净。"""
+    _tree(tmp_path, monkeypatch, gates_baseline=NO_LEDGER)
+    rc, out = _run(_tree.mod)
+    assert rc == 2 and "欠债台账" in out, out
+
+
+def test_empty_critical_globs_collapses_the_range(tmp_path, monkeypatch):
+    """名单空着 ⇒ 基线一条都不会命中，那是空集给的干净，`exit 2`。"""
+    _tree(tmp_path, monkeypatch, gates_toml="critical_globs = [\n]\n", gates_baseline="")
+    rc, out = _run(_tree.mod)
+    assert rc == 2 and "没有射程" in out, out
+
+
+def test_unparsable_gates_toml_exits_2(tmp_path, monkeypatch):
+    """配置文件读得出字节但解析不了 ⇒ 也算射程塌，不能退回"名单为空所以全绿"。"""
+    _tree(tmp_path, monkeypatch, gates_toml="critical_globs = [oops\n")
+    rc, out = _run(_tree.mod)
+    assert rc == 2 and "解析不了" in out, out
+
+
+def test_self_test_fails_when_baseline_detector_is_blind(tmp_path, monkeypatch):
+    """`--self-test` 也必须验得出 ⑦ 这一档瞎了（七档注入少一档就是少一档）。"""
+    mod = _green_tree(tmp_path, monkeypatch)
+    monkeypatch.setattr(mod, "baseline_critical_problems", lambda cfg: [])
+    rc, out = _run(mod, ("--self-test",))
+    assert rc == 1 and "基线命中关键模块" in out, out
+
+
+def test_real_repo_baseline_is_clean_and_has_range():
+    """真仓读数：两本台账都非空，且现在一条都不命中——"干净"必须是数出来的，不是空集给的。"""
+    mod = _module()
+    cfg = mod._load_gate_config(mod.GATES_TOML, mod.GATES_BASELINE)
+    assert cfg.critical_globs and cfg.baseline, (len(cfg.critical_globs), len(cfg.baseline))
+    assert any("af_service.py" in g for g in cfg.critical_globs), cfg.critical_globs
+    assert mod.baseline_critical_problems(cfg) == []
+
+
+def test_the_historical_arch01_fingerprint_is_red_against_the_real_list(tmp_path):
+    """把 ARCH-01 当时那条**真指纹**注回沙箱、名单取真仓那份 ⇒ 必须红。
+
+    这一条打在"名单来自真仓"上：合成名单验的是形状，真名单验的是 glob 语义对得上
+    （`src/autoforge/af_service.py` 这种整路径、`src/autoforge/af_ir/*` 这种带星号的两档）。
+    """
+    mod = _module()
+    shutil.copyfile(ROOT / ".gates.toml", tmp_path / ".gates.toml")
+    baseline = tmp_path / ".gates-baseline.txt"
+    baseline.write_text("src/autoforge/af_service.py#except-pass-broad#health\n", encoding="utf-8")
+    cfg = mod._load_gate_config(tmp_path / ".gates.toml", baseline)
+    problems = mod.baseline_critical_problems(cfg)
+    assert len(problems) == 1 and "af_service.py" in problems[0], problems
