@@ -220,8 +220,10 @@ class TickSupervisor:
 
     # ---- 健康 ----
     def health_state(self, stall_after_s: float = 30.0) -> str:
-        """供 /health 观测。主线程 watchdog（`af_live.tick_watchdog_pass`）**仅**在意外终止时重启本线程；
-        SAFE HALT（`safe_halt`）绝不自动重启——需人工 resume（D1 方案 C，DCD 20261001）。"""
+        """供 /health 观测。**这一格今天读得出原因、读不出补救**：`af_live.tick_watchdog_pass`
+        在 `src/` 内**没有调用者**（只有测试在跑），所以本线程意外死亡**不会**被自动重启——
+        SAFE HALT 绝不自动重启那条安全红线（D1 方案 C，DCD 20261001）因此今天也还没有运行期消费者。
+        接线与否归 DCD 结案（裁定 `20261010-AF与DB与DPP十件` §六 Q3）。"""
         if self._health.halted:
             return "safe_halt"
         if self._health.consecutive_failures:

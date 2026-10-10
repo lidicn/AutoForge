@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import secrets
+import socket
 import threading
 import time
 import uuid
@@ -2456,48 +2457,195 @@ def list_watches(store_root: str | None = None) -> dict[str, Any]:
     return {"ok": True, "watches": watches, "total": len(watches)}
 
 
-def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[str, Any]:
-    """停止正在跑的 watch 进程。
+#: `start_watch` 探测 sidecar 的退避表（秒）。旧实现是固定 15×1 秒：绝大多数成功启动在数百毫秒
+#: 内就写出 sidecar，1 秒的粒度既让成功路径白等，又让失败路径在 Starlette 的同步线程池里占满
+#: 15 秒（审计 BUG-05）。表长仍 15 次、总预算 11.9 秒——**首次探测提前到 0.1 秒**才是这一格的要点。
+_WATCH_PROBE_DELAYS_S: tuple[float, ...] = (0.1, 0.2, 0.3, 0.5, 0.8) + (1.0,) * 10
+_WATCH_PROBE_TOTAL_S = sum(_WATCH_PROBE_DELAYS_S)
 
-    P1-19 修复：用 PID 文件精确终止（不用 /proc 模式匹配，避免误伤无关进程）。
+#: `stop_watch` 发完 SIGTERM 后等待协调锁空闲的退避表（总预算 ≈4.4 秒）。
+_WATCH_EXIT_WAIT_S: tuple[float, ...] = (0.1, 0.2, 0.3, 0.5, 0.8, 1.0, 1.0, 1.0)
+_WATCH_EXIT_WAIT_TOTAL_S = sum(_WATCH_EXIT_WAIT_S)
+
+
+def _owner_pid_from_sidecar(owner: str) -> "tuple[str, int] | None":
+    """把 sidecar 的 `owner`（`{hostname}-{pid}-{uuid8}`，见 `af_flock.owner_id`）拆成 (主机, PID)。
+
+    **从右往左拆**：主机名本身可以含 `-`（`NAS-Server` 这类），只有尾两段的形状是稳的
+    ——uuid 片段 8 位十六进制、PID 纯数字。拆不出 = 身份未知 = 不许按 PID 动刀。
+    """
+    parts = str(owner).rsplit("-", 2)
+    if len(parts) != 3:
+        return None
+    host, pid_str, tail = parts
+    if not pid_str.isdigit() or not re.fullmatch(r"[0-9a-f]{8}", tail):
+        return None
+    return host, int(pid_str)
+
+
+def _verified_pid(pid_file: Path, holder: Mapping[str, Any]) -> "tuple[int | None, str]":
+    """读 PID 文件并核验它现在指向的**就是** sidecar 记录的那个 watcher。
+
+    返回 `(可杀的 PID | None, 理由)`。理由永远非空，`"verified"` 是唯一可杀的那一格。
+    """
+    if not pid_file.exists():
+        return None, "no_pid_file"
+    try:
+        raw = pid_file.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        return None, f"pid_file_unreadable({exc})"
+    if not raw.isdigit():
+        return None, f"pid_file_not_a_number({raw!r})"
+    pid = int(raw)
+    identity = _owner_pid_from_sidecar(str(holder.get("owner", "")))
+    if identity is None:
+        return None, "sidecar_identity_missing"
+    host, owner_pid = identity
+    if owner_pid != pid:
+        return None, f"pid_mismatch_with_sidecar(pid_file={pid},sidecar={owner_pid})"
+    if host != socket.gethostname():
+        # 共享盘上的 PID 文件对**本机**没有意义：容器里的小 PID 在宿主机上是别的进程。
+        return None, f"pid_belongs_to_another_host(sidecar_host={host},this_host={socket.gethostname()})"
+    return pid, "verified"
+
+
+def _cleanup_watch_files(*, info: Path, pid_file: Path) -> dict[str, Any]:
+    """删诊断件（sidecar + PID 文件），**不碰锁文件**；失败逐条具名报出，不再 `pass`。"""
+    removed: dict[str, bool] = {}
+    errors: list[str] = []
+    for label, path in (("sidecar", info), ("pid_file", pid_file)):
+        if not path.exists():
+            removed[label] = False
+            continue
+        try:
+            path.unlink()
+            removed[label] = True
+        except OSError as exc:
+            removed[label] = False
+            errors.append(f"{label}:{type(exc).__name__}")
+    return {"sidecar_removed": removed.get("sidecar", False),
+            "pid_file_removed": removed.get("pid_file", False),
+            "lock_file_kept": True,
+            "errors": errors}
+
+
+def _lock_is_free(lock: Path) -> bool:
+    """协调锁现在**没有**被别的进程持有 ⇒ True（内核真值，不是猜）。
+
+    用 `FileLock.held_by_other()`：另开一个句柄去探，拿得到就是空的。锁文件不存在也算空——
+    并且**不去创建它**（探测本身不该在盘上留东西）。
+
+    射程：只看**跨进程**的持有。`af_flock._LOCAL_HELD` 会让本进程自己持着的锁短路报"没被占"
+    （那是 serve 不把"生产写者在线"读成"别人在写"的同一枚设计），所以这条不是通用的"锁有没有人
+    持着"探针。`stop_watch` 用它是对的：协调锁的持有者从来是 watcher 子进程，不是本进程。
+    """
+    if not lock.exists():
+        return True
+    return not FileLock(lock, timeout=0.0).held_by_other()
+
+
+def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[str, Any]:
+    """停止正在跑的 watch 进程：先核验身份 → 发 SIGTERM → 等协调锁真的空闲 → 才清诊断件。
+
+    第六轮审计 BUG-04／BUG-06 两格都收在这里，口径如下：
+
+    - **不再 unlink `watch.lock`**。锁挂在打开的文件描述符上（`af_flock.FileLock`：POSIX
+      `flock`／Windows `msvcrt.locking`），删文件从来不是释放锁的手段。删了之后新 watcher 会在
+      同一路径新建一个 inode 并"拿锁成功"，而旧 watcher 仍持着旧 inode 的锁——两个 watcher 同时
+      监听，正是 `WatchCoordinator` 声称要防住的局面，而且没有任何日志会记录这次失效。
+    - **不再按裸 PID 动刀**。PID 会被复用，命中复用后的无关进程就是不可撤销的误杀（Windows 上
+      `os.kill(pid, 15)` 等价于 `TerminateProcess`，目标连忽略的机会都没有）。身份来源用系统
+      自己的信号：sidecar 的 `owner` 里就带着 `{hostname}-{pid}-{uuid8}`，两处对不上就拒杀。
+    - **等目标真的退场再收尾**：发完信号后轮询协调锁是否已空闲（内核真值），仍被持着就报
+      `exit_unconfirmed` 并把文件留着，让下一个 `start_watch` 还能读出持有者。
+      刻意**不**升级成 SIGKILL：身份已核验，但对方可能正在写持久化，强杀会把在途写入丢在半截。
+    - **清理失败必须看得见**：旧实现那句 `except OSError: pass` 让"停成功且清干净"与
+      "停成功但什么都没清"对外表现逐字相同。现在 `cleanup` 那一格具名报出。
+
+    Windows 上本函数只能走到"核验 + 发信号"：`os.kill` 在这里是强杀、没有优雅收尾可言，
+    所以这条链路的真机语义在 POSIX（docker 面）上才完整——不在这里假装两边一样。
     """
     root = Path(store_root) if store_root else Path(".forge")
     lock = root / "watch.lock"
     info = root / "watch.lock.info"
     pid_file = root / "watch.pid"
     # 读当前持有者
-    holder = {}
+    holder: dict[str, Any] = {}
     try:
         holder = json.loads(info.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         pass
     if owner and holder.get("owner") and holder["owner"] != owner:
         return {"ok": False, "error": f"当前持有者 {holder['owner']} 与请求 {owner} 不符"}
-    # P1-19：读 PID 文件精确终止
-    killed = False
+
+    pid, identity = _verified_pid(pid_file, holder)
+    if pid is None:
+        # 没核验过就不动刀，也一个文件都不删：现场留着才读得懂为什么没停成。
+        hint = (
+            "watcher 是手工 `forge watch` 起的（没有 PID 文件）：请对它自己 Ctrl+C，"
+            "或对持有进程发信号——服务层不再猜 PID"
+            if identity == "no_pid_file"
+            else "PID 文件与 sidecar 记录对不上：先按 `watch.lock.info` 查明持有者，再决定"
+        )
+        return {
+            "ok": False,
+            "reason": "refused_to_kill",
+            "why": identity,
+            "stopped": holder.get("owner", ""),
+            "graph": holder.get("graph", ""),
+            "hint": hint,
+            "cleanup": {"sidecar_removed": False, "pid_file_removed": False,
+                        "lock_file_kept": True, "errors": []},
+        }
+
+    already_gone = False
     try:
-        if pid_file.exists():
-            pid_str = pid_file.read_text(encoding="utf-8").strip()
-            if pid_str:
-                pid = int(pid_str)
-                try:
-                    os.kill(pid, 15)  # SIGTERM
-                    killed = True
-                except (ProcessLookupError, PermissionError):
-                    pass
-    except (OSError, ValueError) as e:
-        return {"ok": False, "error": f"停止 watch 失败: {e}"}
-    # 清 sidecar
-    try:
-        if info.exists():
-            info.unlink()
-        if lock.exists():
-            lock.unlink()
-        if pid_file.exists():
-            pid_file.unlink()
-    except OSError:
-        pass
-    return {"ok": killed, "stopped": holder.get("owner", ""), "graph": holder.get("graph", "")}
+        os.kill(pid, 15)  # SIGTERM
+    except ProcessLookupError:
+        already_gone = True
+    except PermissionError as exc:
+        return {
+            "ok": False,
+            "reason": "kill_not_permitted",
+            "why": str(exc),
+            "pid": pid,
+            "stopped": holder.get("owner", ""),
+            "graph": holder.get("graph", ""),
+            "cleanup": {"sidecar_removed": False, "pid_file_removed": False,
+                        "lock_file_kept": True, "errors": []},
+        }
+
+    exit_state = "exited" if already_gone else "unconfirmed"
+    if not already_gone:
+        for wait_s in _WATCH_EXIT_WAIT_S:
+            time.sleep(wait_s)
+            if _lock_is_free(lock):
+                exit_state = "exited"
+                break
+        else:
+            exit_state = "exit_unconfirmed"
+    cleanup = _cleanup_watch_files(info=info, pid_file=pid_file) if exit_state == "exited" else {
+        "sidecar_removed": False,
+        "pid_file_removed": False,
+        "lock_file_kept": True,
+        "errors": [],
+    }
+    result: dict[str, Any] = {
+        "ok": exit_state == "exited",
+        "stopped": holder.get("owner", ""),
+        "graph": holder.get("graph", ""),
+        "pid": pid,
+        "identity": identity,
+        "exit": exit_state,
+        "cleanup": cleanup,
+    }
+    if exit_state == "exit_unconfirmed":
+        result["reason"] = "exit_unconfirmed"
+        result["error"] = (
+            f"已向 PID {pid} 发 SIGTERM，但协调锁在 {_WATCH_EXIT_WAIT_TOTAL_S:.1f} 秒预算内仍被持着"
+            "——watcher 还在收尾（或信号被平台吞了）。诊断件一律保留，**没有**再动锁文件。"
+        )
+    return result
 
 
 def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) -> dict[str, Any]:
@@ -2505,21 +2653,35 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
 
     P1-19 修复：
     - HA 令牌经环境变量 AUTOFORGE_HA_TOKEN 传递（不出现在 /proc/pid/cmdline）
-    - 用 PID 文件精确终止旧进程（不用 pkill -f 模式匹配）
+    - 用 PID 文件精确终止旧 watch（不用 pkill -f 模式匹配）
     - 返回值基于真实健康探测（子进程 poll）
+
+    第六轮审计 BUG-05／BUG-06 追加两格：
+    - 探测改成退避表 `_WATCH_PROBE_DELAYS_S`（首次 0.1 秒，合计 11.9 秒）。固定 1×15 秒的旧写法
+      让成功路径至少白等 1 秒、失败路径把一个同步线程池工位占满 15 秒。
+    - 停旧 watch 前先核验 PID 身份（`_verified_pid`）；核验不过就**不杀**，由新 watcher 自己去
+      抢协调锁，抢不到就如实回 `coord_lock_held_by_other`（带 `previous_watch` 说明没杀成的原因）。
+      "端点立刻返回 job id、由前端轮询"那一半要改 HTTP 面（`af_api.py`），不在这次的射程内。
     """
     import subprocess
     import tempfile
     root = Path(store_root) if store_root else Path(".forge")
     pid_file = root / "watch.pid"
-    # P1-19：先停旧 watch（读 PID 文件精确终止）
+    # 先停旧 watch：**只在 PID 与 sidecar 身份核验一致时**才发信号（审计 BUG-06）。
+    # 核验不过就一律不杀，让新建的 watcher 自己去抢协调锁——抢不到会如实回
+    # `coord_lock_held_by_other`，这比"照着盘上的数字动刀"安全，因为那个数字随时可能是别人。
+    previous_holder: dict[str, Any] = {}
     try:
-        if pid_file.exists():
-            pid_str = pid_file.read_text(encoding="utf-8").strip()
-            if pid_str:
-                os.kill(int(pid_str), 15)
-    except (ProcessLookupError, PermissionError, OSError, ValueError):
+        previous_holder = json.loads((root / "watch.lock.info").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         pass
+    old_pid, old_pid_identity = _verified_pid(pid_file, previous_holder)
+    if old_pid is not None:
+        try:
+            os.kill(old_pid, 15)  # SIGTERM
+        except (ProcessLookupError, PermissionError, OSError):
+            old_pid_identity = "old_watch_signal_failed"
+    previous_watch = {"pid": old_pid, "identity": old_pid_identity}
     # 写 IR 到临时文件
     tmp = Path(tempfile.mkdtemp(dir=str(root))) / "deployed_ir.json"
     # 走原子助手：这份 IR 随后被独立进程读取，崩在半截会让部署侧读到半个图
@@ -2545,18 +2707,22 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
     child_env = dict(os.environ)
     if ha_token:
         child_env["AUTOFORGE_HA_TOKEN"] = ha_token
+    # 日志句柄在**父进程侧**必须关掉（审计 BUG-14）：`Popen` 已经把 fd 复制给子进程，父进程再
+    # 持着一份只会让 Windows 上的 watch.log 无法轮转/删除，而 `Popen` 抛错的异常路径原来连
+    # 引用计数回收都走不到。
     try:
-        logf = (root / "watch.log").open("ab")
-        proc = subprocess.Popen(
-            cmd,
-            stdout=logf,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-            env=child_env,
-        )
+        with (root / "watch.log").open("ab") as logf:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                env=child_env,
+            )
     except Exception as e:
         return {"ok": False, "error": f"启动 watch 失败: {e}"}
-    # P1-19：写 PID 文件（供 stop_watch 精确终止）
+    # 写 PID 文件（供 `stop_watch` 用）。内容仍是裸数字——**可信身份不在这里**，而在 sidecar 的
+    # `owner`（`{hostname}-{pid}-{uuid8}`）：停之前两边必须对得上，见 `_verified_pid`。
     try:
         pid_file.write_text(str(proc.pid), encoding="utf-8")
     except OSError:
@@ -2576,8 +2742,8 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
     # 它不在这格的射程内——那一档下发完就退出，不监听。
     tier = "dry_live" if "--dry-live" in cmd else "live_unconfirmed"
     other: dict[str, Any] = {}
-    for _ in range(15):
-        time.sleep(1)
+    for delay_s in _WATCH_PROBE_DELAYS_S:
+        time.sleep(delay_s)
         # P1-19：子进程已死 → 立即返回失败（不再假成功）
         exited = proc.poll() is not None
         try:
@@ -2605,7 +2771,7 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
                 "error": f"watch 子进程启动后立即退出（exit_code={proc.returncode}），请检查 watch.log",
                 "holder": other or None,
             }
-    # 15 秒到：分三种如实结论
+    # 退避表跑完（合计 `_WATCH_PROBE_TOTAL_S` 秒）：分三种如实结论
     if proc.poll() is not None:
         return {
             "ok": False,
@@ -2623,10 +2789,15 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
             ),
             "pid": proc.pid,
             "holder": other,
+            # 上一条 watch 有没有被停掉，如实带出来：核验不过就是没杀，别让它读成"已经清了"。
+            "previous_watch": previous_watch,
         }
     return {
         "ok": False,
         "reason": "not_registered",
-        "error": "子进程仍在跑，但 15 秒内没写出自己的 sidecar——**不能证明它在监听**（旧版本这里回 ok=true）",
+        "error": (
+            f"子进程仍在跑，但 {_WATCH_PROBE_TOTAL_S:.1f} 秒内没写出自己的 sidecar"
+            "——**不能证明它在监听**（旧版本这里回 ok=true）"
+        ),
         "pid": proc.pid,
     }

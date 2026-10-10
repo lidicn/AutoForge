@@ -18,7 +18,7 @@
 | 第 3 步 F9 group 节点 | **①②③④ 已交付** | schema 先行（铁律 #1），原子回滚把手修在 `0dd57b2`、其回归测试在 `34a540c`；验收点按点复测：group 三文件分跑 **`31 passed` RC=0**，④ 的"全回滚、无半部署态"由 `test_af_ir_group_apply.py:91` 钉住（§二之十三） |
 | 第 4 步 MCP 工具面 | **①②③ 已交付** | ① 命名口径按裁定 ①A 以 AF 现名为准（计划文档已改口径，正式重发由 DCD 出）；② 加 `channel_error` 判别字段（③A）；③ 契约测试分跑 **`5 passed` + `14 passed` RC=0**（队列侧 14 ≥ 计划写的 13，§二之十三） |
 | 裁定 20261002 · AF 侧六件 | **①A ②A(部分) ③A ④A 已落地；StateProvider B 排队；合并窗后验收未做** | ②A 的 `instance_id` 删除时点 = AF v2.6，本轮不删；窗口后验收需**一台真 broker**——本机 `MQTT_HOST` 未配、无 `docker`/`mosquitto`（先前记的"本机无 paho-mqtt"是跑错解释器的结论，实测 `paho_available()=True`，更正见 §二之二十五）。四件已固化成一条命令 `scripts/verify_adm_window.py`（三态结论，缺项退出码 2 而不是 0）|
-| 第 5 步 后续优化三项 | **①③④ 已交付；② 经 DCD 判"追加写"那一子句不适用** | ① 单写者租约降级只读、③ import-linter 分层两档、④ tick 线程自愈，逐条 file:line 见 §一；① 的**接缝判据**（serve 抢不到锁 ⇒ `build_app(readonly=True)`）本批补上，两次变异各取到红（§二之十三）；② af_persist 的「顺序追加」子句此前登记为"只落半边、等 DCD 定性"（§五 第 9 件），**裁定 20261004 §一 4 判 A：该子句对 `af_persist` 不适用**（三条理由与 AF 的论证一致：与"不改格式头"相抵 / 与第五轮有界化反向 / 重放友好已被校验和+损坏段跳过+原子替换覆盖）。按裁定执行口径，本仓记录已就地标注"经 DCD 判定不适用"（§二之三十 第五节），`af_persist.py` 一个字节未动 |
+| 第 5 步 后续优化三项 | **①③④ 已交付；② 经 DCD 判"追加写"那一子句不适用**（④ 于 2026-10-10 现读收窄成"函数与测试已交付、**接线未交付**"，见 §一 ④ 行末补记与 §二之九十三 第 五 节） | ① 单写者租约降级只读、③ import-linter 分层两档、④ tick 线程自愈，逐条 file:line 见 §一；① 的**接缝判据**（serve 抢不到锁 ⇒ `build_app(readonly=True)`）本批补上，两次变异各取到红（§二之十三）；② af_persist 的「顺序追加」子句此前登记为"只落半边、等 DCD 定性"（§五 第 9 件），**裁定 20261004 §一 4 判 A：该子句对 `af_persist` 不适用**（三条理由与 AF 的论证一致：与"不改格式头"相抵 / 与第五轮有界化反向 / 重放友好已被校验和+损坏段跳过+原子替换覆盖）。按裁定执行口径，本仓记录已就地标注"经 DCD 判定不适用"（§二之三十 第五节），`af_persist.py` 一个字节未动 |
 | 裁定 20261004 §一 · AF 四件 | **① ② ③ 已落地；④ 是标注动作，已标注** | 件 1 租约纳入 MCP 真机写（只 check 不 acquire + `READONLY_DEGRADED:` 前缀，9 条判据五档变异见 §二之二十九）；件 2 `trace_id` 判事件级并写进口径注释、`node_id` 删（键集判据 B-1 单条红）；件 3 有界缓存注册表门禁上线为 CI 硬门（21 条反例 + 三档真实仓变异各 `RC=1` 各只 1 处判红，§二之三十）；件 4 见上一行。**四条里有两条半是"AF 前提与裁定不符"**：存量不是 5 处而是"扫到 76 / 双腿齐全 2"，裁定的两个误报候选连这 76 都不进——已按实测落并把差异回投 DCD（§五 第 15 件），没有为凑"5 处"去给 cap-only 那批造 TTL 腿（那是裁定自己驳回的 C）。**契约表侧另有四行要 DCD 动手**（前缀登记、`trace_id` 事件级口径、`node_id` 从 §1.2 删、有界缓存不属跨仓契约），AF 不代编 |
 | 裁定 20261004 §一/§二（18:35 那份，回答上一件 §五 续查三问）· AF 侧今日四件 | **① ② ③ ④ 今日落地；⑤ ⑥ ⑦ 各因由推后**（见 §二之三十五 第一节切分表） | 今日落：Q1 长期码可配绝对上限（默认 180 天，`AUTOFORGE_AUTH_LONGCODE_TTL_DAYS`，非正数=显式关；**期限由 `created_at` 推导 ⇒ 盘上历史码不迁移也会到期**）+ `list()` 给"距生成多久/还剩多久"且与 `validate()` 同源；F-1 `GET /api/asks/pending` 加 `Depends(_read)`；F-2 明文样例凭据出产品码（判据扫 src 全集）；Q2=B `paho-mqtt>=1.6,<2.1` 两处声明钉上界；§五 追认侧 `insight_id` 成去重与回灌键；README 写死"只在可信 LAN"这条部署前提。**另盘出一条不是审计 finding 的洞**：`af_auth` 五处落盘站点全是裸 `write_text`，而 `_load_*` 把 `JSONDecodeError` 吞成"文件不存在" ⇒ **半截的撤销名单 = 已撤销的令牌复活（fail-open）**，写侧补私有原子助手（本模块 L0，不能引 `af_store`）、读侧分开"在但读不成"与"不在"并置位保持到进程重启。**推后与理由**：MCP 未设令牌默认拒绝（默认结论翻转级：49 处 `dispatch(` 测试调用点 + `dispatch()` 默认值本身，单独一批）、F-3（两棵 UI 树消费明文列表，须连前端改并做浏览器验证）、F-2 的 UI 半边、Q3 真机演练与窗后四项/NAS 重烤（合并窗，Q1=A 明写本窗只重烤**不开开关**）、compose 那句"可信 LAN"注释（铁律 #3，NAS 部署者持有那份）。**前提差已回投**：裁定那句"write 域含 read"在 HEAD 上不成立（`requires()` 逐名比对、契约行只给 POST 标鉴权、homesdk 里 `autoforge_api_token` 0 命中），AF 落单向蕴含表而非照字面打断 ask 通道。读数与变异表见 §二之三十五 |
 | "写好了没人按"那一族（计划外补刀，注册表项的 test 出处就在这里） | **已交付两处，第三次被自家既有判据驳回** | 盘点"只增不减"时实测两处**函数完整、调用方为零**：`FireRecorder.sweep()`（`keep_days=3` + 3600s 节流）全仓唯一调用方是测试里那句 `sweep(force=True)` ⇒ `fire_log.json` 的 day 维度按天只增不减；`UndoStore.purge_expired()` `grep -rn purge_expired src` 只命中定义 ⇒ `undo_log.json` 随部署数单调增长。修法分别挂进 `Runtime.tick()`（**不带 force**，否则节流被旁路、逐 tick 变逐 tick 扫盘重写）与 `record()` 写侧。后者这里有一次**被既有判据驳回的设计**：第一版"打开即清"在全量跑当场红了 `test_af_undo_http.py::test_undo_refuses_expired_window_via_http`（`KeyError: 'expired'`）——那会让 `/api/undo/{deploy_id}` 对超窗记录回 404，把"过期撤不了"和"没这条"混成同一个答复。回收点因此挪进写路径，判据形状按本仓口径三段（先证 harness 真会写、再证纯写也被回收、最后证没超窗的还在）。两腿变异各 `rc=1 1 failed`，另把 `expire_stale()` docstring 里那句撒谎的"或超配额"改掉（配额管能不能再触发，不管字典留几条）。见 §二之三十 第四节 |
@@ -177,7 +177,7 @@ to_house_iso(0) → 1970-01-01T08:00:00        RC=0
 | ① 单写者租约，抢不到锁降级只读（裁定 A） | serve 启动 `try_acquire` 失败→只读 | `src/autoforge/af_cli.py:1366` `readonly = not _lock.try_acquire()` → `:1376` 传给 `build_app(..., readonly=readonly)`；`af_api.py:357-362` `_readonly_guard`，挂在 `:465 /api/build`、`:473 /api/bind`、`:481 /api/sim`、`:545 /api/spec/compile`、`:714 /api/live/run`、`:735 /api/undo/{deploy_id}`（铁律 #6 写面 503）。**接缝判据本批补上**（此前两端各自有测试、中间那根线一条判据都没有）：`tests/unit/test_af_cli_serve_lease.py` 两条，桩 `uvicorn`/`build_app`/桥，锁分别返回 `False`/`True` ⇒ 断言 `build_app` 收到的 `readonly` 为 `True`/`False`；两次变异各取到红（`readonly=False` ⇒ `1 failed` `assert False is True` @ `:70` RC=1；`readonly=True` ⇒ `1 failed` `assert True is False` @ `:81` RC=1），复原后 `2 passed` RC=0。⚠️ 本行旧读数是 `:1365/:1375/:340-348/:449…`，因 `a5c8aa9` 给 `/api/sessions`、`/api/live/run` 装 events 上限而下移了行号，本批按 HEAD 逐条 `grep -n` 重取 |
 | ② `af_persist` 加校验和（裁定 B，不做全量 eventlog） | **本计划的验收点已落；裁定的执行约束少一条子句** | 已落：`src/autoforge/af_persist.py:40` `_SHA256_KEY`、`:76-82` 计算、`:83-89` 校验（无字段=旧格式视为通过，向后兼容）、`records():223-238` 坏文件/校验不过**跳过并 warning**、`save():171-187` 原子替换且**未改存储格式头**；单测三条在库（`tests/unit/test_af_persist.py:106/:224/:235/:249`）。**未落**："顺序追加"这一子句——现状是每实例一个快照文件、覆盖式写。它同裁定另一条"不改存储格式头/不迁移"相抵，也与第五轮把"每条全量重写 + 明细无上限"收成有界的修法反向 ⇒ 不擅自动存储面，提 DCD（§五 第 9 件，见 §二之十二） |
 | ③ import-linter 分层（裁定 B→A 渐进：**两档都已落**，第二档在本批） | 配置 + 违规清单 ≈0 ⇒ `pyproject.toml:79-98` `[tool.importlinter]` 契约 "Service boundary never imported by kernel"；实测 `lint-imports` → **Contracts: 1 kept, 0 broken**（RC=0），runner 同契约 `KEPT`；`.github/workflows/ci.yml:96` 的 `architecture` 作业里 `lint-imports` **已去 `continue-on-error`、作失败门禁**（观察窗 shortfall 与本批读数见 §二之十，追认申请见 §五 第 8 件）。真正的架构硬门仍是 `scripts/check_imports.py`（ci.yml:87）→ 本机 **`Baseline lock: 96 modules, 0 violations`**（判红的是 `violations != 0`，模块数是覆盖面读数）。⚠️ 本行曾写 86：那不是环境差异而是缺陷读数——`.gitignore` 的 `_*.py` 吞掉 `af_closedloop/__init__.py`、grimp 在 runner 上不递归该包，**CI 门比本机少分析 10 个模块**；已修（负向规则 + 新复发门 `scripts/check_pkg_markers.py` 进 `gates.sh`），全链与"还原原状仍能取红"的实测见 §二之十一；**runner 侧的 96 已复测取到**（run 36 日志：`Baseline lock: 96 modules, 0 violations`） |
-| ④ tick 线程自愈，区分原因重启（裁定 C）+ 必补接缝测试 | "SAFE HALT 后 watchdog 不得重启"绿 | `src/autoforge/af_live.py:77-103` `tick_watchdog_pass`（唯一自愈分支是"意外终止"；`safe_halt`/`stop` 分别返回 `held_safe_halt`/`stopped` 且不重启）；接缝测试 `tests/unit/test_af_live.py:306` `test_watchdog_does_not_restart_after_safe_halt`（断言 `calls == []`），对照 `:315` 意外终止确实重启、`:325` 存活时不动作；`af_tick_supervisor.py:185` HALTED 短路、`:222-224` docstring 写明安全红线 |
+| ④ tick 线程自愈，区分原因重启（裁定 C）+ 必补接缝测试 | "SAFE HALT 后 watchdog 不得重启"绿 | `src/autoforge/af_live.py:77-103` `tick_watchdog_pass`（唯一自愈分支是"意外终止"；`safe_halt`/`stop` 分别返回 `held_safe_halt`/`stopped` 且不重启）；接缝测试 `tests/unit/test_af_live.py:306` `test_watchdog_does_not_restart_after_safe_halt`（断言 `calls == []`），对照 `:315` 意外终止确实重启、`:325` 存活时不动作；`af_tick_supervisor.py:185` HALTED 短路、`:222-224` docstring 写明安全红线 ⇒ **2026-10-10 现读补记**：这一格交付的是**函数语义＋接缝测试**，不是运行期自愈——`tick_watchdog_pass` 在 `src/` 内**没有生产调用者**（跑的只有 `tests/unit/test_af_live.py`），两份独立审计各读到同一处；声明面已改成与控制流一致并钉成两条腿，"接线还是降档"按 `decisions/20261010-AF与DB与DPP十件-裁定.md` §六 Q3 归 DCD 结案，详见 §二之九十三 第 五 节 |
 
 ### 门禁肥化的另一半：计数棘轮（本回合新增，`gates.sh` + `.gates-tally.txt`）
 
@@ -8359,3 +8359,99 @@ AF 不主张后者，故不预先落码，交 DCD（Q1 三档：甲＝按设计�
 - 存证（`%TEMP%`，不进仓）：`full_b97.out`（全量 6 failed／3730 passed、`FULL_RC=1`）、`af_head97/`（HEAD 副本树，腿 X）、腿 Y 的同树换文件跑、`af_fidelity.headcopy.py`／`test_nl_build.headcopy.py`（副本树原始件，用于 PRISTINE 对撞）、`af_commit97/`（`git archive c99047e` 解包树，`75 passed`）、`af_mut97/`＋`mut_b97.py`（四腿变异）、`gate_b95_{a,b,c,d}.out`／`body_b95_{a,b,c,d}.txt`（四遍门禁与剥标签本体）、`gate_b95_pre_{a,b}.out`／`body_b95_pre_a.only.txt`／`body_b95_pre_b.txt`（文本定稿前那两遍；`pre_a` 的本体改名时手滑加了 `.only` 后缀，第一版 `cmp` 因此报 `CMP_PRE_AB=2`——那是**驱动脚本自己的错**，不是门禁读数，重算后为 `0`）。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `91c1ba2` + §十八 B.1／B.7 开窗（代码面 `c99047e`：`af_fidelity` 的 P1 范围声明改成现状并钉一条"点名＋属实"判据，副本树变异 M0 全绿／M1 改回"未实现"被杀／M2 删点名被杀／M3 同义改写必须仍绿；B.1 复测发现审计框架被推翻一半——标注自己的 docstring 说的是 NL↔IR 保真，执行面读 `requires_confirm`、撤销读 `af_undo.inspect()`，两把闸已各有真值源 ⇒ 交裁不结案；两格剩余半边按 Q1／Q2／Q3 递 DCD（10396 字节／88 行／CR=0），AF 只在"开不开 NL 脸"上表态一次（倾向丙＝零改动零新契约面）；工作树 6 条红按两腿副本树反证成登录线在途（HEAD 树 48 passed，换入本批两文件后仍 48 passed）；提交树 `git archive c99047e` 解包独立跑 `75 passed／COMMIT_TREE_RC=0`，并从提交物字节量出"点名行=1、含未实现=0"；等裁／等窗两件现读：两份申请仍在 `inbox/` 无对应裁定文件，`homesdk/pyproject.toml:7` 仍 `0.3.2`、`dist/` 无 0.3.3 wheel；AF 门禁六遍（文本定稿前的 pre_a／pre_b ＋ a／b／c／d）本体逐字节相同——74 行／**7877 字节**，`CMP_A_B=0`／`CMP_AC=0`／`CMP_BC=0`／`CMP_AD=0`／`CMP_CD=0`，且与上一批 `body_b93_a.txt` 也相同 ⇒ 本批代码与散文没有移动门禁一个字节；两枚红仍是登录线在途的 `af_api.py:984/:1005`，未据此动 tally／baseline；开窗的同一分钟落进一枚新审计报告（`docs/audit/AutoForge审计报告.html`，107180 字节，第六轮，15 条 bug＋11 项架构缺陷，自述全程只读未复现）⇒ 登记为下批逐条复测对象，本批不替它背书；未推枚数 `git log origin/main..HEAD` 现读 16）
+
+## 二之九十三、收第六轮审计里 AF 职权内的五格（BUG-04／05／06／07／14）：落码 + 30 条判据腿 + 十六案变异；同窗又落两份报告（第二轮运行时审计、安全与暴露面第三轮），本批对它们只做**归属判定**不做二次落码——两处红都量在登录线的在途文件里
+
+基准：HEAD `62a859f`（§二之九十二 已提交）+ 本批工作树改动。本批动到的文件共 7 份：`src/autoforge/af_service.py`、`src/autoforge/af_mqtt_bridge.py`、`src/autoforge/af_cli.py`、`src/autoforge/af_live.py`（只改声明）、`src/autoforge/af_tick_supervisor.py`（只改声明）、`tests/unit/test_watch_lifecycle_r6_audit.py`（新增）、`tests/unit/test_af_mqtt_bridge.py`。
+
+### 一、五格的"修前形状"与"现在由哪条腿钉住"（两份报告对同一件事各有一套编号，这里并列）
+
+| 格 | 两份编号 | 修前形状（现读） | 落码（现读锚点） | 判据腿 |
+|---|---|---|---|---|
+| 停 watcher 时把锁本体删掉、三连删失败全静默 | 六轮 BUG-04 ／ 运行时二轮② | `stop_watch` 一个 `try` 里连删 `watch.lock.info`＋`watch.lock`＋`watch.pid`，`except OSError: pass`；Windows 持锁时 `os.unlink` 实测 `PermissionError [WinError 32]`（对侧复现，本批不重起真锁） | `_cleanup_watch_files`（`af_service.py:2512`）只回收 sidecar 与 pid 文件，返回 `sidecar_removed`／`pid_file_removed`／`lock_file_kept: True`／`errors:[ "label:异常类型" ]`；锁本体**不删** | `test_stop_watch_leaves_the_lock_file_on_disk_even_on_success`、`test_cleanup_failure_is_named_instead_of_swallowed`、AST 腿 `test_stop_watch_source_contains_no_unlink_of_the_lock` |
+| 起 watch 后固定 15×1 秒轮询，预算数字在散文里有第二份 | 六轮 BUG-05 ／ 运行时二轮③ | `for _ in range(15): time.sleep(1.0)`，错误文案另写"15 秒" | `_WATCH_PROBE_DELAYS_S`（`:2463`）＝`(0.1, 0.2, 0.3, 0.5, 0.8) + (1.0,) * 10`，合计 `_WATCH_PROBE_TOTAL_S`＝11.9 秒；文案用 f-string 读这一个正源 | `test_first_probe_is_sub_second`、`test_probe_schedule_is_monotonic_and_bounded`、`test_unregistered_error_names_the_same_budget_the_schedule_adds_up_to` |
+| 照着盘上的 PID 数字动刀；发完信号就宣称已退出；没有 SIGTERM 优雅路径 | 六轮 BUG-06 ／ 运行时二轮④ | `stop_watch` 无条件 `os.kill(int(pid_file.read_text()), 15)` 并立刻删 PID 文件；`forge watch` 只接 `KeyboardInterrupt` | `_owner_pid_from_sidecar`（`:2471`）＋`_verified_pid`（`:2486`，七种读数，只有 `verified` 允许发信号）；`start_watch` 对上一条 pid 同闸并把 `previous_watch={pid, identity}` 带进 `coord_lock_held_by_other`（`:2670-2684`）；`stop_watch` 发信号后按 `_WATCH_EXIT_WAIT_S`（`:2467`，合计 4.9 秒）轮询 `_lock_is_free`（`:2532`），等不到回 `exit_unconfirmed` 且**刻意不升级 SIGKILL**、诊断文件一律留；`af_cli.py:618-630` 把 SIGTERM 接回已有 `finally`（`stop.set()` 后 `raise KeyboardInterrupt`） | `test_pid_file_and_sidecar_must_agree_before_any_kill`、`test_pid_from_another_hostname_is_not_killed_locally`、`test_hand_watched_process_without_a_pid_file_is_not_killed_by_guesswork`、`_owner_pid_from_sidecar` 形状表（含 `NAS-Server-4242-abcd1234` 这类主机名带 `-` 的拆法）、`test_exit_is_reported_unconfirmed_when_the_lock_is_still_held`、`test_start_watch_does_not_kill_an_unverified_previous_pid`、`test_start_watch_kills_only_after_identity_matches`、`test_watch_command_wires_sigterm_to_the_existing_graceful_path` |
+| MQTT 桥只 `loop_start()`、从不拆环 | 六轮 BUG-07 ／ 运行时二轮⑤ | `stop()` 只做 `advertise(offline=True)` ＋ `started=False`；重复 `start()` 静默覆盖订阅表 | `af_mqtt_bridge.py:749-770`：先播 offline、再摘 `client.on_message`、再 `loop_stop()`／`disconnect()`（拆环失败**抛穿**，不加新的宽 except 静默）；`start()`（`:724`）已在位则抛 `BridgeUnavailable` | `test_stop_tears_down_the_paho_network_loop_it_started`、`test_stop_is_idempotent_and_a_second_one_does_not_nothing`（实名 `…_does_nothing`）、`test_double_start_is_refused_loudly`、`test_callback_detach_happens_before_the_loop_is_stopped`（`__setattr__` 记顺序，断言 `["detach","loop_stop","disconnect"]`） |
+| 子进程日志句柄在父进程不关 | 六轮 BUG-14 | `(root / "watch.log").open("ab")` 裸调后交给 `Popen`，`with` 缺失 ⇒ 异常路径连引用计数回收都走不到 | `af_service.py:2713-2721` 用 `with … .open("ab") as logf:` 包住 `Popen` | `test_start_watch_closes_the_log_handle_after_popen`、`test_start_watch_closes_the_log_handle_when_popen_raises` |
+
+两处判定值得单独记：
+
+- **BUG-07 不等 homesdk 0.3.3**。0.3.2 的 `mqtt.get_client()` 交出来的是**未连接的裸 paho client**，docstring 把 `connect()`／`loop_start()` 明确写成调用方的活 ⇒ 对称的 `loop_stop()`／`disconnect()` 也是调用方的活。这一格和 #93（等发版窗的那格）不是同一件事：那格缺的是库侧新接口，这格缺的是 AF 自己没做收尾。
+- **锁本体为什么不能删**：它是 `flock`／`msvcrt.locking` 的载体。删掉之后新进程会 `create` 出一个**新 inode** 并锁在它上面，而老进程还握着**旧 inode** 的锁 ⇒ 两边互不可见，"同一目录只允许一个活跃 watcher"当场失效。修前那次 unlink 之所以"看起来Works"，只因为它在持锁期根本删不掉（`WinError 32`）或被下一次 `open(...,'a')` 重建。
+
+### 二、十六案变异自证（副本树 `%TEMP%`→`E:\tmp\mut_r6\tree_*`，工作树一个字都不改）
+
+跑法：每条腿重建副本树（`cp -r src tests` ＋ `pyproject.toml`），用 `E:\tmp\mutate_r6.py`（6922 B）注入，锚点在目标文件里命中数≠1 就拒绝注入并非零退出；三份判据文件同树跑。存证：`E:\tmp\mutation_r6.result.txt`（2702 B）＋ 每案的 `<案名>.pytest.txt`（16 份）。两版对照：**M1–M10 跑在"tick 自愈那两条腿还没落地"的 87 腿版**（所以读数分母是 87），M0／M99 在 89 腿版重跑过，M11／M12／M13 只在 89 腿版跑。
+
+| 腿 | 注入（把哪个决定改回修前形状） | 期望 | 现读 |
+|---|---|---|---|
+| M0_noop | 什么都不改（控制腿） | 全绿 | `RC=0`，89 passed in 9.04s |
+| M1_stop_bypass_identity | `stop_watch` 里把身份核验换成"读 pid 文件就算 verified" | 被杀 | `RC=1`，3 failed／84 passed（三条核验腿） |
+| M1b_start_bypass_identity | `start_watch` 里同样换掉（**另一枚调用点单独验**，防"只有一条腿有闸"） | 被杀 | `RC=1`，1 failed／86 passed |
+| M2_cleanup_deletes_lock | 清理列表里把 `watch.lock` 加回来 | 被杀 | `RC=1`，1 failed／86 passed |
+| M3_cleanup_swallow | `errors.append(f"{label}:{type(exc).__name__}")` 删掉，退回 `except OSError: pass` | 被杀 | `RC=1`，1 failed／86 passed |
+| M4_fixed_one_second_probes | 退避表换回 `(1.0,) * 15` | 被杀 | `RC=1`，2 failed／85 passed（首探亚秒＋排程形状） |
+| M5_exit_always_confirmed | `exit_state = "exit_unconfirmed"` 改成 `"exited"` | 被杀 | `RC=1`，1 failed／86 passed |
+| M6_log_handle_leaks | `with` 换成裸 `open` ＋ `if True:` | 被杀 | `RC=1`，2 failed／85 passed |
+| M7_bridge_loop_never_stopped | 拆环循环名表换成空元组 | 被杀 | `RC=1`，3 failed／84 passed |
+| M8_callback_stays_attached | `client.on_message = None` 换成 `if False:` 守卫 | 被杀 | `RC=1`，2 failed／85 passed |
+| M9_double_start_allowed | 重复上线的 `raise` 换成 `if False:` | 被杀 | `RC=1`，1 failed／86 passed |
+| M10_sigterm_does_not_unwind | SIGTERM 处理器只 `stop.set()`、不抛穿回优雅路径 | 被杀 | `RC=1`，1 failed／86 passed |
+| M11_supervisor_claim_says_self_heal_works | `af_tick_supervisor.health_state` 的 docstring 退回 HEAD 那句"主线程 watchdog 仅在意外终止时重启本线程"（第 五 节改判的那一格的修前形状） | 被杀 | `RC=1`，1 failed／88 passed（`test_every_watchdog_claim_says_the_self_heal_is_not_wired`） |
+| M12_definition_stops_declaring_no_caller | 把 `af_live.tick_watchdog_pass` 定义处"今天没有调用者"那段**整段删掉**（删后它连自己名字都不再点） | 被杀 | `RC=1`，1 failed／88 passed（同一条腿的定义侧断言） |
+| M13_watchdog_gets_wired | 真把 `tick_watchdog_pass()` 接进 `get_tick_exit_reason()`＝出现一个生产调用点 | 被杀 | `RC=1`，1 failed／88 passed（`test_tick_watchdog_still_has_no_production_caller`） |
+| M99_synonymous_truthful_reword | **同义改写但仍然属实**（"刻意不升级"→"这一版刻意不升级"） | 必须仍全绿 | `RC=0`，89 passed in 8.74s |
+
+⇒ 十四案全被杀、控制腿与同义改写腿全绿：这 30 条腿钉的是**功能**，不是 diff。M99 这条是必需的——没有它，上面那排"被杀"同样可以是"改了任何字节都红"。M12 是这批里唯一一条"为了防假绿而存在的假绿探测器"：如果第 1 条腿只按"docstring 里点到这个名字"来筛，M12 那种改法（定义处把声明删干净、不再自报姓名）会一路放行；所以那条腿加了定义侧的独立断言（`_definition_docstring`：按名字找**唯一那处定义**，要求它自己带着"没人调它"的字样）。M13 则把"接线"这天钉成必须同时改声明＋改腿的联动，红得掉在地上看得见。
+
+**落码授权来自现读裁定，不来自我的判断**：`decisions/20261010-AF与DB与DPP十件-裁定.md` §五 Q4 甲把第六轮审计逐条分派钉成"BUG-02/03/08/09/15 随登录线同窗、AF 只交复测证据；**其余落在 AF 可动文件的条目（BUG-04/05/06/07/10/11/12/13/14 ＋ ARCH 全部）由 AF 按老口径逐条复测后自行收口**"。本批的五格与下面第 六／七节的三格都在"AF 自行收口"那一栏里，不是我替自己开的口子。
+
+### 三、门禁与全量测试：本批零新增违规；两处红都用副本树判了归属，不按名字猜
+
+| 站 | 现读 | 归属 |
+|---|---|---|
+| `gates.sh` 整体 | `GATES_RC=1`，两遍输出 **7877 B 逐字节一致**（首行标签除外），21 站 | 红只在下面两站 |
+| AST 门禁（`homesdk.gates --no-smoke`） | `RC=1`，新增／未获批 **2 条**：`af_api.py:984 build_app.api_auth_has_admin`、`af_api.py:1005 build_app.api_auth_register`（都是 `fake-ok-const`）；基线内存量 96 条、**过期基线条目 0 条** | **不是本批**。这两枚就是 #79 在等的 af_api 两枚 `ok`（裁定 20261009 已给修法：甲派生／删键），卡在登录线的提交窗 |
+| 计数棘轮 | 全量 98 条／登记上限 97 条（分解 `except-pass-broad=20 \| fake-ok-const=78`） | **HEAD 上就红**：`git archive HEAD` 副本树 total＝98，HEAD＋本批 7 份文件的副本树（`E:\tmp\gate_attr\mine7`）total＝98，工作树 total＝98 ⇒ 本批**一个计数都没加**。上限这行不自上调、不往基线塞指纹 |
+| 全量 `tests/unit` | `6 failed, 3008 passed, 43 skipped in 548.37s`（`PYTEST_RC=1`） | 6 条全在鉴权线（`test_dcd_20261004_auth_limits` 2、`test_v0_8_auth` 3、`test_v1_4_token_expiry` 1）。把这三份鉴权文件在 **HEAD＋本批 7 份文件**的副本树里单跑（`af_api.py`／`af_auth.py` 取 HEAD 版，登录线那份未提交改动不带入）＝ **48 passed, 1 warning in 32.40s**，`RC=0` ⇒ 红只在工作树那份 af_api／af_auth 未提交态里，与 §二之九十二 记的 `6 failed` 同源。本批不接、不修、不豁免 |
+| 本批三份判据文件 | 同那棵 HEAD＋本批 7 份文件副本树 **89 passed in 15.26s**，`RC=0`（`test_watch_lifecycle_r6_audit` 26 ＋ `test_start_watch_identity` 11 ＋ `test_af_mqtt_bridge` 52；本批新增 30 条＝新文件 26 ＋ 桥文件 4 条新 def） | 绿 |
+
+### 四、同窗新到两份报告的逐格归属（登记，不在本批落码）
+
+| 报告 | 规模与时点 | 它量的是哪棵树 | 与上表重叠 | AF 职权内、下一批做 | 越权／等裁 |
+|---|---|---|---|---|---|
+| `docs/audit/AutoForge运行时审计报告.html`（第二轮运行时审计，48172 B，10-10 16:26；9 条＝7 确认／1 部分确认／1 推翻） | 逐条带 file:line 与真机复现（127.0.0.1:8791 起真实例，6 用例） | **`c99047e` ＋ 工作树，但其 §1.1 `git status` 里没有 `src/autoforge/af_service.py`／`af_mqtt_bridge.py`／`af_cli.py`** ⇒ 它量的是**修前形状** | ②③④⑤⑥⑦⑭＝上表五格同源，本批已落；⑥（`start_watch` 从不传 `--confirm` ⇒ `live_unconfirmed` 必被 CLI 拒启动）已在码内如实标注（`:2736-2743` 的 `tier`），等的就是 `20261009-AF` 那纸裁定 | **⑨**（见下节）、BUG-10 的 fail-open 半边、BUG-12 三处裸 `write_text`、BUG-13 的假 LRU | ①`subjects()` 无锁遍历（实测 `RuntimeError: dictionary changed size during iteration`）、⑦SSE 生成器经 `pending_events`／`mark_pushed` 每秒落 `os.fsync`、⑧TTL 墙钟——三格全在 `af_auth.py`／`af_api.py`＝登录线在途文件 ⇒ **证据 only** |
+| `docs/audit/AutoForge安全审计报告.html`（安全与暴露面第三轮，89724 B，10-10 17:47；2 严重／3 高危／87 条路由含 15 条无鉴权／"3+1 声明了但未接线"） | 全程只读＋127.0.0.1:8791 探测 | **`62a859f` ＋ 脏工作区（12 改动＋7 未跟踪），已含本批的 `af_service.py`／`af_mqtt_bridge.py`／`af_cli.py` 三份落码与两份判据文件；`af_live.py`／`af_tick_supervisor.py` 那份**改声明**不在它的快照里**（它的 `git status` 现读只有上面那几份） | "3+1 未接线"里的 tick 自愈＝本报告下节的同一格，**两份独立报告在我改声明之前各自现读到同一处** | 仓库根两份未跟踪令牌产物按既有指示**不删**，只登记为证据 | "未注册即换全权限令牌"与"`AF_ALLOW_NOAUTH` 被放大成常开"点名的是**工作区未提交的 af_api 那份改动**（登录线），不是本批；两条严重项与我 15 时递出的 `20261010-AF-第六轮审计严重项匿名换owner令牌并穿透F3-决策申请` 是同一件事的两张脸，已在申请里请裁（`请裁`×3） |
+
+### 五、两格改判：BUG-11 的"竞态"不成立、成立的是死代码；BUG-10 只成立一半
+
+- **tick 自愈**：全仓 grep 现读，`src/` 内 `tick_watchdog_pass` 只有三处命中——`af_live.py:51`（`__all__`）、`af_live.py:83`（定义）、`af_tick_supervisor.py:223`（注释"主线程 watchdog 仅在意外终止时重启本线程"），**调用者只有 `tests/unit/test_af_live.py:310/319/327/334`**。⇒ 第六轮 BUG-11 提的"自愈 vs 人工停机竞态"不可达（运行时二轮把它判成"推翻"是对的），但真相更重：**宣称的自愈不存在**，tick 线程意外死亡时除了 `/health` 上多一个字符串，没有任何补偿动作。文档口径已随之改（本文与架构文档 §二 `:127` 那句"兜底的心跳自愈"）。**接线本身不在本批**：`_tick_exit_reason` 是模块级全局、ticker 线程写／主线程读且无锁，把 watchdog 接上去就恰好把⑨描述的那个竞态**造出来**；而这一格的形状正是"审计说死码／无调用方"——按 `decisions/20261010-AF与DB与DPP十件-裁定.md` §六 Q3 新立的口径，**定性归 DCD 结案，AF 不得在架构文档里自决记成"按设计"**，本批只做两件事：把声明改成与控制流一致的现状（这一半 B.7 同族、DCD 已在 §七 7.3 追认过同类落码），并把"接线还是降档"攒进下一批集中申请（Q3 明确允许"攒一批"，不逐格占窗）。
+  这两件事各自都有闸，不是"改完就算"：`test_every_watchdog_claim_says_the_self_heal_is_not_wired`（点到这名字的 docstring **加上定义处自己**必须带"没有调用者／无调用者／未接线"字样）与 `test_tick_watchdog_still_has_no_production_caller`（`src/` 里出现任何 `tick_watchdog_pass(...)` 调用点即红）。三案变异对着这两条腿量过：M11（`af_tick_supervisor.health_state` 的 docstring 退回 HEAD 那句"仅在意外终止时重启本线程"）→ 1 failed／88 passed；M12（把定义处那段整段删掉、连名字都不再自报）→ 1 failed／88 passed，这条是定义侧那半条断言的存在理由，只按名字筛会在 M12 假绿；M13（真接一个调用点进去）→ 1 failed／88 passed，杀它的是负控腿。⇒ 声明与控制流**绑在一起动**，谁单方面把"会自愈"写回去、或者悄悄把线接上而不改账，都会当场红。
+- **BUG-10（`af_persist` 租约）**：成立的是 `claims()`（`af_persist.py:188-200`）里 `owner` 有值却 `_parse_iso(lease_until_wall)` 读不出 ⇒ `return True` 这一格——证明不了"已过期"却放行接管，与 F12「归属未知不再放行」是同一条 doctrine 的两个面，AF 职权内可自决（下一批改判 fail-closed 并给腿）。**不成立**的是"租约应改用单调时钟"那半格：租约要跨进程、跨重启，单调时钟做不到，报告自己在 §4.8 也写"用墙钟是可接受的工程选择"；真风险是时钟回跳且无漂移告警，那半格归 #10（homesdk.time 接入窗）而不归本批。
+
+### 六、同日 DCD 十件批裁定到了（`decisions/20261010-AF与DB与DPP十件-裁定.md`），AF 侧逐格对齐
+
+引用一律带文件名与主题短语，不只写日期——这是该裁定 §九 判例 1 新立的规矩，本批当场开始守。
+
+| 裁定格 | 裁定 | AF 侧动作与时点 |
+|---|---|---|
+| §五 BUG-01 Q1 | **甲（删兼容档）**：`not has_admin` 时 `/api/auth/login` 直接 409、不签任何令牌 | 落笔点在 `af_api.py:1022-1029`＝登录线在途文件 ⇒ 本批零落码，作为**追加要求**随登录线同窗（Q2 丙） |
+| §五 BUG-01 附裁 | **要单独修**（采纳丙档"分开"半）：`poisoned` 标志、损坏态对 login＋register **双向 fail-closed** ＋一条可见读数 | 同上（`af_auth.py:1083-1087`／`:1160`／`:259` 三处锚点已由 DCD 现读并写进裁定）。**硬验收**记在账上：注入"无 admin ＋ 任意非空凭据"⇒ 409 且无令牌签发；损坏态⇒ 双向拒绝＋可见读数，这两条不做完不许写 PASS |
+| §五 Q3 | **DCD 不代答现场**，先做零成本止血：`/api` 端口限可信 LAN、不对公网 | 属 owner／NAS 动作，AF 不代改 compose／部署面；现场 `admin.json` 是否已注册**只有 owner 能答** |
+| §五 Q4 | **甲**：BUG-02/03/08/09/15 随登录线，AF 只交复测证据；BUG-04/05/06/07/10/11/12/13/14 ＋ ARCH 全部由 AF 自行收口 | 本批＝其中五格；BUG-10/12/13 与 ARCH-01 口径更正在 #98/#100 继续 |
+| §六 Q1（B.1） | **甲（按设计结案）**，三枚 helper 如实登记为库面保留、不删 | #96 结案；架构文档里"按设计"这四个字**由裁定给出**，不是我自决 |
+| §六 Q2（B.7） | **丙（库面结案）**：中文 NL 入口按 `20260928` §:23 不在 AF，不开 MCP 工具位 | #97 结案；本批已落的"过时能力声明改现状＋判据"仍有效（那是声明面，不是消费者面） |
+| §六 Q3 | **立口径**：死码／无调用方的定性归 DCD，AF 不得自决；允许攒一批集中申请 | 直接影响第 五 节 tick 自愈那一格的处理方式 |
+| §二 Q1／Q2／Q3 | 甲（追认拆码＝0.3.3 第四件，枚数按 `len(ADM_ERRORS)` 现读：`PUBLISH_REFUSED`＝第 7、`LINKAGE_PAUSED`＝第 8 待进树）／乙（发版归 DCD/NAS，排装机窗口）／甲（出交接卡交 DB：`PUBLISH_REFUSED` 是"别重启 broker"） | #93 的 AF 半边继续等 wheel 落地（`af_mqtt_bridge.py:363-377`／`:627`／`:633`）；#80 的切换动作窗口由 DCD 定；交接卡归 DB 线，AF 不自发跨仓通告 |
+| §二 #95 | **甲（维持现状）**：试演期失明只记仓内，不发对端、不新增码 | #95 结案 |
+| §七 7.1 | **A**：v2.6 第 3 件的前置＝第 9 件裁定，AF 转做别的 | 计划 §5.3 那一行的"前置＝无"由 DCD 落笔更正；AF 已把无前置的第 4 件做完（`3039c62` 属实） |
+| §七 7.3 | **追认**（76 容器／2 双腿齐全／74 冻结／2 固定键 的存量口径 ＋ 四行契约表 ＋ 五行路线图过期前提，均由 DCD 落笔） | AF 侧无需再改；`BOUNDED_CACHES` 不硬填三处不齐站点这条判断被追认 |
+
+### 七、任务位与存证
+
+- #98 由"15 条 bug＋11 项架构缺陷逐条复测"收敛为：五格落码（本批）＋ 三条中／低待落（BUG-10 fail-open、BUG-12 裸 `write_text`、BUG-13 假 LRU，已单开 #100）＋ 五格属登录线只作证据（BUG-02/03/08/09/15，裁定 §五 Q4 甲）＋ ARCH-01 的口径更正（`.gates-baseline.txt` 现读 **86 行／83 条生效**，报告写的"86 条生效"把行数当成了条数）；ARCH-02～11 尚未逐条复测，仍挂在 #98。
+- #99 收第二轮运行时审计（含 tick 自愈那一格的接线／降档决策）＋ 登记安全与暴露面第三轮的归属。
+- 按裁定 §六 Q1／Q2 与 §二 #95 结案：**#96（B.1 定性）→ 甲、#97（B.7 对外脸）→ 丙、#95（observe 失明是否对端可见）→ 甲**三格从"等裁"改为"已裁并结案"；#93 继续等 0.3.3 wheel（§二 Q2 乙：发版动作排装机窗口，归 DCD/NAS）。
+- 存证（`E:\tmp\`，不进仓）：`mut_r6/`（16 份 `<案>.pytest.txt` ＋ 16 份 `<案>.patch.err`）、`mutation_r6.result.txt`（2702 B，含"哪几案跑在 87 腿版"的对照说明）、`mutate_r6.py`（6922 B，15 条注入案）／`run_mutations_r6.sh`（2109 B）、`gate_attr/head`＋`mine`＋`mine7`（三棵副本树；`mine7`＝HEAD＋本批 7 份文件，鉴权三文件 48 passed／判据三文件 89 passed 都读自这棵）、`gate_attr/gates_a.txt`＝`gates_b.txt`（各 7877 B）、`audit_r7.txt`（34151 B）／`audit_sec.txt`（2424 行）两份报告的纯文本抽取、`关键决策部/inbox/20261010-AF-第六轮审计严重项匿名换owner令牌并穿透F3-决策申请.md`（9770 B／97 行／CR 0）。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `62a859f`（本批七份文件：`af_service.py`／`af_mqtt_bridge.py`／`af_cli.py` 三份落码 ＋ `af_live.py`／`af_tick_supervisor.py` 两份只改声明 ＋ 判据两份，共 30 条新腿；十六案变异在副本树量：M0 `89 passed in 9.04s`／M99 `89 passed in 8.74s` 全绿，其余十四案 RC=1 全被杀，其中 M12 专门证明"定义侧那半条断言"不是装饰；归属三读全在 `HEAD＋本批 7 份文件` 那棵副本树上现取：鉴权三文件 `48 passed in 32.40s`、判据三文件 `89 passed in 15.26s`、AST 全量 head=98／mine7=98／工作树=98 ⇒ 本批零新增违规；两枚红仍是登录线在途的 `af_api.py:984/:1005`，未据此动 `.gates-tally.txt`／`.gates-baseline.txt` 一个字；落码授权来自 `decisions/20261010-AF与DB与DPP十件-裁定.md` §五 Q4 甲"其余落在 AF 可动文件的条目由 AF 按老口径逐条复测后自行收口"，同裁定 §六 Q3 把"死码／无调用方"的定性收归 DCD ⇒ tick 自愈那格本批只把声明改成与控制流一致并钉成两条腿，接线／降档攒进下一批集中申请（Q3 允许"攒一批"）；同窗三份新报告只做归属登记不做二次落码；未推枚数 `git log origin/main..HEAD` 现读 17）

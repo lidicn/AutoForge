@@ -133,6 +133,91 @@ def test_stop_publishes_retained_offline():
     assert bridge.started is False
 
 
+# ── 收尾（第六轮审计 BUG-07）：只连不停 = 每次重连泄漏一条线程 ──────────
+
+class LoopClient(FakeClient):
+    """带上 paho 那两张脸的假客户端：`loop_start` 是 `make_client()` 真会起的线程。"""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.loop_started = 0
+        self.loop_stopped = 0
+        self.disconnected = 0
+
+    def loop_start(self):
+        self.loop_started += 1
+
+    def loop_stop(self):
+        self.loop_stopped += 1
+
+    def disconnect(self):
+        self.disconnected += 1
+
+
+def test_stop_tears_down_the_paho_network_loop_it_started():
+    """`make_client()` 起了 `loop_start()`，收尾就是调用方的责任（homesdk 的 `get_client()` 明确不连、
+    不起循环，也不会有库来替我们停）。不回收 = 线程与套接字单调增长，NAS 常驻形态下一周后才显形。"""
+    client = LoopClient()
+    bridge = _bridge(client)
+    bridge.start()
+    bridge.stop()
+    assert client.loop_stopped == 1, client.loop_stopped
+    assert client.disconnected == 1, client.disconnected
+    assert client.on_message is None, "已下线的桥不许再挂回调消费消息"
+
+
+def test_stop_is_idempotent_and_a_second_one_does_nothing():
+    client = LoopClient()
+    bridge = _bridge(client)
+    bridge.start()
+    bridge.stop()
+    before = len(client.published)
+    bridge.stop()
+    assert client.loop_stopped == 1 and client.disconnected == 1, client
+    assert len(client.published) == before, "重复 stop 不许再发一份 retained offline"
+
+
+def test_double_start_is_refused_loudly():
+    """重复上线会让对端把同一条自动化看到两次在线，而桥这侧的计数分不清——直接拒。"""
+    client = LoopClient()
+    bridge = _bridge(client)
+    bridge.start()
+    with pytest.raises(BridgeUnavailable) as exc:
+        bridge.start()
+    assert "先 `stop()`" in str(exc.value), str(exc.value)
+    # 拒了之后不能把桥留在"半新半旧"的形状：状态还是那一个 started，订阅表也没多一份
+    assert bridge.started is True
+    assert client.subscribed.count(INSIGHTS_TOPIC) == 1, client.subscribed
+
+
+def test_callback_detach_happens_before_the_loop_is_stopped():
+    """摘回调必须排在 `loop_stop()` 之前：断开是异步的，先停循环会留一个还能被投递的窗口。"""
+    order: list[str] = []
+
+    class OrderedClient(LoopClient):
+        def __setattr__(self, name, value):
+            if name == "on_message":
+                order.append("detach")
+            super().__setattr__(name, value)
+
+        def loop_stop(self):
+            order.append("loop_stop")
+            super().loop_stop()
+
+        def disconnect(self):
+            order.append("disconnect")
+            super().disconnect()
+
+    client = OrderedClient()
+    bridge = _bridge(client)
+    bridge.start()
+    assert order[:1] == ["detach"], f"start() 挂回调也算一次赋值，形状要看得见：{order}"
+    order.clear()
+    bridge.stop()
+    assert order == ["detach", "loop_stop", "disconnect"], order
+
+
+
 def test_plan_caps_version_is_the_number_the_contract_assigns_to_af():
     """契约 v2.0 §7.1（计划 §六 逐字快照第 201 行）写死「AF 2.6 / MA 1.4 / DB 2.7」。
 

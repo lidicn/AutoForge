@@ -83,6 +83,11 @@ def get_tick_exit_reason() -> str:
 def tick_watchdog_pass(*, restart=None) -> str:
     """主线程侧一次守护巡检（方案 C：区分退出原因，绝不让 SAFE HALT 被自愈抵消）。
 
+    **今天没有调用者**：`tick_watchdog_pass` 在 `src/` 内除本定义与 `__all__` 导出之外读不出任何调用点，
+    跑它的只有 `tests/unit/test_af_live.py` ⇒ "tick 线程意外死亡会被自愈"是一条**未接线**的承诺，
+    不是运行期事实（2026-10-10 两份审计各自独立现读同指此处）。接线还是降档属"该不该有消费者"
+    的生态判断，按裁定 `20261010-AF与DB与DPP十件` §六 Q3 归 DCD 结案；本 docstring 只登记现状。
+
     返回处置标签：
       alive         —— 线程仍存活，无需动作
       running       —— 尚未启动过 ticker

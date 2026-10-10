@@ -722,7 +722,15 @@ class AfMqttBridge:
 
     # ── 入向：ma/insights + 在场/设备健康 ─────────────────────────────
     def start(self, *, caps: Mapping[str, Any] | None = None) -> None:
-        """上线：presence 广播 + 订阅洞察与联动入向主题。订阅表在此收口，禁订族先判后订。"""
+        """上线：presence 广播 + 订阅洞察与联动入向主题。订阅表在此收口，禁订族先判后订。
+
+        重复 `start()` 直接拒（审计 BUG-07）：每次重订都会重发一份 retained 上线、重挂一次
+        `on_message`，对端把同一条自动化看到多次上线，而桥这侧的计数无从分辨。
+        """
+        if self.started:
+            raise BridgeUnavailable(
+                "桥已在位：要换订阅表或重发 caps，请先 `stop()` 再 `start()`，不要重复上线"
+            )
         for topic in FORBIDDEN_SUBSCRIPTIONS:
             if topic == INSIGHTS_TOPIC:  # 白名单若被误改，宁可启动失败也不越界
                 raise BridgeUnavailable(f"{INSIGHTS_TOPIC} 不该出现在禁订清单里（请核对裁定）")
@@ -739,9 +747,27 @@ class AfMqttBridge:
         self.started = True
 
     def stop(self) -> None:
-        """优雅下线：显式发 retained `offline`（LWT 只覆盖异常断连）。"""
+        """优雅下线：显式发 retained `offline`（LWT 只覆盖异常断连），然后把 paho 那条网络线程收掉。
+
+        审计 BUG-07 的"只连不停"在这一格收口：`make_client()` 起的是 paho 自己的网络线程
+        （`loop_start()`），而 homesdk 的 `get_client()` 明确把连接与循环交给调用方，所以收尾
+        也是调用方的责任，不等库补。收不干净就是每次重连泄漏一条线程 + 一个套接字——NAS 这种
+        常驻形态下是一周后才显形的慢泄漏。
+        """
+        if not self.started:
+            return
         self.advertise(offline=True)
         self.started = False
+        client = self.client
+        # 先摘回调：断开是异步的，`on_message` 若还挂着，"已下线"之后仍会消费消息并翻计数，
+        # 桥的状态自述与盘上读数就分叉了。
+        client.on_message = None
+        # 两条收尾都是 paho 的脸（`make_client()` 里起的就是它）。失败就抛穿：下线这条路
+        # 不静默吞异常，否则又造出一个"说了 offline、其实线程还在跑"的假绿。
+        for name in ("loop_stop", "disconnect"):
+            hook = getattr(client, name, None)
+            if callable(hook):
+                hook()
 
     def subscribe_topic(self, topic: str) -> bool:
         """唯一订阅入口：禁订族一律拒，并计数留痕。"""

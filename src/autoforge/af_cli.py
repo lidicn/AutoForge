@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
 import threading
 from pathlib import Path
@@ -613,6 +614,20 @@ def watch(
 
     stream = af_live.HAEventStream(base_url=ha_url, token=token, cfg=cfg)
     stop = threading.Event()
+
+    def _on_sigterm(_signum, _frame):
+        """SIGTERM 走与 Ctrl+C 同一条收尾路径（审计 BUG-06）。
+
+        `os.kill(pid, 15)` 不会变成 KeyboardInterrupt，旧实现收到 SIGTERM 就死在半路：协调锁靠
+        内核兜底、在途持久化不 flush、`finally` 里那句 `coord.release()` 根本不执行——把正常关闭
+        走成了崩溃路径。这里把它接回同一个 `except KeyboardInterrupt`。
+        Windows 上这一腿不会真投递（`os.kill` 在那边等价于强杀），所以 SIGTERM 的优雅语义只在
+        POSIX（docker 面）成立，不在这里假装两边一样。
+        """
+        stop.set()
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
     typer.echo(f"\n── 常驻监听（forge watch）── 订阅 {ha_url}{af_live.SSE_STREAM_PATH}，Ctrl+C 退出")
 
     from . import af_mqtt_bridge
