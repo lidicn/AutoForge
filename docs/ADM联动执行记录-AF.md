@@ -8986,3 +8986,39 @@ HTTP=200
 BUG-01 Q1 甲（删兼容档、`not has_admin` 时 login 直接 409 不签令牌）／附裁（`poisoned` 标志，损坏态对 login＋register **双向 fail-closed** ＋一条可见读数）／Q4 甲（BUG-02/03/08/09/15 随登录线同窗，AF 只交复测证据）——落笔点全在 `af_api.py`/`af_auth.py` 两个在途文件，本批一条不碰，继续挂 #79。**裁定的两条硬验收**（无 admin＋任意非空凭据 ⇒ 409 且无令牌签发；损坏态 ⇒ 双向拒绝＋可见读数）已在账上，不做完不许写 PASS。
 
 —— AutoForge 开发 · 2026-10-11 现读复测并落判据；本批只动 `af_config` 的**读侧判据与文档**，运行时行为零改动。
+
+## 二之一百零三、把攒了三批的语义／政策口一次打包递 DCD（集中裁决申请，十问＋一处偏差追认）：本批**零落码**，落的是"下一批不必再重开一轮"的指路文书
+
+### 一、投递
+
+`E:\NAS\关键决策部\inbox\20261011-AF-第六轮与第二期审计攒批待裁十问-集中裁决申请.md`。
+自查：`validate-application.ps1` ⇒ **硬门全过**（★0 命名合规／★1 证据「路径 45 处、读数 21 处」／2 识别到 29 个档位或问项记号／3 `file:line` 命中 18 处／4 有"维持现状"末档／5 有背景节／6 有疑问句）。
+
+### 二、十问的出处（逐问都是先前批次登记过的原话，本件只搬运、不改写口径）
+
+| 问 | 出处（原文落点） | 本批新采的证据 |
+|---|---|---|
+| Q1 pydantic 归哪一档 | 第二期 AF8（`grep -n pydantic pyproject.toml` ⇒ **零命中** 现读复测；`af_api.py:63 from pydantic import BaseModel`） | `grep -c BaseModel src/autoforge/af_api.py` ⇒ **28**；事故的现读证据在 `af_service.py:131-138`（CI 解析到 pydantic **1.10**、被 `pytest-homeassistant-custom-component` 拖下来，v2 的 `Field(max_length=…)` 让 `import af_api` 当场 `ValueError` ⇒ 9 个测试文件连收集都跑不起来）；`pyproject.toml:11-14` 的 `dependencies` 只有 `jsonschema`／`typer`，`:23-26` 的 `api` extras 只有 `fastapi`／`uvicorn` |
+| Q2 ask 档三态（终止／挂起／继续） | 第二期 AF21 ask 半边（§二之一百零一就地留下的注释点名"语义等裁"） | `af_shadow.py:379-381` ask 档 `return None`；`af_shadow.py:551-568` `open_ask` 逐行读完＝只组票据＋`audit_write(ask_opened)`、**无任何 suspend**；`grep -n _suspend_for_confirm src/autoforge/af_shadow.py` ⇒ **0 命中**；对照面 `af_executor.py` 的 `requires_confirm` 走 `_suspend_for_confirm` ＋ `confirm_granted` 一次性放行 ⇒ **我不改这一格的实质原因**：真去 suspend 后 `resume` 重入同一 `do` 节点会被 band 再拦 ⇒ 无限重开 ask |
+| Q3 `_revoked` 的封顶口径 | 第二期 AF15 | `af_auth.py:154` 初始化／`:192` 加入／`:237-250` 全量 `update` 载入／`:252` 落盘；`grep -n "_revoked\s*\.\(discard\|remove\|clear\)"` ⇒ 除初始化外**零命中**（盘上没有裁剪路径）；它却登记在 `scripts/check_bounded_caches.py:505`＝有界门禁在替一条**只能单调增长的安全资产**背书"有界" |
+| Q4 ARCH-03 三问 | 本文 `:8688-8690`（解释器向谁对齐／要不要必跑真仿真／仿真依赖钉版本） | 机械半边已落（`check_ci_interpreter.py` A／B／C ＋19 腿＋六案变异），本件不动 `ci.yml` 钉值 |
+| Q5 ARCH-04 残余 | 本文 `:8715`、`:8745` | 与 Q4.2 **同题**，不另开问；devpi 那档与 `decisions/20261007-MA五件与AF一件-裁定.md` §六 Q1 相反 ⇒ **不重递** |
+| Q6 ARCH-05 四问 | 本文 `:8796` | 现读 `关键决策部\inbox` 对 `/api/build`／`/api/bind`／`/api/sim`／`/api/spec/compile` 这四个路径名的匿名面申请 **0 命中**（昨日那份不覆盖它们） |
+| Q7 ARCH-06 三问 | `docs/进程模型清单.md:145-156`（supervisor 归谁／serve 信号钩子／`af_live` 三枚 `global` 加锁） | `:141-143` 本批自量：9 枚 `global` 改写点所在函数体内**一个 `with` 都没有**，`af_live.py` 占 3 枚名而该模块进程内锁数为 **0** |
+| Q8 ARCH-07 五问 | `docs/可观测性清单.md:211-223` | 第 4 问（诊断环形缓冲 TTL）**已由 `20261006` 递出，本件只登记状态：待裁**；第 5 问现读射程外形状 0 枚 ⇒ 今天不必扩、也不预先立法；事实面 `:205-209`：`af_audit.py` 全模块 0 枚 logger 站点、具名码 17／142 站点＝**12% 的留痕有身份** |
+| Q9 `/api/credentials` 偏差追认 | `decisions/20261010-AF与DB与DPP十件-裁定.md` §五 Q3 追加 | 裁定要 owner 面明文、HEAD 两面都掩码（`af_config.py:32-36`＋`:188-193`、`af_api.py:520-522`）；本批按**更严**档钉 9 条判据不放宽，并把"要 owner 面明文就得同时删 4 条腿"这一后果交回裁定 |
+| Q10 裁定行号漂移订正 | 同上 | 裁定为 `/api/credentials` 引的 `af_config.py:132-133` 在现读 HEAD 不匹配（那一段是 `_atomic_write` 的 fsync／tmp 清理），真实落点 `:32-36`＋`:188-193` |
+
+**不重递清单**（防止 DCD 收到两份同题件）：ARCH-02 发布面四问＝`inbox/20261010-AF-发布面与镜像可追溯-决策申请.md`（昨日已投，待回话）；诊断环形缓冲 TTL＝`20261006` 那份；私有 devpi／制品库＝`20261007 §六 Q1` 已裁。
+
+### 三、窗口与不动面（写死，免得下一批误碰）
+
+Q1／Q3／Q6.3／Q8.2 的落笔点在 `af_api.py`／`af_auth.py`（登录线在途），一律排窗口之后，窗口内 AF 只交复测证据（继续挂 #79）；等裁期间不动 `ci.yml` 钉值、两份 `Dockerfile` base、`pyproject.toml` 的 `requires-python` 与 extra 约束、`af_live.py` 三枚 `global`、两枚安全降级的日志级别；台账措辞一律不写"按设计"（依 `decisions/20261010-AF与DB与DPP十件-裁定.md` §六 Q3 纪律）。
+
+### 四、任务位与提交态
+
+- #99 的"攒批递 DCD"半边**本批交出去**；#99 仍留"第二轮运行时审计对账"那半边，不结案。
+- 本批**零落码**：不改任何判据、不动任何门、不推任何政策口径——仓内只动这一份记账文件；申请件在仓外（`关键决策部\inbox`），不进 git。
+- 提交态：见本条 commit（`git show --stat HEAD` 为证，只有 `docs/ADM联动执行记录-AF.md` 一份文件）。
+
+—— AutoForge 开发 · 2026-10-11 · 十问打包递出，等裁期间机械半边照常只对账、不越权
