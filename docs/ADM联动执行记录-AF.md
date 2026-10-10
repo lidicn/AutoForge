@@ -8752,3 +8752,54 @@ M31 与 M33 各杀 4 条但方向不同：前者证明这条判据真的在按�
 - 存证（`E:\tmp\`，不进仓）：`arch04_mutation.result.txt`（十二案＋收尾，13 段带 `RC=`／`findings=`／`letters=`）／`arch04_mutate.sh`（副本树驱动，含逐案 restore）／`arch04_tree`（副本树）／`arch04_gates_a.txt`＋`arch04_gates_b.txt`＋`arch04_gates_c.txt`（各 8670 B，三份 md5 相同；c 跑在两份 docs 记账之后）／`_prev_body.txt`＋`_now_body_minus_section.txt`（本体对撞用，各 8210 B、只差两行等长数字）。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `d5a222b`、本批落码后现读 `af5f1cc`（本批六份文件：`scripts/check_vendored_wheel.py` 新建 209 行／`tests/unit/test_vendored_wheel_gate.py` 新建 333 行 24 腿／`docker/homesdk/README.md` 新建 90 行／`gates.sh` 22 增 0 删／两份 docs 记账。**没有换过任何一枚 wheel、没有动过任何一处引用面的文件名、没有动过权威摘要**；落的是"四个引用面必须同读一枚＋指路文档不许复制第二份摘要"的 rot 防线。报告三句"缺什么"里两句按现读已由裁定 20261007 §六 Q1 接住（校验和清单、源码与构建说明），第三句（本地装法与报错）按实测答在文档里；"改私有 devpi"与裁定相反不重递；"两侧真跑"与 ARCH-03 第 2 问同题攒批。**对报告建议的一处偏差已显式登记并请追认**（README 不钉 SHA256，改成指路＋判据 D 禁止复制）。变异 M0／M99 绿、M42／M43／M44／M45／M46／M47／M48 各杀一条、M49／M50／M51 各落 `exit 2`；相关判据合跑 50 passed；门禁三遍逐字节相同（8670 B／`770bad82…`；a／b 在代码＋README 落完、c 在两份 docs 记账改完且与 a 的 `diff` 为空），与上一批的 460 B 差值与两行数字变动逐条对上；AST 面同读、两枚红仍是登录线在途，tally／baseline 未动；未推 GitHub——推要 owner 点头
+
+## 二之九十九、收第六轮审计 ARCH-05（信任边界：写面／live 面 fail-closed，但边界外有两个可绕过入口，公开读面全押在"可信 LAN"这条网络前提上）：报告要的资产第一次落成**可 diff 的产物**＋新门五判据默认拒绝；复测把 87／86／90 三个数对上、把"`/api/metrics` 是公开读"那句按现读改掉，并露出报告没点名的一族（四条匿名 POST ＋ 第二份裸挂载安装器表）
+
+### 一、复测对撞表（报告每一句 vs 现读）
+
+| 报告的话（`docs/audit/AutoForge审计报告.html` §ARCH-05） | 现读 | 定性 |
+|---|---|---|
+| 「`/api/*` 的公开读端点（`/api/health`、`/api/metrics` 等 `scope=None` 的门）按裁定维持公开」 | 运行期路由表：`GET /api/metrics` 的顶层依赖是 `requires(read)` ⇒ `scope:read`；匿名档里的 GET 只有 `GET /api/health` 与 `GET /api/auth/has-admin` 两条 | **半句不成立**（`/api/metrics` 不是公开读）。这一句同时躺在本仓 README §4.1 里——本批按现读改掉那一格，并写明"逐条以清单为准、README 只写部署前提"，不留第三份副本 |
+| 「当前这些信息分散在 **60 多个**路由装饰器里」 | AST 现读 `af_api.py`：**87 枚**装饰器（41 get／41 post／4 delete／1 patch，`(method,path)` 无一对重复）；运行期 `build_app()` 的 `APIRoute`：**86 条**第一方＋4 条内置＝**90 条路由对象** | 报告低估了量级，但两个数**都能对上**：87−86＝那枚**条件注册**的 SPA 兜底 `af_api.py:1409 @app.get("/{full_path:path}")`（挂在 `if dist is not None or requested_mimo:` 下，本门装配不带 `ui_dir` ⇒ 不进表，明写成清单 §一 的射程边界①） |
+| 「`/api/auth/register` 是匿名的先到先得（`af_api.py:986-1009`）」 | 装饰器在 `:986`、处理器 `987-1009`——**逐字对上**；档位现读 `anon`、依赖列 `（无）` | 成立，且这是本轮三件 ARCH 里**唯一一条锚点没漂**的读数（ARCH-02／03 那批各有 off-by-one）。"该不该匿名、注册即发 `read+write+live`"归 DCD，见 §五 |
+| 「这条设计的完整性依赖『没有任何绕过 `requires()` 的路径』，而实际存在两条（BUG-01 的 login 旁路、BUG-02 的逃生舱放大）」 | 两条都在册：`POST /api/auth/login` 的无管理员兼容分支、`AF_ALLOW_NOAUTH=1` 的放大形状 | 成立且**已递**（`20261010-AF-第六轮审计严重项匿名换owner令牌并穿透F3-决策申请`，§二之九十三 归属表）⇒ 不重递、不动 `af_api.py` |
+| 「缺『信任边界清单』这一份可核对的资产」 | 本仓此前没有：`docs/` 全树 grep 信任边界／端点档位 0 命中 | **成立**，本批落码（清单＋门＋判据＋接线） |
+| 「建议：从 `build_app()` 的路由表生成清单并打进 CI（形状检查：新端点必须**显式声明 scope**，默认拒绝）」 | 已落为 `scripts/check_trust_boundary.py` ＋ `gates.sh` 一节 | **方向照办、机制换一枚**：不新增"声明键"，改**推导＋未登记即红**。偏差见 §三 末与 §四 的追认请求 |
+
+### 二、复测露出来的两格报告没点名的东西
+
+1. **四条匿名 POST**：`POST /api/build`、`/api/bind`、`/api/sim`、`/api/spec/compile`。它们身上挂着 `dependencies=[Depends(_readonly_guard)]`，文本读起来"设了守卫"，但 `_readonly_guard` 判的是**单写者租约**（只读降级实例拒绝写），不是令牌 ⇒ 运行期档位是 `anon`，零凭据即可调用。四条里 `POST /api/sim` 唯一真有写入（`_telemetry` 随 store 落盘）。这是安全第三轮 F-10「看起来设了权限」同一族，本轮报告没有把它算进"无鉴权 15 条"的构成里，也没建议处置——**AF 不自裁**，清单 §三 逐条认领并把口径递给 DCD（§五）。
+2. **第二份裸挂载安装器表**：报告只点名 `af_runtime_plugins.py:329`（`app.add_api_route(...)` 不带 `dependencies=`，整块包在 `except Exception: pass` 里 ⇒ 接线即漏、挂载失败也不响）。同源自查查出 `af_conflict_runtime.install_api` 那份 `_ROUTES` 表**形状完全一样**（5 条端点里含 `POST /api/conflicts/{automation_id}/reset` 与 `DELETE /api/conflicts/locks/{entity_id}`，挂载走 `getattr(app,"add_api_route")`），一并量进射程。两者现读都**没有 src 内调用者**（判调用读 AST 的 `ast.Call` 节点，注释里出现 `install_api(app, service)` 不算——这一格本批真修过：先前按名字 grep 把注释当成接线，差点让门在"其实没接线"的文件上假红）。
+
+### 三、落码（AF 职权内的机械半边；**鉴权装配一寸没动**）
+
+1. **`docs/信任边界清单.md`（本批新建，162 行／18337 B，CR=0）**＝报告要的那份资产。§一 口径四条（真源只有运行期路由表；档位怎么从 `dependant.dependencies` 顶层推导——`requires(X)` 闭包读 `scope` 自由变量、只有 `authenticated()` ⇒ `optional`、只有安全方案实例 ⇒ `bearer-in-handler`、什么都没有 ⇒ `anon`；`_rate_limit_dep` 全局且不鉴权；两格射程边界明写）；§二 自动段 90 行表格（`--write` 生成，人改即红）；§三 非鉴权面登记 14 行（每条给处理器名＋仓内依据＋理由）；§四 未挂载安装器登记 2 行；§五 复测对撞 6 行。
+2. **`scripts/check_trust_boundary.py`（本批新建，477 行／24756 B，纯 stdlib＋导入 `build_app(store_root=临时目录)`）** 五判据各自单独可红：**A** 清单漂移；**B** 默认拒绝（落非鉴权档而未登记即红）；**C** 登记不可核对（处理器名与现读不符／依据不是仓内真实存在的文件／理由空、过短或占位词）；**D** 只减不增（登记里那条已不在非鉴权档就必须删）；**E** 安装器（有挂端点的机制而未登记即红；断言只认「未挂载」／「已挂载」两形状；登记写"未挂载"却现读有调用者 ⇒ 报**接线已经发生**）。八种射程塌法一律 `exit 2`（清单不在／标记被改／两节任一缺失／导入或装配失败／读出 0 条路由／某条 APIRoute 读不出 `dependant`／两节整节解析不出）。
+3. **`tests/unit/test_trust_boundary_gate.py`（本批新建，390 行／32 腿）**：红腿逐条打 A／B／C／D／E＋射程档＋"什么都不改"的干净档，真仓绿腿把 `90／86／4／14` 与三档 scope 读数钉住，并含"把修前形状种回去必须被扫出"的反空集腿。
+4. **`gates.sh`** 新增一节（**26 增／0 删**，纯加法；`bash -n` `RC=0`；`exit 2` 与红两档结论各自单独给，文案里的反引号逐个转义 ⇒ 覆盖门现读"echo 文案 74 行无未转义反引号"）。
+5. **README §4.1** 改掉那句"`/api/health`、`/api/metrics` 一类 `scope=None`"（现读只有两条公开读 GET），并加一条"清单＋门"的指路（8 增／3 删）。
+
+**偏差登记（须请追认）**：报告 §建议 的原话是「形状检查：新端点必须**显式声明 scope**，默认拒绝」。本批**没有新增声明键**——字面落地要给每条路由挂一枚新元数据，那要动并发登录线在途的 `af_api.py`，并且在依赖树之外造出第二份真值（与清单 §一 第一条口径正面冲突：真源只能有一个）。落的是**推导＋未登记即红**：`requires(X)` 那枚闭包本身就是声明，本门从运行期读它；落在非鉴权档却没人认领的新端点当场红（判据 B），且已登记的面只减不增（判据 D）。若 owner／DCD 认为仍要显式声明键，改动面在新脚本一处（把"读依赖树"换成"读声明键"），不影响 A／C／D／E。
+
+### 四、读数
+
+- **门本体**：`PYTHONPATH=E:/NAS/AutoForge/src …Python313/python.exe scripts/check_trust_boundary.py E:/NAS/AutoForge` ⇒ `RC=0`，读数 `✓ 信任边界门禁干净（现读 90 条路由：第一方端点逐条对撞清单一致；14 条非鉴权档端点全部在册且处理器/依据/理由都核得过、无过期登记；2 个挂端点的机制全部登记为未挂载并现读复核过没有调用者）`（`E:\tmp\tb_gate_now.txt`）。`--write` 复跑不产生 diff（自动段幂等）。
+- **新判据**：`pytest tests/unit/test_trust_boundary_gate.py -q` ⇒ **`32 passed in 18.86s`／`RC=0`**（`E:\tmp\tb_unit_now.txt`）。
+- **变异十五案＋收尾**（驱动 `E:\tmp\tb_mut.py`，副本树 `E:\tmp\tb_mut/tree`＝门脚本＋整棵 `src/`＋清单＋**每一条 `依据：` 指向的文件**（第一趟没带锚点，六条 C 判据立刻红，是射程外的树不是缺陷），结果 `E:\tmp\mutation_arch05.result.txt` 5584 B）：**M0** 空注入 `RC=0`；**MZ99** 登记理由同义改写 `RC=0`（门不判散文）；**MA1** 把某行档位手抄成 `scope:read` → 恰 1 条 **A**；**MA2** 凭空加一条 `GET /api/ghost` → **A**；**MA3** 删掉真在的 `POST /api/bind` 行 → **A**；**MB1** 删掉 `POST /api/build` 的登记行 → **B**（默认拒绝）；**MC1** 处理器换成 `api_bind_v2` → **C**「路径还在但里面换人了」；**MC2** 依据改成 `../../../../windows/win.ini` → **C**；**MC3** 理由改成 `待补` → **C**；**MD1** 留一条已升成 `scope:read` 的过期登记 → **D**；**ME1** 新增挂端点机制的 `af_ghost_installer.py` 而不登记 → **E**；**ME2** 断言写成"待定" → **E**；**ME3** 登记写"未挂载"却新增调用它的 `af_ghost_wiring.py` → **E**「**接线已经发生**」；**MX1／MX2** 两枚射程塌各 `RC=2`；restore 后复跑 `RC=0`。合计 `腿数 15＋1；FAIL 0`。**五判据各有专属腿，两枚射程塌各有专属腿。**
+  - 途中两次自证失败值得记：**MX2 第一版是假绿**——`re.sub` 没命中却没断言命中数，腿报 `RC=0` 而什么都没注入；改成下标切片重写整节，并给每条腿加"文档与 src 都没变 ⇒ 判 FAIL（注入未生效）"的通用护栏。**MC1／MD1 第一版各锚空一次**（模式串写成 `（处理器：)?api_bind ` 与"追加到文件末尾"），前者改字面 `处理器：api_bind ·`、后者改成在 `- \`POST /api/spec/compile\`` 那行之后插入，都靠"锚点没命中就 `SystemExit`"当场暴露而不是静默绿。
+- **整树单测（分段跑）**：`tests/unit` **`6 failed, 3103 passed, 43 skipped … in 288.59s`／`RC=1`**（`E:\tmp\chunk_unit.txt`），六条红**同名同因**于 §二之九十五 记的那一组，全在鉴权面且没有一条在本批文件里：`test_dcd_20261004_auth_limits.py::test_owner_face_still_sees_plaintext`、`::test_third_party_write_token_gets_the_mask_not_the_code`、`test_v0_8_auth.py::test_legacy_single_token_backward_compat`、`::test_multi_token_scope_grading`、`::test_revocation_immediate_over_http`、`test_v1_4_token_expiry.py::test_expired_token_is_403_over_http`；另四段 `tests/contract` `57 passed`／`RC=0`、`tests/f14` `104 passed`／`RC=0`、`tests/acceptance` `38 passed, 10 skipped`／`RC=0`、仓根 33 份 `553 passed, 65 subtests passed`／`RC=0`（各段存证 `E:\tmp\chunk_*.txt`）。**为什么分段**：本机一条 `pytest tests` 长进程三次都在 3–4.5 分钟处被截断（shell 回 `RC=127`、没有汇总行），截断点还每次不同 ⇒ 那种读数不能写进记账，改成分段跑并把每段的落盘件名写全。
+- **门禁**：**三遍逐字节相同**——各 **9088 B**、整份 md5 **`1c13299d4bfe894d71be72971f6ded16`**、`GATES_RC=1`（a 在代码＋清单＋README 落完、b 在两份 docs 记账落完、c 复跑确认；a／b／c 两两 `diff` 均为空 ⇒ 本批两份 docs 记账没移动门禁一个字节）。两枚红＝登录线在途 `af_api.py:984`／`:1005`（`fake-ok-const`，`新增/未获批 2 条（error 0 / warn 2）`），计数棘轮现读 `全量违规 97 条 / 登记上限 97 条`、`except-pass-broad=19 | fake-ok-const=78`、基线内存量 95 条、过期条目 0 条；本门在 HEAD 上的绿读数原样进了输出（`✓ 信任边界门禁干净（现读 90 条路由…）`）。与上一批 `arch04_gates_c.txt`（8670 B／`770bad82…`）的差值 **418 B 逐字节可解释**：新节三行 131＋275＋1＝407 B，＋本批把 `GATES_RC=1` 这行写进同一份文件的 11 B；其余只有**等长数字**换了——`undefined-name` 扫描 214→**215** 个文件（多的那枚就是本批新脚本），覆盖门自认 `check_*.py` 21→**22**／`gates.sh` 覆盖 20→**21**／echo 文案 71→**74** 行，**无需新豁免**，`tally`／`baseline` 一字未动。**顺带更正我自己上一节的一处口径**：§二之九十八 写"整份含 `GATES_RC=1` 标签行"，现读那份 `arch04_gates_c.txt` 的末行是"结论：AST 门禁红（exit=1）…"，标签行并不在文件里（8670 B 是**不含**标签行的尺寸，所以本批的 9088 B 才要加回那 11 B 才能对撞）——记下来是因为下一次对撞会拿这两个数当同一口径。
+
+### 五、递 DCD 的那半边（攒批，今天不投同日第三件 AF 件）
+
+- **已递、不重递**：零凭据换全权限那两格（`register` 先到先得／`login` 无管理员兼容分支）＝`20261010-AF-第六轮审计严重项匿名换owner令牌并穿透F3-决策申请`，见 §二之九十三 归属表。
+- **从未递过、本批新登记为待裁**（现读 `关键决策部\inbox` 对 `/api/build`／`/api/bind`／`/api/sim`／`/api/spec/compile` 这四个路径名的匿名面申请 **0 命中**，上面那件不覆盖它们）：① 四条匿名 POST 该不该继续匿名（`/api/build`／`/api/bind`／`/api/spec/compile` 只回显不落盘，`/api/sim` 真落遥测——**这一格不是同一问题**）；② 若要收，收到哪一档（`read` 还是 `write`；`_readonly_guard` 与令牌是两回事，不能拿它当代替鉴权）；③ "新端点必须显式声明 scope"要不要成为**装配期硬约束**（＝要动 `af_api.py` 的在途面，AF 不自决）；④ 清单 §三 那 14 行的"理由"要不要由 DCD 逐条签认，还是 AF 认领即可。⇒ 与 #99 那批（ARCH-03 口径三问＋ARCH-04 两侧真跑）同批递，等裁期间清单不写"按设计应当匿名"，也不写"匿名面已收窄"。
+- **本门刻意不判的**：判"差有没有被认领"，不判"该不该这样"。
+
+### 六、任务位与残余
+
+- ARCH-05 **收口**：机械半边（清单＋五判据＋32 腿＋十五案变异＋接线）落码，口径半边四问递裁。等裁期间不动 `af_api.py`／`af_auth.py` 的任何一处鉴权装配，不动那四条路由的 `dependencies=`。
+- #98 还剩：ARCH-06（进程模型：三套互不相识的同步原语／无 supervisor／无优雅停机，报告称 `src/` 全树 `atexit`／`signal.signal` 命中 0——这一条要现读复核，本批 §十八 第 15 条已经动过 watch 的收尾）、ARCH-07（可观测性）、ARCH-08（仓库卫生；README 剩 2 处死链在那一格）、ARCH-09（名单手抄）、ARCH-10／11（原文未读）逐条复测。
+- 存证（`E:\tmp\`，不进仓）：`tb_gate_now.txt`／`tb_unit_now.txt`／`tb_mut.py`（副本树驱动，含逐案 restore 与"注入未生效"护栏）／`tb_mut/tree`（副本树）／`mutation_arch05.result.txt`（15＋1 案，`FAIL 0`）／`chunk_unit.txt`＋`chunk_contract.txt`＋`chunk_f14.txt`＋`chunk_acceptance.txt`＋`chunk_rest.txt`（五段单测）／`arch05_gates_a.txt`＋`arch05_gates_b.txt`＋`arch05_gates_c.txt`（各 9088 B，三份 md5 相同 `1c13299d…`；b 跑在两份 docs 记账之后、c 是复跑确认）。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `079facc`、本批落码后现读同 `079facc`（本批未提交；`af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`／`docs/audit/参考/FFL-200题测试提示词.md` 都是并发在途文件，一条不在本批改动面里。本批七份文件：`docs/信任边界清单.md` 新建 162 行／`scripts/check_trust_boundary.py` 新建 477 行／`tests/unit/test_trust_boundary_gate.py` 新建 390 行 32 腿／`gates.sh` 26 增 0 删／`README.md` §4.1 8 增 3 删／两份 docs 记账。**没有改过任何一处鉴权装配、没有新增路由、没有动过任何一枚 scope**）；落的是"边界从可读的代码变成可 diff 的产物"：87 装饰器／86 运行期第一方／90 路由对象三个数对上，`/api/metrics` 那句过期口径按现读改掉，报告没点名的四条匿名 POST 与第二份裸挂载表量进射程，五判据各自可红＋八种射程塌 `exit 2`＋十五案变异 `FAIL 0`；对报告建议的一处偏差（不落声明键、落"未登记即红"）已显式登记请追认；四问待裁与 #99 同批递；门禁三遍逐字节相同（9088 B／`1c13299d…`，两枚红＝登录线在途），未推 GitHub——推要 owner 点头

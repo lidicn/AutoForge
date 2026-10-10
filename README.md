@@ -225,9 +225,14 @@ forge sim examples/ir/case01_day_light.json
 这是 DCD 裁定 20261004 §一 Q2 要求"写成显式前提"的那一条，不是注释里的口头约定：
 
 - **`--host 0.0.0.0` 保留**：DB（homesdk）跨机器调 AF，绑 loopback 会直接打断联动环。
-- **因此这一面默认不出可信 LAN**：`/api/*` 的公开读端点（`/api/health`、`/api/metrics` 一类
-  `scope=None` 的门）按裁定维持公开，判据是铁律 #6——只读面不能反过来依赖令牌系统。
-  它们的"公开"边界靠的是这条网络前提，而不是鉴权。把它挪出可信 LAN 之前，先回来读这一段。
+- **因此这一面默认不出可信 LAN**：`/api/*` 的公开**读**端点现读只有两条——`GET /api/health` 与
+  `GET /api/auth/has-admin`（那句把 `/api/metrics` 也算成公开读的旧口径**不成立**：它在运行期路由表上读作
+  `requires(read)`，属 `scope:read` 档）。匿名档维持公开按裁定 20261004，判据是铁律 #6——只读面不能
+  反过来依赖令牌系统。它们的"公开"边界靠的是这条网络前提，而不是鉴权。把它挪出可信 LAN 之前，先回来读这一段。
+- **清单与默认拒绝**：端点 × 信任档 × 匿名性的完整对账表在 `docs/信任边界清单.md`，由
+  `scripts/check_trust_boundary.py` 从 `build_app()` 的**运行期路由表**现生成（不是 `grep` 装饰器条数），
+  并已接进 `gates.sh`。落在非鉴权档而未在 §三 登记的第一个方端点即红；登记里的"依据"必须指得到仓内真源。
+  本文件只写前提，逐条读数不在这里复制第二份。
 - 写面 / live 面仍然 fail-closed：无令牌即 403，本地放行只有 `AF_ALLOW_NOAUTH=1` 一个逃生舱。
 - **MCP 面同样默认拒绝（裁定 20261004 §一 Q2=B）**：`forge mcp` 未配 `AUTOFORGE_TOKENS` 时，需鉴权工具
   （write / live 域，注册表里 11 条）一律拒；公开工具（20 条，含 `af_health`/`af_draft`/`af_whoami`）照常可用。
