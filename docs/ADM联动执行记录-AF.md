@@ -8647,3 +8647,56 @@ M31 与 M33 各杀 4 条但方向不同：前者证明这条判据真的在按�
 - 存证（`E:\tmp\`，不进仓）：`arch02_tests.txt`（35 条）／`arch02_unit.txt`（71 条，`RC=0`）／`mutation_arch02.result.txt`（三案）／`gates_arch02_a.txt`＋`gates_arch02_b.txt`（各 7835 B，md5 `3e32e25d7c38a24b496d2faf38e0aab8`，与上一批 `gates_arch01_c.txt` 同一枚 md5）／`mutate_arch02.py`（副本树驱动，仓内不留未跟踪件）。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `0a26dd9`、本批四份文件（`af_orchestrator.py` 手抄收敛／`tests/test_af_ir_version.py` +2 条腿／`README.md` §1.1 双轨＋里程碑 v2.5＋删钉死计数＋24 处链接重钉／两份 docs 记账）；**一枚版本号取值都没改**（裁定 20261001·G 钉着 `0.1.0` 与 `API_VERSION` 不动，审计建议 1 按裁定驳回）；变异 M0 绿、M40／M41 各杀一条；相关单测 35→71 全绿；门禁两遍与上一批**逐字节相同**（md5 `3e32e25d…`）⇒ 本批没移动门禁一个字节，`GATES_RC=1` 的两枚红仍是登录线在途的 `af_api.py:984/:1005`；发布面四问已投 `20261010-AF-发布面与镜像可追溯-决策申请.md`（`validate-application.ps1` 六门全 ✓）；未推 GitHub——推要 owner 点头
+
+## 二之九十七、收第六轮审计 ARCH-03（"CI 解释器口径与自述环境不一致，真 vhass 在 CI 上不可能按本机口径跑"）：报告三处读数要订、一条因果链要反转；机械半边（新门＋19 腿＋六案变异）AF 自决落码，交付／验证口径三问攒批递 DCD
+
+### 一、复测：报告点名的格子逐格对撞
+
+| 报告断言（`docs/audit/AutoForge审计报告.html` :777–:788 现读原文） | 现读（命令与行号见 §四 证据） | 定性 |
+|---|---|---|
+| 「`.github/workflows/ci.yml` 的**四个作业**全部使用 `python-version: "3.11"`（:16、:35、:56、:88 附近各一处）」 | `grep -n "^  [a-z0-9-]*:"` 在 `jobs:`（`:8`）之后 ⇒ **6 条作业**：`test:9`／`contracts:29`／`gates:50`／`architecture:83`／`ui:108`／`ui-user-mimo:159`；`grep -n "python-version:"` ⇒ **4 枚钉值在 :16／:36／:57／:90**，全是 `"3.11"` | **一半成立一半要订**：钉值确实四枚且同值，但作业数 4→6（另两条是 node 面：`:115 node-version: "20"`、`:170 node-version: "22"`），行号三处 off-by-one |
+| 「README 快速开始明写需要 Python 3.14＋」 | `README.md:155`「⚠️ 需要 Python 3.14+：pytest-homeassistant 要求 `python_requires>=3.14`」 | 成立 |
+| 「`pyproject.toml` 的 dev extra 含 `pytest-homeassistant-custom-component` 且**未钉版本**」 | `tomllib` 现读：该依赖在**两枚 extra**里各列一次（`sim` 与 `dev`，字面在 `:19` 与 `:35`），两处都无版本约束；`requires-python` 是 `>=3.11`（`:10`） | 成立（且报告只数了一枚 extra） |
+| 「`addopts = "-p no:homeassistant"` 默认禁用插件，vhass 标记的用例 skip ⇒ CI 走 skip 分支」 | `pyproject.toml:78` 原样在册；`pytest tests -q -m vhass --collect-only` ⇒ **`10/3858 tests collected (3848 deselected)`**（标记写在 3 处源码：`tests/acceptance/test_case_study_room_vhass.py:34`／`test_g5_fault_vhass.py:28`／`test_vhass_native.py:36`） | 成立——这一格是本主题的真承重面 |
+| 「CI 上跑的是与**本机**不同的解释器（3.11 vs 3.14）」 | 现读是**四方口径**不是两方：CI 钉 `3.11`／本机门禁解释器 `Python 3.13.2`（`gates.sh` import 冒烟那行自报）／交付镜像 `Dockerfile.api:10 FROM python:3.14-slim`／测试镜像 `Dockerfile.test:13 FROM python:3.14-slim` | **方向对、形状不对**：把它读成"CI vs 本机"两方，就会只想到"把 CI 升到 3.14"；四方 spread 才是这一节要防的 rot 形状 |
+| 「回归基线 1300 passed / 51 skipped 是本机读数，不能代表 CI」 | 该行在 ARCH-02 批已删（`README.md:33` 现读是"README 不钉死测试计数"那段） | **已自愈**（报告写于该次改动之前），本批不复动 |
+
+### 二、报告的因果链有一处反转：「pip 会回溯到老版本」是真读数，但它推出的后果不成立
+
+报告把这格标了「疑似（需在 runner 上核对）」——**它其实可量，不用上 runner**（PyPI 元数据现读，存证 `arch03_pypi.txt`）：该包 578 枚 wheel 里，`>=3.11` 能取到的最新是 `0.13.109`，`>=3.14` 是 `0.13.371`，相隔 **262 个发布**。所以"CI 装到的那一版与 `.venv314` 装的不是同一版"确实成立。
+
+**但结论要倒过来**：CI 的 `addopts` 里那枚 `-p no:homeassistant` 把插件整个禁用（`pyproject.toml:78`），装到老版本这件事在 CI 上**不参与执行**——所以报告说的"CI 与本机跑的仿真依赖不是同一个版本"，在"跑"这一层不成立（CI 上根本不跑）；成立的是更朴素也更要紧的一句：**真仿真从来没有在任何自动化链上跑过**。两条独立证据：`docker/Dockerfile.test:11` 自己写着「⚠️ 本机为 Windows，本文件未经实跑验证」；`ci.yml` 六条作业里**没有一条 docker 作业**（grep `docker` 只命中 `pip install docker/homesdk/*.whl` 那三行装 wheel 的步骤）。⇒ 这一格的正确修法不是"给仿真依赖钉版本，让 CI 与本机同版"（那是把一条不参与执行的线对齐），而是问"要不要给真仿真开一条必跑的链"。那句话是 DCD 的问，不是 AF 自决的。
+
+### 三、AF 自决落码的三格（机械可判，一律不碰"对齐成哪一档"）
+
+1. **新门 `scripts/check_ci_interpreter.py`**（纯 stdlib：`tomllib` ＋ 行正则），三条各自可红的规则：**A** `ci.yml` 全部 `python-version:` 钉值必须同值（四枚手抄没有东西保证同步——改一个作业的解释器，另外三个照旧跑旧口径而 CI 每作业各报各的绿）；**B** 那枚钉值必须被 `pyproject` 的 `requires-python` 允许（区间解析不了要**报**而不是跳过）；**C** 钉值与某份镜像 `FROM python:` base 不一致时，必须在 `INTERPRETER_DRIFT` 里**显式认领**，理由要同时给两个可核锚点（一个带钉值的真实作业＋一条盘上真在的路径），登记了却没差 ⇒ 红（「豁免只减不增」，与 `check_gates_coverage.py` 的 `CI_ONLY_EXEMPT` 同一族语法）。射程读不出＝**`exit 2`** 五种形状（`ci.yml` 缺／作业数 0／钉值数 0／`requires-python` 缺或解析不了／镜像里没有 `FROM python:` base）——"没发现"不等于"没问题"。
+2. **判据 `tests/unit/test_ci_interpreter_gate.py`（本批新建，19 条腿）**：tmp 树红腿覆盖 A／B／C 三条与 `_satisfied` 的运算符（`>= > <= < == != ~=`、带 `*` 返回 `None` 不判）、4 条 `exit 2` 下限、一枚"改写登记理由的措辞不动读数"（门不判散文）；真仓绿腿两枚把现状钉死：`check(ROOT)` 空、`info` 读数 `jobs=6 / pins=4 / values=["3.11"] / requires_python=">=3.11" / images={api:3.14, test:3.14}`，以及"漂移集合恰等于登记集合、两条理由的锚点都核得过"。
+3. **README 的口径鲜度**：vhass 那一栏由「自动启用真 vhass」改成「**显式加载插件后**才启用真 vhass」（旧措辞与 `addopts` 禁用互相打脸）；表下新增一段（7 行）写明 **CI 不属于表里任何一栏**：四条 Python 作业钉 3.11、`addopts` 在那边同样生效 ⇒ 那 10 条真仿真用例在 CI 走 skip 分支、CI 绿只证明内置 FakeHA 那条链过了；权威跑法是 `docker run autoforge-test`，而那份文件自陈未经实跑验证；要不要对齐／要不要增设必跑作业已列 ARCH-03 待裁，手抄一致性由新门判。
+
+**规则 C 的设计要点**（也是"机械半边"与"口径半边"的分界线）：门判的是**差有没有被认领**，不判**该对齐成哪一边**。M53 就是这一条的自证——把交付镜像 base 抄成 `3.13`，门照样绿。如果门去要求"镜像必须等于 CI"，它就在替 owner 选口径，那是越权。
+
+### 四、读数
+
+- **变异六案**（驱动 `E:\tmp\mutate_arch03.py`，副本树 `E:\tmp\arch03_tree`，结果 `mutation_arch03.result.txt`；工作树未碰）：M0 空注入 `RC=0`；**M50**（`:57` 钉成 `3.12`）`RC=1` 杀 A，文案逐格点出 `:16 钉 3.11、:36 钉 3.11、:57 钉 3.12、:90 钉 3.11`；**M51**（`requires-python` 改成 `>=3.14`）`RC=1` 杀 B；**M52**（测试镜像 base 改回 `3.11`，让差消失却不删登记）`RC=1` 杀 C 的"只减不增"；**M53**（交付 base 改 `3.13`）`RC=0`——设计自证；**M99** 同义改写 `RC=0`——门不判措辞。
+- **单测**：`test_ci_interpreter_gate.py`（19）＋两份近邻门禁判据（`test_mqtt_runtime_dep_gate.py`、`test_gates_coverage_gate.py`）合跑 ⇒ **`83 passed`**，`RC=0`。
+- **门禁三遍**（代码＋README 改完跑 a／b 两遍：`gates_arch03_a.txt`／`_b.txt`，各 8248 B；两份 docs 记账改完再跑第三遍 `gates_arch03_c.txt`，同 8248 B）：整份 md5 **不同**，`cmp -l` 只报一处字节差（偏移 8242，`a` vs `b`）——差的是我驱动自己打的 `pass a`／`pass b` 标签；把末行剥掉，**三遍的门禁本体逐字节相同：8210 B／md5 `da90f82142101549244127f28d9902f1`**（c 与 a 的 `diff` 空 ⇒ 本批记账那两份 docs 没移动门禁一个字节）。⇒ **本批与上一批的 md5 必然不同，这是加了门的必然结果，不是口径漂移**：与上一批本体（7799 B／`a53d3410ebc0b777108edf980d3add28`）对撞，`diff` 只有三处移动——新节 3 行；覆盖门自认新脚本（`check_*.py` 19→**20** 个、`gates.sh` 覆盖 18→**19**、echo 文案 65→**68** 行，**无需新豁免**）；`undefined-name` 扫描 212→**213** 个文件（多的那一个就是本批新脚本；`src` 面那份读数仍是 102 个）。AST 面两批**逐行同读**：`新增/未获批 2 条（error 0 / warn 2）`、`计数：except-pass-broad=19 | fake-ok-const=78`、`全量违规 97 条 / 登记上限 97 条`，两枚红仍是登录线在途的 `af_api.py:984/:1005`。`bash -n gates.sh` `RC=0`；`gates.sh` diff **22 增／0 删**（纯加法），`README.md` 8 增／1 删且行尾保住 CRLF（整文件 CR 278→285，与净增 7 行一致）。新门在 HEAD 上的绿读数以 `✓ CI 解释器口径门干净（ci.yml 6 个作业、4 枚钉值全为 3.11 且被 requires-python = ">=3.11" 允许；镜像侧 …3.14／…3.14，其中与钉值不一致的 2 格已逐条核过登记理由的两个锚点）` 原样进了门禁输出。
+- **自证接缝**（这一格是本仓的递归风险）：`ci.yml:81` 跑 `bash gates.sh`，而新门读的正是 `ci.yml`——runner 上 `actions/checkout` 会带 `.github/`，锚点在远端同样存在；门若读不到就 `exit 2`，不会假绿。
+- **一处更正我自己的上一节**：§二之九十六 残余那行写「`ci.yml` **全部作业**钉 `python-version: "3.11"`」不准确 ⇒ 现读 6 条作业里只有 4 条带钉值，另两条是 node 面。**报告说"四个作业"数字不对，我那句"全部作业"口径不对，两头都按现读改。** 顺手记一枚不在射程内的读数：两条 node 作业钉的是**不同的** node（20 与 22），本批不判、也不扩门。
+
+### 五、递 DCD 的那半边：交付／验证口径三问（攒批，不今天单投）
+
+1. CI 的解释器向谁对齐：CI→镜像（升 3.14）／镜像→CI／还是先把 `requires-python = ">=3.11"` 与 README 那句「需要 Python 3.14＋」统一成一个口径再谈对齐；
+2. 要不要为真 vhass 增设一条**必跑**作业（`Dockerfile.test` 那条"权威跑法"自己未经实跑验证；开了就把 CI 从"永远绿"变成"可能红"）；
+3. 仿真依赖要不要钉版本（`sim`／`dev` 两枚 extra 各列一次、两处都没钉：`:19`／`:35`）。
+
+不自决的理由三条，都超出"AF 职权内的自家文件"：镜像重烤要走 NAS 变更窗；增设必跑作业是把验收口径改成"允许红"；`pyproject` 的依赖口径与交付环境是对外承诺面。按 `decisions/20261010-AF与DB与DPP十件-裁定.md` §六 Q3 那条纪律，这三问**不许**在架构文档里记成按设计。投递方式：与 #99（第二轮运行时审计）那批待裁项**同批递**，不为一格单开一份件——上一批今天刚投过发布面那份（ARCH-02），同一天投两份 AF 件会把裁决排到队尾。本批先把机械半边落地，让"差"在台账上看得见、并让**任何人再抄一次钉值或偷偷移出镜像都会红**，口径留给裁定。
+
+### 六、任务位与残余
+
+- ARCH-03 **半收口**：机械半边（新门＋19 腿＋六案变异＋README 口径鲜度）落码；口径三问攒批等裁。等裁期间 AF 不动 `ci.yml` 的钉值、不动两份 `Dockerfile` 的 base、不动 `pyproject` 的 `requires-python` 与 extra 版本约束。
+- ARCH-04 原文随本批一并提取（`docker/homesdk/homesdk-0.3.2-py3-none-any.whl` 随仓提交、无来源与构建说明、建议补 `docker/homesdk/README.md`＋SHA256、最好改私有 devpi／制品库＋锁文件；报告另点名 `af_executor`／`af_runtime` 硬依赖 `homesdk.consent` 承载 G4 canary 同意闸门，而 wheel 是 `py3-none-any` 安装不受版本约束、运行时未在 3.11／3.14 两侧都验过）。**本批只抽查了两枚锚点**：`.gitignore:64` 确为 `!docker/homesdk/*.whl`、盘上那份 wheel 为 49374 B；其余**未复测**，归 #98 下一格。
+- #98 还剩：ARCH-05（信任边界：写面／live 面 fail-closed，但报告说边界外有两个可绕过入口、公开读面全押在"可信 LAN"这一条网络前提上）、ARCH-06（进程模型）、ARCH-07（可观测性）、ARCH-08（仓库卫生；README 剩 2 处死链在那一格）、ARCH-09（名单手抄）、ARCH-10／11（原文未读）逐条复测。
+- ARCH-02 发布面四问等裁；ARCH-03 口径三问待攒批。
+- 存证（`E:\tmp\`，不进仓）：`mutation_arch03.result.txt`（六案）／`arch03_pypi.txt`（578 枚 wheel 的八档 `requires-python` 读数）／`gates_arch03_a.txt`＋`gates_arch03_b.txt`＋`gates_arch03_c.txt`（各 8248 B；剥末行后本体 8210 B、md5 `da90f821…`，三遍同一本体；c 跑在两份 docs 记账改完之后）／`body_gates_arch02_c.txt`＋`body_gates_arch03_a.txt`（本体对撞用，差 3 处移动逐条已解释）／`mutate_arch03.py`（副本树驱动）／`arch03_tree`（副本树）。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `5616dc6`、本批五份文件（`scripts/check_ci_interpreter.py` 新建／`tests/unit/test_ci_interpreter_gate.py` 新建 19 腿／`gates.sh` 22 增 0 删／`README.md` vhass 措辞＋CI 一段／两份 docs 记账）；**没有动过任何一枚解释器版本取值**：`ci.yml` 四枚钉值仍 `3.11`、两份镜像 base 仍 `3.14`、`requires-python` 仍 `>=3.11`——落的是"手抄要一致＋差要显式认领"的 rot 防线，对齐方向三问递裁；报告的"四个作业"（实为 6 作业 4 钉值）、三处行号、"3.11 vs 3.14 两方"（实为四方 spread）与"pip 回溯导致 CI 与本机跑的依赖不同版"（依赖在 CI 不参与执行，真缺陷是**真仿真从未在自动化链上跑过**）逐条订正；变异 M0／M53／M99 绿、M50／M51／M52 各杀一条；相关门禁判据合跑 83 passed；门禁三遍本体逐字节相同（8210 B／`da90f821…`；a／b 在代码＋README 改完、c 在两份 docs 记账改完），与上一批差 411 B 全部由新增那一节解释；AST 面两批同读、两枚红仍是登录线在途 `af_api.py:984/:1005`，tally／baseline 未动；未推 GitHub——推要 owner 点头

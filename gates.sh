@@ -223,6 +223,19 @@ echo "══ 联动桥依赖门禁（paho：声明处 / 交付面 / CI 面 三�
 dep_rc=$?
 
 echo
+echo "══ CI 解释器口径门（ci.yml 手抄钉值一致 / 满足包声明 / 与镜像 base 的差要显式认领）══"
+# 第六轮审计 ARCH-03 复测（§二之九十七）：ci.yml 的四个 Python 作业把解释器**手抄了四遍**
+# （:16、:36、:57、:90 全是 "3.11"），包声明是 pyproject.toml:10 的 requires-python = ">=3.11"，
+# 两份镜像 base 是 3.14（docker/Dockerfile.api:10、docker/Dockerfile.test:13），README 快速开始明写
+# 「需要 Python 3.14+」。四枚手抄没有任何东西保证同步；包下限抬一次（例如为了跟镜像对齐）而钉值不跟上，
+# CI 会继续绿并给出一条没被验过的交付环境。而"CI 向镜像对齐还是镜像向 CI 对齐"属交付/验证口径，
+# 已列 ARCH-03 待裁 ⇒ 本门不替主人拍板，只判三条形状：钉值彼此相等、钉值被包声明允许、
+# 与镜像 base 的差挂着锚点核对得住的登记。真仿真那条链在 CI 上恒 skip（pyproject.toml:78 的 addopts
+# 默认不加载 pytest-homeassistant 插件），所以本门不假装 CI 验过仿真——那一条在 docker 面上。
+"$PYTHON" "$REPO/scripts/check_ci_interpreter.py" "$REPO"
+interp_rc=$?
+
+echo
 echo "══ 有界缓存注册表门禁（TTL 与硬上限成对、回收要有测试钉住、只写不读判死）════"
 # 第六轮审计 §三 把"新增有界缓存必须同时给 TTL 与硬上限，并在测试里断言纯写不读也被回收"记成
 # "约定 + 门禁可见"，但约定的两半里当时没有任何能判红的东西（只活在审计正文里）。裁定 20261004 §一 3
@@ -366,6 +379,15 @@ fi
 if [ $dep_rc -ne 0 ]; then
   echo "结论：联动桥依赖门禁红（exit=$dep_rc）。paho-mqtt 要**声明在一处、装到三个面**（交付面 \`docker/Dockerfile.api\`、CI 面 \`docker/Dockerfile.test\` 与 \`.github/workflows/ci.yml\`）：只在本机装过不算修。镜像里没它 ⇒ 窗内开 \`AUTOFORGE_MQTT=1\` 时 serve 抛 \`MqttUnavailable\` 拒绝启动，不开 ⇒ 桥永远不上线而两千多条测试照绿（它们用 duck-typed client，不碰真库）。"
   exit $dep_rc
+fi
+
+if [ $interp_rc -eq 2 ]; then
+  echo "结论：CI 解释器口径门读不出（exit=$interp_rc）。五种形状：\`.github/workflows/ci.yml\` 读不到、\`jobs:\` 段里数不出任何作业、整份文件数不出一个 \`python-version:\` 钉值（改用矩阵或容器镜像就同步改本门口径，别让它静默全绿）、\`pyproject.toml\` 里没有 \`requires-python\` 或它的写法本门比较器认不出、两份 Dockerfile 任一处读不出 \`FROM python:\` base。都是射程塌了，此刻本门无从判定，报『干净』没有依据。"
+  exit $interp_rc
+fi
+if [ $interp_rc -ne 0 ]; then
+  echo "结论：CI 解释器口径门红（exit=$interp_rc）。三条各自可红：① 手抄不一致——ci.yml 各 Python 作业的 \`python-version:\` 钉值必须彼此相等（现仓四枚手抄），改一处忘三处时另外三个作业继续跑旧口径、每个作业各报各的绿；② 包声明不允许——钉值必须落在 \`requires-python\` 的允许区间内，把下限抬到 3.12／3.14 而钉值不动，CI 就是在一条包声明已不承认的环境上验交付；③ 漂移无人认领——钉值与镜像 base 不一致时必须在 \`INTERPRETER_DRIFT\` 里挂一格，理由要同时点到一个**本体带钉值**的作业和一个盘上真实存在的路径（\`路径:行号\` 的那一行也要真在），已经对齐了还挂着＝豁免过期，同样红。对齐成哪一个口径不由本门拍板：那是交付／验证口径，走裁定（第六轮审计 ARCH-03）。"
+  exit $interp_rc
 fi
 
 if [ $cache_rc -eq 2 ]; then

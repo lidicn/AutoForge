@@ -177,7 +177,14 @@ forge sim examples/ir/case01_day_light.json
 | 环境 | 行为 |
 |---|---|
 | Windows | 默认用内置 **FakeHA**（三接口一致，Runtime 零改动；太阳历用本地桩）。`pyproject.toml` 里已默认 `-p no:homeassistant` 防止整轮 pytest 崩溃 |
-| Linux / WSL / Docker | `tests/acceptance/test_vhass_native.py` 自动启用真 vhass：`pytest tests -q -p pytest_homeassistant_custom_component.plugins`；或用 `docker/Dockerfile.test` |
+| Linux / WSL / Docker | `tests/acceptance/test_vhass_native.py` 显式加载插件后才启用真 vhass：`pytest tests -q -p pytest_homeassistant_custom_component.plugins`；或用 `docker/Dockerfile.test` |
+
+> **CI 不属于上面两栏的任何一栏**（本批现读，§二之九十七）：`.github/workflows/ci.yml` 的四个 Python
+> 作业钉 `python-version: "3.11"`，而 `pyproject.toml` 的 `addopts = "-p no:homeassistant"` 在那边同样生效
+> ⇒ 真 vhass 那一族 10 条用例在 CI 上走 **skip 分支**，CI 绿只证明内置 FakeHA 那条链过了。
+> 真 vhass 的权威跑法是 `docker run autoforge-test`（`docker/Dockerfile.test`：base 3.14、显式 `-p` 加载
+> 插件），而那份文件自己注明**未经实跑验证**。CI 要不要与镜像 base 对齐、要不要给真仿真增设一条必跑作业，
+> 属交付/验证口径，已列第六轮审计 ARCH-03 待裁；钉值之间的手抄一致性由 `scripts/check_ci_interpreter.py` 判。
 
 详见 `docs/reference/G1_ACCEPTANCE.md` §4。
 
