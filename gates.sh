@@ -223,17 +223,29 @@ echo "══ 联动桥依赖门禁（paho：声明处 / 交付面 / CI 面 三�
 dep_rc=$?
 
 echo
-echo "══ CI 解释器口径门（ci.yml 手抄钉值一致 / 满足包声明 / 与镜像 base 的差要显式认领）══"
+echo "══ CI 解释器口径门（ci.yml 手抄钉值一致 / 满足包声明 / 与镜像 base 的差要显式认领 / README 口径表对撞真源）══"
 # 第六轮审计 ARCH-03 复测（§二之九十七）：ci.yml 的四个 Python 作业把解释器**手抄了四遍**
 # （:16、:36、:57、:90 全是 "3.11"），包声明是 pyproject.toml:10 的 requires-python = ">=3.11"，
-# 两份镜像 base 是 3.14（docker/Dockerfile.api:10、docker/Dockerfile.test:13），README 快速开始明写
-# 「需要 Python 3.14+」。四枚手抄没有任何东西保证同步；包下限抬一次（例如为了跟镜像对齐）而钉值不跟上，
-# CI 会继续绿并给出一条没被验过的交付环境。而"CI 向镜像对齐还是镜像向 CI 对齐"属交付/验证口径，
-# 已列 ARCH-03 待裁 ⇒ 本门不替主人拍板，只判三条形状：钉值彼此相等、钉值被包声明允许、
-# 与镜像 base 的差挂着锚点核对得住的登记。真仿真那条链在 CI 上恒 skip（pyproject.toml:78 的 addopts
+# 两份镜像 base 是 3.14（docker/Dockerfile.api:10、docker/Dockerfile.test:13），而 README 快速开始原本
+# 明写「需要 Python 3.14+」。四枚手抄没有任何东西保证同步；包下限抬一次（例如为了跟镜像对齐）而钉值不跟上，
+# CI 会继续绿并给出一条没被验过的交付环境。而"CI 向镜像对齐还是镜像向 CI 对齐"属交付/验证口径 ⇒ 本门不替
+# 主人拍板，判四条形状：钉值彼此相等、钉值被包声明允许、与镜像 base 的差挂着锚点核对得住的登记、
+# README 那张口径表逐格等于它自己点名的真源现读值（裁定 20261011《十三问》§3 Q4.1 裁「以 requires-python
+# 为单一真源，⛔ 不得只改一头」）。真仿真那条链在 CI 上恒 skip（pyproject.toml:84 的 addopts
 # 默认不加载 pytest-homeassistant 插件），所以本门不假装 CI 验过仿真——那一条在 docker 面上。
 "$PYTHON" "$REPO/scripts/check_ci_interpreter.py" "$REPO"
 interp_rc=$?
+
+echo
+echo "══ 依赖下界门（每一枚依赖都带约束 / 在册下界逐枚 extra 同值 / 依据指得到裁定与读数）══"
+# 裁定 20261011《十三问》§3 Q4.3 裁「仿真依赖钉版本：做」。pytest-homeassistant-custom-component 原本在
+# sim 与 dev 两枚 extra 里各抄一遍、两处都没有版本约束 ⇒ 同一条 pip install -e ".[dev]" 在 CI（钉 3.11）
+# 与镜像 base（3.14）两面上解析出的不是同一版（PyPI 元数据现读：>=3.11 面最新 0.13.109、>=3.14 面 0.13.371，
+# 隔 262 个发布），而无下界时某次重建还能一路回溯到更老的不兼容版本。本门不判该钉多少、更不加下界之外的
+# 上界（那属 Q4.1 明写"对齐后再谈"的第二半），只判三条形状：无裸名依赖、在册下界在它出现的每一枚 extra
+# 里同值、登记的依据文案指得到裁定与一个盘上真在的锚点。
+"$PYTHON" "$REPO/scripts/check_sim_dep_floor.py" "$REPO"
+simdep_rc=$?
 
 echo
 echo "══ 随附 wheel 门禁（盘上单枚 / 四个引用面同名 / 字节等于权威登记 / 指路文档不复制摘要）══"
@@ -439,12 +451,21 @@ if [ $dep_rc -ne 0 ]; then
 fi
 
 if [ $interp_rc -eq 2 ]; then
-  echo "结论：CI 解释器口径门读不出（exit=$interp_rc）。五种形状：\`.github/workflows/ci.yml\` 读不到、\`jobs:\` 段里数不出任何作业、整份文件数不出一个 \`python-version:\` 钉值（改用矩阵或容器镜像就同步改本门口径，别让它静默全绿）、\`pyproject.toml\` 里没有 \`requires-python\` 或它的写法本门比较器认不出、两份 Dockerfile 任一处读不出 \`FROM python:\` base。都是射程塌了，此刻本门无从判定，报『干净』没有依据。"
+  echo "结论：CI 解释器口径门读不出射程（exit=$interp_rc）。六种形状：\`.github/workflows/ci.yml\` 读不到、\`jobs:\` 段里数不出任何作业、整份文件数不出一个 \`python-version:\` 钉值（改用矩阵或容器镜像就同步改本门口径，别让它静默全绿）、\`pyproject.toml\` 里没有 \`requires-python\` 或它的写法本门比较器认不出、两份 Dockerfile 任一处读不出 \`FROM python:\` base、\`README.md\` 读不出「### 解释器口径」那一节的任何三列数据行（口径表被删或改了形状）。都是射程塌了，此刻本门无从判定，报『干净』没有依据。"
   exit $interp_rc
 fi
 if [ $interp_rc -ne 0 ]; then
-  echo "结论：CI 解释器口径门红（exit=$interp_rc）。三条各自可红：① 手抄不一致——ci.yml 各 Python 作业的 \`python-version:\` 钉值必须彼此相等（现仓四枚手抄），改一处忘三处时另外三个作业继续跑旧口径、每个作业各报各的绿；② 包声明不允许——钉值必须落在 \`requires-python\` 的允许区间内，把下限抬到 3.12／3.14 而钉值不动，CI 就是在一条包声明已不承认的环境上验交付；③ 漂移无人认领——钉值与镜像 base 不一致时必须在 \`INTERPRETER_DRIFT\` 里挂一格，理由要同时点到一个**本体带钉值**的作业和一个盘上真实存在的路径（\`路径:行号\` 的那一行也要真在），已经对齐了还挂着＝豁免过期，同样红。对齐成哪一个口径不由本门拍板：那是交付／验证口径，走裁定（第六轮审计 ARCH-03）。"
+  echo "结论：CI 解释器口径门红（exit=$interp_rc）。三条各自可红：① 手抄不一致——ci.yml 各 Python 作业的 \`python-version:\` 钉值必须彼此相等（现仓四枚手抄），改一处忘三处时另外三个作业继续跑旧口径、每个作业各报各的绿；② 包声明不允许——钉值必须落在 \`requires-python\` 的允许区间内，把下限抬到 3.12／3.14 而钉值不动，CI 就是在一条包声明已不承认的环境上验交付；③ 漂移无人认领——钉值与镜像 base 不一致时必须在 \`INTERPRETER_DRIFT\` 里挂一格，理由要同时点到一个**本体带钉值**的作业和一个盘上真实存在的路径（\`路径:行号\` 的那一行也要真在），已经对齐了还挂着＝豁免过期，同样红；④ 口径表与真源脱钩——README 那张口径表的每一格必须等于它自己点名的那份真源现读值（改 \`pyproject.toml\`／\`ci.yml\`／任一份 Dockerfile 而忘改表，或把表里某一格整格删掉，都是红）。对齐成哪一个口径不由本门拍板：那是交付／验证口径，走裁定（第六轮审计 ARCH-03 ＋ 裁定 20261011 §3 Q4.1）。"
   exit $interp_rc
+fi
+
+if [ $simdep_rc -eq 2 ]; then
+  echo "结论：依赖下界门读不出射程（exit=$simdep_rc）。四种形状：\`pyproject.toml\` 不在盘上或 \`tomllib\` 解析失败、没有 \`[project]\` 表、没有 \`[project.optional-dependencies]\`（extra 那一族整族不在了就该同步改本门口径）、或在册项点名的 extra 名字在那张表里读不出来。都是射程塌了，此刻本门无从判定，报『干净』没有依据。"
+  exit $simdep_rc
+fi
+if [ $simdep_rc -ne 0 ]; then
+  echo "结论：依赖下界门红（exit=$simdep_rc）。三条各自可红：① 裸名依赖——\`[project].dependencies\` 与每一枚 extra 里的每一条都要写成 \`名字>=X.Y\`，裸名就是"每次重建拿哪一版看运气"，而 CI 与镜像两面会各自解析出不同的一套；② 在册下界不符——\`SIM_DEP_FLOORS\` 登记的包在它出现的**每一枚** extra 里的 \`>=\` 都要逐字符等于登记值（同包两枚手抄改一枚忘一枚就是两套环境），整枚从 extra 里消失同样红（在册项不许静默蒸发）；③ 依据不合格——登记文案要非空、含「裁定」、并点到至少一个盘上真实存在的锚点。钉成多少、要不要再加下界之外的上界都不由本门拍板：上界会替交付面选环境，属裁定 20261011 §3 Q4.1 留到"对齐后再谈"的第二半。"
+  exit $simdep_rc
 fi
 
 if [ $wheel_rc -eq 2 ]; then

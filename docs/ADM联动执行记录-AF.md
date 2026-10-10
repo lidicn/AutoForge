@@ -9588,3 +9588,84 @@ md5 与 §二之一百一十二那一批**逐字节相同**，说明本批没有
   Q4.1 解释器口径、Q4.3 仿真依赖下界、Q13 只对 `DEPLOY_AUDIT` 落盘。
 - **本批新登记的债**：`gates.sh` 与 pytest 的关系（第四格那句），AF 名下，不与任何裁定混。
 - 任务位：#116 本批。十三问裁定的 `## 执行回填` 与本批同批交（回执见裁定书末尾）。
+
+## §二之一百一十四 · 裁定 20261011《十三问》§3 Q4.1＋Q4.3 窗内半边落地：口径进机器判据 ＋ 仿真依赖钉下界（2026-10-11）
+
+上一批回执里登记的那两格「下一批窗内（不需要窗口）… AF 名下」就是本批。**本批只落"口径"半边，不落"取值"半边**：
+裁定 Q4.1 裁的是「先统一口径再谈对齐」，"对齐成哪一档"仍然是 DCD 的问，AF 不自决。
+
+### 一、Q4.1 · 口径从"文档里的一段话"变成"逐格对撞的门禁判据"
+
+`scripts/check_ci_interpreter.py` 从三条规则（A 手抄一致／B 满足包声明／C 漂移显式登记）加到四条：
+
+- **新增判据 D：README 口径表逐格对撞仓内真源**。`README.md` 的「### 解释器口径」小节里那张四行表
+  （面／现读口径／真源锚点）由门逐行核三件事：① 声称值等于现读的 `requires-python`／`python-version` 钉值／
+  两份 Dockerfile 的 `FROM python:` base；② 锚点 `路径:行号` 那一行**在盘上真在**；③ 那一行**也含着声称的那个值**
+  （比原判据 C 的 `_anchors_ok` 只核"行存在"更严——行在而值不对，就是文档与仓脱钩）。
+- **口径表只能加长不能缩**：新增一个真源面而表里没写 ⇒ 红。反过来说，删表里的行也是红。
+- 未知锚点路径 ⇒ 「认不出那是哪一面」，**同时**该面从覆盖集里掉出去 ⇒ 第二条 finding。这是门真实行为，
+  测试腿按 2 条断言，没有为了让腿绿而放松判据。
+- 射程塌（README 缺／小节读不出／表一行都解析不出）一律 **`exit 2`**，形状从五种加到六种。
+
+`README.md` 侧新增「### 解释器口径」小节（表头那句写明唯一真源＝`pyproject.toml` 的 `requires-python`，并点到裁定书
+文件名），快捷启动那句注释同步改成「要最新那版真 vhass 才需要 3.14；只跑内核＋内置 FakeHA 按包声明 `>=3.11` 即可」——
+原文是「需要 Python 3.14+」，那是把镜像口径抄成了项目门槛。测试腿
+`test_real_repo_caliber_table_names_the_single_source` 里有一枚名字哨兵断言整份 README 不再含「需要 Python 3.14+」。
+
+`INTERPRETER_DRIFT` 两格理由改写为引用裁定 §3 Q4.1／Q4.2／Q4.3 ＋ 现读锚点。**注意：这一格不是"对齐掉了差"**——
+CI 3.11 与镜像 base 3.14 这条差本批没动，只是把它认领得能被机器核对。
+
+### 二、Q4.3 · 新门 `scripts/check_sim_dep_floor.py`（纯 stdlib，`tomllib` ＋ 正则）
+
+- `pyproject.toml` 的 `sim`／`dev` 两枚 `pytest-homeassistant-custom-component` 从裸名改成 `>=0.13.109`。
+  **这是同包两枚手抄**，所以门的判据 B 要求"在册下界在该包出现的每一枚 extra 逐字符同值"，而不是只查 `sim`。
+- 取 `0.13.109` 的理由不是随手抄：PyPI 元数据现读（存证见本件 `:8666`）该包 578 枚 wheel，`requires-python>=3.11`
+  那一档最新只到 `0.13.109`（`>=3.14` 才是 `0.13.371`，隔 262 个发布）。取这个值**不改动任何一面的解析结果**：
+  CI 面（钉 3.11）本来就只能装到它，镜像面（3.14）继续拿最新——下界只禁止"某次重建回溯到更老的不兼容版本"这一族。
+- **⛔ 上界不自决**：钉上界等于替交付面选环境，属 Q4.1「对齐后再谈」那半问。这一点写进依赖注释、门的 docstring
+  和 `gates.sh` 的红字结论三处，防止下一个人在没裁定的情况下补一枚上界。
+- 三条规则：A 每一枚依赖带版本约束（**无豁免档**，核心与全部 extra 一起查）／B 在册下界逐枚 extra 同值 ＋
+  在册项不许静默蒸发（从 extra 里删掉 ⇒ 红）／C 依据非空、含「裁定」二字、至少一个盘上真在的锚点。
+- 射程塌＝`exit 2`（`pyproject.toml` 缺／解析不了／`[project.optional-dependencies]` 读不出任何 extra 等）。
+
+### 三、`gates.sh` 接入（纯加法）
+
+` interp_rc=$?` 之后新增依赖下界门一节；解释器门的 exit-2 文案改「六种形状」并加 README 口径表那格，红字结论加第④条；
+依赖下界门文案逐条列 ①②③，并写明「钉成多少、要不要再加……上界都不由本门拍板」。**`gates.sh` 不跑 pytest**，
+所以钉在 `tests/unit/*.py` 里的判据红不会自然浮出——本批因此当场跑了相邻文件（见下）。
+
+### 四、读数（命令原文 ＋ 现读）
+
+- `GATES_PYTHON=…Python313 python.exe scripts/check_ci_interpreter.py .` ⇒ **RC=0**：
+  「ci.yml 6 个作业、4 枚钉值全为 `3.11` 且被 `requires-python = ">=3.11"` 允许；镜像侧 docker/Dockerfile.api base
+  `3.14`、docker/Dockerfile.test base `3.14`，其中与钉值不一致的 2 格已逐条核过登记理由的两个锚点；
+  README 口径表 4 行逐格对撞真源同值、锚点行也含着声称值」。
+- `… scripts/check_sim_dep_floor.py .` ⇒ **RC=0**：「包声明共 18 条依赖——核心 2 条、extra 面
+  `{'api': 2, 'dev': 10, 'ha': 1, 'homesdk': 1, 'mqtt': 1, 'sim': 1}`——无一条裸名；在册下界逐面同值：
+  `pytest-homeassistant-custom-component` 登记 `>=0.13.109`，现读 `[('dev', '>=0.13.109'), ('sim', '>=0.13.109')]`」。
+- `pytest tests/unit/test_ci_interpreter_gate.py tests/unit/test_sim_dep_floor_gate.py -q` ⇒ **44 passed**。
+- 相邻（本批改了 `gates.sh` 与 `README.md`，怕连带红）：`pytest tests/unit/test_gates_coverage_gate.py
+  tests/unit/test_vendored_wheel_gate.py -q` ⇒ **64 passed**。
+- `bash -n gates.sh` ⇒ RC=0。
+- 变异自证（副本树 `E:\tmp\q4_mut\tree`，工作树未动）：M0 忠实腿通过；M1–M6 **全部 KILLED**；串扰 0
+  （改 A 门的输入时 B 门仍 RC=0）；**存活腿 0 条**；驱动 RC=0。六案为：README 口径表一格改成 3.13／口径表删一行／
+  ci.yml 一枚钉值改成 3.12／`sim` 下界单独降低／在册包从 `dev` 删除／依赖裸名。存证 `mutation_q4.result.txt`。
+- 全链 `bash gates.sh` 两遍 ⇒ 各 **RC=1**、输出逐字节相同（10341 B，md5 `8a9fd3ec434a64926809c3882d55ef56`）。
+  唯一红源仍是并发登录线在途的两处 `fake-ok-const` WARN（`src/autoforge/af_api.py:984` `api_auth_has_admin`、
+  `:1005` `api_auth_register`），与本批无关；AST 门禁报「基线内存量 95 条，过期基线条目 0 条」。
+
+### 五、本批自己造成的漂移（如实登记）
+
+`pyproject.toml` 里我加的依赖注释把 `addopts` 从 `:78` 顶到了 **`:84`**，而 `INTERPRETER_DRIFT` 的理由文案正引用着
+`pyproject.toml:78` ⇒ 那一刻锚点是假的。改法不是"把注释删掉让行号回去"，是把引用改成 `:84` 并**让门去核它**
+（判据 D 现在核锚点行含值；C 核锚点在盘上真在）。其余锚点逐条复测：`pyproject.toml:10`、`ci.yml:16`、
+`Dockerfile.api:10`、`Dockerfile.test:13` 均为现读真值。教训：改带注释的行段前先 grep 有没有别的锚点在引用它后面的行。
+
+### 六、未落项归属
+
+- **Q4.1 的"取值"半边（CI 3.11 与镜像 3.14 对齐到哪一档）**：仍等 DCD；本批只把这条差做得可核对。
+- **Q4.2**（真仿真要不要进必跑链）：裁的是"先补证据"，依赖 Q4.1 取值裁定，本批不动。
+- **上一批登记的其余窗内项**：Q7.1、Q7.2、Q8.1、Q13、Q3 乙的门禁半边 ⇒ 未做，AF 名下，下一批。
+- 任务位：#117 本批。裁定 `20261011-AF第六轮与第二期审计攒批十三问-裁定.md` 的 `## 执行回填`
+  §3 Q4.1／Q4.3 两行与本批同批改（回执落在裁定书，不是本件）。
+- 同批记账：`docs/architecture/AF完整架构与运行时说明.md` §十八 新增第 26 条、§十九 新增一行（两处都指回本件 §二之一百一十四）。

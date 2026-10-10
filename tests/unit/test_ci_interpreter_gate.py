@@ -1,13 +1,15 @@
 """CI 解释器口径门必须"能变红"（铁律 #8），红的是**下一处手抄漂移或无人认领的差**，不是已经对上的那些。
 
-背景（第六轮审计 ARCH-03 / §二之九十七）：`ci.yml` 的四个 Python 作业把解释器手抄了四遍，包声明是
-`requires-python = ">=3.11"`，两份镜像 base 是 3.14，README 快速开始明写「需要 Python 3.14+」。
-其中两对关系必须成立（四枚手抄彼此相等、CI 钉值被包声明允许），一对当前不成立且**不由本门拍板**
-（CI 3.11 vs 镜像 3.14——那是交付/验证口径，已列待裁）。所以本门只判形状：A 手抄一致 / B 满足包声明 /
-C 漂移必须挂着锚点核对得住的显式登记。
+背景（第六轮审计 ARCH-03 / §二之九十七 ＋ 裁定 20261011《十三问》§3 Q4.1 / §二之一百一十四）：
+`ci.yml` 的四个 Python 作业把解释器手抄了四遍，包声明是 `requires-python = ">=3.11"`，两份镜像 base 是
+3.14，而 README 快速开始原本明写「需要 Python 3.14+」。其中两对关系必须成立（四枚手抄彼此相等、CI 钉值被
+包声明允许），一对当前不成立且**不由本门拍板**（CI 3.11 vs 镜像 3.14——那是交付/验证口径）。所以本门判形状：
+A 手抄一致 / B 满足包声明 / C 漂移必须挂着锚点核对得住的显式登记 / D README 那张口径表逐格等于真源现读值。
+D 是裁定 §3 Q4.1「以 `requires-python` 为单一真源，⛔ 不得只改一头」的落码半边：真改了包下限而 README 不动，
+B 与 D 同时红；只把 README 抄错，D 单独红。
 
-反面样本一律用 tmp 树，不动仓内真文件；`test_real_repo_*` 三条是对当前仓库的实测（真绿），它们保证
-本门不是"只对自己的样本有效"的纸门，也保证登记里那两格的理由在**真仓**上真的能过锚点核对。
+反面样本一律用 tmp 树，不动仓内真文件；`test_real_repo_*` 是对当前仓库的实测（真绿），它们保证
+本门不是"只对自己的样本有效"的纸门，也保证登记里那两格的理由与口径表那四格在**真仓**上真的核对得住。
 """
 from __future__ import annotations
 
@@ -61,11 +63,37 @@ DRIFT = {
     "docker/Dockerfile.test": "`pytest` 钉 3.11，测试镜像 base 是 3.14（`docker/Dockerfile.test`），同上一条待裁。",
 }
 
+def _line_of(text: str, needle: str) -> int:
+    """锚点行号按样本自身内容现算，不硬编码——样本改了行号就跟着走，D 才不会被自己抄错。"""
+    for idx, line in enumerate(text.splitlines(), 1):
+        if needle in line:
+            return idx
+    raise AssertionError(f"样本里没有 {needle!r}")
+
+
+# tmp 树的口径表：四格都写成"与样本真源同值"，所以绿；红腿各改一格。
+README = f'''# AutoForge
+
+### 解释器口径（唯一真源＝`pyproject.toml` 的 `requires-python`）
+
+| 面 | 现读口径 | 真源锚点 |
+|---|---|---|
+| 项目声明下限（真源） | `>=3.11` | `pyproject.toml:{_line_of(PYPROJECT, "requires-python")}` |
+| CI 的四个 Python 作业钉值 | `3.11` | `.github/workflows/ci.yml:{_line_of(WORKFLOW, "python-version")}` |
+| 交付镜像 base | `3.14` | `docker/Dockerfile.api:{_line_of(API, "FROM python")}` |
+| 测试镜像 base | `3.14` | `docker/Dockerfile.test:{_line_of(TEST_IMAGE, "FROM python")}` |
+
+### 下一节
+
+正文不参与对撞。
+'''
+
 PATHS = {
     "pyproject.toml": PYPROJECT,
     "docker/Dockerfile.api": API,
     "docker/Dockerfile.test": TEST_IMAGE,
     ".github/workflows/ci.yml": WORKFLOW,
+    "README.md": README,
 }
 
 
@@ -118,6 +146,30 @@ def test_real_repo_is_actually_green():
         "docker/Dockerfile.api": "3.14",
         "docker/Dockerfile.test": "3.14",
     }, f"两份镜像 base 现读 {info['images']}"
+    # README 口径表：四格、四个真源各一次，且每格的声称值就是上面那几个现读值。
+    rows = info["caliber_rows"]
+    assert len(rows) == 4, f"README 口径表现读 {len(rows)} 行：{rows}"
+    assert {r[2].partition(":")[0] for r in rows} == {
+        "pyproject.toml", ".github/workflows/ci.yml",
+        "docker/Dockerfile.api", "docker/Dockerfile.test",
+    }, f"口径表覆盖的真源 {rows}"
+    assert {r[1] for r in rows} == {">=3.11", "3.11", "3.14"}, f"口径表声称值 {[(r[0], r[1]) for r in rows]}"
+    assert [(r[0], r[1]) for r in rows] == [
+        ("项目声明下限（真源）", ">=3.11"),
+        ("CI 的四个 Python 作业钉值", "3.11"),
+        ("交付镜像 base", "3.14"),
+        ("测试镜像 base", "3.14"),
+    ], f"口径表逐格现读 {[(r[0], r[1], r[2]) for r in rows]}"
+
+
+def test_real_repo_caliber_table_names_the_single_source():
+    """裁定 §3 Q4.1 的字面要求：README 必须写明真源是 `requires-python`，不许只留一张数表。"""
+    doc = (ROOT / "README.md").read_text(encoding="utf-8")
+    head = doc.split("### 解释器口径", 1)[1].split("###", 1)[0]
+    assert "requires-python" in head and "单一真源" in head, head[:200]
+    assert "20261011-AF第六轮与第二期审计攒批十三问-裁定.md" in head, "口径表没指到裁它的那份文书"
+    # 「需要 Python 3.14+」那一格已被改掉：项目自身不再声称一个比包声明更高的下限。
+    assert "需要 Python 3.14+" not in doc, "README 又出现与 requires-python 冲突的项目级下限主张"
 
 
 def test_real_repo_drift_register_matches_drift():
@@ -159,14 +211,21 @@ def test_single_pin_drift_goes_red(tmp_path):
 # ── 判据 B：CI 钉值满足包声明 ────────────────────────────────────────
 
 def test_raised_floor_goes_red(tmp_path):
-    """把包下限抬到 3.14（例如与镜像对齐）而 CI 钉值没跟上 ⇒ 红。"""
+    """把包下限抬到 3.14（例如与镜像对齐）而 CI 钉值没跟上 ⇒ B 红，README 那一格同时过期 ⇒ D 红。
+
+    这正是裁定 §3 Q4.1「⛔ 不得只改一头」要拦的形状：改 `requires-python` 的人面对的是两条独立的红，
+    一条说 CI 没跟上，一条说文档没跟上。
+    """
     findings, _info = _check(tmp_path, **{"pyproject.toml": '[project]\nrequires-python = ">=3.14"\n'})
-    assert len(findings) == 1 and "不满足包声明" in findings[0], findings
+    assert len(findings) == 2, findings
+    assert any("不满足包声明" in f for f in findings), findings
+    assert any("文档与仓脱钩" in f and "requires-python" in f for f in findings), findings
 
 
 def test_unparseable_specifier_is_reported_not_skipped(tmp_path):
     findings, _info = _check(tmp_path, **{"pyproject.toml": '[project]\nrequires-python = "== 3.*"\n'})
-    assert len(findings) == 1 and "认不出" in findings[0], findings
+    assert len(findings) == 2 and any("认不出" in f for f in findings) \
+        and any("文档与仓脱钩" in f for f in findings), findings
 
 
 def test_compatible_release_operator_supported():
@@ -187,13 +246,15 @@ def test_unregistered_drift_goes_red(tmp_path):
 
 
 def test_stale_register_entry_goes_red(tmp_path):
-    """CI 与镜像已经对齐了却还挂着登记 ⇒ 豁免过期。"""
+    """CI 与镜像已经对齐了却还挂着登记 ⇒ 豁免过期；README 那格 base 也跟着过期 ⇒ C、D 各一条。"""
     findings, _info = _check(
         tmp_path,
         drift=DRIFT,
         **{"docker/Dockerfile.api": 'FROM python:3.11-slim\nRUN pip install -e ".[api]"\n'},
     )
-    assert len(findings) == 1 and "已过期" in findings[0], findings
+    assert len(findings) == 2, findings
+    assert any("已过期" in f for f in findings), findings
+    assert any("交付镜像 base" in f and "文档与仓脱钩" in f for f in findings), findings
 
 
 def test_empty_reason_goes_red(tmp_path):
@@ -228,7 +289,62 @@ def test_rewording_the_reason_does_not_move_the_reading(tmp_path):
     assert findings == [], findings
 
 
+# ── 判据 D：README 口径表逐格对撞真源（裁定 20261011 §3 Q4.1） ──────────
+
+def test_caliber_claim_stale_against_its_own_source_goes_red(tmp_path):
+    """仓没动、表抄错一格 ⇒ D 单独红（不是靠 B/A 顺带抓到）。"""
+    stale = README.replace("| CI 的四个 Python 作业钉值 | `3.11` |", "| CI 的四个 Python 作业钉值 | `3.12` |")
+    assert stale != README, "锚点没命中，样本口径表写法变了"
+    findings, _info = _check(tmp_path, **{"README.md": stale})
+    assert len(findings) == 1, f"只该咬到判据 D，实际 {findings}"
+    assert "文档与仓脱钩" in findings[0] and "`3.12`" in findings[0] and "`3.11`" in findings[0], findings[0]
+
+
+def test_caliber_row_deleted_goes_red(tmp_path):
+    """表可以加长不能缩：删掉交付镜像那一格，那一面的漂移从此没有对撞对象。"""
+    shrunk = "\n".join(l for l in README.splitlines() if "交付镜像 base" not in l) + "\n"
+    assert "交付镜像 base" not in shrunk
+    findings, _info = _check(tmp_path, **{"README.md": shrunk})
+    assert len(findings) == 1 and "口径表里没有" in findings[0] and "docker/Dockerfile.api" in findings[0], findings
+
+
+def test_caliber_anchor_pointing_elsewhere_goes_red(tmp_path):
+    """值抄对了、锚点指到不含那个值的行 ⇒ 红：`路径:行号` 的号是编的也算假证据。"""
+    moved = README.replace("`docker/Dockerfile.test:%d`" % _line_of(TEST_IMAGE, "FROM python"),
+                          "`docker/Dockerfile.test:2`")
+    assert moved != README and "Dockerfile.test:2" in moved
+    findings, _info = _check(tmp_path, **{"README.md": moved})
+    assert len(findings) == 1 and "那一行并不含" in findings[0], findings
+
+
+def test_caliber_anchor_naming_an_unknown_source_goes_red(tmp_path):
+    """真源那一列写上门认不出的面 ⇒ 这一格对不了撞，等于白写，判红而不是跳过。"""
+    bogus = README.replace("`docker/Dockerfile.api:%d`" % _line_of(API, "FROM python"),
+                          "`docker/Dockerfile.web:1`")
+    findings, _info = _check(tmp_path, **{"README.md": bogus})
+    assert len(findings) == 2, findings
+    assert any("认不出那是哪一面" in f for f in findings), findings
+    # 那一格同时不再覆盖 Dockerfile.api 这一面——两条都要报：一条说锚点坏，一条说覆盖面缩了。
+    assert any("口径表里没有" in f and "docker/Dockerfile.api" in f for f in findings), findings
+
+
+def test_caliber_inconsistent_ci_pins_are_not_double_reported(tmp_path):
+    """钉值本身不一致时（判据 A 已红）D 不追第二句——CI 那格现读"没有唯一值"，跳过而不是假红。"""
+    changed = WORKFLOW.replace('          python-version: "3.11"\n  ui:', '          python-version: "3.12"\n  ui:')
+    findings, _info = _check(tmp_path, **{".github/workflows/ci.yml": changed})
+    assert len(findings) == 1 and "钉值不一致" in findings[0], findings
+
+
 # ── 射程塌了不许报干净 ───────────────────────────────────────────────
+
+def test_missing_readme_is_exit_two(tmp_path):
+    assert _anchor(tmp_path, **{"README.md": None}) is not None
+
+
+def test_caliber_table_removed_is_exit_two(tmp_path):
+    """整节被删（只剩散文）时判据 D 没有射程——必须 exit 2，不能因为"没找到行"而全绿。"""
+    doc = README.replace("### 解释器口径（唯一真源＝`pyproject.toml` 的 `requires-python`）", "### 别的东西")
+    assert _anchor(tmp_path, **{"README.md": doc}) is not None
 
 def test_no_pins_at_all_is_exit_two_not_green(tmp_path):
     workflow = WORKFLOW.replace('          python-version: "3.11"\n', "")

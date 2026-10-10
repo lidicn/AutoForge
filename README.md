@@ -152,7 +152,7 @@ IR 顶层可声明 `expect`（自动化自己立的军令状），`forge sim` �
 ## 2. 快速开始
 
 ```powershell
-# 1) 建虚拟环境（⚠️ 需要 Python 3.14+：pytest-homeassistant 要求 python_requires>=3.14）
+# 1) 建虚拟环境（要最新那版真 vhass 才需要 3.14；只跑内核＋内置 FakeHA 按包声明 >=3.11 即可——口径见下表）
 & "<python3.14>" -m venv .venv314
 .\.venv314\Scripts\python.exe -m pip install -e ".[dev]"
 
@@ -168,6 +168,26 @@ forge sim examples/ir/case01_day_light.json
 
 > **只做内核开发、不碰仿真**时 Python 3.11+ 即可（`pip install jsonschema typer pytest pytest-asyncio`），
 > 无需装 HA 那一大坨依赖。
+
+### 解释器口径（唯一真源＝`pyproject.toml` 的 `requires-python`）
+
+裁定 `20261011-AF第六轮与第二期审计攒批十三问-裁定.md` §3 Q4.1 裁「先统一口径再谈对齐」：口径以**包声明**为
+单一真源，⛔ 不许四个面各说各话。下面这张表由 `scripts/check_ci_interpreter.py` 的判据 D 逐格与仓内真源
+对撞——改了 `pyproject.toml`／`ci.yml`／任一份 Dockerfile 而忘了这张表，那条门当场红。
+
+| 面 | 现读口径 | 真源锚点 |
+|---|---|---|
+| 项目声明下限（真源） | `>=3.11` | `pyproject.toml:10` |
+| CI 的四个 Python 作业钉值 | `3.11` | `.github/workflows/ci.yml:16` |
+| 交付镜像 base | `3.14` | `docker/Dockerfile.api:10` |
+| 测试镜像 base | `3.14` | `docker/Dockerfile.test:13` |
+
+- **项目自身不要求 3.14**。`>=3.11` 这一档装得上仿真依赖：PyPI 元数据现读该包 578 枚 wheel，`>=3.11` 面最新
+  可取到 `0.13.109`，`>=3.14` 面才是 `0.13.371`（相隔 262 个发布，读数存证 `docs/ADM联动执行记录-AF.md:8666`）。
+  要最新那一版 HA 栈才需要抬解释器；仿真依赖的下界 `>=0.13.109` 就是照 `>=3.11` 面**实际解析得到的那一版**钉的
+  （裁定同件 §3 Q4.3），它不抬高任何一面的门槛，只禁止"某次重建回溯到更老的不兼容版本"。
+- **CI 3.11 与镜像 base 3.14 这条差仍在，本批没有把它"对齐"掉**。谁向谁对齐是同一问裁的第二半（「对齐后再谈」），
+  AF 不自决；这条差由 `check_ci_interpreter.py` 的 `INTERPRETER_DRIFT` 逐格认领并核锚点。
 
 ### vhass（真 HA 仿真）在 Windows 上的限制
 
