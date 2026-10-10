@@ -8001,3 +8001,144 @@ M5 必须写清，不能拿"八枚全杀"当卖点：`not_comparable` 为真时 
 - 远端读数：本批未推。未推枚数一律 `git log origin/main..HEAD --oneline` 现读，不追写计数。推 GitHub 要 owner 点头。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `d6802bc` + §十八 B.14 收口批次（代码面 `3ace9b6`：五枚 `ignore_errors=True` 全撤、删除收成 `_purge_tree` 一个入口、报告新格 `residual_backups`、伪装成撞车的 `FileExistsError` 换成 `BackupNotReclaimed` fail-closed；判据 11 条腿＋变异 9 枚全杀；修前修后同一支探针各四档原样贴回；工作树那 6 条红按两份副本树反证定性成登录线在途、非本批；门禁三遍 7877 字节逐字节相同；未推枚数以 `git log origin/main..HEAD` 现读为准）
+
+## 二之九十、收 §十八 B.4：试演档的守卫失明不再静默——通知半边从"按模式"改成"按这一跑拦没拦"，仓内指示两档都落、对端快照只在真拦下的那一次才发
+
+### 一、触发物：一句文档承诺，探针量出来不成立
+
+《AF完整架构与运行时说明.md》§十八 第 4 条修前原文（现读逐字）：
+
+> 4. observe 档在异常/拒绝两处回落为"照常执行"是设计（§八），但它意味着**试演期的守卫是瞎的**——这段时间的降级通知半边由 `_notify_guard_blind` 承担，判据只覆盖 enforce。
+
+前半句（回落是设计）成立，后半句**没被量过**。三站源码现读（`git show fa71f86:src/autoforge/af_conflict_runtime.py`）：
+
+| 站点 | 修前位置 | 形状 | observe 档会不会通知 |
+|---|---|---|---|
+| 内省 | `:298-299` 是 `if observe: return original(...)`，`:300` 才是 `_notify_guard_blind` | 通知调用点**站在回落之后** | **不会**（那行永远走不到） |
+| 读 band | `:314` 无条件调用 | 不看模式 | 会 |
+| 仲裁请求 | `:333-334` `if observe: decision = ALLOW`，通知在 `:336` 的 `else:` 分支里 | 通知**整个在 else 里** | **不会** |
+
+修前被调方签名 `:469` 也没有 `blocked` 这一枚（`def _notify_guard_blind(self, automation_id, phase, exc, entity_ids)`）——它无从知道"这一跑拦没拦"，所以那句"由 `_notify_guard_blind` 承担"在 observe 档是**空转的一句话**。
+
+判据覆盖面同步现读：修前 `tests/test_af_conflict_runtime.py` 共 24 条腿，其中 observe 名下的三条（`:275`/`:386`/`:500`）里，唯一与失明有关的 `test_observe_mode_observes_even_when_the_guard_is_blind`（`:500`）只核两件事——行为没变（`== {"then"}`、适配器真被调）＋ `_audit_degraded` 台账那格 `fail_open is True`。**af_watch 常驻指示面与出向快照面在 observe 档一条腿都没有**，所以"判据只覆盖 enforce"这句也只对了一半：降级台账其实覆盖了，缺的是通知的两张脸。
+
+裁定原文核对（这一格不归 AF 自决的部分）：`关键决策部/decisions/20261008-AF冲突守卫内层与band缺省-裁定.md` §四 :32 逐字「裁 A：`band` 读不出来就拒发（`_abort` + `fail_open: False` + Q2 通知同 §一 形状）」——**没给试演档开口子**。⇒ band 那一站在 observe 档照拒照通知是**裁定要求的正确行为**，不是"和另外两站不对称"的缺陷。本批因此把它钉成 CONTROL 腿（§四 那两条）而不是改它。另两处同族的"不对称"（introspect/request 与 band 之间的差别）本来就应当相反：那两站在试演档不拦，所以它们**不该**发对端降级快照——差的只是"什么都不留"与"仓内留一条"。
+
+顺带一处如实记账：计划文档把这一格的依据写成 `decisions/20261008-ADM以AF为核心联动版本-裁定.md`，那份文件对 `band`/`observe` **零命中**（`grep -c` 现读 0，`GREP_RC=1`）——它说的不是这一格，真正的出处是上面那份冲突守卫裁定。
+
+### 二、修法：通知半边按"拦没拦"分栏，外加四条"不改的东西"
+
+1. **`blocked` 由调用点现给**（三枚：`:300` introspect、`:318-320` band、`:338` request），被调方 `_notify_guard_blind(..., *, blocked: bool)`（`:474-475`）收成关键字参数。为什么不在被调方里读 `self.settings.mode`：那是**第二份真值**（模式与"这一跑拦没拦"本来就不同义——band 站在 observe 档也是拦），而且会把 band 那一站读反。两枚 AST 结构腿把这条钉成源码形状（§四）。
+2. **仓内常驻指示两档都落**：`_feed_watch_conflict(automation_id, "guard_blind", phase=…, error=…, entity_ids=…, blocked=blocked)`（`:492-495`）→ `af_watch` 的 `conflict` 列，detail 新键 `blocked`。三档分栏纪律不变：被挡下／守卫瞎了都**不进** `failed_in_prod`，也不进 `verified_in_prod`。
+3. **对端半边只在真拦下时发**：`if not blocked:` ⇒ 落一条 WARNING（logger `autoforge.conflict`，`:496-501`）后 `return`；`blocked=True` 才走 `mark_degraded(ADM_ERR_INTERNAL)` + `publish_degraded()`（`:502-523`，一字未动）。试演期失明**要不要**也对端可见＝跨仓 `degraded` 词汇，AF 不自加（见 §七）。
+4. **不改的**：① `_audit_degraded` 的 `fail_open` 语义（observe=True 是"这次没拦"的如实记账，不是"没记账"）；② band 站的 REJECT（裁定 §四）；③ 出向仍走 retained `af/status`、**不开新事件写者**（§二 追认二 — 那条门是 `check_mqtt_writers` 判据 B，"测试测不到、对端却在收"换来的），`publish_failed` 的唯一生产者仍是 `observe_terminal`；④ **执行语义一字未动**：observe 档两站仍照常执行（`if observe:` 那两行位置没挪、返回值没改），本批改的只是"通知半边在回落之前有没有被调用"。
+5. **消费面**：`af_watch` 的 detail 是自由 dict，除 `conflict` 计数之外没有别的消费者按名读键，所以新键 `blocked` 是加法式；`/api/conflicts` 读的是 `_audit_degraded` 那份降级台账，这一格本批没动它的面。
+
+### 三、修前／修后读数（同一支探针，六档：observe 三站 + enforce 三站正对照）
+
+`%TEMP%/probe_b94.py` 各跑一次（修前在工作树、修后在同一份工作树代码面改完之后），输出落 `%TEMP%/probe_b94_before.out`／`probe_b94_after.out`。**observe 三档原样**：
+
+```
+修前                                          修后
+[observe/introspect]                          [observe/introspect]
+  edges={'then'}  adapter_call=True             edges={'then'}  adapter_call=True
+  degraded_ledger=[('introspect', True)]        degraded_ledger=[('introspect', True)]
+  guard_blind_watch_records=[]                  guard_blind_watch_records=[('guard_blind', 'introspect')]
+  watch_row_conflict=None                       watch_row_conflict=1
+  bridge_marks=[] bridge_publishes=0            bridge_marks=[] bridge_publishes=0
+[observe/request]                             [observe/request]
+  edges={'then'}  adapter_call=True             edges={'then'}  adapter_call=True
+  degraded_ledger=[('request', True)]           degraded_ledger=[('request', True)]
+  guard_blind_watch_records=[]                  guard_blind_watch_records=[('guard_blind', 'request')]
+  watch_row_conflict=None                       watch_row_conflict=1
+  bridge_marks=[] bridge_publishes=0            bridge_marks=[] bridge_publishes=0
+[observe/band_read_failed]                    [observe/band_read_failed]
+  edges={'on_error'}  adapter_call=False        edges={'on_error'}  adapter_call=False
+  degraded_ledger=[('band_read_failed', False)] degraded_ledger=[('band_read_failed', False)]
+  guard_blind_watch_records=[('guard_blind', 'band_read_failed')]   （同）
+  watch_row_conflict=1                          watch_row_conflict=1
+  bridge_marks=['ADM_ERR_INTERNAL'] bridge_publishes=1               （同）
+```
+
+读数怎么读：修前 observe 的 introspect/request 两档 `guard_blind_watch_records=[]`＋`watch_row_conflict=None`——**这就是那句文档承诺的空转**；修后两档各落一条指示、`conflict` 计数 1。三档共同的 `edges`/`adapter_call`/`degraded_ledger` 两版逐字相同 ⇒ 执行语义与台账面没动。`bridge_publishes` 修后仍是 0（试演档不发对端快照），而 band 档两版都是 1（裁定 §四 的形状没被"顺手统一"掉）。
+
+**enforce 三档正对照**：修前与修后**逐字相同**（脚本按 `=== enforce` 之后整段比对：`ENFORCE_BLOCK_IDENTICAL= True | chars: 857 857`），三档都是 `edges={'on_error'}`、`adapter_call=False`、`guard_blind_watch_records=[('guard_blind', …)]`、`watch_row_conflict=1`、`bridge_publishes=1`。⇒ 本批没改 enforce 的任何行为。
+
+修后 observe 两档另有一行日志面读数（探针 stdout 顶部原样）：
+
+```
+冲突守卫失明但处于试演档（phase=introspect，动作照常执行）：只落监护视图常驻指示，不发对端降级快照（这一跑没拦东西；该档出向语义未裁）
+冲突守卫失明但处于试演档（phase=request，动作照常执行）：只落监护视图常驻指示，不发对端降级快照（这一跑没拦东西；该档出向语义未裁）
+```
+
+**方法面两处如实记（都是探针/判据自己造的坑，不是被测系统的读数）**：
+
+- 第一次那版探针把 `af_watch.record_conflict` **整个替换掉、没转调原函数** ⇒ 视图行从来没被写过，`watch_row_conflict=None` 在 enforce 档也照样是 `None`。那一版的"None"是探针造成的真空，不作数。改成 spy 转调 original 后重测（本节贴的就是重测后的两份），并把这条陷阱写进判据 helper `_watch_records`（`tests/test_af_conflict_runtime.py:650`）的 docstring。同一支探针的 enforce 三档从此当正对照用。
+- observe 腿一开始用 `_blind_node(object())`：回落那支 `original` 自己做 `dict(node.params)`，`object()` 让它当场 `TypeError`，测到的是"节点本身坏"而不是"守卫瞎了"。改成 `_deep_params()`（超深度预算 ⇒ `ParamDepthError`，守卫炸而执行器不炸），enforce 腿保留 `object()`。
+
+### 四、判据 +8 条腿（24→32）与副本树变异 M0–M9
+
+新增腿（`tests/test_af_conflict_runtime.py` 现读行号）：
+
+| 腿 | 位置 | 钉什么 |
+|---|---|---|
+| `test_observe_introspect_blindness_still_executes_but_leaves_an_indicator` | `:672` | 执行不变（`{"then"}`＋适配器真被调）同时指示真落，detail `reason=guard_blind`/`phase=introspect`/`blocked is False` |
+| `test_observe_request_blindness_still_executes_but_leaves_an_indicator` | `:693` | 同上，request 站 |
+| `test_enforce_blindness_still_marks_the_indicator_as_blocked` | `:716` | 反向 CONTROL：enforce 档同一站必须 `blocked is True`，防"分栏"退化成"两档都 False" |
+| `test_observe_blindness_does_not_publish_the_peer_degraded_snapshot` | `:734` | observe 档 `bridge.published == 0`，**同一条腿里带 enforce 正对照** `== 1`（防"把通知整体摘掉"也算通过） |
+| `test_band_read_failure_blocks_and_notifies_even_in_observe` | `:758` | 裁定 §四：试演期 band 照拒（`{"on_error"}`、适配器未被调、`fail_open is False`）照发（`blocked is True`、`bridge.published == 1`） |
+| `test_observe_blindness_leaves_a_warning_on_the_log_face` | `:787` | WARNING 读数面：caplog 先发自证哨兵 `SENTINEL_B94`（抓不到哨兵就当场失败），再要求恰好 1 条 WARNING 含「试演档」＋「introspect」＋「不发对端降级快照」 |
+| `test_every_guard_blind_call_point_declares_whether_it_blocked` | `:832` | AST 结构腿：派发函数里恰好 3 枚调用点、每枚都带 `blocked`；band 那枚字面量 `"True"`，另两枚 `"not observe"`；被调方签名保留 `blocked` 且函数体不含 `settings.mode` |
+| `test_notification_precedes_the_observe_passthrough_at_both_blind_sites` | `:858` | AST 结构腿：两站的通知调用索引 **<** 该 handler 里第一枚 `if observe` 的索引——正是修前那两行站错的位置 |
+
+辅助件：`BandBrokenConf`（`:643`，`band` 抛错）、`_blind_records`（`:668`）、AST 助手 `_conflict_service_class`/`_method`/`_dispatch_function`/`_notify_calls`（`:810`/`:815`/`:820`/`:824`）。判据文件本体现读 `32 passed`；五份冲突文件合跑（`tests/test_af_conflict_runtime.py`+`_core`+`_e2e`+`_audit`+`tests/test_conflict_band.py`）现读 `%TEMP%/conflict94.out`：**`58 passed in 1.48s`，`CONFLICT_RC=0`**。
+
+副本树变异（`%TEMP%/mut94.py` → `mut94.out`，只碰 `/tmp/mut94tree` 副本树；每枚注入前 `ast.parse`、跑完 `write_text(original)` 还原并断言文本回到原样）：本节写完后又按字节对撞了一次副本树与工作树的两枚被改文件——`cmp` 均无输出，`MUT_TREE_RESTORED_SRC=1`、`MUT_TREE_RESTORED_TEST=1` ⇒ 九枚注入没在副本树上留下任何残余。
+
+| 枚 | 注入的缺陷形状 | 读数 |
+|---|---|---|
+| M0 什么都不改 | 读数面自证档 | `RC=0 红 0 条｜32 passed in 0.80s` |
+| M1 introspect 站通知调用点摘掉 | **本格缺陷原形状** | 红 8 |
+| M2 通知挪回 observe 回落之后 | 只给 enforce 通知 | 红 4 |
+| M3 仓内常驻指示摘掉（只留日志） | 指示面消失 | 红 5 |
+| M4 试演档那条告警降级成 debug | 读数面消失 | 红 1 |
+| M5 没拦也照发对端快照（早退那块摘掉） | 给没发生的事下结论 | 红 2 |
+| M6 band 站改成跟着模式走 | **推翻裁定 §四** | 红 2 |
+| M7 被调方自己读模式 | 第二份真值 | 红 2 |
+| M8 introspect 站把 `blocked` 写死成 False | enforce 不再发快照 | 红 4 |
+| M9 request 站通知调用点摘掉 | 半边静默 | 红 3 |
+
+九枚**全部被杀**，M0 全绿，没有"锚点作废/语法作废"（每枚注入前先 `ast.parse`）。
+
+**判据自身返工两处，如实记**：① 变异驱动初版把 M4 的 old/new 锚点写反了（会变成一枚永远"锚点作废"的假腿），跑前对照源码改回；② AST 腿初版写成 `"observe" not in keywords or …` 这种"自我满意式"断言（它对任何实现都近乎为真），换成被调方级别的两条实检查——`blocked` 留在签名里 **且** 函数体不含 `settings.mode`。
+
+### 五、全量与归属反证
+
+- 工作树全量（`%TEMP%/full94.out`）：**`6 failed, 3729 passed, 53 skipped, 1 warning, 65 subtests passed in 536.62s (0:08:56)`，`FULL_RC=1`**。
+- 那 6 条 FAILED 名单与上一批 §二之八十九 登记的**逐字同**（`test_dcd_20261004_auth_limits` 2 条、`test_v0_8_auth` 3 条、`test_v1_4_token_expiry` 1 条 `assert (400 == 403)`），全在鉴权面；passed 从 3721→3729，差正好是本批 +8 条腿。
+- 归因反证（**对修前 HEAD 的副本树**跑，不是对工作树跑）：`git archive HEAD | tar -x` 得 `%TEMP%/head94`（现读那份 `af_conflict_runtime.py` 里 `blocked=not observe` 零命中 ⇒ 不含本批代码面），单跑上述三份鉴权文件 ⇒ `%TEMP%/head94_auth.out`：**`48 passed, 1 warning in 23.67s`，`AUTH_RC=0`**。⇒ 这 6 条红只在工作树那批**在途未提交的 `af_api.py`/`af_auth.py`（登录线）**里红，不是本批带来的，本批也不替它修。除这 6 条以外全树无别的红。
+- 行尾按各文件自己的口径量过（不是"全树 LF"）：`af_conflict_runtime.py` 与本批判据文件工作树 **CR=0**（HEAD blob 也是 LF，所以跨行锚点按 LF 取），三份文档同样 CR=0；`git show --stat d8f2234` = 34 插（代码面）+256 插（判据）／7 删，不是整份重写。
+
+### 六、门禁
+
+`GATES_PYTHON=<Python313> bash gates.sh` 共**八遍**，按批次阶段分组：代码面进树后两遍（`%TEMP%/gate_b94_a.out`／`b`，各 **7877 字节**）、文档面进树后两遍（`c`／`d`，各 **7888 字节**）、记账两行改动后两遍（`e`／`f`）、**全部文本定稿后最后一对（`gate_b94_g.out`／`h`）**。**八遍的门禁自身输出逐字节相同**：`cmp gate_b94_c.out gate_b94_e.out` ⇒ `CMP_CE_RC=0`、`cmp gate_b94_e.out gate_b94_f.out` ⇒ `CMP_EF_RC=0`、`cmp gate_b94_a.out <(head -74 gate_b94_e.out)` ⇒ `CMP_A_E74_RC=0`（a/b 少的那 11 字节是这一批后半程才加上的驱动记账行 `GATES_RC=1`，属驱动自己的行，不是门禁措辞）。终稿档现读：`gate_b94_g.out`／`h` 各 **7884 字节**，`cmp gate_b94_e.out gate_b94_g.out` 只在**第 75 行**分叉（`CMP_EG_RC=1`，byte 7879），`cmp gate_b94_g.out gate_b94_h.out` 同样只在第 75 行分叉（`CMP_GH_RC=1`，byte 7878）——那一分叉就是驱动自己写的标签行（`GATES_RC=1`／`G_RC=1`／`H_RC=1`，长度 11／7／7 字节，正是 7888 与 7884 的差额）。把末尾那行剥掉再比：**门禁本体（74 行／7877 字节）三遍逐字节相同**——`head -74 gate_b94_{e,g,h}.out` 落三份文件后 `cmp body_e body_g` ⇒ `CMP_BODY_EG_RC=0`、`cmp body_g body_h` ⇒ `CMP_BODY_GH_RC=0`。⇒ 八遍读的是同一张门禁。
+
+**"写完 g/h 读数还要改本节，这一档还算不算数"——不靠侥幸，靠现读**：`grep -rln "执行记录" gates.sh scripts/*.py .github/workflows/*.yml` 只命中 `scripts/gh_ci_status.py`，而它**不在 `gates.sh` 的调用序列里**；`gates.sh` 里唯一读文档的是计划表口径门 `scripts/check_plan_ui_claims.py`，射程是 `docs/plan/开发计划_WebUI全功能接入.md`。也就是说本批这**三份文档正文都不在任何一站的射程内**，本节最后的措辞改动按定义不可能改变门禁读数。仍然如实记一句顺序上的不干净：`g/h` 是在本节"终稿"那句写完之前 fire 的，所以我先前写的"全部文本定稿后最后一对"这句在字面上不成立——成立的是上面那条射程读数，不是"改口说它本来就对"。
+
+**流程上的一次自伤，如实记**：我在 `c/d` 那一对在飞的时候改了文档两行（13:10:02、13:10:15，早于 13:10:36 fire 的 `e/f` 仅十几秒），所以 `c/d` 对最终文本不作数——纪律是"冻结树 → fire → 读数 → 再改"，不是"侥幸相同"。这次改口后又 fire 了 `e/f`，最后把本节与存证清单定稿，再 fire 一对 `g/h` 作为终稿档，之后**不再动任何文件**。
+
+读数八遍以来与 §二之八十七／八十八／八十九 一模一样：`GATES_RC=1`、`扫描完成：AutoForge  新增/未获批 2 条（error 0 / warn 2），基线内存量 96 条，过期基线条目 0 条`、`计数：except-pass-broad=20 | fake-ok-const=78` ⇒ 全量 **98**／登记上限 **97**。差的两条仍是既有的 `af_api.py:984`/`:1005`（登录线 #79 的窗口），AF 不自上调上限、不写 `.gates-baseline.txt` 豁免。
+
+本批**动了代码面**，所以"文档改动按定义不可能新增违规"那句在这里不适用——实测口径是：新代码没新增任何一条 AST 违规，散文（三份文档共约 150 行新增）也没踩名字哨兵。另两处操作面读数：① 第一遍用默认 `python3` 起门禁直接中止（`homesdk 未安装`，RC=2，输出 182 字节），本机必须 `GATES_PYTHON` 指到 Python313 那份——"缺包"九成是跑错解释器；② 这一时段单遍耗时从约 3 分钟涨到约 13 分钟（有界缓存那一站 12:54→13:02 无输出），与全量跑批重叠、机上另有并发会话的两个常驻 python 争 IO；读数本身没受影响（多遍逐字节相同是证据）。
+
+### 七、记账位
+
+- 本批文件：代码面**已提交 `d8f2234`**（`src/autoforge/af_conflict_runtime.py`、`tests/test_af_conflict_runtime.py`，283 插／7 删，staged 集合按 `git diff --cached --stat` 核过只含这两份）；文档面＝本批第二枚提交（`docs/ADM联动执行记录-AF.md`、`docs/architecture/AF完整架构与运行时说明.md`、`docs/architecture/AF完整知识文档.md`）。**不进**：`af_api.py`、`af_auth.py`、`docker/*`、`ui-user-mimo/*`、`docs/audit/参考/FFL-200题测试提示词.md`（并发登录线在途／归属他人）、计划文档（按纪律保持 unstaged）。
+- 存证（`%TEMP%`，不进仓）：`probe_b94.py`／`probe_b94_before.out`／`probe_b94_after.out`、`mut94.py`／`mut94.out`、`prefix_b94.py`（修前源码快照，行号依据）、`conflict94.out`（五份冲突文件）、`head94_auth.out`（HEAD 副本树反证）、`full94.out`（全量）、`gate_b94_a.out`／`gate_b94_b.out`（代码面进树后两遍）、`gate_b94_c.out`／`gate_b94_d.out`（文档面进树后两遍）、`gate_b94_e.out`／`gate_b94_f.out`（记账两行定稿后的权威两遍）、`gate_b94_g.out`／`gate_b94_h.out`（终稿档，本体与 a–f 逐字节同）、`body_{e,g,h}.txt`（剥掉驱动标签行后的本体，用于 `cmp`）、`head94/`（`git archive HEAD` 副本树，鉴权反证用）。
+- 两份架构文档同步位：说明 §八 那张 fail-closed 站点表**加了"通知半边"一列**并把六行位置全部按现读重钉（`:294-304`/`:306-309`/`:310-321`/`:331-343`），表后那句"observe 档的例外是设计"扩成完整口径；说明 §十八 第 4 条改收取口形状（编号保留、不挪后面条目）；知识文档 §八"冲突档"那格的"落盘"列补 `af_watch` 的 `conflict` 列，并加一段实测口径；两本各加一行变更记录。
+- **本批不交 DCD**，理由要说清：落下来的那半边全是**加法式仓内证据**（指示 detail 多一枚键、多一条 WARNING），不动公开契约、不动 state 枚举、不动路由与面板、不改执行语义 ⇒ 没有 AF 不能自决的分叉。**剩的那半边确实不能自决**：试演期失明要不要也对端可见＝`degraded` 那格的跨仓词汇（契约 §7.1 的 state 枚举与注册表都归 DCD／homesdk）。这一格**未在本批单独申报**，原因是两种答案里"不发明词汇"这一边已经是今天落下的实现，申报不会解锁任何 AF 侧动作；而它仍在 §十八 第 4 条的"剩半边"里点名挂着，等下一次跨仓批次（#93 的 B.10 那一问就是同一族的"retained status 落哪一档"）**并入同一份申请递交**，避免同话题多份申请。任务位已挂：**#95「随下一次跨仓申请一并申报：observe 档失明是否也要对端可见」**。
+- 待办：#94 收口。§十八 结构性残余现读剩 **B.1（`af_irreversible` 执行面无调用方）／B.7（`af_nl_parse` 无产品调用方）／B.10（裁定 `20261010-AF拆码与MA自更新四问-裁定.md` §一 已回：Q1 甲／Q2 甲／Q3 甲，#93 由"等裁定"转为"落地"，硬前置在库侧那一半）**。#79 的子项不变（两枚 `ok`＋把 `BackupNotReclaimed` 接进 `af_api.py:474` 那组 409）。阻塞格：#75/#76 等卡2 与 NAS 合并窗、#80 等 homesdk 0.3.3、#81 等部署机、#83/#84 等 owner。
+- 远端读数：本批未推。未推枚数一律 `git log origin/main..HEAD --oneline | wc -l` 现读（本批代码面进树后现读 13），不追写计数。推 GitHub 要 owner 点头。
+- `docs/audit` 本批开窗检查：`find docs/audit -type f -printf "%TY-%Tm-%Td %p\n" | sort -r` 现读共 **78** 份，最新一份审计报告仍是 2026-10-07 的归档（`AutoForge_第二十轮审计报告_最终轮.md`），`index.md` 2026-10-08，`参考/FFL-200题测试提示词.md` 2026-10-09（归属他人、不碰）⇒ **本批开窗没有新增审计报告**，也就没有新增待收的 bug。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `fa71f86` + §十八 B.4 收口批次（代码面 `d8f2234`：`blocked` 由三枚调用点现给、被调方不读模式；observe 档两站失明不再静默——仓内 `af_watch` 指示照落＋一条 WARNING，对端 retained 快照只在真拦下时发；band 站照裁定 §四 不看模式，本批只加 CONTROL 腿；判据 24→32 条腿（含两枚 AST 结构腿）＋副本树变异 M0 全绿、M1–M9 全部被杀；修前修后同一支探针六档原样贴回、enforce 段逐字相同；工作树那 6 条红按修前 HEAD 副本树 `48 passed / AUTH_RC=0` 反证成登录线在途；门禁八遍逐字节相同（本体 74 行／7877 字节，各遍末尾只差驱动自己写的 RC 标签行）、基线读数未动；未推枚数以 `git log origin/main..HEAD` 现读为准）
