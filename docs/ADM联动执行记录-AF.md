@@ -7750,3 +7750,112 @@ hunk 头逐枚（`git diff -U0 -- src/autoforge/af_scanner.py` 原样）：`@@ -
 - 待办：#89 收口。#83/#84 不变（等 owner 勾名单与部署机）；#79 等登录线窗口（门禁那两枚红押在这里）；#75/#76 等卡2 与 NAS 合并窗；#80 等 homesdk 0.3.3。§十八 结构性残余还剩 B.1／B.2／B.4／B.7／B.10 诸格未动。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `bf8c563` + 测试区删除面批次（提交态现读：代码面 `125c646`＝`af_test.py` +100−5／`af_mcp.py` +12−4／新判据 373 行 17 腿／基线 −1 条过期指纹／三份文档；记账格 `bf5d110`；本格是 `bf5d110` 之后补的第四遍门禁读数）
+
+## 二之八十七、收 §十八 结构性残余 B.2：保真校验器自己的规范化不许把"没比成"写成"保真"——`_canon` 从裸 `json.dumps` 换成带类型标记的递归编码，`FidelityReport` 从此有第三档
+
+> 出品：AutoForge 开发
+> 触发物：`docs/audit` §十八 结构性残余 B.2（说明文档 `:477` 原措辞"仍是裸 `json.dumps`，与第十三轮修掉的 `_leaf_key` 同形…列待窗"）；第十三轮 `_leaf_key`／`LeafUnserializable` 判例（`af_ir/condition_norm.py:36,56,79`）；纪律「没做成都不许报成 done」「门管形状、判据管语义」。
+> 基准 HEAD：`3b00224`；代码面已提交为 `7800d5c`（`src/autoforge/af_fidelity.py` +97−15、新判据 `tests/unit/test_fidelity_canon_vocabulary.py` 229 行 21 腿、两份架构文档），**未推远端**。推远端要 owner 点头。
+
+### 一、修前实测：两格都是**在 HEAD 上跑出来的**，不是我推的
+
+探针 `probe_b2.py` 分别在工作区与 `git archive HEAD` 副本树（`%TEMP%/af89pure`）各跑一次，两份存证 `cmp` 逐字节相同（各 990 字节，md5 `e0fe64583dbacc4af723cb8419bac95b`）⇒ 下面这些读数是 HEAD 的形状，不带任何未提交改动。
+
+**① 抛穿（调用方拿到崩，连报告都没有）**——`verify_roundtrip` 原样贴回：
+
+```
+[①a date 值进 params] 抛出 TypeError: Object of type date is not JSON serializable
+[①b set 值进 params] 抛出 TypeError: Object of type set is not JSON serializable
+[①c 自引用 list 进 params] 抛出 ValueError: Circular reference detected
+[①d 混合键型（int+str）] 抛出 TypeError: '<' not supported between instances of 'str' and 'int'
+```
+
+**② 塌陷（校验器的本职恰恰是拒绝这一格，却报成保真）**：
+
+```
+[②a tuple vs list] _canon((1,2))==_canon([1,2]) -> True  两侧串='[1, 2]' / '[1, 2]'
+[②b int 键 vs str 键] _canon({1:1})==_canon({'1':1}) -> True  两侧串='{"1": 1}' / '{"1": 1}'
+[②c NaN] _canon(nan)='NaN'  而 float('nan')==float('nan') -> False
+[②e 端到端：一条 params 用 list、另一条用 tuple] 返回=True
+[②f 端到端：一条 params 键是 1、另一条是 '1'] 返回=True
+```
+
+②e／②f 这两行是分量最重的一格：**`fidelity_equal` 端到端返回 `True`**。F14 P1 的验收形态是 `verify_roundtrip(...).ok is True`，而 `ok` 里就含 `projection_fidelity`——规范化把类型差异抹平，等于校验器在"IR→NL→IR 到底有没有丢东西"这件事上自己造假绿。②c 那行是反方向的同一件事：`NaN` 能被 canon 成串，但 `nan != nan`，于是同一格自己跟自己"不等"。
+
+消费面读数（决定这是不是产品缺陷）：`grep -rn "af_fidelity\|fidelity_equal\|verify_roundtrip\|FidelityReport" src/`（排掉自身文件与 `__pycache__`）⇒ 命中的**只有一处 docstring 提及**（`af_nl_build.py:7`，不 import、不调用），**`src` 里零代码调用方**；真正的调用面是 `tests/f14/{test_fidelity_roundtrip,test_nl_build,test_ask_irreversible}.py`；`_canon` 只在 `af_fidelity` 内部出现。所以这一格修的是**开发/CI 侧的验收诚实度**，不动对外契约、不动运行期。（ALL/CODE 两个口径分开报，是按 §十五 那条"名字哨兵罩住 docstring"的既有纪律。）
+
+### 二、修法：词汇表显式化 + 第三档"无法比较"是一等输出，不由 `False` 或异常兼职
+
+`_canon`（现读 `af_fidelity.py:54-93`）改成递归编码，每个值带自己的类型标记：
+
+- 词汇表＝JSON 那一套：`null` / `bool:true|false` / `int:<值>` / `float:<repr>` / `str:<json 转义>` / `[l:…]` / `[t:…]` / `{…}`；**`bool` 必须排在 `int` 之前判**（`isinstance(True, int)` 为真，写反了就把 `True` 与 `1` 塌成新一格——正是本批要消灭的形状）；
+- **tuple 与 list 分别打 `t`/`l` 标签**（②a 那格的正解不是"比 json 更小心"，而是让序列类型进编码）；
+- 非 str 键 ⇒ 拒比（②b：`json` 会把键强转成字符串，`1` 与 `'1'` 就此同串）；非有限 float（NaN/±inf）⇒ 拒比（②c：JSON 里没有这一档，两侧无从对齐）；
+- str 叶子与键仍借 `json.dumps(..., ensure_ascii=False)` 做**转义**——不是拿它编整格容器。这一条有专门判据腿钉：`json.dumps` 的参数必须是单枚字符串 `Name`，且函数体里不许再出现 `sort_keys`；分隔符塌陷也量了（`["a,b"]` ≠ `["a","b"]`，`{"k]:": 1}` ≠ `{"k": 1}`，字符串 `'str:"int:1"'` 伪造不出真 `int:1`）；
+- 深度预算走 `check_param_depth`（真源 `af_ir.models.MAX_PARAM_DEPTH`＝那份单一真值源），所以**自引用容器抛的是 `ParamDepthError` 而不是解释器的 `RecursionError`**（①c），本模块不出现第二个深度数字——由 AST 腿拒绝手抄。
+
+表外形状抛 `FidelityNotComparable`（`:35` 具名码 `FIDELITY_CANON_UNSUPPORTED`、`:38-51` 异常类），带 `code`/`where`/`detail` 三格，且**仍继承 `ValueError`**——调用方按仓内既有口径接得住，不必新增 catch 族。`where` 是从根一路拼下来的位置（`nodes[n_do].params[when]`），因为"哪一格没比成"是这份报告唯一能被读回去的定位信息。
+
+`verify_roundtrip`（`:273-315`）只捕三枚具名错（`FidelityNotComparable` / `ParamDepthError` / `LeafUnserializable`），把它落成新增的第三档 `FidelityReport.not_comparable`（`:261-270`，放在 `detail` 之后以免破坏位置化构造）：`ok` 与 `projection_fidelity` 同时 False，`detail` 逐字写 `无法比较（不是不等）：…`。`fidelity_equal` 遇同一格**继续抛**而不返回 `False`——返回 `False` 会被读成"两条不等"，实情是"这一条没比成"，这两件事在验收面上必须能分开。三档口径（相等／不等／无法比较）已写进知识文档 §十五 第 11 条坑。
+
+修后同一支探针重跑（`%TEMP%/probe_b2_after.out`）：①的四格全部变成 `ok=False projection_fidelity=False not_comparable=True` 的报告（位置与原因逐字带出，自引用那格报的是 `参数容器嵌套超过预算 64（保真规范化 nodes[n_do].params[loop][0]…）`）；②的 `tuple vs list` canon 相等读数 `False`、端到端 `fidelity_equal` `False`，int 键与 NaN 抛 `FidelityNotComparable`；③合法形状不误伤——正常参数 `ok=True`、键序不同仍相等、预算内深嵌套仍保真、`["a,b"]` vs `["a","b"]` 不等。
+
+### 三、判据：21 条腿（`tests/unit/test_fidelity_canon_vocabulary.py`，229 行）
+
+四组分面：① 抛穿的四格现在必须是报告（含"位置＋具名码"那条）；② 塌陷的格子必须区分或如实拒比；③ 合法形状照常保真（同型同值、键序无关、自我相等、预算内深嵌套）；④ 静态形状面——三枚 AST 腿（`_canon` 不许再吃整容器 `dumps(sort_keys)`、`json.dumps` 只准编码单枚字符串叶子、`verify_roundtrip` 的 `except` 里不许出现 `Exception`/`BaseException`）＋两枚结构腿（`not_comparable` 必须同时在数据类字段与 `__all__`、`ok` 必须等于四项派生值）。
+
+**判据文件第一次真跑就红两条，两条都是判据自己写错，不是被测面**（如实记账，别让它伪装成"被测面稳"）：
+
+1. `test_int_key_versus_str_key_is_refused_not_collapsed` 里我留了一条空洞断言（`_canon({"1":1}) != _canon({"1":1","2":2})`——两条本来就不等，杀不了任何东西）。改成核 `FidelityNotComparable` 的 `where`/`detail`，并加一条**嵌套层**的 int 键腿（`{"outer": {2: "x"}}` ⇒ `where == "v[outer]"`），钉的是"不是只在顶层设防"。
+2. `test_string_delimiters_do_not_collapse_across_items` 里我把 dict 写成了 `_canon({"k]:", 1})`——那是**集合字面量**，探针报 `value = {1, 'k]:'}`。这条红同时说明拒 set 那档真在挡东西。改成 `{"k]:": 1}`，另加"字符串伪造类型标记"那条腿。
+3. 另一处非红但同族的错：静态腿里我写了 `inspect.getsource(_func("_canon"))`，而 `_func` 返回的是 AST 节点 ⇒ `TypeError: … got FunctionDef`。改用 `ast.get_source_segment(src, node)`，顺带删掉因此空转的 `import inspect`（避免给 AST 门添新形状）。
+
+读数（原样贴回）：`21 passed in 0.35s`，`RC=0`（`%TEMP%/t90_unit.out`）；消费面合跑 `tests/f14 tests/unit/test_fidelity_canon_vocabulary.py tests/unit/test_ir_trigger_depth_budget.py` ⇒ `140 passed in 1.55s`，`RC=0`（`%TEMP%/t90_consumer.out`）——`tests/f14` 那 103 条是本批的**反证档**：合法 IR 的往返保真没被改坏。
+
+### 四、副本树变异自证：8 枚，7 枚有杀腿，**1 枚是等价变异并如实登记**
+
+串行跑在 `%TEMP%/af90mut`（`src`+`examples`+该判据文件，`PYTHONPATH` 指副本，模块面自证 `MODULE: C:\Users\lidicn\AppData\Local\Temp\af90mut\src\autoforge\af_fidelity.py`）；每枚注入前先 `ast.parse`，跑完还原原字节。对照腿 M0（未变异）＝`21 passed`，`RC=0`；还原腿 M99＝`21 passed`，`RC=0`。逐枚点名（`%TEMP%/mut90.log`，单枚日志 `mut90_M*.out`）：
+
+| 变异 | 改的就是哪一格缺陷 | 被杀腿数 | 点名 |
+|---|---|---|---|
+| M1 | HEAD 形状复现：整个 `_canon` 换回 `json.dumps(value, sort_keys=True, ensure_ascii=False)` | **12** | 抛穿四腿 + 塌陷三腿 + 四枚静态腿全红 |
+| M2 | 摘掉非 str 键的判 | 2 | `int_key_versus_str_key…`、`mixed_key_types…` |
+| M3 | tuple 与 list 打同一个标签 `l` | 1 | `tuple_and_list_params_are_no_longer_equal` |
+| M4 | 非有限 float 放行 | 1 | `non_finite_floats_are_refused` |
+| M5 | `ok` 里去掉 `and not not_comparable` | **0（等价变异）** | 21 全绿 |
+| M6 | `verify_roundtrip` 改宽捕 `except Exception` | 1 | `verify_roundtrip_catches_named_errors_only` |
+| M7 | 深度预算换成本模块手抄的 `if _depth > 64` | 3 | `depth_budget_comes_from_the_shared_constant…`、`nesting_over_budget…`、`self_referential_container…` |
+| M8 | `FidelityReport` 不带 `not_comparable` 字段 | 8 | 含 `report_has_the_not_comparable_tier…`、`normal_ir_still_passes…` |
+
+M5 必须写清，不能拿"八枚全杀"当卖点：`not_comparable` 为真时 `projection_fidelity` 必然还是初值 `False`（`:293`），所以 `ok` 里那一项当前**被蕴含**，摘掉不减真值。判据杀不了一个语义不变的变异，这是等价变异（equivalent mutant），不是判据盲区；那一项留着是把不变式写在可读的位置（将来若 `projection_fidelity` 改成"拒比也算比过"，它会立刻变成必要项）。这一格因此**不能**声称"`ok` 的每一项都被独立杀过"。
+
+### 五、整树红态的归属：本批一枚红都不添，工作区那 10 枚红全在鉴权线
+
+- 工作区三切片（`tests/unit tests/f14 tests/contract`）：`10 failed, 3125 passed, 43 skipped, 1 warning in 188.65s`，`RC=1`（`%TEMP%/t90_broader.out`）。十条 FAILED 全是鉴权面（`403` 读成 `400`／明文被掩成 `********`／读门面该 fail-closed 却 `200`），没有一条落在保真、IR、NL、门禁族。
+- 按同名红先单跑的纪律：这 10 条在工作区**单跑** ⇒ `2 failed, 8 passed`（`%TEMP%/t90_auth_worktree_alone.out`）⇒ 其中 8 条是切片顺序／共享态带来的，不是稳定红。
+- 隔离树对撞（`%TEMP%/af90iso`：副本 `src` 的 `af_api.py`/`af_auth.py` 先取 HEAD 版，`af_fidelity.py` 取本批版，`tests` 整份拷工作区）：
+  - STEP-A（HEAD 的 auth + 本批）⇒ 那 10 条 `10 passed`；
+  - STEP-B（把在途的 `af_api.py`/`af_auth.py` 叠上去，本批不动）⇒ 同一批腿 `2 failed, 8 passed`，失败的正是 `test_dcd_20261004_auth_limits` 那两条（owner 明文／第三方 write 令牌掩码）。
+  ⇒ 这两条红由**登录线在途改动**引起，与本批文件同树共存但不由本批产生。读数在 `%TEMP%/t90_isolate.out`。
+- 纯 HEAD 基线（`%TEMP%/af89pure`，同一三切片、`--ignore` 掉上一批的 B.3 判据文件）：`3 failed, 3094 passed, 43 skipped in 255.63s`（`%TEMP%/t90_pure_slice.out`）；同树只叠本批两份文件（`%TEMP%/af90pure2`）：`3 failed（**同名三条**）, 3115 passed, 43 skipped in 192.22s`（`%TEMP%/t90_pure2_slice.out`）⇒ 本批净增 21 条腿、全部通过，**没把任何一条腿改红**。剩下的 3 条：`test_pkg_markers_gate`（副本树无 `.git` 索引，属测量口径，§十八 A 已记）与 `tests/contract/test_af_ask_contract.py` 两条——后者在纯 HEAD 上就红，工作区那 10 条里含它们，因此这 2 条也**不是**本批引起。
+
+### 六、门禁：读数与本批前逐字相同，未新增违规、未产生过期指纹
+
+`GATES_PYTHON=<Python313> bash gates.sh` ⇒ `GATES_RC=1`（`%TEMP%/g90a.out`）。现读：`新增/未获批 2 条（error 0 / warn 2）`、`基线内存量 96 条`、`过期基线条目 0 条`、`计数：except-pass-broad=20 | fake-ok-const=78` ⇒ 全量 **98** 条／登记上限 **97** 条——**这一组数与本批进来之前一模一样**：本批既没消掉任何存量违规（`af_fidelity.py` 原本不在基线里，`grep -n af_fidelity .gates-baseline.txt` 零命中），也没新增，更没有触发过期指纹删除（上一批 B.3 已把 `TestChannel.clear` 那条删过）。第二遍在两份架构文档改完之后重跑（`%TEMP%/g90b.out`）、第三遍在本记账格也进树之后重跑（`%TEMP%/g90c.out`）：三遍**逐字节相同**（各 7877 字节，两次 `diff` 都是 `DIFF_RC=0`）⇒ 文档与本格散文都没有踩到任何名字哨兵，也没有改任何门的读数。那 2 枚未获批仍是 `api_auth_has_admin`／`api_auth_register` 的字面量 `ok=True`（`af_api.py`，登录线在途，#79）；上限是评审动作，AF 不自上调。
+
+### 七、文档同步
+
+- **说明文档**（`AF完整架构与运行时说明.md`）：§十八 B.2 按 §二之八十三 起的惯例**收口但保留编号**（后面 3-13 不重号），措辞含锚点、三档语义、等价变异的如实登记，以及"src 无产品调用方"的消费面边界；§十六 门禁表新增一行 `tests/unit/test_fidelity_canon_vocabulary.py`；§十九 加本批行。
+- **知识文档**（`AF完整知识文档.md`）：§十六 第 4 条收口（编号保留）；§十五 新增第 11 条坑——"没比成"不许由 `False` 或异常兼职，诚实分档是三档不是一档；§十九 加本批行。
+- 两份文档的行号锚点都按**改后文件现读**重钉（`:35`/`:38-51`/`:54-93`/`:261-270`/`:273-315`/`:294-299`），不用插入前的旧值。
+
+### 八、记账位
+
+- 本批改动清单（代码与文档面**已随 `7800d5c` 提交**，本记账格紧随其后，未推远端）：`src/autoforge/af_fidelity.py`（+97−15，现读 315 行，md5 `434cc6ea1011fb276b49d4136f7d39cf`，CR=0）、`tests/unit/test_fidelity_canon_vocabulary.py`（新增 229 行 21 腿，CR=0）、`docs/architecture/AF完整架构与运行时说明.md`、`docs/architecture/AF完整知识文档.md`、本执行记录。**不进**：`af_api.py`、`af_auth.py`、`docker/*`、`ui-user-mimo/*`、`docs/audit/参考/FFL-200题测试提示词.md`（并发登录线在途／归属他人）、计划文档（按纪律保持 unstaged）。
+- 不交 DCD 的那一格，理由写清：`not_comparable` 这一档是 **AF 内部报告面**的新字段（`FidelityReport` 只被 `tests/f14` 消费，`src` 与对外契约、MCP/HTTP 面板都不读它），改的是 F14 P1 分层等价判据（DCD 20261001·F／方案 C）的执行诚实度，**没动跨仓消息契约的任何一个键**，所以按 AF 侧自决落码。若后续把这一档抬成对外可读的诊断码（例如进 MCP 工具返回或 `/api/health`），那才需要走 DCD 的词汇登记。
+- 存证（`%TEMP%`，本轮用，不进仓）：`probe_b2.py`／`probe_b2_worktree.out`／`probe_b2_head.out`／`probe_b2_after.py`／`probe_b2_after.out`、`mut90.py`／`mut90.log`／`mut90_M*.out`、`t90_unit.out`／`t90_consumer.out`／`t90_broader.out`／`t90_auth_worktree_alone.out`／`t90_isolate.out`／`t90_pure_slice.out`／`t90_pure2_slice.out`／`g90a.out`／`g90b.out`／`g90c.out`（三遍门禁存证，两份 `diff` 的 `DIFF_RC=0` 也在这三枚里）；副本树 `af90mut`（变异面）、`af90iso`（auth 隔离对撞）、`af90pure2`（纯 HEAD + 本批整切片）。
+- 仓根那四份未跟踪产物（`docker-compose.api.yml.tmp`、`issued_tokens.json.tmp`、`issued_tokens_clean.json`、`docker/docker-compose.api-test.yml`）不删不动（归属不明）。
+- 远端读数：本批未推。未推枚数不写在散文里，一律 `git log origin/main..HEAD --oneline` 现读（本批落笔那一刻读到 6 枚，`328dde5`…`3b00224`；§二之八十六 里那句"此刻三枚"是当时那一刻的读数，已被其后的三枚提交（`125c646`／`bf5d110`／`3b00224`）作废——按现读口径重读即可，不去追写计数）。推 GitHub 要 owner 点头。
+- 待办：#90 收口。#83/#84 不变（等 owner 勾名单与部署机）；#79 等登录线窗口（门禁那两枚红押在这里）；#75/#76 等卡2 与 NAS 合并窗；#80 等 homesdk 0.3.3。§十八 结构性残余还剩 **B.1／B.4／B.7／B.10** 诸格未动（B.1＝`af_irreversible` 执行面无调用方、B.4＝observe 档回落是设计但试演期守卫是瞎的、B.7＝`af_nl_parse` 无产品调用方属 F14 P2、B.10＝publish `rc` 单码待 DCD）。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `3b00224` + 保真规范化批次（提交态现读：代码面 `7800d5c`＝`af_fidelity.py` +97−15／新判据 229 行 21 腿／两份架构文档；本格与两文档的提交态措辞是本格这一笔；门禁三遍逐字节相同（各 7877 字节，两次 `diff` 都 `DIFF_RC=0`）；未推枚数以 `git log origin/main..HEAD` 现读为准）
