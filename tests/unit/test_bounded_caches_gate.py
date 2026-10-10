@@ -10,6 +10,10 @@
 D 固定键表的理由没写进代码、基线里的容器已消失 / E 死写容器），射程读不成退 2 不退 1。
 反空洞：注册表为空、扫到 0 个容器、注册表读不出 ⇒ 一律 exit 2——"没有发现"不等于"没有问题"。
 
+判据 F（裁定 20261011 §3 Q3 乙，本批新增，与 A–E 并列为第六条）核的是第三张表 `MONOTONIC_PERSISTENT_SETS`：那一档
+**不给 TTL 与上限**，给的是落盘／重启恢复／坏档 fail-closed 三条腿——它按设计无界且不许淘汰。
+`af_auth.py::TokenRegistry._revoked` 因此从基线冻结名单（114）移进这一档（113）。
+
 判据 E（稳定性审计 §六 P1）是这一批新加的第五条：只写不读、又没登记裁剪的增长容器判红。
 它与判据 C 的区别是 C 问"有没有登记"（基线里的 73 个全算登记过），E 问"有没有人读"
 ——`node_visits` 那一族正是躺在基线口径够不着的地方被删掉的。
@@ -52,6 +56,47 @@ class Counters:
         self._stats["a"] += 1
 '''
 
+#: 「持久化单调集」档的表名（裁定 20261011 §3 Q3 乙）。写成字面量是故意的：门禁那边把名字改了，
+#: 这里造的 fixture 就匹配不上、负控腿会立刻红——不让测试跟着脚本改名而一起漂走。
+MONOTONIC_TABLE = "MONOTONIC_PERSISTENT_SETS"
+
+#: 一个"无界＋持久化＋坏档拒绝"形状的合成样例：三条腿的名字都在模块里。
+MONO_MODULE = DEMO_MODULE + '''
+
+class Revoked:
+
+    def __init__(self):
+        self._revoked = set()
+        self._revoked_poisoned = False
+
+    def revoke(self, jti):
+        self._revoked.add(jti)
+
+    def is_revoked(self, jti):
+        return jti in self._revoked
+
+    def _persist_revoked(self):
+        pass
+
+    def _load_revoked_file(self):
+        pass
+'''
+
+
+def _mono_entry(**over: str) -> str:
+    row = {"module": "af_demo", "attr": "Revoked._revoked", "persist": "_persist_revoked",
+           "reload": "_load_revoked_file", "poison": "_revoked_poisoned",
+           "bound": "裁定 20261011-AF第六轮与第二期审计攒批十三问-裁定.md §3 Q3 乙",
+           "why": "裁掉一条＝那一条可能重新被接受，是安全语义倒退"}
+    row.update(over)
+    return "    {" + ", ".join(f'"{k}": "{v}"' for k, v in row.items() if v != "") + "},\n"
+
+
+def _mono_fixture(tmp_path, *, bounded: str = "", **over: str):
+    """一个"该绿"的单调集 fixture：`Cache._CACHE` 走 BOUNDED_CACHES，`Revoked._revoked` 走单调集档。"""
+    return _fixture(tmp_path, bounded=_entry() if bounded == "" else bounded,
+                    demo=MONO_MODULE, monotonic=_mono_entry(**over))
+
 
 def _gate():
     spec = importlib.util.spec_from_file_location("check_bounded_caches", SCRIPT)
@@ -73,10 +118,14 @@ def _entry(**over: str) -> str:
 
 
 def _fixture(tmp_path: pathlib.Path, *, bounded: str, fixed: str = "",
-             demo: str = DEMO_MODULE, extra: dict[str, str] | None = None) -> pathlib.Path:
+             demo: str = DEMO_MODULE, extra: dict[str, str] | None = None,
+             monotonic: str | None = None) -> pathlib.Path:
     src = tmp_path / "autoforge"
     src.mkdir(parents=True, exist_ok=True)
-    (src / "af_bounded_caches.py").write_text(_registry(bounded, fixed), encoding="utf-8")
+    registry = _registry(bounded, fixed)
+    if monotonic is not None:
+        registry += f"{MONOTONIC_TABLE} = [\n{monotonic}\n]\n"
+    (src / "af_bounded_caches.py").write_text(registry, encoding="utf-8")
     if demo:
         (src / "af_demo.py").write_text(demo, encoding="utf-8")
     for name, code in (extra or {}).items():
@@ -550,12 +599,12 @@ def test_real_repo_is_green(tmp_path):
 
 
 def test_real_repo_measurements_are_pinned():
-    """钉住本批实测：注册表 3 / 固定键 3 / 扫到 129 / 基线 114。
+    """钉住本批实测：注册表 3 / 固定键 3 / 持久化单调集 1 / 扫到 129 / 基线 113。
 
     数字变了只有两种可能：新增了一个容器（那要走登记或豁免），或者有人动了基线。两者都不该
     悄悄发生——第六轮审计那句"四处现状已是两条腿"就是靠这种核对才没被本门照抄成假账。
 
-    基线 114：73 自稳定性批次起未动过（`af_executor.py::NodeExecutor.node_visits` 那条删掉时
+    基线 113（本批 114→113）：73 自稳定性批次起未动过（`af_executor.py::NodeExecutor.node_visits` 那条删掉时
     扫到数与基线各减 1）；BUG-21 收口（20261006）关闭 dataclass 字段容器盲点后新增 41 个冻结
     （见 `scripts/check_bounded_caches.py` 尾部注释）。扫到数 81 → 122：F14 的 `af_nl_parse.py`
     （commit 9742102）带进来 6 个容器已就地豁免带理由；BUG-21 收口后 `_scan_class` 开始识别类级
@@ -598,8 +647,12 @@ def test_real_repo_measurements_are_pinned():
       `tests/unit/test_linkage_feed.py::test_unreadable_ring_is_bounded`。同样不给 TTL——
       "盘上有一条读不出来"不该自行愈合。
 
-    工作树里若躺着未提交的 WIP 模块，扫到数会比 129 更大而基线仍是 114——那种红的意思是
+    工作树里若躺着未提交的 WIP 模块，扫到数会比 129 更大而基线仍是 113——那种红的意思是
     "新容器没登记"，不是这行数字错了，登记处置归那一批自己，不许靠挪动这里的数字把它抹平。
+
+    基线 114 → 113（裁定 20261011 §3 Q3 乙）：`af_auth.py::TokenRegistry._revoked` 从基线移出，改进
+    `MONOTONIC_PERSISTENT_SETS`。挪走的不是数字，是**性质**——基线冻的是"这一枚先当作有界的存量"，
+    而撤销黑名单按设计无界且不许淘汰（裁掉一条 = 那个 jti 可能重新被接受）。
     """
     gate = _gate()
     src = ROOT / "src" / "autoforge"
@@ -607,7 +660,7 @@ def test_real_repo_measurements_are_pinned():
     containers, _lines, scan_errs = gate.scan(src)
     assert errs == [] and scan_errs == []
     assert len(bounded) == 3 and len(fixed) == 3
-    assert len(containers) == 129 and len(gate.BASELINE) == 114
+    assert len(containers) == 129 and len(gate.BASELINE) == 113
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"
@@ -638,3 +691,141 @@ def test_real_repo_has_no_dead_write_container():
                         ("REJECTIONS_MAX", "af_scheduler.py")):
         assert token in (src / path).read_text(encoding="utf-8"), f"{path} 里那条封顶腿不见了"
 
+
+# ── 判据 F：「持久化单调集」那一档（裁定 20261011 §3 Q3 乙）────────────────
+# 这一档给的三条腿是**落盘入口 / 重启恢复入口 / 坏档 fail-closed 标志位**，不是 TTL 与硬上限：
+# 它按设计无界、也不许有淘汰路径。把它留在基线里 = 门禁默认它"有界"，正是要拆掉的那枚章。
+
+
+def test_f_control_monotonic_tier_shape_is_green(tmp_path):
+    """正控：三条腿齐全 + 依据指得到裁定 ⇒ 整条链走到绿。下面每一条红都以这一条为对照。"""
+    gate = _gate()
+    src = _mono_fixture(tmp_path)
+    assert gate.main([str(src)]) == 0
+
+
+def test_f_missing_field_goes_red(tmp_path):
+    """半条腿都不许空着——这一档存在的全部理由就是那三条可核对的腿。"""
+    gate = _gate()
+    src = _mono_fixture(tmp_path, poison="")
+    mono, errs = gate.read_monotonic(src)
+    assert errs == []
+    findings = gate.check_monotonic(mono, src, {"af_demo.py::Revoked._revoked"}, set(), set(), set())
+    assert any("缺字段 `poison`" in f for f in findings), findings
+
+
+def test_f_leg_name_not_in_module_goes_red(tmp_path):
+    """注册表不许给说法盖章：写出来的那条腿名字必须真在模块里出现。"""
+    gate = _gate()
+    src = _mono_fixture(tmp_path, poison="_revoked_poisoned_renamed_away")
+    mono, _errs = gate.read_monotonic(src)
+    findings = gate.check_monotonic(mono, src, {"af_demo.py::Revoked._revoked"}, set(), set(), set())
+    assert any("poison" in f and "_revoked_poisoned_renamed_away" in f for f in findings), findings
+
+
+def test_f_bound_needs_a_ruling_reference(tmp_path):
+    """「无界」是裁定下来的性质：`bound` 要同时含「裁定」与八位日期编号，缺一样都红。"""
+    gate = _gate()
+    for bad in ("无界，因为它一直长", "裁定 §3 Q3 乙（没有八位日期编号）"):
+        src = _mono_fixture(tmp_path, bound=bad)
+        mono, _errs = gate.read_monotonic(src)
+        findings = gate.check_monotonic(mono, src, {"af_demo.py::Revoked._revoked"}, set(), set(), set())
+        assert any("没指到一份裁定" in f for f in findings), (bad, findings)
+
+
+def test_f_same_key_in_baseline_goes_red(tmp_path):
+    """负控核心：谁把这枚容器挪回基线冻结名单（= 又当作"有界的存量"），当场判红。"""
+    gate = _gate()
+    src = _mono_fixture(tmp_path)
+    mono, _errs = gate.read_monotonic(src)
+    findings = gate.check_monotonic(mono, src, {"af_demo.py::Revoked._revoked"},
+                                    set(), set(), {"af_demo.py::Revoked._revoked"})
+    assert any("基线冻结名单" in f for f in findings), findings
+
+
+def test_f_same_key_in_another_table_goes_red(tmp_path):
+    """同键不许双档：既声称"无界且不许淘汰"又声称"有 TTL 与上限"是两份口径各说各话。"""
+    gate = _gate()
+    src = _mono_fixture(tmp_path)
+    mono, _errs = gate.read_monotonic(src)
+    findings = gate.check_monotonic(mono, src, {"af_demo.py::Revoked._revoked"},
+                                    {"af_demo.py::Revoked._revoked"}, set(), set())
+    assert any("两份口径各说各话" in f for f in findings), findings
+
+
+def test_f_stale_entry_goes_red(tmp_path):
+    """扫描器已经够不着它 ⇒ 这一档是给空气盖章，必须显式过期。"""
+    gate = _gate()
+    src = _mono_fixture(tmp_path)
+    mono, _errs = gate.read_monotonic(src)
+    findings = gate.check_monotonic(mono, src, set(), set(), set(), set())
+    assert any("过期登记" in f for f in findings), findings
+
+
+def test_f_dropping_the_whole_tier_goes_red(tmp_path, capsys):
+    """反空集：删掉整张表**不等于**"这档没问题"——那枚容器立刻变成判据 C 的未登记新增容器。
+
+    这条是这一档的防蒸发腿：表可以整张没有（合成树本来就没有），但真仓删了它，红的是判据 C，
+    不是"本门失去射程"。
+    """
+    gate = _gate()
+    src = _fixture(tmp_path, bounded=_entry(), demo=MONO_MODULE)
+    mono, errs = gate.read_monotonic(src)
+    assert mono == [] and errs == []
+    assert gate.main([str(src)]) == 1
+    assert "af_demo.py::Revoked._revoked" in capsys.readouterr().out
+
+
+def test_f_unreadable_table_reads_as_scope_not_as_red(tmp_path):
+    """表写成非字面量 ⇒ 退 2：射程塌了不许被说成"代码有 bug"（退 1）或"没问题"（退 0）。"""
+    gate = _gate()
+    src = _mono_fixture(tmp_path)
+    (src / "af_bounded_caches.py").write_text(
+        _registry(_entry()) + f"{MONOTONIC_TABLE} = build_rows()\n", encoding="utf-8")
+    mono, errs = gate.read_monotonic(src)
+    assert mono == [] and any("不是字面量列表" in e for e in errs), errs
+    assert gate.main([str(src)]) == 2
+
+
+def test_real_repo_revoked_sits_in_the_monotonic_tier_and_out_of_baseline():
+    """裁定 20261011 §3 Q3 乙的落点读数：撤销黑名单在**新档**、已从基线移出、门在这一档上判绿。
+
+    三条腿的名字（`_persist_revoked` / `_load_revoked_file` / `_revoked_poisoned`）在已提交树上就在
+    `af_auth.py` 里，与并发在途那半条线无关 ⇒ 这一条是真仓腿，可以进 CI。
+    """
+    gate = _gate()
+    src = ROOT / "src" / "autoforge"
+    mono, errs = gate.read_monotonic(src)
+    assert errs == []
+    assert len(mono) == 1, f"持久化单调集只放「无界＋持久化＋不许淘汰」的安全集，现读 {len(mono)} 项"
+    key = gate._registry_key(mono[0]["module"], mono[0]["attr"])
+    assert key == "af_auth.py::TokenRegistry._revoked"
+    assert key not in gate.BASELINE, "还躺在基线里 ⇒ 门禁默认它有界，正是这一档要拆掉的那枚章"
+    containers, _lines, scan_errs = gate.scan(src)
+    assert scan_errs == [] and key in containers
+    bounded, fixed, _errs = gate.read_registry(src)
+    assert gate.check_monotonic(
+        mono, src, containers,
+        {gate._registry_key(e["module"], e["attr"]) for e in bounded},
+        {gate._registry_key(e["module"], e["attr"]) for e in fixed},
+        set(gate.BASELINE),
+    ) == []
+    auth = (src / "af_auth.py").read_text(encoding="utf-8")
+    for token in ("_persist_revoked", "_load_revoked_file", "_revoked_poisoned"):
+        assert token in auth, f"三条腿少了 `{token}`"
+
+
+def test_f_registration_does_not_excuse_a_dead_write(tmp_path, capsys):
+    """判据 E **不看**这一档：登记"它无界但持久化"没有回答"有没有人读这份数据"。
+
+    这一条是这一档与基线最容易混的地方——基线冻的是"有没有界"，E 问的是"有没有人读"。
+    合成模块里去掉那个读取方法（容器还在、三条腿还在、依据还在），必须仍然被 E 判红。
+    """
+    gate = _gate()
+    unread = MONO_MODULE.replace(
+        "    def is_revoked(self, jti):\n        return jti in self._revoked\n", "")
+    assert unread != MONO_MODULE, "去掉读取方法的注入没生效，这条腿成了空转"
+    src = _fixture(tmp_path, bounded=_entry(), demo=unread, monotonic=_mono_entry())
+    assert gate.main([str(src)]) == 1
+    out = capsys.readouterr().out
+    assert "死写容器 af_demo.py::Revoked._revoked" in out, out

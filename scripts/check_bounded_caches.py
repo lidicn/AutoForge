@@ -21,6 +21,12 @@
   （`NodeExecutor.node_visits`：每次进节点 append 一条、全文件从来没人读）那一族的形状。
 - **D 反空洞**：固定键表声称的豁免必须真在代码里；基线里的容器必须真还存在；扫描器读出 0 个
   增长容器 ⇒ 判据失效，按射程问题退 2（不是"没问题"）。
+- **F 持久化单调集**（裁定 20261011 §3 Q3 乙）：`MONOTONIC_PERSISTENT_SETS` 那一档给的是**落盘／重启恢复／
+  坏档 fail-closed** 三条腿，不是 TTL 与上限——它按设计无界，把它留在基线里等于门禁替一个不存在的性质盖章。
+  本判据核：字段齐、三条腿的名字真在那个模块里、`bound` 指得到一份裁定（含「裁定」＋八位日期编号）、
+  同一枚容器不许同时躺在 BOUNDED_CACHES / FIXED_KEY_CACHES / 基线里（两份口径各说各话）、
+  扫描器还扫得到它（扫不到＝过期登记）。**判据 E 不看这一档**：登记"它无界但持久化"没有回答"有没有人读它"。
+  这一档整表被删**不会**让本门失去射程：那枚容器立刻变成判据 C 里"没登记的新增增长容器"，当场红。
 
 退出码：0=绿，1=有判红，2=射程读不成（注册表 AST 读不出 / 测试文件收集失败 / src 目录缺失）。
 `--print-baseline` 只打印当前扫到的全部容器键（供一次性冻结基线，不判红不判绿）。
@@ -38,6 +44,10 @@ from typing import Iterable
 
 REGISTRY_REL = "af_bounded_caches.py"
 REGISTRY_TABLES = ("BOUNDED_CACHES", "FIXED_KEY_CACHES")
+#: 「持久化单调集」档（裁定 20261011 §3 Q3 乙）。不放进 `REGISTRY_TABLES`：那张名单的三元组返回形状
+#: 被八处测试点按位置解包，而这一档**允许整表缺席**（合成树没有它；真仓删了它由判据 C 兜红）。
+MONOTONIC_TABLE = "MONOTONIC_PERSISTENT_SETS"
+MONOTONIC_FIELDS = ("module", "attr", "persist", "reload", "poison", "bound", "why")
 EXEMPT_MARKER = "# bounded-cache: exempt("
 MUTATORS = {"append", "update", "setdefault", "add", "extend", "insert", "pop", "popitem", "clear"}
 #: 这三个mutator 会把**已有内容**交回调用方（`log = self._x.setdefault(k, [])` 之后 `len(log)` 就在读这个容器），
@@ -87,6 +97,29 @@ def read_registry(src_root: Path) -> tuple[list[dict[str, str]], list[dict[str, 
     if missing:
         return [], [], [f"注册表缺少名单：{', '.join(missing)}"]
     return tables["BOUNDED_CACHES"], tables["FIXED_KEY_CACHES"], []
+
+
+def read_monotonic(src_root: Path) -> tuple[list[dict[str, str]], list[str]]:
+    """返回 `(MONOTONIC_PERSISTENT_SETS, 射程自证问题)`。
+
+    整表缺席 ⇒ 返回空表且**不算射程问题**：这一档在不在不该由射程决定，而把它删掉会让那枚容器
+    落进判据 C 的"没登记的新增增长容器"，当场判红。合成测试树没有这一档，也不该被强迫写一份。
+    """
+    path = src_root / REGISTRY_REL
+    if not path.is_file():
+        return [], []
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in tree.body:
+        if _assigned_name(node) != MONOTONIC_TABLE:
+            continue
+        value = _assigned_value(node)
+        if not isinstance(value, ast.List):
+            return [], [f"注册表 `{MONOTONIC_TABLE}` 不是字面量列表，读不出"]
+        rows = [r for r in (_literal_dict(e) for e in value.elts) if r is not None]
+        if len(rows) != len(value.elts):
+            return [], [f"注册表 `{MONOTONIC_TABLE}` 含非字面量项，读不出（请写成纯字符串字典）"]
+        return rows, []
+    return [], []
 
 
 def _assigned_name(node: ast.AST) -> str:
@@ -469,24 +502,81 @@ def check_exemptions(fixed: list[dict[str, str]], markers: dict[str, str]) -> li
 
 def check_membership(containers: set[str], registry: set[str], fixed: set[str],
                      baseline: set[str], markers: dict[str, str],
-                     lines: dict[str, int]) -> list[str]:
+                     lines: dict[str, int],
+                     monotonic: set[str] = frozenset()) -> list[str]:
     """判据 C：每个增长容器必须登记、豁免，或在冻结基线里。基线只减不增。
 
     基线是**本仓那一份扫描**的冻结快照，所以 `--src` 指向别处时由调用方传空集：拿一份树的名单
     去判另一棵树，"陈旧"与"新增"两头都失去意义。
+
+    `monotonic`（裁定 20261011 §3 Q3 乙）算"登记过"，因此从"新增未登记"里扣掉——但只扣这一半：
+    判据 E 不看它，登记"无界但持久化"没有回答"有没有人读这份数据"。
     """
     findings: list[str] = []
-    for key in sorted(containers - registry - fixed - baseline):
+    for key in sorted(containers - registry - fixed - baseline - monotonic):
         loc = f"{_rel_of(key)}:{lines.get(key)}"
         if loc in markers:
             continue
         findings.append(
-            f"新增增长容器 {key}（{loc}）既不在注册表 / 固定键表 / 基线名单，那一行也没带豁免标记："
+            f"新增增长容器 {key}（{loc}）既不在注册表 / 固定键表 / 持久化单调集 / 基线名单，那一行也没带豁免标记："
             f"有界缓存必须同时给 TTL 与硬上限并留测试出处（进 af_bounded_caches.BOUNDED_CACHES，"
+            f"无界但持久化且按设计不许淘汰的安全集进 af_bounded_caches.MONOTONIC_PERSISTENT_SETS，"
             f"或把 {loc} 那一行标成 `{EXEMPT_MARKER}…）`）"
         )
     for key in sorted(baseline - containers):
         findings.append(f"基线名单里的 {key} 已经不存在了：扫不到它，请把这一行从基线删掉")
+    return findings
+
+
+def check_monotonic(entries: list[dict[str, str]], src_root: Path, containers: set[str],
+                    registry: set[str], fixed: set[str],
+                    baseline: set[str]) -> list[str]:
+    """判据 F（裁定 20261011 §3 Q3 乙）：「持久化单调集」那一档给的三条腿必须真在模块里。
+
+    这一档的形状与 `BOUNDED_CACHES` **故意不同**：它不给 TTL、不给硬上限，因为按设计它不许被淘汰。
+    所以这里核的是「落盘入口 / 重启恢复入口 / 坏档 fail-closed 标志位」三个名字，外加
+    依据必须指得到一份裁定、同键不许双档登记、扫描器还扫得到它。
+    """
+    findings: list[str] = []
+    for e in entries:
+        for field in MONOTONIC_FIELDS:
+            if not e.get(field):
+                findings.append(
+                    f"持久化单调集项 {e.get('attr') or e!r} 缺字段 `{field}`"
+                    f"（这一档的三条腿是落盘／重启恢复／坏档标志位，半条都不许空着）"
+                )
+        if not e.get("module") or not e.get("attr"):
+            continue
+        key = _registry_key(e["module"], e["attr"])
+        path = src_root / _module_rel(e["module"])
+        if not path.is_file():
+            findings.append(f"持久化单调集项 `{e['module']}` 指向的模块不存在：{path.relative_to(src_root)}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        for field in ("persist", "reload", "poison"):
+            token = e.get(field)
+            if token and not re.search(rf"\b{re.escape(token)}\b", text):
+                findings.append(
+                    f"持久化单调集说 `{key}` 的 {field} 腿是 `{token}`，"
+                    f"但 {path.name} 里找不到这个名字 ⇒ 那条腿不存在"
+                )
+        bound = e.get("bound") or ""
+        if "裁定" not in bound or re.search(r"\d{8}", bound) is None:
+            findings.append(
+                f"持久化单调集项 `{key}` 的 `bound` 没指到一份裁定（要含「裁定」二字与八位日期编号）："
+                f"「无界」是裁定下来的性质，不是注册表自己盖的章"
+            )
+        if key in registry or key in fixed:
+            findings.append(f"`{key}` 同时躺在持久化单调集与另一张表里：两份口径各说各话")
+        if key in baseline:
+            findings.append(
+                f"`{key}` 同时躺在持久化单调集与基线冻结名单里：基线声称的是「这一枚先当作有界的存量放着」，"
+                f"而这一档声称的是「它按设计无界、也不许被淘汰」⇒ 必须从基线里删掉那一行"
+            )
+        if key not in containers:
+            findings.append(
+                f"持久化单调集里的 `{key}` 已经扫不到了：过期登记，请把这一项从表里删掉"
+            )
     return findings
 
 
@@ -502,7 +592,9 @@ BASELINE = frozenset(
         "af_auth.py::AuthCodeStore._codes",
         "af_auth.py::PairCodeStore._codes",
         "af_auth.py::RateLimiter._hits",
-        "af_auth.py::TokenRegistry._revoked",
+        # 裁定 20261011 §3 Q3 乙：`TokenRegistry._revoked` 已从这份基线移出，改进
+        # af_bounded_caches.MONOTONIC_PERSISTENT_SETS（无界＋持久化＋坏档一律拒绝，按设计不许淘汰）。
+        # 移出后判据 C 会盯着它：表里删掉、基线也没加回来 ⇒ 那枚容器当场变成"未登记的新增容器"，红。
         "af_auth.py::TokenRegistry._tokens",
         "af_bus.py::EventBus._changes",
         "af_bus.py::EventBus._last_accepted",
@@ -633,6 +725,12 @@ def main(argv: list[str] | None = None) -> int:
 
     bounded, fixed, reg_errs = read_registry(src)
     try:
+        monotonic, mono_errs = read_monotonic(src)
+    except Exception as exc:
+        print(f"[射程] 持久化单调集读不下去：{type(exc).__name__}: {exc}")
+        return 2
+    reg_errs = reg_errs + mono_errs
+    try:
         containers, lines, scan_errs = scan(src)
     except Exception as exc:
         # 扫描器自己读不下去（不是"扫到 0 个"）必须按射程问题退 2：判成 1 会让人觉得是代码有 bug。
@@ -682,7 +780,8 @@ def main(argv: list[str] | None = None) -> int:
               f"不是这些容器同时出问题")
         return 2
     try:
-        findings, scope_errs = judge(bounded, fixed, markers, containers, lines, src, baseline, reads)
+        findings, scope_errs = judge(bounded, fixed, markers, containers, lines, src, baseline, reads,
+                                     monotonic)
     except Exception as exc:
         print(f"[射程] 判据读不下去：{type(exc).__name__}: {exc}")
         return 2
@@ -695,11 +794,12 @@ def main(argv: list[str] | None = None) -> int:
         for f in sorted(findings):
             print(f"[有界缓存] {f}")
         print(f"共 {len(findings)} 处判红（注册表 {len(bounded)} 项 / 固定键 {len(fixed)} 项 / "
-              f"基线 {len(baseline)} 项 / 扫到 {len(containers)} 个容器）")
+              f"持久化单调集 {len(monotonic)} 项 / 基线 {len(baseline)} 项 / 扫到 {len(containers)} 个容器）")
         return 1
 
     print(
         f"[有界缓存] 注册表 {len(bounded)} 项双腿齐全且测试 id 被收集；固定键 {len(fixed)} 项带理由；"
+        f"持久化单调集 {len(monotonic)} 项三条腿齐全且依据指得到裁定；"
         f"扫到增长容器 {len(containers)} 个，其中基线冻结 {len(baseline)} 个、就地豁免标记 {len(markers)} 处；"
         f"死写容器 {len(dead)} 个（判据 E 按名字在全仓数读取点，{len(reads)} 个名字被读到过）"
     )
@@ -709,15 +809,27 @@ def main(argv: list[str] | None = None) -> int:
 def judge(bounded: list[dict[str, str]], fixed: list[dict[str, str]],
           markers: dict[str, str], containers: set[str], lines: dict[str, int],
           src_root: Path, baseline: frozenset[str],
-          reads: dict[str, int]) -> tuple[list[str], list[str]]:
-    """跑五条判据，返回 `(判红, 射程自证问题)`。拆成函数是为了让"门自己崩了"能被调用方按射程处理。"""
+          reads: dict[str, int],
+          monotonic: list[dict[str, str]] | None = None) -> tuple[list[str], list[str]]:
+    """跑六条判据，返回 `(判红, 射程自证问题)`。拆成函数是为了让"门自己崩了"能被调用方按射程处理。"""
     findings: list[str] = []
+    monotonic = monotonic or []
+    monotonic_keys = {_registry_key(e["module"], e["attr"]) for e in monotonic
+                      if e.get("module") and e.get("attr")}
     findings += check_legs(bounded, src_root)
     test_findings, scope_errs = check_tests(bounded)
     findings += test_findings
     if scope_errs:
         return findings, scope_errs
     findings += check_exemptions(fixed, markers)
+    findings += check_monotonic(
+        monotonic,
+        src_root,
+        containers,
+        {_registry_key(e["module"], e["attr"]) for e in bounded},
+        {_registry_key(e["module"], e["attr"]) for e in fixed},
+        set(baseline),
+    )
     findings += check_membership(
         containers,
         {_registry_key(e["module"], e["attr"]) for e in bounded},
@@ -725,6 +837,7 @@ def judge(bounded: list[dict[str, str]], fixed: list[dict[str, str]],
         set(baseline),
         markers,
         lines,
+        monotonic_keys,
     )
     findings += check_dead_writes(
         containers,

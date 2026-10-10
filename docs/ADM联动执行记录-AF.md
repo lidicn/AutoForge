@@ -9758,3 +9758,100 @@ $ PY -m pytest tests/unit/test_observability_gate.py::test_real_repo_http_face_r
 里被提交的那一段，同样是按在途工作树现读写出来的。所以选项 ①（真仓腿＋门禁一起改跑
 `git archive HEAD` 的干净副本树）才是把这族一次拔掉的那一个；选项 ② 只能拔 pytest 那一半。
 本批不动它们：改口径要先定"清单文档到底该跟哪棵树"，那是 #118 的第一格，不是本批的。
+## §二之一百一十五 · 裁定 20261011 §3 Q3 乙 的门禁半边落地：「持久化单调集」另立一档 ＋ 判据 F ＋ 负控与防蒸发（2026-10-11）
+
+依据：`E:\NAS\关键决策部\decisions\20261011-AF第六轮与第二期审计攒批十三问-裁定.md` §3 Q3（乙档）与 §4 验收 3。
+上一批回执里这一格写的是「Q3 的门禁半边射程在 `scripts/`，**窗口内可落**，本批未做 ⇒ 登记为下一批窗内项」，
+本批就是那"下一批"。**只做门禁半边**：`af_auth.py`／`af_api.py` 一行没碰（丙档读数仍排窗口，见 §五）。
+
+### 一、这一档为什么不能留在「有界缓存」的基线里
+
+裁定 Q3 裁的是"撤销黑名单 `_revoked` 要不要给它加淘汰"。甲档（LRU/按 TTL 裁）被明确驳回——**裁掉一条＝那个
+jti 可能重新被接受**，是安全语义倒退。但它原先躺在 `check_bounded_caches.py` 的基线冻结名单里，而那张名单的
+语义是"这一枚先当作**有界的存量**放着"。于是门禁在给一个**不存在的性质**盖章：它既没有 TTL 也不许有上限。
+⇒ 落法不是"改基线的数字"，是**给这类容器单立一档**，并让它给出自己能被核对的东西。
+
+`src/autoforge/af_bounded_caches.py` 新增第三张表 `MONOTONIC_PERSISTENT_SETS`（78 → 107 行），每枚容器给
+**三条腿＝落盘入口 / 重启恢复入口 / 坏档 fail-closed 标志位**（不是 TTL 与上限），现有一枚：
+
+| 键 | persist | reload | poison |
+|---|---|---|---|
+| `af_auth.py::TokenRegistry._revoked` | `_persist_revoked` | `_load_revoked_file` | `_revoked_poisoned` |
+
+三个名字都取**文件锚点**（不给 `路径:行号`），理由是本仓踩过行号漂的坑（§二之一百一十四 §五 又漂过一次），
+而这一档的核对手段是"名字在那个模块里出现"，行号对判定没有贡献。`bound` 与 `why` 两格按字面要求写：
+`bound` 必须含「裁定」＋八位日期编号，写不出就把这一项交进来。
+
+### 二、门禁 `scripts/check_bounded_caches.py`：判据从五条加到六条
+
+- `read_monotonic(src_root)`——独立读第三张表，**不动 `read_registry` 的三元组返回形状**（八处测试点按位置解包它）。
+  整表缺席返回 `([], [])` 且**不算射程问题**；表在但读不出字面量 ⇒ 射程问题（`exit 2`）。
+- **新判据 F `check_monotonic()`**，五件事各自可红：① 七字段（module/attr/persist/reload/poison/bound/why）非空；
+  ② 三条腿的名字用 `\bname\b` 回到模块源码里核对（与判据 A 同一纪律：写不出那条腿就是没有那条腿）；
+  ③ `bound` 含「裁定」＋`\d{8}`；④ **同键不许双档**——不许同时出现在 `BOUNDED_CACHES`／`FIXED_KEY_CACHES`／
+  基线冻结名单里（尤其最后这一条：谁把它挪回基线，当场红）；⑤ 扫描器还扫得到它，扫不到＝过期登记。
+- **判据 C 扣掉这一档**（登记过 ⇒ 不算"新增未登记"），**判据 E 不扣**：登记"它无界但持久化"没有回答
+  "有没有人读这份数据"。这条区分是这一档与基线最容易混的地方，专门配了一条腿（见 §三 第 8 条）。
+- 基线 `af_auth.py::TokenRegistry._revoked` 那一行**删掉**（114 → 113），原位置留三行注释写明"移出后判据 C 会
+  盯着它：表里删掉、基线也没加回来 ⇒ 那枚容器当场变成未登记的新增容器，红"。⇒ 这一档**自带防蒸发**，
+  不需要额外的"表不许为空"规则。
+- 两行读数（绿线与红计数）各加一格「持久化单调集 N 项」；门头 docstring 增补 F 段（含"整表被删不会让本门失去射程"的说明）。
+
+### 三、判据腿：`tests/unit/test_bounded_caches_gate.py`（640 → 811 行，45 条）
+
+新增 9 条（八条负控/形状 ＋ 一条真仓）：正控形状绿 1／缺字段 1／腿名不在模块里 1／`bound` 两种缺法各红（
+同一条腿里跑两个反例）／**同键回基线必红** 1／同键双表必红 1／过期登记必红 1／**整表删除必红（防蒸发）** 1／
+表读不出 ⇒ `exit 2` 不退 1 1／**F 档不给 E 挡枪** 1（去掉读取方法后仍判死写，并断言注入真的生效了才继续）。
+真仓腿 `test_real_repo_revoked_sits_in_the_monotonic_tier_and_out_of_baseline`：这一档恰好 1 项、键正是
+`af_auth.py::TokenRegistry._revoked`、**不在基线里**、扫描器还扫得到、`check_monotonic` 在真树上返回空、
+三条腿的名字在 `af_auth.py` 里逐个核到。计数棘轮 `:663` 重钉 `len(BASELINE) == 113`（同处的 `containers == 129`
+不变 ⇒ 移出没有让任何一个容器凭空消失）。
+
+### 四、读数（命令原文＋现读，`GATES_PYTHON=…Python313`）
+
+```
+$ PY scripts/check_bounded_caches.py src/autoforge                        → RC=0
+[有界缓存] 注册表 3 项双腿齐全且测试 id 被收集；固定键 3 项带理由；持久化单调集 1 项三条腿齐全且依据指得到裁定；
+扫到增长容器 129 个，其中基线冻结 113 个、就地豁免标记 16 处；死写容器 0 个（判据 E …4111 个名字被读到过）
+
+$ PY -m pytest tests/unit/test_bounded_caches_gate.py -q                  → 45 passed in 45.96s
+$ PY -m pytest tests/unit/test_dcd_20261006_pairing_bootstrap.py tests/unit/test_diagnostic_ring_bounds.py -q
+                                                                          → 35 passed, 1 warning in 5.24s
+$ PY scripts/check_gates_coverage.py                                      → RC=0（盘上 check_*.py 25 / gates.sh 24 / 工作流 1 / 豁免 1）
+$ GATES_PYTHON=… bash gates.sh ×2（a/b，去掉我自己追加的标签行后逐字节对撞）
+      各 10406 B、md5 全同 889eb4c97ecc0a72455b8313596a11ee、diff 空；GATES_RC=1 的唯一红源仍是登录线在途两枚
+      fake-ok-const（`af_api.py:984`／`:1005`），与本批无干（#113/#79 名下）
+```
+
+变异自证（副本树 `E:\tmp\q3_mut\tree`，由 `git archive HEAD` 出树后覆盖本批三份在途文件；工作树全程未动，
+逐案还原后按 sha1 对撞 pristine）：**七案全 KILLED、串扰 0、存活 0**。
+
+| 案 | 注入 | gate RC | 被杀 |
+|---|---|---|---|
+| M0 | 什么都不改（忠实性护栏） | 0（期望 0） | 全绿 ⇒ 下面每一案的红都以这一案为对照 |
+| M1 | 门里把 `_revoked` 塞回基线 | 1 | `…revoked_sits_in_the_monotonic_tier…` ＋ `test_real_repo_measurements_are_pinned` |
+| M2 | 注册表把 `poison` 腿写成不存在的名字 | 1 | 真仓两条 |
+| M3 | **整张表改名（防蒸发）** | 1，读数自报「持久化单调集 **0** 项」 | 真仓两条 |
+| M4 | `bound` 不再指得到裁定 | 1 | 真仓两条 |
+| M5 | 门里把 `bound` 那条检查短路成 `if False` | 0（真树仍绿，因为真值没变） | `test_f_bound_needs_a_ruling_reference` |
+| M6 | 门里把"过期登记"那条短路 | 0 | `test_f_stale_entry_goes_red` |
+| M7 | 判据 C 不再扣掉这一档 | 1 | `test_f_control_monotonic_tier_shape_is_green` ＋ 真仓绿线腿 |
+
+**两案首跑没成功，如实记（缺陷在我这一侧，不是门的）**：
+① M3 首跑 **SURVIVED**——注入用的锚点是裸名 `MONOTONIC_PERSISTENT_SETS`，`replace(…, 1)` 命中的是**文件头
+docstring 里第一次出现的那个名字**，赋值行根本没动 ⇒ 门读数还是"1 项"。改成整行锚点
+`MONOTONIC_PERSISTENT_SETS: list[dict[str, str]] = [` 后 KILLED。教训：变异锚点要取**能被唯一命中的那一行**，
+不是"这个词在文件里出现过"。
+② 第一次驱动跑的是 `python drive_mut.py | tail -30`，后台通知给的是 exit 0——那是 `tail` 的码；
+驱动自己打的是「串扰/存活问题：1」。第二次改成本地重定向后单独取码。同一条坑（`env-driver-shell-guard-traps`）
+第二次踩，记入本仓事实。
+
+### 五、未落项归属（Q3 三档里的另两档）
+
+| 档 | 状态 | 卡在谁 / 什么时候 |
+|---|---|---|
+| 甲（给 `_revoked` 加淘汰） | **裁定已驳回，不做** | 同一份裁定 §3 Q3 甲档：裁掉一条＝那个 jti 可能重新被接受 |
+| 乙（门禁另立一档＋负控） | **本批已落** | 落点 `scripts/check_bounded_caches.py`／`src/autoforge/af_bounded_caches.py`／`tests/unit/test_bounded_caches_gate.py` |
+| 丙（当前条数读数接 `/api/metrics`） | **未落（窗口）** | 落点在并发登录线在途文件（`af_api.py`／`af_auth.py`），按裁定排在窗口之后；#79 名下。这一档的"读数不许说谎"另有一条 `check_bounded_caches` 之外的面，窗口开时一并交 |
+
+同批记账：`docs/architecture/AF完整架构与运行时说明.md` §十八 新增第 27 条、§十九 新增一行（两处指回本件）。
