@@ -30,6 +30,14 @@ htmlcov/
 credentials.json
 revision.json
 
+# 令牌注册表（明文令牌落盘文件，安全审计第三轮 F-03 于 2026-10-11 补）：
+# 现读 `git ls-files --error-unmatch issued_tokens.json` 与 `git log --all -- 同路径` 均零命中
+# （从未进过版本库），但 `git check-ignore -v` 也无输出 ⇒ 它过去**没被忽略**，
+# 一旦重新生成，`git add` 就会把明文令牌带走。`_clean.json` 那份**不忽略**：归属不明，
+# 可能是并发登录线要提交的产物，不在我这里替它决定。
+issued_tokens.json
+issued_tokens.json.tmp
+
 # G6 版本化存储默认目录（本地归档，不入库）
 .forge/
 

@@ -9051,3 +9051,40 @@ Q1／Q3／Q6.3／Q8.2 的落笔点在 `af_api.py`／`af_auth.py`（登录线在�
 - 本批**零落码**：只新增一份对账文档＋一份记账，不动任何判据、不动任何在途文件。
 
 —— AutoForge 开发 · 2026-10-11 · 报告的 `file:line` 我逐条现读，已修的承认已修、换形的不写成修好、量不出来的空着不填
+
+## 二之一百零五、收安全与暴露面审计（第三轮 `AutoForge安全审计报告.html` F-01…F-12＋§4.1–4.4 逐条现读对撞）：两条被报告的"工作区快照"口径替我背了不存在的东西、一条它自己标了未提交改动；本批落两格防线（`.gitignore` 明文令牌面 ＋ `af_secrets` 射程订正＋7 条行为判据）
+
+### 一、对撞表
+
+`docs/audit/安全与暴露面审计核实对账_20261011.md`（F-01…F-12 全条＋§4.1–4.4，报告口径与现读口径**分列两栏**）。基准 HEAD `fb700b5`。报告自述"2026-10-10 16:37–16:52 的工作区快照，行号会漂"⇒ 它那两次运行时实测（§1.6）我既不复现也不背书。
+
+对撞里把报告**改窄**的两格：
+- **F-03 前半句已证伪**：`git ls-files --error-unmatch issued_tokens.json` 与 `git log --oneline --all -- issued_tokens.json` 均**零命中**（从未进版本库），盘上 `ls issued_tokens.json` 不存在；但**后半句成立**——`git check-ignore -v` 无输出＝确实没被忽略 ⇒ 本批补两行 ignore（见 §二）；
+- **F-04 后半句过期**：`af_audit.py:142` 收 `journal` 参数、`:164-166` 以 `open("a")` 逐条 append 落盘——`:114` 那枚 `deque(maxlen=5000)` 是内存环形视图不是唯一去处。前半句（`grep -c audit src/autoforge/af_api.py` ⇒ **0**）成立，落笔点在在途 `af_api.py` ⇒ #79 窗内。**"journal 默认是否总被传入"这一格本批未追到调用点，登记不填结论**。
+
+F-11 的定性要反过来读：报告说"三段链**根本没实现**"，现读是 `af_config.py:93-103` 在 `ha_token`/`api_token` 两个键上**确实**先取 `credentials.json`（链成立），而 `af_auth.py:166/170/189` 直调 `load_secret` 的那族名字不经它（实测 `credentials.json` 在 `af_auth.py` 零命中）⇒ **缺陷在宣告的射程，不在实现**。
+
+### 二、本批落码（两格，全是防线面，运行时行为一行未改）
+
+1. **`.gitignore:34-41`**：新增 `issued_tokens.json` ＋ `issued_tokens.json.tmp`。自证（修后现读）：`git check-ignore -v` ⇒ `.gitignore:38:issued_tokens.json`／`.gitignore:39:issued_tokens.json.tmp`；**反例腿**：`git check-ignore -v issued_tokens_clean.json` ⇒ **RC=1（仍未被忽略）**——那份归属不明（可能是登录线要交的产物），我不替它决定，更不动仓根那四份受保护的未跟踪产物（现读尺寸逐一核对未变：`docker-compose.api.yml.tmp` 6588／`docker/docker-compose.api-test.yml` 964／`issued_tokens.json.tmp` 4361／`issued_tokens_clean.json` 147）。
+2. **`af_secrets.py` 模块 docstring 射程订正 ＋ `tests/unit/test_secrets_precedence_scope.py`（7 腿）**：钉的是**行为**不是文案——两段的`load_secret` 面上腿 1／2／3（文件压 env、缺/空两种"没有"都回 env、`credentials.json` 对本层是**不存在的东西**），三段链成立处腿 4／5（`credentials.json` 压过 env；档里没值时链子继续往下走不回空串），形状锚点腿 6（注册表三枚名字直调 `load_secret`），自证腿 7（把 docstring 改回全局宣告就红）。
+
+读数：`pytest tests/unit/test_secrets_precedence_scope.py -q` ⇒ **7 passed in 0.44s**；`pytest tests/unit -q -k "secret or credential or config"` ⇒ **38 passed, 1 skipped, 3244 deselected in 9.75s**。
+过程如实记：首跑 **1 failed, 6 passed**——`test_config_face_keeps_credentials_file_first` 传了不存在的 `store/` 目录（原子写不替你建树），补 `_mkdir` 后转绿；**这是腿的缺陷不是行为的缺陷**，不写成"发现一处真缺陷"。
+
+### 三、门禁与归属（不自上调、不写豁免）
+
+`GATES_PYTHON=…Python313 bash gates.sh` ⇒ **RC=1**，全文 `9781 B`（落盘 `/tmp/gates_sec_batch.out`）。红的**唯一**来源是 AST 面两枚 `fake-ok-const` **WARN**：`af_api.py:984`（`api_auth_has_admin`）／`:1005`（`api_auth_register`），`error 0 / warn 2`，计数棘轮**全量 97 条／登记上限 97 条**顶格——这两枚出自**并发登录线的未提交改动**（`git diff -U0 -- src/autoforge/af_api.py` 的 hunk 恰落在 `@@ -1000 +1004 @@`／`@@ -1019 +1023 @@` 这一段），**不是本批引入**：我改的三份文件（`af_secrets.py`／`.gitignore`／两份 docs）在整份门禁输出里 `grep af_secrets|gitignore|precedence` ⇒ **零命中**。⛔ 我因此**没有**动 `.gates-tally.txt`、**没有**写 `.gates-baseline.txt` 豁免、**没有**碰 `af_api.py` 一行——修这两枚是登录线窗内的事（#79）。
+其余各面本批现读全绿：信任边界（90 条路由／14 条非鉴权档在册／2 个未挂载机制）、进程模型（生命周期 4 枚全在册）、可观测性（留痕 **143** 站点、具名码 **18 枚／18 站点**——比上一批的 142／17 各＋1，来自在途面，认领可读）、有界缓存（增长容器 129、基线冻结 114、就地豁免 16、死写 0）、随附 wheel（`19bc83a6…` 与权威登记一致）、装配覆盖（24 枚 `check_*.py`／`gates.sh` 覆盖 23／工作流 1）。
+
+### 四、归属与残余
+
+窗内（#79，全在途文件）：F-01／F-02（F-02 报告自己标注"工作区未提交改动引入"⇒ 不写成仓内既有缺陷）／F-04 前半句／F-07。
+已投不重递：F-05（`20261010-AF-第六轮审计严重项匿名换owner令牌并穿透F3`）、F-06 与 §4.4 的"逐端点手动挂"同族（今日件 **Q6.3**）、F-08 四枚 builtin 路由（已登记在 `docs/信任边界清单.md:119-123`，口径归今日件 **Q6.1／Q6.4**）、§4.1 watchdog 接线（今日件 **Q7.1／Q7.3**）、F-09 的客户端 IP 口径（`20261007-MA-登录限速的客户端IP口径与8086直曝`）。
+补格（下一批）：F-04 的"journal 默认接线"调用点、F-10 的 Windows ACL／文案那一半、§4.1 建议的"已导出但零调用"结构性清单（登记为**候选**，不自决成门禁）。
+**自我订正一处**：今日件 Q6.4 我把清单写成 `docs/端点信任边界清单.md`，真实文件名是 `docs/信任边界清单.md`——已在件内就地改，并在对账表点名。
+
+- **归档判定**：残余都不是今天能独立关掉的 ⇒ `AutoForge安全审计报告.html` **留在 `docs/audit/` 原地不归档**（同 `AutoForge审计报告.html`、`AutoForge运行时审计报告.html`）。
+- 任务位：新增 #109（本批两格落码已完，登记）；#99 的三枚 HTML 中已对撞两枚（运行时 §4、安全 F 族），第六轮 `AutoForge审计报告.html` 的 ARCH-08~11 归 #98。
+
+—— AutoForge 开发 · 2026-10-11 · 报告替我"实测"过的那两次我不背书；我替它证的只有现读行号与命令

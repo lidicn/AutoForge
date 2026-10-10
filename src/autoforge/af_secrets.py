@@ -1,9 +1,18 @@
 """Secret 管理：敏感凭据走挂载的 secret 文件，env 仅作兼容回退。
 
 v2.0.1 / PR 0.1-b：把 HA/API 令牌从明文 `env_file: .env` 移出，改由 docker
-secrets（或任意挂载的 secret 文件目录）提供。读取优先级：
+secrets（或任意挂载的 secret 文件目录）提供。
 
-    credentials.json（af_config 内的文件存储） > secret 文件 > 环境变量
+**本模块自己实现的两段**：`secret 文件 > 环境变量`。
+
+第三段 `credentials.json` **不在本层**，它由 `af_config` 接在前面，而且只接在
+`af_config.get_ha_token()` / `get_api_token()` 这两个键上（先取 `credentials.json`，
+取不到才落到 `load_secret("AUTOFORGE_HA_TOKEN" / "AUTOFORGE_API_TOKEN")`）。
+所以「`credentials.json` > secret 文件 > 环境变量」这条三段链的**射程只有那两个键**：
+其余名字（`AUTOFORGE_TOKENS`、`AUTOFORGE_REVOKED_TOKENS`，以及 `af_auth.py` 里
+legacy 的 `AUTOFORGE_API_TOKEN` 回退）由 `af_auth` 直接调 `load_secret`，**不经**
+`credentials.json`。旧措辞把三段链写成了全局事实——安全审计 F-11 对撞后按现读订正射程，
+行为一行未改。
 
 - secret 文件目录：默认 `/run/secrets`（docker secrets 挂载点），可用
   `AUTOFORGE_SECRET_DIR` 环境变量覆盖（本地开发/非 docker 场景）。
