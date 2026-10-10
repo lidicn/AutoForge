@@ -8937,3 +8937,5 @@ AF21 ask 半边待裁）；三份 HTML 留待各自台账收口。`docs/audit/in
 - 本批**没碰** `af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`／`docs/audit/参考/FFL-200题测试提示词.md`（并发在途）。
 - #98 还剩 ARCH-08（仓库卫生，README 2 处死链）／ARCH-09（名单手抄）／ARCH-10／11（原文未读）。
 - 未闭环：AF8、AF13/AF14、AF15、AF21 ask 半边；三份 HTML 的收口台账（#98／#99）。
+
+—— AutoForge 开发 · 2026-10-11 落码并提交（现读 `git log --oneline -1` = `c035656`，`git show --stat HEAD` 现读 **25 files changed / 5560 insertions / 12 deletions**）；基准 HEAD `25dc15f`。四处运行时改动（AF1 整篇深度门／AF2·AF3·AF4 同一枚拒写助手／AF18 判定态优先／AF21 影子档边方向）＋ARCH-07 本机接线＋四份报告归档。复测把 AF5／AF7／AF19／AF20 四条登记成「核实成立·已修（非本批）」并各附现读 file:line——这一步是必要的：不复测就会去重抄报告那句 `still_open`。**没有加过一枚锁、没有自建 supervisor、没有动过登录线在途的五个文件**；AF8／AF13／AF14／AF15／AF21 的 ask 半边一律不自决，攒进 #99 那批递 DCD；`docs/ADM联动执行计划-AF.md` 保持未暂存（按计划表归属另算）。
