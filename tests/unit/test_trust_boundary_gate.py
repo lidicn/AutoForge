@@ -387,3 +387,57 @@ def test_two_reports_counts_reconciled_in_inventory_doc():
     assert "scope:read=30" in text and "scope:write=39" in text and "scope:live=3" in text
     assert "anon=10" in text and "optional=2" in text and "bearer-in-handler=2" in text
     assert "非鉴权档第一方端点 **14 条**" in text
+
+
+# --------------------------------------------------------------------------------------
+# 裁定 20261011《十三问》§3 Q6.4／Q6.1 的文案半边：门判不出语义，这一族腿判得出
+# --------------------------------------------------------------------------------------
+
+ECHO_ONLY = ("POST /api/build", "POST /api/bind", "POST /api/spec/compile")
+
+
+def _q64_problems(text: str) -> list[str]:
+    """整批签认在不在场，以及「只回显不落盘」有没有写在它该在的三行、有没有被误写进 `/api/sim`。"""
+    probs: list[str] = []
+    sec = text[text.index(mod.REGISTER_HEADING):]
+    if "AF 整体认领" not in sec or "Q6.4" not in sec:
+        probs.append("§三 没有 AF 的整批签认（裁定 §3 Q6.4 要的就是这一格）")
+    entries, errs = mod.parse_register(text)
+    if errs:
+        return [f"§三 读不出形状：{errs[0]}"]
+    for key in ECHO_ONLY:
+        if "只回显不落盘" not in entries[key]["reason"]:
+            probs.append(f"`{key}` 的理由没写明「只回显不落盘」——维持匿名的根据就是这一句")
+    sim = entries["POST /api/sim"]["reason"]
+    if "不满足" not in sim or "write" not in sim:
+        probs.append("`POST /api/sim` 必须自陈它**不满足**「只回显不落盘」且已被裁收到 write；这一行混进回显那一族就是假绿")
+    return probs
+
+
+def test_real_repo_q64_claim_and_echo_only_wording_is_on_the_books():
+    text = (ROOT / mod.DOC_REL).read_text(encoding="utf-8")
+    assert _q64_problems(text) == []
+
+
+def test_q64_claim_paragraph_removed_is_red():
+    text = (ROOT / mod.DOC_REL).read_text(encoding="utf-8")
+    probs = _q64_problems(text.replace("AF 整体认领", "AF 尚未认领"))
+    assert any("整批签认" in x for x in probs), probs
+
+
+def test_q64_sim_row_claiming_echo_only_is_red():
+    """把 `/api/sim` 写成"也只回显"——这是本族最贵的一种假绿，必须单条判红。"""
+    text = (ROOT / mod.DOC_REL).read_text(encoding="utf-8")
+    broken = text.replace("唯一**不满足「只回显不落盘」**的一格", "唯一**满足「只回显不落盘」**的一格")
+    assert broken != text, "注入未生效"
+    probs = _q64_problems(broken)
+    assert any("/api/sim" in p for p in probs), probs
+
+
+@pytest.mark.parametrize("key", ECHO_ONLY)
+def test_q64_echo_only_phrase_removed_is_red(key):
+    text = (ROOT / mod.DOC_REL).read_text(encoding="utf-8")
+    line = next(l for l in text.splitlines() if l.startswith(f"- `{key.split()[0]} {key.split()[1]}`"))
+    broken = text.replace(line, line.replace("只回显不落盘", "回显面"))
+    assert broken != text, "注入未生效"
+    assert any(key in p for p in _q64_problems(broken)), key

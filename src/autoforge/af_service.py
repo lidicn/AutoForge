@@ -906,10 +906,11 @@ def load_device_guard(store: GraphStore | None) -> DeviceGuardRegistry | None:
             from .af_catalog import DeviceCatalog
             guard.catalog = DeviceCatalog(store.root)
         except Exception as exc:
-            logger.warning("DEVICE_GUARD_CATALOG_INJECT_FAILED err=%s", exc)
+            # 裁定 20261011《十三问》§3 Q8.3：安全面降级按介入档就是 ERROR，WARNING 会让人沉默。
+            logger.error("DEVICE_GUARD_CATALOG_INJECT_FAILED err=%s", exc)
         return guard
     except (OSError, ValueError) as exc:
-        logger.warning("DEVICE_ACL_LOAD_FAILED path=%s err=%s", path, exc)
+        logger.error("DEVICE_ACL_LOAD_FAILED path=%s err=%s", path, exc)
         return None
 
 

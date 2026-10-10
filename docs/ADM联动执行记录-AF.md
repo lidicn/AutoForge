@@ -9383,11 +9383,12 @@ CR 面：`tr -dc '\r' | wc -c` 五份文件均 0
   裁定 §3 Q3 的读数半边同样排在窗口之后。
 - **watchdog 接线**：裁定只授权加锁，没授权把 `tick_watchdog_pass` 接进生产链路 ⇒ 未接，
   判据腿仍钉"零调用点"，接线与否归 `20261010-AF与DB与DPP十件` §六 Q3 那条待裁。
-- **13问回执仍欠**：Q7.3 是第一批落地的问，回执与 §〇-1 行数对撞等攒够几条一起交（裁定 §3 明写
-  Q1／Q3／Q6.3／Q8.2／Q11／Q12 都排在窗口之后 ⇒ 回执不该逐条挤）。
+- **13问回执**：当时攒到本批 §二之一百一十三 一起交 ⇒ **已交**（落在裁定书 `decisions/20261011-AF第六轮与第二期审计攒批十三问-裁定.md`
+  末尾 `## 执行回填`，含 §〇-1 行数三口径对撞的再登记）。裁定 §3 明写 Q1／Q3／Q6.3／Q8.2／Q11／Q12 都排在窗口之后 ⇒ 回执按小节逐格交，未逐条挤。
 - 任务位：#114（本批）已完。下一批按裁定继续可窗内落的：Q7.1 的"serve 退出前收子进程"兜底＋Q7.2 信号钩子、
-  Q8.3 两枚安全降级升 ERROR、Q13 只对 `DEPLOY_AUDIT` 落盘、Q4.1 解释器口径、Q4.3 仿真依赖下界、
+  Q13 只对 `DEPLOY_AUDIT` 落盘、Q4.1 解释器口径、Q4.3 仿真依赖下界、Q8.1 最小告警一条、
   Q3 乙的门禁半边（`check_bounded_caches.py` 另立"持久化单调集"档）。
+  ⚠️ Q8.3 已于 §二之一百一十三 落地，从这一行划掉。
 
 ---
 
@@ -9497,3 +9498,93 @@ CR 面：CRLF 三份保持 CRLF（af_config 226/226、af_store 1224/1224、test_
 - 下一批窗内候选：§六 B 嵌套 `and`、G 观察者逐个隔离（现读 `af_runtime.py:262-263` 无 try/except，
   与 `af_bus.py:372-387` 的逐 handler 隔离纪律不一致）、H 两处 `entry_nodes()[0]` 同批、D／E 租约线，外加那份 BOM。
 - 任务位：#115 本批收口（13 条仍开项按归属挂 #79 窗／DCD／前端）。
+
+---
+
+## §二之一百一十三 · 裁定 20261011《十三问》窗内两项落地：Q8.3 两枚安全降级升 ERROR ＋ Q6.4／Q6.1 的信任边界文案半边（2026-10-11）
+
+依据裁定：`E:\NAS\关键决策部\decisions\20261011-AF第六轮与第二期审计攒批十三问-裁定.md` §3 Q8.3／§3 Q6.4／§3 Q6.1。
+本批**只动仓内非在途文件**，⛔ 未碰 `af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`。
+
+### 一、Q8.3：两枚安全降级留痕 WARNING → ERROR
+
+现读落点 `src/autoforge/af_service.py:910`（`DEVICE_GUARD_CATALOG_INJECT_FAILED`）与 `:913`（`DEVICE_ACL_LOAD_FAILED`）。
+裁定给的授权理由原样引一句就够：「安全能力瞎了一维」按 §1.6 的介入档就是 ERROR；申请件当年"不单方面改"的顾虑由本裁定解除。
+代码里只留一行 WHY 注释指向裁定小节，不复述理由。
+
+⚠️ **升级不动 §四 棘轮**——这两枚本来就带具名码，不占任何一行的无码格子。这一格写进清单 §七 问 3，
+免得下一个人以为"级别变了没动上限"是漏做。
+
+### 二、Q8.3 的判据：四枚新腿＋三条变异
+
+| 腿 | 判什么 |
+|---|---|
+| `test_real_repo_q83_security_degradations_are_error` | 两枚码**代码面与 §三 登记面都是 error**，且登记行必须引裁定小节号（不引=红，防"随手改档"） |
+| `test_real_repo_q83_promotion_did_not_move_the_uncoded_ceiling` | 无码存量仍是 error=10／warning=83——"棘轮未动"是推导出来的事实，漂了要在这一腿响，免得两件事被记成同一件 |
+| `test_b_registered_error_downgraded_in_code_is_red`（合成树） | 反向：登记面写 error、**代码面**被降回 warning ⇒ 单条判红。降级只会发生在代码里，注入点必须打在代码侧 |
+| 既有 `test_b_level_mismatch_is_red` | 另一半（注入清单面）本来就在，两条合起来才是双向 |
+
+变异自证跑在副本树 `E:\tmp\q83_mut\tree`（工作树一根手指没碰），驱动 `E:\tmp\q83_mut\drive.py`：
+**M0 未改动** RC=0（副本树可信，否则后面所有红作废）→ `M1_code_downgrade` KILLED →
+`M2_registry_downgrade` KILLED → `M3_site_deleted`（升档之后整条留痕被删）KILLED → `unexpected survivors: 无`。
+
+### 三、Q6.4／Q6.1 的文案半边
+
+- **Q6.4**：`docs/信任边界清单.md` §三 加一段**整批签认**（AF 认领 14 行，不逐行另签），并按裁定的 ⛔ 划清认领射程——
+  认领的是"这行理由是我写的、指得到仓内记录"，**不认领"该不该匿名"**（那一问按 §一 末条归 DCD 与 owner）。
+- **Q6.1.1**：`/api/build`・`/api/bind`・`/api/spec/compile` 三行把裁定要求的**「只回显不落盘」写成字面理由**（原来只说"不落盘"，
+  是描述不是判据）。判据腿逐条钉这三行含该短语，删掉即红。
+- **Q6.1.2 的 `POST /api/sim`**：这一行**自陈不满足**「只回显不落盘」并写明已被裁收到 **write**、卡在并发登录线窗口。
+  配一条反向腿：谁把它改写成"也只回显"，`test_q64_sim_row_claiming_echo_only_is_red` 单条判红——
+  这一格是全族最贵的假绿形状。
+- 落码半边（给 `/api/sim` 挂 `requires("write")`）按裁定排在窗口之后，本批零代码。
+
+### 四、本批最该记住的一格：`gates.sh` 不跑 pytest，所以读数钉会静默过期
+
+上一批（`b345955`）加了三枚具名码（`CONFIG_REVISION_BAD_SHAPE`／`SCHED_PENDING_AUTO_GONE`／`PREDICT_CORRUPT_ROWS_SKIPPED`），
+`tests/unit/test_observability_gate.py` 里三枚**真仓读数钉**当场变红（143→146 站点、18→21 具名码、warning 88→89、error 18→20），
+但那批的门禁读数一路 `GATES_RC=1` 且红源逐字节相同——**因为 `gates.sh` 只跑 AST 门与自研门，一条 pytest 都不跑**。
+我的分段回归只覆盖了"引用被改模块的测试文件"，`test_observability_gate.py` 恰好不在那 28 份里 ⇒ 三枚红腿随 `b345955` 上了 `main`。
+本批按现读对齐三枚钉，并把数字**从 docstring 里撤掉**（真仓那批腿的说明改成"具体数字只写在腿里"）：
+一份会过期的副本就是第二份债——这与本仓在 README 里删掉"N passed"是同一条纪律。
+⚠️ 这不等于要给 `gates.sh` 加全量 pytest：整树单进程在本机 RC=127，接入方式要单独想，已登记为本批未落项。
+
+### 五、连带：我自己那一行注释让进程模型清单行号漂了
+
+`af_service.py` 加注释 ⇒ 三枚生命周期站点与三枚同步原语站点行号 +1，进程模型门当场红 13 处（A 自动段 6 行漂移＋B 过期登记）。
+按门的修法做：§三 六处行号 2604→2605／2682→2683／2716→2717／1853→1854／2545→2546／1551→1552，
+再 `check_process_model.py --write` 重生成自动段。计数一字未动（生命周期 4／原语 34／共享名 9）。
+这一格值得留着写：**加注释不是零成本动作**，它会把两张行号表一起推动。
+
+### 六、清单 §六 那句过期现读
+
+`docs/可观测性清单.md` 里"现读具名码只有 17 枚／142 站点＝12%"是**上一批的现读**，现在读 21／146＝14%。
+已改成"以 §2.1／§2.2 自动段为准"并写明 ⛔ 别来这里抄新数——把会漂的数从散文里搬回真源。
+
+### 七、读数（命令原文＋现读）
+
+```
+$ Python313/python.exe scripts/check_observability.py .            → RC=0（146 站点／28 文件逐行对撞一致；具名码 21 枚／21 站点全部在册）
+$ Python313/python.exe scripts/check_trust_boundary.py             → RC=0（90 条路由；14 条非鉴权档全部在册；2 个未挂载机制）
+$ Python313/python.exe scripts/check_process_model.py .            → RC=0（生命周期 4／原语 34／共享名 9）
+$ Python313/python.exe -m pytest tests/unit/test_observability_gate.py -q            → 55 passed
+$ Python313/python.exe -m pytest tests/unit/test_trust_boundary_gate.py -q            → 38 passed
+$ Python313/python.exe -m pytest tests/unit/test_observability_gate.py tests/unit/test_trust_boundary_gate.py tests/unit/test_phase2_af18_af21_fixes.py -q → 106 passed
+$ Python313/python.exe -m pytest tests/unit/test_v1_4_device_guard.py tests/unit/test_af_live_entry_seams.py -q → 14 passed
+$ Python313/python.exe E:/tmp/q83_mut/drive.py                     → M0 RC=0；M1/M2/M3 全 KILLED；survivors 无
+$ GATES_PYTHON=…Python313 bash gates.sh ×2                          → GATES_RC=1、各 9781 B、md5 全同 2f27d26ab397b1341aeaa3d773406000、逐行 diff 空
+```
+
+`grep -n "WARN\|ERROR" …gates_q83_c.txt | wc -l` → 2，两枚都是登录线在途的 `fake-ok-const`（`af_api.py:984`／`:1005`）。
+md5 与 §二之一百一十二那一批**逐字节相同**，说明本批没有把门禁面推动一格；未动 `.gates-tally.txt`／`.gates-baseline.txt`、未用豁免。
+
+### 八、未落项与归属
+
+- **窗口内不落的（裁定明写排在并发登录线之后）**：Q1 pydantic 声明、Q3 乙的门禁半边＋丙的读数、Q6.1.2 `/api/sim` 收 write、
+  Q6.3 装配期硬约束、Q8.2 请求级 id、Q11 删 `live_unconfirmed`、Q12 拆 `build_app()`。
+- **Q2**：裁定裁"退回补充证据、丙（`_do` 显式三态返回）作为前置"⇒ 今天不落码，**到期日 2026-10-18**，复核人 owner，
+  复核动作是 AF 提交三态返回设计并重提 ask 问。
+- **待落的窗内项（下一批）**：Q7.1 serve 退出前收子进程、Q7.2 SIGTERM/atexit 钩子、Q8.1 最小告警一条、
+  Q4.1 解释器口径、Q4.3 仿真依赖下界、Q13 只对 `DEPLOY_AUDIT` 落盘。
+- **本批新登记的债**：`gates.sh` 与 pytest 的关系（第四格那句），AF 名下，不与任何裁定混。
+- 任务位：#116 本批。十三问裁定的 `## 执行回填` 与本批同批交（回执见裁定书末尾）。

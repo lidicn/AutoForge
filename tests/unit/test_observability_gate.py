@@ -1,7 +1,8 @@
 """`scripts/check_observability.py` 的判据腿：真仓读数钉死 ＋ 合成树上每条规则单独可红。
 
-真仓那九枚腿钉的是**读数本身**（142 站点／27 文件、具名码 17 枚、无码 125、trace_id 信封 6 枚、
-HTTP 请求侧 0 枚、`af_api.py` 的 logger 站点 0 枚与 `ok: False` 5 枚、访问日志掩码三个锚点都在）；
+真仓那批腿钉的是**读数本身**（站点数／级别分布／具名码数／无码存量、trace_id 信封、HTTP 请求侧、
+`af_api.py` 的 logger 与 `ok: False` 形状、访问日志掩码三个锚点）；具体数字只写在腿里，
+**不抄进本 docstring**——抄了就是第二份会过期的副本（上一批正是这样红了三门）。
 合成树那批钉的是**规则形状**——B 十一种红法、C 一种、A 一种、D 四种、E 五种，另加射程塌的十一枚 `exit 2`。
 
 合成树的两条纪律（上一批同一形状栽过，这里预先挡住）：
@@ -55,27 +56,60 @@ def real():
 
 
 def test_real_repo_site_readings_are_pinned(real):
-    """142 站点／27 个文件；级别分布六档全点。数字漂了要么连同清单一起改，要么这一腿先响。"""
+    """现读站点数／文件数／级别分布六档全点。数字漂了要么连同清单一起改，要么这一腿先响。"""
     from collections import Counter
 
     lv = Counter(s["level"] for s in real["sites"])
-    assert len(real["sites"]) == 143
+    assert len(real["sites"]) == 146
     assert len({s["path"] for s in real["sites"]}) == 28
-    assert dict(lv) == {"debug": 19, "info": 7, "warning": 88, "error": 18, "exception": 11}
+    assert dict(lv) == {"debug": 19, "info": 7, "warning": 89, "error": 20, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
 
 def test_real_repo_named_code_readings_are_pinned(real):
-    """具名码 17 枚／17 站点、无码 125 枚——§四 那六行上限就是照这组数钉的。"""
+    """具名码枚数／站点数与无码存量——§四 那六行上限就是照无码那组数钉的。"""
     from collections import Counter
 
     coded = real["coded"]
-    assert len(coded) == 18
-    assert len({s["code"] for s in coded}) == 18, "一枚码出现两次意味着它在两处承诺同一件事"
+    assert len(coded) == 21
+    assert len({s["code"] for s in coded}) == 21, "一枚码出现两次意味着它在两处承诺同一件事"
     nc = Counter(s["level"] for s in real["sites"] if not s["code"])
     assert sum(nc.values()) == 125
     assert nc["warning"] == 83 and nc["exception"] == 11 and nc["info"] == 7
+
+
+Q83_CODES = ("DEVICE_GUARD_CATALOG_INJECT_FAILED", "DEVICE_ACL_LOAD_FAILED")
+
+
+def test_real_repo_q83_security_degradations_are_error(real):
+    """裁定 20261011《十三问》§3 Q8.3：两枚安全降级留痕**代码面与 §三 登记面都得是 ERROR**。
+
+    只钉代码面会漏掉"码改了、清单没改"；只钉清单面会漏掉"清单改了、码没改"。两面对撞才是一条腿。
+    """
+    by_code = {s["code"]: s for s in real["coded"]}
+    doc = (REPO / gate.DOC_REL).read_text(encoding="utf-8")
+    for code in Q83_CODES:
+        site = by_code.get(code)
+        assert site is not None, f"{code} 从射程里消失了——升档之后不该有人把它整条删掉"
+        assert site["level"] == "error", f"{code} 代码面是 {site['level']}：安全能力瞎了一维按 §1.6 就是需人介入"
+        rows = [l for l in doc.splitlines() if f"code={code}" in l]
+        assert len(rows) == 1, f"{code} 在 §三 出现 {len(rows)} 行（应恰好一行）"
+        assert " · level=error · " in rows[0], f"{code} 登记面不是 error：{rows[0]}"
+        assert "Q8.3" in rows[0], f"{code} 的登记没引裁定小节，下一个人会当成随手改档"
+
+
+def test_real_repo_q83_promotion_did_not_move_the_uncoded_ceiling(real):
+    """这两枚本来就带具名码 ⇒ 升档不吃 §四 的无码格子，棘轮未动是**推导出来的**，不是巧合。"""
+    from collections import Counter
+
+    nc = Counter(s["level"] for s in real["sites"] if not s["code"])
+    by_code = {s["code"] for s in real["coded"]}
+    assert set(Q83_CODES) <= by_code, "带码这一前提是'棘轮未动'的根据，码没了就要重新谈上限"
+    assert nc["error"] == 10 and nc["warning"] == 83, (
+        f"无码存量漂了（error={nc['error']} warning={nc['warning']}）——这跟 Q8.3 无关，"
+        "但要在这里响，免得有人把两件事记成同一件"
+    )
 
 
 def test_real_repo_every_named_code_is_registered(real):
@@ -83,7 +117,7 @@ def test_real_repo_every_named_code_is_registered(real):
     findings, info = gate.check(REPO)
     b = [f for f in findings if f.startswith("B：")]
     assert not b, "\n".join(b)
-    assert info["codes"] == 18 and info["coded"] == 18
+    assert info["codes"] == 21 and info["coded"] == 21
 
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
@@ -396,6 +430,24 @@ def test_b_level_mismatch_is_red(synth):
     )
     f = _findings(synth["root"])
     assert "B" in _rules(f) and any("现读是" in x for x in f), f
+
+
+def test_b_registered_error_downgraded_in_code_is_red(synth):
+    """反向腿（Q8.3 的那一半）：登记面写 error，有人把**代码面**降回 warning ⇒ 必须红。
+
+    上面那条注入的是清单，这一条注入的是代码——降级恰恰只会发生在代码里。
+    """
+    target = next(s for s in synth["coded"] if s["level"] == "error")
+    _replace(
+        synth["root"] / "src" / "autoforge" / "mod_a.py",
+        f'logger.error("{target["code"]}',
+        f'logger.warning("{target["code"]}',
+    )
+    f = _findings(synth["root"])
+    anchor = f"{target['path']}:{target['lineno']}"
+    assert any(
+        x.startswith("B：") and anchor in x and "现读是 `warning`" in x for x in f
+    ), f
 
 
 def test_b_code_mismatch_is_red(synth):
