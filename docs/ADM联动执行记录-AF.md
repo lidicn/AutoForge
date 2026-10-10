@@ -9400,8 +9400,16 @@ CR 面：`tr -dc '\r' | wc -c` 五份文件均 0
 
 上一批的形状是「zip 快照旧、HEAD 新 ⇒ 报告说仍未修的东西其实已经修了」；这一批是**反方向**：
 报告自称 base 含 8 个未提交改动，而那 8 格里就有登录线的在途 diff ⇒ F-01／F-02 的"已复现"复现的是
-**在途工作树**，不是 HEAD。现读 `git show HEAD:src/autoforge/af_auth.py` 里那两格是 `user: dict` 的无占位形状，
-报告说的"None 占位却 return 非 None"在 HEAD 上不存在那行代码。
+**在途工作树**，不是 HEAD。现读 `git show HEAD:src/autoforge/af_api.py` 里那道 `AF_ALLOW_NOAUTH` 判断是**嵌在
+`if not registry.enabled:` 之内**的（HEAD `:366-368`），工作树才把它提到 `dep()` 函数体第一行（`:366-369`
+直接 `return None`）——后面 scope 分级那一整段永远走不到；F-02 那三处 `issue_for_agent(body.username, …)`
+（工作树 `:1004/:1023/:1033`）同样只存在于在途 diff。
+
+⚠️ **本批自己犯过一次"抄报告落点"**：第一稿把 F-01 写成 `af_auth.py:203/:219` 的 `dict | None` 占位形状，
+现读工作树 `grep -n "dict | None" src/autoforge/af_auth.py` → **零命中**，真落点在 `af_api.py`。
+连带把 §六 I 也归错了：`api_agent_delete`／`api_agent_rename`（HEAD `:1175`／`:1180`）只挂
+`dependencies=[Depends(_write)]`、体内直接 `revoke_by_subject`／`rename_subject`，**无主体校验这一格在 HEAD 上今天就成立**，
+不是登录线带进来的。
 
 所以两边用的其实是同一句话：**对撞只用 `git show HEAD:<file>`**——既不能拿审计包附的片段当 HEAD，
 也不能拿当前工作树当 HEAD（后者这次的错法更隐蔽，因为它"看起来更新"）。这条纪律在本仓已第三次生效，
