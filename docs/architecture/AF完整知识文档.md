@@ -1,9 +1,9 @@
 # AutoForge 完整知识文档
 
 > **更新时间**：2026-10-09　**鲜度基准**：`master` HEAD `e5b3fd5`
-> **本文是"面与清单"**：IR 语言、31 个 MCP 工具、90 条 HTTP 路由、18 个 CLI 命令、42 项安全闸、测试通道与预演怎么用、两棵 WebUI 怎么用、部署与排障。
+> **本文是"面与清单"**：IR 语言、31 个 MCP 工具、90 条 HTTP 路由、18 个 CLI 命令、43 项安全闸、测试通道与预演怎么用、两棵 WebUI 怎么用、部署与排障。
 > **机制与不变量在**《AF完整架构与运行时说明.md》（同一份代码、同一个基准；那里讲"为什么这档不碰真机"，这里讲"这档怎么调"）。
-> **清单不是手抄**：工具表来自 `len(af_mcp.TOOLS)=31` 的注册表、路由表来自 `build_app().routes`（90 条含 methods）、CLI 表来自 `typer` 命令注册表、检查项来自 `af_scanner.CHECKS`（42 项）、枚举来自 `af_ir/schema/ir.schema.json`。这四份都是**系统自己的信号**，改代码后重取即可，别信任何一处散文副本。
+> **清单不是手抄**：工具表来自 `len(af_mcp.TOOLS)=31` 的注册表、路由表来自 `build_app().routes`（90 条含 methods）、CLI 表来自 `typer` 命令注册表、检查项来自 `af_scanner.CHECKS`（43 项）、枚举来自 `af_ir/schema/ir.schema.json`。这四份都是**系统自己的信号**，改代码后重取即可，别信任何一处散文副本。
 
 ---
 
@@ -14,7 +14,7 @@
 核心能力（现状，非计划）：
 
 - 自然语言 → 意图 JSON → IR（`af_draft`，服务端解析中文设备名）
-- 编译期安全闸 **42 项**（`af_scanner.CHECKS`）
+- 编译期安全闸 **43 项**（`af_scanner.CHECKS`）
 - 双轨仿真 + 后置条件断言（`simulate` / `simulate_track`，`expect`）
 - **预演档 `dry_run`**：校验 + 仿真，零写入（§八）
 - **测试通道 `af_test_*`**：批量跑题、自动放行、与正式区隔离（§九）
@@ -230,7 +230,7 @@
 
 ---
 
-## 七、安全闸：`af_scanner.CHECKS` **42 项**（唯一真源 `af_scanner.py:38`）
+## 七、安全闸：`af_scanner.CHECKS` **43 项**（唯一真源 `af_scanner.py:39`）
 
 按族分组（括号里是注册表原话的短版）：
 
@@ -244,16 +244,18 @@
 | 后置条件 | `EXPECT_MISSING`、`EXPECT_UNREACHABLE`、`EXPECT_STATE_INVALID` |
 | 并发与快照 | `NON_IDEMPOTENT_CONCURRENT`、`SNAPSHOT_FALSE_MULTI_AND`、`ADAPTER_POLICY_PARAM` |
 | 真机三重闸 | `LIVE_TOKEN_REQUIRED`、`LIVE_CONFIRM_REQUIRED`、`LIVE_WHITELIST_REQUIRED`、`LIVE_ENTITY_NOT_WHITELISTED` |
-| 出站与覆盖 | `HTTP_NOT_WHITELISTED`、`NL_COVERAGE` |
+| 出站与覆盖 | `HTTP_NOT_WHITELISTED`、`NL_COVERAGE`、`INBOX_PARAM_TOO_LONG` |
 
 两个"名字像检查项但性质不同"的说明，别混进上表的读法：
 
-- **`L2_NEEDS_CANARY`**：会真发诊断（`af_scanner.py:423`，ERROR 级）——L2 动作标了 `requires_confirm=true` 却没配 `canary` 灰度时拒（P1-2：不给"用确认位换免费豁免"）。**该批（执行记录 §二之八十三）已登记进 `CHECKS`（`:54`）与 `CODE_HINT`（`:110`）**，所以 42 项含它。收口的不是那条判断（一直在），是"这项检查在目录里查得到、且发得出时 `hint` 非空"这两格；防复发由 `tests/unit/test_diagnostic_code_catalog.py` 八条腿盯（通用腿＝仓里 `Diagnostic("X")` 字面量发得出的码必须两本目录都在）。
+- **`L2_NEEDS_CANARY`**：会真发诊断（`af_scanner.py:429`，ERROR 级）——L2 动作标了 `requires_confirm=true` 却没配 `canary` 灰度时拒（P1-2：不给"用确认位换免费豁免"）。**该批（执行记录 §二之八十三）已登记进 `CHECKS`（`:55`）与 `CODE_HINT`（`:112`）**，所以 43 项含它。收口的不是那条判断（一直在），是"这项检查在目录里查得到、且发得出时 `hint` 非空"这两格；防复发由 `tests/unit/test_diagnostic_code_catalog.py` 八条腿盯（通用腿＝仓里 `Diagnostic("X")` 字面量发得出的码必须两本目录都在）。
 - **`IR_SCHEMA`**：不是扫描项，是错误知识的**分类键**（`af_error_knowledge.py:60/81/115`），把 schema 校验报错归到"补必填字段"的修复建议上。
 
-42 项里唯一一枚"由裁定新增、而不是由缺陷新增"的诊断是 **`CONFIRM_WITHOUT_DENY_PATH`**（裁定 20261009（第二份）§二 2.2）：节点标了 `requires_confirm` 却没有 `no`/`on_timeout`/`default` 任一出口时出**告警**。级别必须是 WARN——被拒后照既有边纪律落 `done` 是 **Q2 裁的甲**（与 `ask` 答"不要"同一条路），不是缺陷，所以这条诊断**不拦发布**（`ScanResult.ok` 只看 errors）。它要挪走的只是"作者没写拒绝出口 ⇒ 那条走向只在运行期静默发生、图里读不出来"。落点：检查方法 `af_scanner.py:503-521`（`Diagnostic` 字面量 `:514`）、调用点 `:364`（紧跟 `_check_suspension`）、`CHECKS :55`、`CODE_HINT :97-98`；判据 `tests/unit/test_confirm_exit_diagnostic.py` 十一条腿（含"三枚出口名 = 执行器拒绝分支词汇"那条同源腿）。
+43 项里唯一一枚"由裁定新增、而不是由缺陷新增"的诊断是 **`CONFIRM_WITHOUT_DENY_PATH`**（裁定 20261009（第二份）§二 2.2）：节点标了 `requires_confirm` 却没有 `no`/`on_timeout`/`default` 任一出口时出**告警**。级别必须是 WARN——被拒后照既有边纪律落 `done` 是 **Q2 裁的甲**（与 `ask` 答"不要"同一条路），不是缺陷，所以这条诊断**不拦发布**（`ScanResult.ok` 只看 errors）。它要挪走的只是"作者没写拒绝出口 ⇒ 那条走向只在运行期静默发生、图里读不出来"。落点：检查方法 `af_scanner.py:509-527`（`Diagnostic` 字面量 `:520`）、调用点 `:369`（紧跟 `_check_suspension`）、`CHECKS :56`、`CODE_HINT :99-100`；判据 `tests/unit/test_confirm_exit_diagnostic.py` 十一条腿（含"三枚出口名 = 执行器拒绝分支词汇"那条同源腿）。
 
-另外：`ENTITY_DEP_CYCLE`/`CROSS_DEP_CYCLE`/`EMIT_SELF_LOOP` 走变量传码（`af_scanner.py:1120-1131`），`LIVE_*` 四项走模块级字符串常量（`:1260-1263`）——只按 `Diagnostic("字面量", …)` 的 AST 扫这七项会误判成"注册了却从不发出"。
+第 43 枚 **`INBOX_PARAM_TOO_LONG`**（执行记录 §十八 残余 B.9 的后半格）管的是**收件箱载荷超长**：`adapter: inbox` 的 `do` 节点里 `text`/`title`/`body`/`content` 任何一枚超过库侧上限 ⇒ **ERROR、拦发布**。级别与上一条相反的理由是契约 §1.3 已经写明 DB 侧对超长载荷 fail-closed **丢弃**：这条动作发出去也必死，让它进库、进演练台账、跑到执行才红，等于把"必然失败"伪装成"已配置好"（与 `L2_NEEDS_CANARY` 同族）。**上限一个数字都不写在 AF 里**：`af_adapters/inbox.py:57` 的 `INBOX_LEN_LIMITS` 格子里放的**就是** `from homesdk.presence import INBOX_MAX_TEXT/INBOX_MAX_TITLE/INBOX_MAX_BODY` 那三枚常量本身，`inbox_overlong_fields()` `:74` 是唯一判定入口。这里刻意不走按名派发：对 `homesdk.presence` 成员的 `getattr` 访问在 `af_adapters` 里是 `scripts/check_mqtt_writers.py` D 判据的射程（机制层入口只许在桥内），而直接 import 让"库侧改名"变成 AF 的 **import 期** `ImportError`，比运行期才炸响亮；扫描器 `af_scanner.py:709-728`（字面量 `:720`、调用点 `:379`）里连一个整数字面量都不许出现——那条"判超长的数＝拒超长的数"由 `tests/unit/test_inbox_param_length_diagnostic.py` 用 AST 解析库侧源码自证（三个 builder 里 `_len_bounded(arg, CONST, "field")` 的字段名单必须与该表逐 kind 相等，且每格的值等于 `getattr(_presence, CONST)` 的现读值；另有两条腿钉住"本文件零 `getattr` 派发、零整模块 import"与"表里的值就是库侧那枚常量对象"）。满射程的依据：执行器把 `node.params` 原样交给适配器（`af_executor.py:741`，运行期不做插值），编译期量的就是运行期那份长度；同一份超长载荷在两端的读数由两条腿同时钉（扫描器 ERROR + 适配器 `ADM_ERR_PAYLOAD_INVALID`）。
+
+另外：`ENTITY_DEP_CYCLE`/`CROSS_DEP_CYCLE`/`EMIT_SELF_LOOP` 走变量传码（`af_scanner.py:1147-1158`），`LIVE_*` 四项走模块级字符串常量（`:1287-1290`）——只按 `Diagnostic("字面量", …)` 的 AST 扫这七项会误判成"注册了却从不发出"。
 
 高风险面：`lock`（门锁）、`water_heater`、`climate` 等按 Tier 取最严（`DeviceGuardRegistry`，Tier-0 读取/写入都要人工审批）；`conf < 0.6` 只出 ask 提案、禁写设备。
 
@@ -270,7 +272,7 @@
 | **自主 band** | `auto` / `shadow` / `ask` | shadow/ask 不真动 | shadow 写 `shadow_log` | 运行时 conf，非入参 |
 | **冲突档** | `off` / `observe` / `enforce` | — | 冲突审计 | `AUTOFORGE_CONFLICT_ARBITER` |
 
-**安全旗子哪枚真有人在跑的时候读**（2026-10-09 现读，锚点按本批落码后的 `af_executor.py`）：`canary` **有**运行期消费者——`:646` 取 `dry_run`、`:663-670` 判 `use_canary`（含 `not dry_run`）、`:610-619` 起 `CanaryGuard.perform`、`:650` 挂观察期（`kind="canary_observe"`），漂移与反向回滚在 `resume` 的 `:243-331`。`requires_confirm` **现在也有**（裁定 20261009 §三 硬前置，本批补上）：`_do` 入口 `:648-659` 判这枚旗——没拿到授权就一次都不下发，挂成一次人工确认会话（`_suspend_for_confirm` `:864-891`，复用现成的 `pending_asks` 与 `/api/asks`、`/api/asks/answer`、sidecar/inbox 那张已有脸，`AskSession` 字段一字未加）；唤醒在 `resume` `:211-241`——yes ⇒ `confirm_granted` 是一次性把手，就地重进同一节点执行一次并落一条 `confirm_granted` 审计；no / `on_timeout` ⇒ 一条动作都不发（fail-closed），落 `confirm_denied` 审计，终态照既有边纪律选路——图里没有 `no`/`default` 边就落 `done`（`resume` 尾 `:333-338`，与 `ask` 拒绝同一条路，不为确认单开特例）；**这一格现在编译期也看得见**：受确认节点缺 `no`/`on_timeout`/`default` 任一出口时出 `CONFIRM_WITHOUT_DENY_PATH` **告警**（裁定 20261009（第二份）§二 2.2，落点见 §七，不拦发布）（两枚事件名在 `af_audit.py:51-52`、注册进 `ALL_EVENT_TYPES :75-76`）。编译期那三张脸照旧在（字段 `af_ir/models.py:398/:439`、L2 策略表 `af_scanner.py:406-430`、编排与闭环的修与检 `af_orchestrator.py:683/:793/:1597`、`af_closedloop/fixers.py:53`/`detectors.py:84`/`deepfix.py:123`），判例 §六 3 那句「编译期看见 ≠ 运行期兑现」现在两半都对得上了。⇒ "节点标了 `requires_confirm` 就会先问人"从今天起才是真的：但**只在实际会写出去的那条路上问**——适配器是 dry 时（预演 / dry-live）这一格不挂起，只留 `confirm_skipped_dry_run` 痕（`:657-659`，与 canary 跳过 dry 同一口径）；这一处与先前写下的落码档「预演档不豁免」不一致，改口理由与代价记在执行记录 §二之八十一，并按纪律向 DCD 交追认——**裁定 20261009（第二份）§一 已回、追认甲**：确认闸的存在理由是"不可逆真写要人点头"，预演档零字节上线就没有可确认的实体，逐格挂起会把演练场卡死；裁的正是"跳过 + 记痕"而不是"静默跳过"，所以 `confirm_skipped_dry_run` 那一痕是这条裁定的**关键半边**，不许省。进程重启也不等于放行：`restore_persisted()` 末尾调 `reseed_sessions`（`af_runtime.py:203`、`af_executor.py:507-565`）把落盘时挂起的 `ask` / 人工确认会话重挂回 `pending_asks`，实例照旧 suspended、恢复过程零下发；挂起节点已不在当前图就落 `instance_session_lost` 具名审计（`af_audit.py:35-37`），不许静默跳过。**这一格闭合 ≠ 常驻真机通道可以开**：还押着 Q2=甲 的逐条勾与 Q3 试演台账（UI/HTTP 脸，#83）与现场写闸关回 0（#84）。
+**安全旗子哪枚真有人在跑的时候读**（2026-10-09 现读，锚点按本批落码后的 `af_executor.py`）：`canary` **有**运行期消费者——`:646` 取 `dry_run`、`:663-670` 判 `use_canary`（含 `not dry_run`）、`:610-619` 起 `CanaryGuard.perform`、`:650` 挂观察期（`kind="canary_observe"`），漂移与反向回滚在 `resume` 的 `:243-331`。`requires_confirm` **现在也有**（裁定 20261009 §三 硬前置，本批补上）：`_do` 入口 `:648-659` 判这枚旗——没拿到授权就一次都不下发，挂成一次人工确认会话（`_suspend_for_confirm` `:864-891`，复用现成的 `pending_asks` 与 `/api/asks`、`/api/asks/answer`、sidecar/inbox 那张已有脸，`AskSession` 字段一字未加）；唤醒在 `resume` `:211-241`——yes ⇒ `confirm_granted` 是一次性把手，就地重进同一节点执行一次并落一条 `confirm_granted` 审计；no / `on_timeout` ⇒ 一条动作都不发（fail-closed），落 `confirm_denied` 审计，终态照既有边纪律选路——图里没有 `no`/`default` 边就落 `done`（`resume` 尾 `:333-338`，与 `ask` 拒绝同一条路，不为确认单开特例）；**这一格现在编译期也看得见**：受确认节点缺 `no`/`on_timeout`/`default` 任一出口时出 `CONFIRM_WITHOUT_DENY_PATH` **告警**（裁定 20261009（第二份）§二 2.2，落点见 §七，不拦发布）（两枚事件名在 `af_audit.py:51-52`、注册进 `ALL_EVENT_TYPES :75-76`）。编译期那三张脸照旧在（字段 `af_ir/models.py:398/:439`、L2 策略表 `af_scanner.py:412-436`（§二之八十四 钉 `:406-430`，本批两本目录插行后按现读再钉）、编排与闭环的修与检 `af_orchestrator.py:683/:793/:1597`、`af_closedloop/fixers.py:53`/`detectors.py:84`/`deepfix.py:123`），判例 §六 3 那句「编译期看见 ≠ 运行期兑现」现在两半都对得上了。⇒ "节点标了 `requires_confirm` 就会先问人"从今天起才是真的：但**只在实际会写出去的那条路上问**——适配器是 dry 时（预演 / dry-live）这一格不挂起，只留 `confirm_skipped_dry_run` 痕（`:657-659`，与 canary 跳过 dry 同一口径）；这一处与先前写下的落码档「预演档不豁免」不一致，改口理由与代价记在执行记录 §二之八十一，并按纪律向 DCD 交追认——**裁定 20261009（第二份）§一 已回、追认甲**：确认闸的存在理由是"不可逆真写要人点头"，预演档零字节上线就没有可确认的实体，逐格挂起会把演练场卡死；裁的正是"跳过 + 记痕"而不是"静默跳过"，所以 `confirm_skipped_dry_run` 那一痕是这条裁定的**关键半边**，不许省。进程重启也不等于放行：`restore_persisted()` 末尾调 `reseed_sessions`（`af_runtime.py:203`、`af_executor.py:507-565`）把落盘时挂起的 `ask` / 人工确认会话重挂回 `pending_asks`，实例照旧 suspended、恢复过程零下发；挂起节点已不在当前图就落 `instance_session_lost` 具名审计（`af_audit.py:35-37`），不许静默跳过。**这一格闭合 ≠ 常驻真机通道可以开**：还押着 Q2=甲 的逐条勾与 Q3 试演台账（UI/HTTP 脸，#83）与现场写闸关回 0（#84）。
 
 **预演（`dry_run`）的准确定义**：`build` + `simulate` 都真跑，然后**在入队之前返回**，因此——
 
@@ -489,7 +491,7 @@ PYTHONPATH=src <py313> -m pytest tests -q
 5. `af_test_clear` 的无守卫 `rmtree`（§九）。
 6. **本批（2026-10-09）已收，原先是 HEAD 上的 4 条红**：`_cooldown_pending` 没进有界容器注册表（现按"键空间是实体 id、同一实体反复失败不增长、给它封顶等于把实体放出 fail-closed 守卫"走就地豁免并写理由），路由/UI 计数棘轮没重钉（现钉 87 / 90 / mimo 22，两条新路由 `/api/auth/has-admin`、`/api/auth/register` 各有 `LoginView.vue` 里的真 fetch）。逐条定性与两树复测见执行记录 §二之七十六。**还剩的整树红只有 AST 棘轮 2 条**（`af_api.py:980`/`:1001` 返回字面量 `ok=True`，登录正规化 `e5b3fd5` 自带；HEAD 干净树带基线复测逐字 `新增/未获批 2 条（error 0 / warn 2），基线内存量 97 条`，全量口径 `99 / 上限 97`，涨的两条全在 `fake-ok-const`（77→79），`except-pass-broad=20` 未动）。上调登记上限是门禁自己措辞里的**评审动作**，改成真校验派生要动并发会话正在改的那两个函数体 ⇒ **AF 不自决，已交 DCD** `20261009-AF-AST两条未获批的ok字面量归属`（甲改派生 / 乙上调上限 / 丙入基线，AF 建议甲，另带 Q2「纯查询端点能否不写 `ok` 键」——现读唯一调用点 `LoginView.vue:30-33` 读 `data.has_admin`、注册读 HTTP 层 `res.ok`，无人读响应体 `ok`）。**裁定已回**（`20261009-AF两件ok字面量与平键登记-裁定` §一）：Q1=**甲**——`api_auth_register` 的 `ok` 改成派生自真读数（令牌真签出来才算成，即 `bool(token)` 那一族，与 `2f86af9` 的 `persisted`/`verified` 同形）；Q2=**允许删**——`api_auth_has_admin` 是纯查询，删掉 `ok` 直接返回 `{"has_admin": …}`，并明写**不接受拿恒真表达式骗门**；乙（上调棘轮上限）/丙（塞基线）双双驳回。**落码窗口也被钉死**：这两个函数正被登录线在途改写，裁定要求"由登录线提交后（或该线提交后的窗口）落码，不抢在途函数"⇒ 今天这两条红照旧在，AF 不动 `af_api.py`。判例 §四：假成功标记分两类——写操作→真校验派生，纯查询→删掉。远端同形：run 127 只有 `quality-gates` 红、`pytest` 已转绿。
 7. `READONLY_DEGRADED:` 前缀在 homesdk 契约表的登记半边归 DCD／homesdk，现读两文档零命中。
-8. 收件箱投递（计划 §七 卡1）三管线（编译/仿真/NL）与 fail-closed 已绿，但**`mosquitto_sub` 那一半验收要在 NAS 上做**，属合并窗动作，本批只到"上线字节由库侧生成并被测试反解核对"为止。同一条未接的还有契约 §1.3 护栏 3（按 source 限速）与编译期的 >500 字符检查——长度上限现在由库侧 `_len_bounded` 把，编译期不提前报。
+8. 收件箱投递（计划 §七 卡1）三管线（编译/仿真/NL）与 fail-closed 已绿，但**`mosquitto_sub` 那一半验收要在 NAS 上做**，属合并窗动作，本批只到"上线字节由库侧生成并被测试反解核对"为止。原先并列的两格未接项**已收掉一半**：长度上限的**编译期预拒**由第 43 项 `INBOX_PARAM_TOO_LONG` 接住（上限现读库侧常量、不在 AF 写数字，见 §七）；**还差的只有契约 §1.3 护栏 3（按 source 每分钟限速）**——执行人与 N 值都不归 AF 定，已交 DCD `20261010-AF-契约护栏3每来源限流的N与执行人-决策申请`（AF 侧现读：`af_mqtt_bridge.py` 对 inbox 出站零限速代码）。
 9. publish 失败目前只归一个码（`ADM_ERR_BROKER_UNREACHABLE`，原始 `rc=…` 写在 message 里）：ACL 拒绝与 broker 不可达在 AF 侧不做区分，是否要独立码已列为 DCD 待问项。
 10. 计划 §七 卡3（订阅 `ma/presence`/`ma/device-health` 并落独立持久队列）仓内半边已绿，**没收的三样点名写出**：① 对端实际载荷是否逐键符合契约 §1.2 那两行，只有 NAS 合并窗的 `mosquitto_sub` 能对撞，仓内证到的是"契约要求的必填项缺了就拒收并带 `ADM_ERR_*`"；② 面板上没有"入向联动"这一格，唯一读数面是 `/api/health` 的 `linkage.inbound`；③ 队列没有 per-source 限速（与第 8 条同一护栏）。
 11. 入向事件的**载荷按设备读得进、按成员数组仍读不进**（裁定 20261009 §四 甲已落地）：`spawn`（`af_instance.py:264`）除 `{entity_id, state}` 外再摊三枚平键进 `context`（`trigger_entity_id`/`trigger_subject`/`trigger_kind`，真源 `TRIGGER_FLAT_KEYS` `:479`），所以"哪台设备掉线"这一格现在能写进 DSL 分支；`_trigger_repr`（`af_instance.py:466-475`）本身一字未动。仍堵的是结构半边：`make_resolver`（`af_state.py:157-182`）是平表、`split_namespace` 用 `partition(".")` ⇒ `context.trigger.members` 这类嵌套路径读不出，"是妈妈回家才开灯"要等乙或卡2 的 `ma_query` 变量绑定。
@@ -552,4 +554,5 @@ FAILED tests/unit/test_ui_api_paths_gate.py::test_all_trees_of_this_repo_are_in_
 | 2026-10-09 | HEAD `0300150` + 恢复重挂批次（未提交态，叠在确认闸批次之上） | §十六 残余第 13 条收口：崩溃恢复后 `ask` / 人工确认会话重挂回 `pending_asks`（`af_executor.py:507-565` 新增 `reseed_sessions`，`af_runtime.py:203` 在 `restore_persisted()` 末尾调用）。同批查出真凶：`pending_confirm` 原先写在 `instances.suspend()` **之后**，而落盘恰好发生在那次状态转换里 ⇒ 盘上记录永远缺这枚标记（`:881-884`、`:845-852` 现在都先写标记再挂起；`wait` 那格的 `_ask_rounds`/`_ask_room` 同口径）。新增具名审计 `instance_session_lost`（`af_audit.py:35-37`、注册 `:66`，枚举现读 **22 枚**，`API_CONTRACT.md` 同步）。判据 `tests/unit/test_restore_pending_sessions.py` 11 条；变异六枚分别杀 10 / 1 / 1 / 1 / 4 / 11 条红。确认闸那批的锚点因本批在执行器前部插入整体后移，两份架构文档 + 契约 + 执行记录按现读重钉（`:646`/`:648-659`/`:663-670`/`:671-680`/`:711`/`:243-331`/`:864-891`/`:211-241`/`:333-338`/`:51-52`/`:75-76`） |
 | 2026-10-10 | HEAD `8efc134` + 目录收口批次（未提交态） | §七 读数从 40 项翻成 **41 项**：`L2_NEEDS_CANARY` 已登记进 `CHECKS`（`af_scanner.py:54`）与 `CODE_HINT`（`:107`），风险分级那一行补进该枚；那条"看着像检查项其实不在 40 里"的说明改成两条性质不同的注记（`L2_NEEDS_CANARY`＝本批收口，`IR_SCHEMA`＝错误知识分类键、不是扫描项）。扫描器锚点随本批 +3 重钉：诊断发出点 `:415`→`:419`、L2 策略表 `:399-419`→`:402-426`、变量传码 `:1093-1104`→`:1096-1107`、`LIVE_*` 常量 `:1233`→`:1236-1239`。新增通用判据 `tests/unit/test_diagnostic_code_catalog.py`（8 条腿）。§八"安全旗子"那格的 `requires_confirm` 叙述未动（上一批已翻） |
 | 2026-10-10 | HEAD `086cf09` + 拒绝出口诊断批次（未提交态） | §七 读数从 41 项翻成 **42 项**：新增 `CONFIRM_WITHOUT_DENY_PATH`（裁定 20261009（第二份）§二 2.2，**WARNING 级、不拦发布**），族表挂在"中断与挂起"那一行；§八 那格补两句——Q1 追认已回（dry ⇒ 不挂起 + 留痕 `confirm_skipped_dry_run`，裁的就是"跳过 + 记痕"这半边）、Q2 裁甲之下的"被拒落 `done`"现在编译期也喊得出来。扫描器锚点随本批重钉：`__post_init__` 回退 `:171-173`→`:174-176`（+3）、`L2_NEEDS_CANARY` 发出点 `:419`→`:423`、L2 策略表 `:402-426`→`:406-430`（这两处 +4：三行目录 + 一行调用点）、`CODE_HINT` 那枚 `:107`→`:110`，变量传码 `:1096-1107`→`:1120-1131`、`LIVE_*` 常量 `:1236-1239`→`:1260-1263`、说明文档 §五 dry-live 组 `:1248/1275/1285-1286`→`:1272/1299/1309-1310`（本批方法体之后一律 +24）。新增判据 `tests/unit/test_confirm_exit_diagnostic.py`（11 条腿，含"三枚出口名＝执行器拒绝词汇"同源腿）；`test_diagnostic_code_catalog.py` 的目录枚数腿 41→42 |
+| 2026-10-10 | HEAD `033866f` + 收件箱长度预拒批次（未提交态） | §七 读数从 42 项翻成 **43 项**：新增 `INBOX_PARAM_TOO_LONG`（**ERROR 级、拦发布**，收 §十八 残余 B.9 后半格），族表挂在"出站与覆盖"那一行；§十六 残余第 8 条随之收掉一半（只剩契约 §1.3 护栏 3 的按 source 限速，执行人与 N 值已交 DCD）。同一批把 `af_adapters/inbox.py` 文档串里手抄的 `text≤500`/`title≤80`/`body≤500` 删掉，改成"上限现读库侧 `INBOX_MAX_*`，本文件一个数字都不写"：终版直接 `from homesdk.presence import` 三枚常量、`INBOX_LEN_LIMITS`（`:57`）格子里放的就是常量本身，`inbox_overlong_fields()` 挪到 `:74`。扫描器锚点随本批重钉（两本目录各插行 + 新检查方法 ⇒ 方法体之后一律 **+27**）：`CHECKS` 声明 `:38`→`:39`、`__post_init__` 回退 `:174-176`→`:179-181`、L2 发出点 `:423`→`:429`、`CONFIRM_WITHOUT_DENY_PATH` 方法 `:503-521`→`:509-527`（字面量 `:520`、调用点 `:369`）、变量传码 `:1120-1131`→`:1147-1158`、`LIVE_*` 常量 `:1260-1263`→`:1287-1290`（用于 `:1313/:1321/:1329/:1347`）、dry-live 组 `:1272/1299/1309-1310`→`:1299/1326/1336-1337`。**形状返工过一次并如实记账**：初版把常量名存进表、运行期 `getattr` 现读，被 `check_mqtt_writers.py` D 判据判红（桥外按名派发机制层成员正是该门要拦的形状），而那条红同时说明"漂移要响亮"该走 import 期——库侧改名现在是 `ImportError` 而不是运行期 `AttributeError`。新增判据 `tests/unit/test_inbox_param_length_diagnostic.py`（30 条腿，含"表与库侧 `_len_bounded` 名单+现读值对撞""扫描器零整数字面量""本文件零 `getattr` 派发/零整模块 import"三条同源腿，全部走 AST 而非按名字 grep，理由见 §十六 第 10 条）；目录枚数腿 42→43 |
 | 2026-09-24 | 当时 HEAD | 初版（端到端实测后） |

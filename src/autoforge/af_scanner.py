@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .af_adapters import POLICY_PARAMS, classify_action, is_destructive, host_of
+from .af_adapters.inbox import inbox_overlong_fields
 from .af_affordance import domain_of, possible_states
 from .af_bus import EVENT_ENTITY_PREFIX
 from .af_ir import (
@@ -67,6 +68,7 @@ CHECKS: dict[str, str] = {
     "EXPR_INVALID": "表达式校验失败（未知算子/函数、参数个数、深度/节点上限）",
     "TRIGGER_INVALID": "触发源校验失败（group 嵌套超预算或自引用，实体集无法展开）",
     "PARAMS_TOO_DEEP": "动作参数容器嵌套超预算或自引用（运行期遍历腿必然失败，编译期先拒）",
+    "INBOX_PARAM_TOO_LONG": "契约 §1.3 收件箱载荷超长（text/title/body/content，上限现读库侧常量）：DB 侧对超长 fail-closed 丢弃 ⇒ 这条投递永远到不了音箱",
     "UNDECLARED_VAR": "引用了未声明的实例变量",
     "NL_COVERAGE": "⑬ NL 覆盖率检查：有节点没出现在自然语言描述里",
     # ── v0.3.0 跨自动化事件·发布侧（IR §4.3）──
@@ -124,6 +126,9 @@ CODE_HINT: dict[str, str] = {
     "EXPR_INVALID": "检查算子名/函数名拼写、参数个数，以及嵌套深度（上限 32）/节点数（上限 256）。",
     "TRIGGER_INVALID": "把 group 触发源改平（一层 `or`/`and` 列出全部条件），别让 group 套 group，也别自引用。",
     "PARAMS_TOO_DEEP": "把参数摊平成正常层级；嵌套到这种深度，通常是引用写错成了自引用。",
+    "INBOX_PARAM_TOO_LONG": "把该字段裁短到上限以内，或把长文拆成多条 `inbox.*` 投递后先做摘要。上限不在 AF 里写死，"
+                            "真源是库侧 `homesdk.presence.INBOX_MAX_TEXT`/`INBOX_MAX_TITLE`/`INBOX_MAX_BODY`（本条诊断报的就是现读值）。"
+                            "别指望 DB 收下超长载荷——契约 §1.3 写明它对超长 fail-closed 丢弃并审计，音箱那头不会响。",
     "UNDECLARED_VAR": "在 `vars` 里声明该变量，或改用已有变量名。",
     "NL_COVERAGE": "该节点未出现在自然语言描述里——补 `name` 字段，让渲染器能叙述到它。",
     "EMIT_SELF_LOOP": "纯事件环、无设备回灌，运行时安全；当前为放行告警（不阻断编译），如需消除可改名或加条件避免自触发。",
@@ -371,6 +376,7 @@ class StaticScanner:
             # 都接了同一份预算，但闸门原本不查，于是"build 放行、运行期内省必失败"的 IR
             # 能进库；而冲突内省失败会被 dispatch 的 `except Exception` 变成降级放行。
             self._check_param_budget(auto, node, out)
+            self._check_inbox_payload_len(auto, node, out)
             self._check_vars(auto, node, declared | assigned, out)
 
         # `_check_expr` / `_check_trigger_depth` 两站是后面所有"实体依赖腿"的**前提**：
@@ -695,6 +701,27 @@ class StaticScanner:
                     "PARAMS_TOO_DEEP",
                     ERROR,
                     f"节点 {node.id} 的动作参数容器超限：{exc}",
+                    auto.id,
+                    node.id,
+                )
+            )
+
+    # §十八 残余 B.9 的后半格：收件箱载荷**超长**在编译期先拒（前半格"长度由库侧把"已交付）。
+    # 级别取 ERROR 的理由与 L2_NEEDS_CANARY 同族：契约 §1.3 已写明 DB 对超长载荷 fail-closed 丢弃，
+    # 这条动作**发出去也必死**——等到运行期第一次真投递才红，等于把一条永远送不到的 IR 放进了库、
+    # 放进了演练台账。上限不在本文件写数字：`inbox_overlong_fields` 现读库侧
+    # `homesdk.presence.INBOX_MAX_*`，判超长的数与运行期拒超长的数是同一个数。
+    def _check_inbox_payload_len(self, auto: Automation, node: Node, out: ScanResult) -> None:
+        if node.kind != "do" or node.adapter != "inbox":
+            return
+        for kind, field, actual, limit in inbox_overlong_fields(node.action or "", node.params):
+            out.diagnostics.append(
+                Diagnostic(
+                    "INBOX_PARAM_TOO_LONG",
+                    ERROR,
+                    f"收件箱动作 `{node.action}` 的载荷字段 `{field}` 长 {actual} 字，"
+                    f"超过 butler/inbox/{kind} 的库侧上限 {limit} 字：DB 侧对超长载荷 fail-closed 丢弃，"
+                    f"这条投递永远到不了音箱",
                     auto.id,
                     node.id,
                 )

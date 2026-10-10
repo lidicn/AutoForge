@@ -29,13 +29,13 @@ SRC = ROOT / "src" / "autoforge"
 SCANNER = SRC / "af_scanner.py"
 
 #: 目录里有、但不以 `Diagnostic("X")` 字面量发出的键（发出点为现读位置，行号随本批插键后重钉）：
-#: - `code = "CROSS_DEP_CYCLE"` `af_scanner.py:1120`
-#: - `code = "EMIT_SELF_LOOP"`   `:1125`
-#: - `code = "ENTITY_DEP_CYCLE"` `:1131`
-#: - `LIVE_TOKEN_REQUIRED` 常量 `:1260`，用于 `:1286`
-#: - `LIVE_CONFIRM_REQUIRED` 常量 `:1261`，用于 `:1294`
-#: - `LIVE_WHITELIST_REQUIRED` 常量 `:1262`，用于 `:1302`
-#: - `LIVE_ENTITY_NOT_WHITELISTED` 常量 `:1263`，用于 `:1320`
+#: - `code = "CROSS_DEP_CYCLE"` `af_scanner.py:1147`
+#: - `code = "EMIT_SELF_LOOP"`   `:1152`
+#: - `code = "ENTITY_DEP_CYCLE"` `:1158`
+#: - `LIVE_TOKEN_REQUIRED` 常量 `:1287`，用于 `:1313`
+#: - `LIVE_CONFIRM_REQUIRED` 常量 `:1288`，用于 `:1321`
+#: - `LIVE_WHITELIST_REQUIRED` 常量 `:1289`，用于 `:1329`
+#: - `LIVE_ENTITY_NOT_WHITELISTED` 常量 `:1290`，用于 `:1347`
 _NON_LITERAL_KEYS = {
     "CROSS_DEP_CYCLE",
     "EMIT_SELF_LOOP",
@@ -170,6 +170,6 @@ def test_confirm_and_canary_are_two_distinct_branches():
 
 
 def test_catalog_size_reading_is_pinned():
-    """目录枚数现读（文档里那句"42 项"的对账位）：漂了就红，逼记账同步。"""
-    assert len(CHECKS) == 42, f"CHECKS 现读 {len(CHECKS)} 枚，两份架构文档那句读数要跟着改"
+    """目录枚数现读（文档里那句"43 项"的对账位）：漂了就红，逼记账同步。"""
+    assert len(CHECKS) == 43, f"CHECKS 现读 {len(CHECKS)} 枚，两份架构文档那句读数要跟着改"
     assert set(CHECKS) == set(CODE_HINT), "两份目录的键集要同源：只进一份就是半张脸"
