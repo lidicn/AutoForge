@@ -9022,3 +9022,32 @@ Q1／Q3／Q6.3／Q8.2 的落笔点在 `af_api.py`／`af_auth.py`（登录线在�
 - 提交态：见本条 commit（`git show --stat HEAD` 为证，只有 `docs/ADM联动执行记录-AF.md` 一份文件）。
 
 —— AutoForge 开发 · 2026-10-11 · 十问打包递出，等裁期间机械半边照常只对账、不越权
+
+## 二之一百零四、收第二轮运行时审计报告（`AutoForge运行时审计报告.html` §4.1–4.9 逐条现读对撞）：四条"仍未修"里有两条在现读 HEAD 早已被改掉、一条被换形、一条报告自己就推翻；残余三格全部点名归属，报告**不归档**
+
+### 一、产物
+
+`docs/audit/第二轮运行时审计核实对账_20261011.md`（对撞表 12 行：§3.1/3.2、4.1–4.9、§5.1、§6.1）。基准 HEAD `503c4a0`＝远端 `origin/main`。
+
+### 二、对撞里最要紧的四格（报告口径 vs 现读，逐条附命令可复现）
+
+| 条目 | 现读结论 |
+|---|---|
+| **4.2 sidecar 三连删被吞** | **已修（非本批）**。`af_service.py:2513-2529` `_cleanup_watch_files()` 逐条具名报 `errors.append(f"{label}:{type(exc).__name__}")`、返回体带 `lock_file_kept: True`；`:2563` 注释就地点名旧实现那句 `except OSError: pass` |
+| **4.5 MQTT 生命周期不闭合** | **已修（非本批）**。`af_mqtt_bridge.py:749 def stop()` ＋ `:767 for name in ("loop_stop", "disconnect")` 收尾在场 |
+| **4.3 start_watch 同步阻塞 15 秒** | **形状已换**（不是"已修"）。报告的 `for _ in range(15): time.sleep(1.0)` 现读**零命中**，换成 `for delay_s in _WATCH_PROBE_DELAYS_S`（`:2746-2748`）＋ `proc.poll()` 早退 ＋ 三种如实结论。**最坏占用上界本批未取**：`_WATCH_PROBE_TOTAL_S` 的具体值没读，就不填估计数 |
+| **4.4 全仓 `atexit`／`signal.signal` 零命中** | **半过期**（与我 §二之一百 记的同一件事）。`grep -rn "atexit\|signal.signal\|signal.SIGTERM" src/autoforge/` ⇒ 1 命中 `af_cli.py:631 signal.signal(signal.SIGTERM, _on_sigterm)`；`atexit` 侧仍 0 |
+
+其余：4.1（`af_auth.py:307-312` `subjects()` 体内仍无 `with self._lock`）、4.7（`af_api.py:1093/1103/1106` 每秒读盘＋`mark_pushed`＋`sleep(1.0)`）两格**成立·未修**，落笔点在登录线在途文件 ⇒ #79 窗内，AF 不自挑修法；4.8 四处 `time.time()` 仍在（`:292`／`:330`／`:635`／`:911`），按报告自己给的定性**成立·按设计**，真实缺口是"时钟回跳没有告警读数"，归可观测性族；4.9 报告自己推翻第一轮的第 9 条，现读 `af_live.py:87` docstring 已明写"今天没有调用者"、`af_tick_supervisor.py:223` 明写"读得出原因、读不出补救" ⇒ **成立·就地留痕**，"接不接 watchdog"＝今日件 Q7.1／Q7.3。
+
+### 三、新增的一问（补进今日已投那份件，不另开件）
+
+**Q11 · HTTP 路径要不要实现真机常驻档的 `--confirm` 传递？** 证据：`af_service.py:2738-2744`（本层从不传 `--confirm`／`--live-allow`）＋ `af_cli.py:565-567`（缺 `--confirm` 直接 `typer.Exit`）＋ 成功返回体 `real_device: False`。这一格与裁定 20261009 §三（确认闸、#83/#84 现场开关）同族 ⇒ 不自决。候选：甲 HTTP 补 `confirm` 参数（＝新授权面经网络可达）；乙 把 `live_unconfirmed` 这一档从 API 面显式删掉，`tier` 只允许 `dry_live`；丙 维持现状＋就地注释。**倾向乙**——不必新增授权面就能消除"文档说双档、代码只有一档"这个断的承诺。
+
+### 四、归档判定与任务位
+
+按 §四 归档判据（每条确证项要落到「已修＋判据」或「已证伪＋理由」），本报告残余三格：窗内两格（4.1／4.7）＋待裁两格（4.6→Q11、4.4/4.9→Q7）＋未收一格（§6.1 正文本批未提取）⇒ **`AutoForge运行时审计报告.html` 留在 `docs/audit/` 原地，不移入归档**。同理 `AutoForge审计报告.html`（第六轮 ARCH-08~11 与 BUG 残余未逐条复测）、`AutoForge安全审计报告.html`（本轮未开）。
+- #99 更新：对账半边本报告 §4 已收，§6.1 与另两枚 HTML 仍开；
+- 本批**零落码**：只新增一份对账文档＋一份记账，不动任何判据、不动任何在途文件。
+
+—— AutoForge 开发 · 2026-10-11 · 报告的 `file:line` 我逐条现读，已修的承认已修、换形的不写成修好、量不出来的空着不填
