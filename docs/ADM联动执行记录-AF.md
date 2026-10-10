@@ -8700,3 +8700,55 @@ M31 与 M33 各杀 4 条但方向不同：前者证明这条判据真的在按�
 - 存证（`E:\tmp\`，不进仓）：`mutation_arch03.result.txt`（六案）／`arch03_pypi.txt`（578 枚 wheel 的八档 `requires-python` 读数）／`gates_arch03_a.txt`＋`gates_arch03_b.txt`＋`gates_arch03_c.txt`（各 8248 B；剥末行后本体 8210 B、md5 `da90f821…`，三遍同一本体；c 跑在两份 docs 记账改完之后）／`body_gates_arch02_c.txt`＋`body_gates_arch03_a.txt`（本体对撞用，差 3 处移动逐条已解释）／`mutate_arch03.py`（副本树驱动）／`arch03_tree`（副本树）。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `5616dc6`、本批落码后现读 `bfdc8b1`（本批六份文件：`scripts/check_ci_interpreter.py` 新建 319 行／`tests/unit/test_ci_interpreter_gate.py` 新建 19 腿 248 行／`gates.sh` 22 增 0 删／`README.md` vhass 措辞＋CI 一段／两份 docs 记账）；**没有动过任何一枚解释器版本取值**：`ci.yml` 四枚钉值仍 `3.11`、两份镜像 base 仍 `3.14`、`requires-python` 仍 `>=3.11`——落的是"手抄要一致＋差要显式认领"的 rot 防线，对齐方向三问递裁；报告的"四个作业"（实为 6 作业 4 钉值）、三处行号、"3.11 vs 3.14 两方"（实为四方 spread）与"pip 回溯导致 CI 与本机跑的依赖不同版"（依赖在 CI 不参与执行，真缺陷是**真仿真从未在自动化链上跑过**）逐条订正；变异 M0／M53／M99 绿、M50／M51／M52 各杀一条；相关门禁判据合跑 83 passed；门禁三遍本体逐字节相同（8210 B／`da90f821…`；a／b 在代码＋README 改完、c 在两份 docs 记账改完），与上一批差 411 B 全部由新增那一节解释；AST 面两批同读、两枚红仍是登录线在途 `af_api.py:984/:1005`，tally／baseline 未动；未推 GitHub——推要 owner 点头
+
+## 二之九十八、收第六轮审计 ARCH-04（"交付面依赖仓内随附的私有 wheel，且没有私有源策略"）：报告"缺什么"三格里两格已被裁定 20261007 §六 Q1 接住、第三格按现读答完；复测真正挖出来的是**引用面不对账**那条缝 ⇒ 新门四条判据＋一份指路文档；"改私有 devpi"与裁定相反不重递，"3.11／3.14 两侧真跑"与 ARCH-03 第 2 问同题、攒批
+
+### 一、复测对撞表（报告每一句 vs 现读）
+
+| 报告的话（`docs/audit/AutoForge审计报告.html` §ARCH-04） | 现读 | 定性 |
+|---|---|---|
+| 「缺私有包索引（或 vendor 目录的**校验和清单**）」 | 字节真值有两处且都在册：`tests/unit/test_mqtt_compose_env.py:163` 的 `AUTHORITATIVE_WHEEL_SHA256`（值 `19bc83a6…`，同文件那条判据实算本目录那枚并与它对撞）＋库侧 `E:\NAS\homesdk\dist\VERSIONS.txt` 0.3.2 段（`:32` 一行给全 sha256／49374 B／"该不该用"，`:28` 段首自述"DCD 构建，2026-10-07"，只增不删） | **这句已过期**——它没读 `decisions/20261007-MA五件与AF一件-裁定.md` §六 Q1（裁 **A**＝仓内先换＋文件名钉死＋那份 sha 明写"这就是权威值"）与本仓已有的那条字节判据 |
+| 「没有**源码可比对**、没有**构建流程可复现**」 | 源码在同一块盘：`E:\NAS\homesdk`（`pyproject.toml:8` 现读 `version = "0.3.2"`、`:2-3` 是 `setuptools>=68` / `setuptools.build_meta`），要审同意闸门就读 `src/homesdk/consent.py`；构建命令登记在 `VERSIONS.txt:42`＝`python -m pip wheel --no-build-isolation --no-deps -w dist .` | "没有源码可比对"**不成立**。但"可复现"这一格报告问对了方向、**答法要换**：实测那枚 wheel 的 22 个 zip 条目带着 **17 个不同的 `date_time`**（2026-09-18 → 2026-10-06，就是各源文件自己的 mtime）⇒ 重烤必然得到**不同 sha256** ⇒ 摘要只能靠**登记值对撞**，不能靠"重新构建一次看对不对得上"。这条按现读写进了指路文档的「来源与可再生性」 |
+| 「缺『本地开发怎么装、**装不上怎么报错**』的统一入口」 | 装法＝`pip install docker/homesdk/<那一枚>`；**不要用** `pip install -e ".[homesdk]"`——那枚 extra（`pyproject.toml:61` = `homesdk>=0.3.2`）声明的是归属、不是可安装入口，PyPI 404 已实测（§二之九十七），它的失败形状是 pip 报 `No matching distribution found for homesdk>=0.3.2`。"报错"侧现读实测：`src/autoforge/af_executor.py:95` 是**模块级** `from homesdk.consent import YES, classify_answer` ⇒ 用 `-I -S` 关掉 `site-packages` 导入包本体，得到 `ModuleNotFoundError: No module named 'homesdk'`，serve 起不来 | **已答，且不另造入口**：报错点就是那条依赖本身，缺包是**响**的（不是静默降级、也不是"同意闸门读成默认放行"）。真正会静默的那一族（paho 缺了桥不起、配置没配好时 `AUTOFORGE_MQTT=1` 抛 `MqttUnavailable`）另有 `check_mqtt_runtime_dep.py` 与 `paho_available()`／`broker_settings()` 预检。为"统一入口"再挂一个 dev-setup 脚本是新增机制、且不会比现在更响 ⇒ 不落 |
+| 「靠白名单保住交付物……形状很脆弱」 | `.gitignore:64` 确为 `!docker/homesdk/*.whl`；目录里现读一枚 49374 B | 成立但**脆弱点不在这条白名单**，在"引用面各抄各的"（下节） |
+| 「最好改**私有 devpi／制品库**＋锁文件」 | 20261007 §六 Q1 当场就驳回过 B／C 两档（C＝三仓同步窗口），裁的是 A | **与裁定相反 ⇒ 不重递、不落地**。引 `decisions/20261007-MA五件与AF一件-裁定.md` §六 Q1 |
+| 「wheel 是 `py3-none-any`，安装不受版本约束，但运行时未在 **3.11／3.14 两侧**都验证过」 | 与 ARCH-03 口径三问的第 2 问（要不要一条**必跑**的真仿真作业、解释器向谁对齐）是同一个问题 | **同题 ⇒ 随 #99 同批递**，本批不自决（口径半边的理由与上一节那三条相同：`decisions/20261010-AF与DB与DPP十件-裁定.md` §六 Q3） |
+
+### 二、复测真正挖出来的缺陷：那条字节判据只认交付面一枚
+
+`tests/unit/test_mqtt_compose_env.py` 的 `_wheel()` 从 **`Dockerfile.api` 的 COPY 行**现取 wheel 路径（`WHEEL_FROM_DOCKERFILE_RE`＋`assert len(hits) == 1`）——这个设计本身是对的（"部署面真正装的那枚才算数"），但它的射程边界因此是**单面**的：
+
+- `.github/workflows/ci.yml:25`／`:42`／`:63` 三条 `pip install docker/homesdk/homesdk-0.3.2-py3-none-any.whl`
+- `docker/Dockerfile.test:26-27` 的 `COPY`＋`pip install`
+- `docker/docker-compose.api.yml:56` 的注释提及
+
+**都不在那条判据的对账范围里**。把 CI 那一面指到目录里的另一枚（或一枚同名不同字节的东西），测试算的仍然是交付面那一枚 ⇒ **CI 装的与镜像装的不是同一枚，而 CI 照绿**。这与刚收的 ARCH-03 同族：手抄的引用面各报各的绿。M44 是这一格的实测：只改 `Dockerfile.test` 的文件名，新门 `RC=1`，而 `test_vendored_wheel_is_the_exact_bytes_dcd_registered` 在同一棵副本树上 **`1 passed`（RC=0）**。
+
+### 三、落码（AF 职权内的机械半边）
+
+1. **`scripts/check_vendored_wheel.py`（本批新建，209 行）** 纯标准库（`hashlib`＋`pathlib`＋逐行文本匹配），与 `check_mqtt_runtime_dep.py`／`check_ci_interpreter.py` 同一形状，四条判据各自单独可红：**A 目录单枚**（`docker/homesdk/` 只许一枚 `.whl`——多一枚就是"CI 挑那一枚、镜像挑这一枚"的物理前提）；**B 引用面同名**（四个面里出现的文件名全等于盘上真身；真源从盘上现取，门里没有第二份名单可抄；compose 那份只是注释提及，不在盘上时不参与判定）；**C 字节等于权威值**（实算 sha256 对撞 `test_mqtt_compose_env.py:163` 那一行——**门自己去读那一行，不抄第二份摘要**）；**D 指路文档在册且不复制**（`docker/homesdk/README.md` 必须存在、必须指得到两处真源、里面不许出现 64 位十六进制、不许提到目录里不存在的 wheel 名）。射程前提六种塌法一律 `exit 2`：目录不在／目录零枚／常量文件读不到／那一行不再是 64 hex／三份必读引用面任一不在盘上任一读不出任何 `homesdk-*-py3-none-any.whl` 引用。
+2. **`docker/homesdk/README.md`（本批新建，90 行）**＝报告建议的那份文档（版本、来源仓库、构建命令、引用面清单表、本地装法与两种失败形状、0.3.2→0.3.3 的六步更换流程），**唯独不按它的字面钉 SHA256**——偏差见下一节末。
+3. **`tests/unit/test_vendored_wheel_gate.py`（本批新建，333 行／24 腿）**：tmp 树红腿逐条打 A／B／C／D（含"只改 `Dockerfile.test` 必须红"这条**盲区腿**，并带反向自证——同一棵树上由 `Dockerfile.api` 派生的路径与摘要都不动，所以既有那条判据抓不到）＋五条 `exit 2` 下限＋一枚"什么都不改"的干净档；真仓绿腿把现状钉死（`check(ROOT)` 空、CI 面恰好三条引用、README 指到两处真源且不含摘要、权威常量确实是 64 位十六进制）。
+4. **`gates.sh`** 新增一节（**22 增／0 删**，纯加法；`bash -n` `RC=0`；`wheel_rc` 的 `exit 2` 与红两档结论各自单独给，文案里的反引号逐个转义 ⇒ 覆盖门判据 ⑥ 现读"echo 文案 71 行无未转义反引号"）。
+
+**偏差登记（须请追认）**：报告 §建议 的原话是「至少补一份 `docker/homesdk/README.md` 记录版本、来源仓库、构建命令**与 SHA256**」。本批落的那份**刻意不含 64 位摘要**，而且判据 D 把"文档里出现 64 位十六进制"直接判红。理由三条：① 字节真值已有两处（`test_mqtt_compose_env.py:163` 的常量、库侧 `VERSIONS.txt:32`），第三份就是 §二之九十六 那一族"会过期的副本"；② 摘要是**登记值不是可重算值**（zip 内嵌 mtime 已实测），抄进文档会让下一个人误以为可以拿它核对重建；③ 指路文档的职责是"领到真源"而不是"复述真源"。**版本、来源仓库、构建命令三项按报告字面落了**（「来源与可再生性」一节），只有 SHA256 这一项改成指路。若 owner 或 DCD 认为文档里就该带一份摘要，撤掉判据 D 那一腿即可（一处改动，不影响 A／B／C）。
+
+### 四、读数
+
+- **变异十二案＋收尾**（驱动 `E:\tmp\arch04_mutate.sh`，副本树 `E:\tmp\arch04_tree`＝`git archive HEAD` ＋本批三份新文件；工作树未碰；结果 `E:\tmp\arch04_mutation.result.txt`）：**M0** 空注入 `RC=0`；**M99** README 两处小标题同义改写 `RC=0`（门不判措辞）；**M42** 目录里多放一枚 `homesdk-0.3.9-…`（字节与真身相同、排序在 0.3.2 之后 ⇒ 不连带出 B／C／D）`RC=1` 恰 1 条 **A**；**M43** `ci.yml` 三条引用换名 `RC=1` 恰 1 条 **B**（按面聚合，一个面只报一条）；**M44** 只改 `Dockerfile.test` `RC=1` 恰 1 条 **B**，同一棵树既有 sha 判据 `1 passed`＝**缝的实测**；**M45** wheel 末尾追加一个字节 `RC=1` 恰 1 条 **C**（`7efda40b…` vs 权威 `19bc83a6…`）；**M46** 删 README ⇒ 恰 1 条 **D**；**M47** README 钉一份 64 位摘要 ⇒ 恰 1 条 **D**；**M48** README 不再指 `VERSIONS.txt` ⇒ 恰 1 条 **D**；**M49／M50／M51** 三种射程塌法（目录里没有 wheel／权威行不再是 64 hex／`ci.yml` 里读不到任何引用）各 `RC=2`；收尾 restore 后 `RC=0`。**四判据各有专属腿，三种射程塌各有专属腿。**
+- **单测**：新判据 24 腿＋两份近邻（`test_mqtt_compose_env.py`、`test_ci_interpreter_gate.py`）合跑 **`50 passed`**，`RC=0`；同一份 24 腿在副本树上 **`24 passed`**（那条树的"真仓绿腿"读的是副本树 ⇒ 顺带自证副本树内容忠实）。
+- **门禁三遍**（a／b 都跑在代码＋README 落完之后；c 跑在本文件与架构文档两处记账改完之后）：各 **8670 B**、整份 md5 **逐字节相同** `770bad825770e5faf08525dcbfb9ef58`（c 与 a 的 `diff` 为空 ⇒ 本批两份 docs 记账没移动门禁一个字节）、`GATES_RC=1`（两枚红＝登录线在途 `af_api.py:984`／`:1005`）。与上一批本体（8210 B／`da90f821…`）对撞，差值逐条解释得开：整份 +460 B 全部由新节三行（标题＋`✓` 行＋空行）贡献；**剥掉那三行后正好回到 8210 B**（尺寸分毫不差），md5 仍不同是因为剩下**两行等长数字**换了——`undefined-name` 扫描 213→**214** 个文件（多的那一枚就是本批新脚本），覆盖门自认新脚本（`check_*.py` 20→**21** 个、`gates.sh` 覆盖 19→**20** 个、echo 文案 68→**71** 行，**无需新豁免**）。AST 面与上一批**逐行同读**：`新增/未获批 2 条（error 0 / warn 2）`、`计数：except-pass-broad=19 | fake-ok-const=78`、`全量违规 97 条 / 登记上限 97 条`；`.gates-tally.txt`／`.gates-baseline.txt` **一字未动**。新门在 HEAD 上的绿读数原样进了门禁输出：`✓ 随附 wheel 门禁干净（docker/homesdk/ 单枚 homesdk-0.3.2-py3-none-any.whl；4 个引用面全部同名；实算 sha256 19bc83a6… 与 tests/unit/test_mqtt_compose_env.py 里的权威登记一致；docker/homesdk/README.md 在册、两处真源都指得到、未复制摘要）`。
+- **一趟弯路（记下来免得下次再撞）**：第一次想用 `-I` 隔离解释器复现"没装 homesdk"，`-I` **不含 `-S`**、`site-packages` 仍在路径上 ⇒ 打印回来的是 `IMPORT OK`，那条读数当场作废并写明"不能用"；改 `-I -S` 才拿到 `ModuleNotFoundError: No module named 'homesdk'`（顺带打印 `homesdk 可见? False` 自证隔离真生效）。**没有为这一步卸载本机任何东西**——本机那份是库仓的可编辑安装，卸载不是可逆动作。
+
+### 五、递 DCD 的那半边（仍然攒批，不今天单投第二件）
+
+只剩「3.11／3.14 两侧真跑验证」这一格，且它与 ARCH-03 口径三问的第 2 问同题（要不要一条必跑的真仿真作业、解释器向谁对齐）⇒ 与 #99 那批待裁项**同批递**。devpi／制品库**不重递**（`decisions/20261007-MA五件与AF一件-裁定.md` §六 Q1 已裁 A 并驳回 B／C）。上一条 20261010 发布面那份件（ARCH-02）今天刚投，同一天投两份 AF 件会把裁决排到队尾。
+
+### 六、任务位与残余
+
+- ARCH-04 **收口**：机械半边（新门四判据＋24 腿＋十二案变异＋接线）落码，文档面（来源／可再生性／装法／两种失败形状／更换流程）答完；残余一格（两侧真跑）归 ARCH-03 那批待裁。等裁期间不动 `Dockerfile.api`／`Dockerfile.test`／`ci.yml` 的 wheel 引用，不动 `pyproject.toml:61` 的下限。
+- #98 还剩：ARCH-05（信任边界：写面／live 面 fail-closed，报告说边界外有两个可绕过入口、公开读面全押在"可信 LAN"这条网络前提上）、ARCH-06（进程模型）、ARCH-07（可观测性）、ARCH-08（仓库卫生；README 剩 2 处死链在那一格）、ARCH-09（名单手抄）、ARCH-10／11（原文未读）逐条复测。
+- ARCH-02 发布面四问等裁；ARCH-03 口径三问＋ARCH-04 的两侧真跑待攒批。
+- 存证（`E:\tmp\`，不进仓）：`arch04_mutation.result.txt`（十二案＋收尾，13 段带 `RC=`／`findings=`／`letters=`）／`arch04_mutate.sh`（副本树驱动，含逐案 restore）／`arch04_tree`（副本树）／`arch04_gates_a.txt`＋`arch04_gates_b.txt`＋`arch04_gates_c.txt`（各 8670 B，三份 md5 相同；c 跑在两份 docs 记账之后）／`_prev_body.txt`＋`_now_body_minus_section.txt`（本体对撞用，各 8210 B、只差两行等长数字）。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `d5a222b`、本批落码后提交态见下一行提交；本批六份文件：`scripts/check_vendored_wheel.py` 新建 209 行／`tests/unit/test_vendored_wheel_gate.py` 新建 333 行 24 腿／`docker/homesdk/README.md` 新建 90 行／`gates.sh` 22 增 0 删／两份 docs 记账。**没有换过任何一枚 wheel、没有动过任何一处引用面的文件名、没有动过权威摘要**；落的是"四个引用面必须同读一枚＋指路文档不许复制第二份摘要"的 rot 防线。报告三句"缺什么"里两句按现读已由裁定 20261007 §六 Q1 接住（校验和清单、源码与构建说明），第三句（本地装法与报错）按实测答在文档里；"改私有 devpi"与裁定相反不重递；"两侧真跑"与 ARCH-03 第 2 问同题攒批。**对报告建议的一处偏差已显式登记并请追认**（README 不钉 SHA256，改成指路＋判据 D 禁止复制）。变异 M0／M99 绿、M42／M43／M44／M45／M46／M47／M48 各杀一条、M49／M50／M51 各落 `exit 2`；相关判据合跑 50 passed；门禁三遍逐字节相同（8670 B／`770bad82…`；a／b 在代码＋README 落完、c 在两份 docs 记账改完且与 a 的 `diff` 为空），与上一批的 460 B 差值与两行数字变动逐条对上；AST 面同读、两枚红仍是登录线在途，tally／baseline 未动；未推 GitHub——推要 owner 点头

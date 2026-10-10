@@ -236,6 +236,19 @@ echo "══ CI 解释器口径门（ci.yml 手抄钉值一致 / 满足包声明
 interp_rc=$?
 
 echo
+echo "══ 随附 wheel 门禁（盘上单枚 / 四个引用面同名 / 字节等于权威登记 / 指路文档不复制摘要）══"
+# 第六轮审计 ARCH-04 复测（§二之九十八）：`docker/homesdk/` 那枚私有 wheel 随仓提交，报告的"缺校验和
+# 清单／缺来源说明"两格已被裁定 20261007 §六 Q1 裁 A 接住（仓内随附＋文件名钉死＋权威 sha，字节真值在
+# `tests/unit/test_mqtt_compose_env.py` 的常量与库侧 `dist/VERSIONS.txt`）。复测挖出的是另一条缝：那条
+# 字节判据的 wheel 路径**只从 `Dockerfile.api` 的 COPY 行取**，于是 `ci.yml` 的三条 `pip install`、
+# `Dockerfile.test` 的 COPY、compose 的注释提及都不在对账范围——把 CI 那一面指到目录里另一枚旧 wheel，
+# 测试算的仍是交付面那一枚 ⇒ CI 装的与镜像装的脱钩而 CI 照绿。与刚收的 ARCH-03 同族：手抄的引用面各报
+# 各的绿。换 wheel 走不走 DCD 不由本门拍板（它只判"当前这枚是不是那枚"），来源与构建流程写在
+# `docker/homesdk/README.md`；那份文档**不许钉第三份 64 位摘要**——副本会过期，只指路。
+"$PYTHON" "$REPO/scripts/check_vendored_wheel.py" "$REPO"
+wheel_rc=$?
+
+echo
 echo "══ 有界缓存注册表门禁（TTL 与硬上限成对、回收要有测试钉住、只写不读判死）════"
 # 第六轮审计 §三 把"新增有界缓存必须同时给 TTL 与硬上限，并在测试里断言纯写不读也被回收"记成
 # "约定 + 门禁可见"，但约定的两半里当时没有任何能判红的东西（只活在审计正文里）。裁定 20261004 §一 3
@@ -388,6 +401,15 @@ fi
 if [ $interp_rc -ne 0 ]; then
   echo "结论：CI 解释器口径门红（exit=$interp_rc）。三条各自可红：① 手抄不一致——ci.yml 各 Python 作业的 \`python-version:\` 钉值必须彼此相等（现仓四枚手抄），改一处忘三处时另外三个作业继续跑旧口径、每个作业各报各的绿；② 包声明不允许——钉值必须落在 \`requires-python\` 的允许区间内，把下限抬到 3.12／3.14 而钉值不动，CI 就是在一条包声明已不承认的环境上验交付；③ 漂移无人认领——钉值与镜像 base 不一致时必须在 \`INTERPRETER_DRIFT\` 里挂一格，理由要同时点到一个**本体带钉值**的作业和一个盘上真实存在的路径（\`路径:行号\` 的那一行也要真在），已经对齐了还挂着＝豁免过期，同样红。对齐成哪一个口径不由本门拍板：那是交付／验证口径，走裁定（第六轮审计 ARCH-03）。"
   exit $interp_rc
+fi
+
+if [ $wheel_rc -eq 2 ]; then
+  echo "结论：随附 wheel 门禁读不出射程（exit=$wheel_rc）。六种形状：\`docker/homesdk/\` 不在盘上、目录里一枚 \`.whl\` 都没有（没有真身可对账）、\`tests/unit/test_mqtt_compose_env.py\` 读不到或那行 \`AUTHORITATIVE_WHEEL_SHA256\` 不再是 64 位十六进制、\`ci.yml\`／\`Dockerfile.api\`／\`Dockerfile.test\` 任一必读引用面不在盘上，或其中读不到任何 \`homesdk-*-py3-none-any.whl\` 引用（安装面换了形状，本门没有口径来源）。都是射程塌了，此刻本门无从判定，报『干净』就是假绿——wheel 若真被搬走、或改成从制品库拉取，要**当场决定本门去留**并同步改口径，不能让它沉默全绿。"
+  exit $wheel_rc
+fi
+if [ $wheel_rc -ne 0 ]; then
+  echo "结论：随附 wheel 门禁红（exit=$wheel_rc）。四条各自可红：① A 目录多枚——\`docker/homesdk/\` 只许留一枚，多一枚就是「CI 挑那一枚、镜像挑这一枚」的物理前提，而两条链各自报绿；② B 引用面不同名——\`ci.yml\` 的三条 \`pip install\`、两份 Dockerfile 的 \`COPY\`＋\`pip install\`、compose 注释里出现的文件名必须全等于盘上那一枚；真源从盘上现取，门里没有第二份名单可抄；③ C 字节不符——盘上那枚的实算 sha256 要等于 \`tests/unit/test_mqtt_compose_env.py\` 里登记的权威值，同名不同字节就是「写着 0.3.x」与「跑的真是那一枚」脱钩，而改那一行只有一条路：新的 DCD 裁定；④ D 指路文档——\`docker/homesdk/README.md\` 要在册、要指得到两处真源，里面不许钉第三份 64 位摘要（会过期的副本），也不许提到目录里不存在的 wheel 名。"
+  exit $wheel_rc
 fi
 
 if [ $cache_rc -eq 2 ]; then
