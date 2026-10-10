@@ -9152,3 +9152,58 @@ F-11 的定性要反过来读：报告说"三段链**根本没实现**"，现读
 - 第 3 条（`sys.executable -m` 起子进程／`stop_watch` 写停止信号／锁删除失败显式留痕）⇒ 与今日件 **Q7** 同族，拆开做只会出现"信号钩子归谁"悬空，**等裁后一并落**。
 
 ⛔ 三条都**未复测**（本批是提取＋归属，不是修）；三份 HTML 的归档判定不变，仍全部留在 `docs/audit/` 原地。今日那份件本批**未再补问**（同日已三次补入 Q11／Q12／Q13，不往里塞跨仓改动面）。
+
+## 二之一百零九、把「用户视角 UI → NAS」这一格从"靠记忆手敲"变成"一条只读命令"：新脚本 `scripts/verify_ui_nas_deploy.py`（八条腿＋默认拒绝写动作）＋ 22 条注入式判据腿；发布面裁定 §3 Q1 三件套按窗口约束**零落码**
+
+口径订正（写在最前面，因为这是我上一轮说错的那句）：我说过"这一段在这台机器上不能实跑"。**错了**。真实情况是"未获点头不动共享部署面"，不是"跑不了"——SSH 只读通道在这台开发机上一直是通的（现读 `ssh nas hostname` ⇒ `Fn7T`，`SSH_RC=0`，退出码实测在 `ssh` 这一条上，不是管道尾部的 `head`）。`E:\NAS\开发规范.md` §4 方式 B 早就把路径写死了：本地写、本地提交、**手动触发** SSH 部署。
+
+### 一、本批落码（两枚新文件，都不动在途面）
+
+1. **`scripts/verify_ui_nas_deploy.py`（348 行，CR=0，纯标准库）**：八条腿各自单独可红——L1 通道、L2 `docker ps` 端口绑（规范 §6.1）、L3 NAS 那份 compose 的 `restart:`／`healthcheck`（§2-7 崩溃循环形状）、L4 资源名对撞（仓 `dist/index.html` ↔ 服务端 index，**状态码不参与判定**）、L5 md5 三方（仓 ↔ NAS 宿主机逐文件实算）、L6 部署树 HEAD＋未提交数、L7 compose／`.env` 在册、L8 镜像身份（`autoforge-api:<sha7>` 与 `/api/health` 的 `build`）。
+   - **默认拒绝写**：远程命令逐条过 `WRITE_MARKERS`（`rm`／`>`／`docker compose`／`docker exec`／`restart`／`git push`／`pip install`… 命中即抛 `ReadOnlyViolation`）；build／`--force-recreate` 只**打印**成建议命令，⛔ 不代跑——容器 churn 是规范 §0 坐实的整机冻结触发路径。
+   - **不抄第四份 `mimo`**：URL 前缀从 NAS 那份 compose 的 `--ui-user-dir` 现取（`ui_prefix_from_compose()`），读不出就判 `BLOCK`。这是躲 ARCH-09 点名的"同一字面量散几处、靠测试对账代替单一真源"——加一格手抄就是给自己添第四个要对账的地方。
+   - **不进 `gates.sh`**：这条口径要写明——它要 SSH 到家里那台机器，CI 里没有 NAS，接进去就是一枚永远红的门（判例"测不出收益的闸与永远不红的闸等价"的反向：永远跑不起来的闸＝假绿）。
+2. **`tests/unit/test_verify_ui_nas_deploy.py`（291 行／22 条，全离线注入）**：每条腿正反两向（注入不一致必红＋全绿夹具必绿）、`BLOCK` 与 `OK` 不许互换（通道塌／本地 dist 不在／compose 读不出／服务端读不出 一律 `BLOCK` ⇒ 收尾 `exit 2`）、镜像身份那格**只许 NA 或 OK**（`build=null` 时即便 tag 对上也不升 `OK`）、反空集腿＝断言"确实发出了 ≥8 条远程命令"（否则"全过白名单"是空集给的绿）、白名单九种写命令逐个抛、建议命令段钉住 `-f docker-compose.api.yml`／`--env-file .env`／`--force-recreate`／`merge --ff-only` 四个形状。
+   - 判据取**注入式双向腿**而不是 E 盘副本树文本变异：本脚本的假绿风险全在"读不到却判通过"这一类，注入夹具直接命中；改文本命中不到它。这一点算偏差，写在下面的"未做与归属"里。
+
+### 二、现场读数（命令原文＋现读，2026-10-11）
+
+```
+$ PYTHONPATH=E:/NAS/AutoForge/src Python313/python.exe scripts/verify_ui_nas_deploy.py --target nas
+RC=1
+  [OK   ] L1 通道：远端 hostname=Fn7T（rc=0）
+  [BAD  ] L2 端口绑：… autoforge-api→0.0.0.0:8787->8787/tcp, [::]:8787->8787/tcp、autoforge-api-test→0.0.0.0:8788->8787/tcp
+  [BAD  ] L3 重启策略：restart=unless-stopped × 1 处且 healthcheck 0 处——规范 §2-7 的崩溃循环形状
+  [OK   ] L4 资源名：服务端与仓 dist 资源名逐条相同（3 枚）
+  [OK   ] L5 md5 三方：3 枚资源 仓↔NAS 逐字节相同
+  [NA   ] L6 部署树 HEAD：NAS 工作副本 HEAD=68c30ae 未提交=10（本机 HEAD=908a48d…）
+  [OK   ] L7 命令形状：compose 与 .env 都在 NAS 侧原处
+  [NA   ] L8 镜像身份：tags=['autoforge-api:latest', …4 枚备份 tag…]、/api/health 的 build=null
+结论：2 处不一致或违例（绿 4／NA 2）
+```
+存证 `E:\tmp\nas_ui_verify_final2.txt`（1351 B，不进仓）。
+
+- **这一跑读出一格以前只能靠人回忆的东西**：`git merge-base --is-ancestor 68c30ae HEAD` ⇒ `RC=0`，本机 HEAD `908a48d`。⇒ **NAS 工作副本的源码面上界＝`68c30ae`（2026-10-08）**，而那棵 UI `dist` 与仓 dist **逐字节相同**——"UI 是新的、镜像里的 `src` 是旧的"这种分裂从此一条命令读得出（镜像烤的是 `src`，卷里挂的是 `dist`）。这一格正是 #81 那张账的现读形状，裁定 §7「未核：NAS 侧 compose 实际部署副本」由 L3／L7 两条腿补上了半边。
+- `pytest tests/unit/test_verify_ui_nas_deploy.py -q` ⇒ **`22 passed in 1.38s`**（首跑 20 条里 1 条红，红因是夹具自身：`_dist(drop=...)` 先前只"不创建"不"删除"，`_all_green()` 又把那枚文件写回去了——这是腿的缺陷不是脚本的缺陷，改成 `unlink(missing_ok=True)` 后 22 条全绿）。
+- **门禁**：`GATES_PYTHON=…Python313 bash gates.sh` ⇒ **`GATES_RC=1`**，**两遍逐字节相同**（建完两枚新文件跑一遍、prefix 现取改动完再跑一遍：各 **9792 B**、md5 **`8f3f201195452803047d1ce22173d8b6`**、`diff` 空）。唯一红源仍是登录线在途的两枚 `fake-ok-const` WARN（`af_api.py:984` `api_auth_has_admin`／`:1005` `api_auth_register`），计数棘轮 `全量违规 97 条 / 登记上限 97 条`、`except-pass-broad=19 | fake-ok-const=78`、`新增/未获批 2 条（error 0 / warn 2）`——**本批没动 `af_api.py`**，`.gates-tally.txt`／`.gates-baseline.txt` 一字未动，⛔ 未动用任何豁免。覆盖门现读 `盘上 check_*.py 24 个、gates.sh 覆盖 23 个、工作流覆盖 1 个`（本批新增的是 `verify_*.py` 与一条 `tests/unit` 判据腿，不进 `check_*` 名单，所以这两遍门禁本体分毫不差）。
+
+### 三、仓外两格（owner 点头"其余按你建议执行"之后落的）
+
+- **`C:\Users\lidicn\.ssh\config`（新建）**：`Host nas`／`Host nas-tail` 两段，只写主机名／用户／`IdentityFile` 路径／心跳，**不含任何口令或私钥内容**（规范 §8.3 模板；§8.6 那条"私钥绝不入库／外发"照守）。落完实测 `ssh -o BatchMode=yes nas hostname` ⇒ `SSH_RC=0`、`Fn7T`。
+- **`E:\NAS\开发规范.md` §5 项目表补 AutoForge 一行**（该文件 CR=0，编辑前后行尾不变）：NAS 路径／容器名／验证命令，并就地写 ⚠️ 现读两格违例（`8787` 仍绑 `0.0.0.0`、`restart: unless-stopped` 且无 `healthcheck`）——登记时不粉饰成"已合规"。
+- **一条自我登记的工具副作用**：往裁定书 `## 执行回填` 区落短回执那一次编辑，把该文件里**一枚游离 CR** 顺带抹平了（`tr -dc '\r' < 该文件 | wc -c` 改前 **1** → 改后 **0**，行数 104→117 全是本次追加的正文，文字内容无一处改动）。不是我有意改行尾，但字节确实动了 1，按纪律写在账上。
+
+### 四、`decisions/20261011-AF发布面与镜像可追溯-裁定.md` 的处置
+
+- **§3 Q1 甲三件套（`Dockerfile.api` 的 `ARG GIT_SHA`＋`LABEL`、`/api/health` 增只读 `build`、compose 改 `autoforge-api:<sha7>`）零落码**：裁定 §3 窗口约束明写落点 `docker/Dockerfile.api`・两份 compose・`af_service.py` 与并发登录线同窗 ⇒ 排在窗口之后，窗口内 AF 只交复测证据（上面 L2／L3／L8 那三格就是复测证据）。**#81 继续挂着。**
+- **§3 Q2（`build` 不进 ADM 契约表）**：现读 `/api/health` 无 `build` 键（`build=null`），本脚本因此**不**读它作为判据、只报 NA ⇒ 无契约表动作。裁定那句"何时升级＝出现真消费者（如 NAS 侧部署脚本要按 sha 对账）"——本脚本就是候选消费者，但它现在按 md5 对账，不动契约语义。
+- **§3 Q3（tag 由 owner 手工打，AF 只出建议清单）**：本批不发版 ⇒ 无清单可出。现读 NAS 侧 `docker images` 有五枚 `autoforge-api:*` tag（`latest` ＋ `pre-f13-backup`／`pre-f11-backup`／`pre-group-backup`／`nonroot`），全部不是发布 tag；仓侧 `git tag` 仍只有 `pre-g2-dod`（裁定 §2.1 同读）。
+- **§3 Q4（不建独立 CHANGELOG）**：无动作，⛔ 未新增第二份会过期的计数副本。
+- **偏差登记一条**：裁定 §〇-1 的现读行数（`af_api.py` 1242／`af_mqtt_bridge.py` 939／`af_linkage_feed.py` 244）与我这台机器两种口径都不同——`wc -l` 现读工作区 **1450／1085／290**，`git show HEAD:<f> | wc -l` **1442／1085／290**（基准 HEAD `908a48d`）。我不按"裁定说的为准"沉默接受，也不自证对方错：**留到回执里带命令对撞**（13问那件的回回执同样欠，两件的回执一起交时逐格摆）。
+
+### 五、未做与归属（本批明确不做）
+
+- **compose 三处（端口前缀／`restart:` 退避／补 `healthcheck`）**＝登录线在途文件 `docker/*` ⇒ **#79 窗内**；且裁定 §3 Q7.1 已把 supervisor 归属钉在"部署面（compose `restart:` 策略）"，仓内 ⛔ 不自建第二套。窗口一开这三格与 L2／L3 两条腿一起收，L2 转绿即验收读数。
+- **回执**：发布面裁定已在原裁定书 `## 执行回填` 区落短回执（Q1 未落码＋窗口三件套）；13问裁定的回执**欠**，与上面的行数对撞一并交。
+- **变异自证取形偏差**：本批用注入式双向判据腿替代 E 盘副本树文本变异（理由见 §一 第 2 条）；若下一批把这类"读远端"的脚本正式纳入门禁装配，需要按 `preflight.sh` 那条线补一次真机跑动的读数。
+- 任务位：#111（本批脚本＋判据腿）已完；#112（仓外两格）已完；#81 保持 pending 并注明"现读上界＝NAS 工作副本 HEAD `68c30ae`"。
