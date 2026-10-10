@@ -8,10 +8,11 @@
 - **condition（`expr`）L1 结构等价**：经 `condition_norm.normalize_condition` 归一化（CNF）后相等
   ——允许布尔等价变形，如 `(A and B) or C ≡ (A or C) and (B or C)`。
 
-P1 范围约束（见裁定 §三.3）：NL→IR 自由文本解析属 **P2**（`build_ir_from_nl` 未实现）。
-P1 的 `IR→NL→IR` 由**确定性 NL 渲染**（`af_nl.render_automation`：同图必得同文 + 全节点覆盖）
-承担 IR→NL 半程，用**结构化投影回写**（本模块 `project_automation`）承担 NL→IR 半程，
-再按上述分层规则比较。交付物 = 校验器 + 归一化 + 30 样本全绿，不含自由文本解析器。
+P1 范围约束（见裁定 §三.3）：P1 的比较面**不含自由文本解析器**——`IR→NL→IR` 由**确定性 NL 渲染**
+（`af_nl.render_automation`：同图必得同文 + 全节点覆盖）承担 IR→NL 半程，用**结构化投影回写**
+（本模块 `project_automation`）承担 NL→IR 半程，再按上述分层规则比较。交付物 = 校验器 + 归一化 +
+30 样本全绿。自由文本解析属 **P2**，已在 `af_nl_build.build_ir_from_nl` 落地（受限文法、零 LLM，
+超文法即 `ValueError`；判据 `tests/f14/test_nl_build.py`）——P1 用投影、P2 用解析器，两条半程**互不替换**。
 """
 from __future__ import annotations
 

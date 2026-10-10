@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from autoforge import af_fidelity
 from autoforge.af_fidelity import verify_roundtrip
 from autoforge.af_ir import Automation, load_automation
 from autoforge.af_nl import render_automation
@@ -146,3 +147,15 @@ def test_property_build_output_passes_verify_roundtrip(text):
 def test_unsupported_raises_valueerror(text):
     with pytest.raises(ValueError):
         build_ir_from_nl(text)
+
+
+# ── 散文半边：写在源码里的能力声明不许比代码旧 ────────────────────
+def test_p1_scope_note_does_not_claim_the_p2_parser_is_missing():
+    """`af_fidelity` 的模块 docstring 是给读者看的"能力地图"，它长期写着 P2 `build_ir_from_nl`
+    未实现，而解析器其实早已在树里（本文件就是在测它）。这类声明不会随代码自己更新，所以钉一条：
+    docstring 里凡点到这个名字的行都不许带「未实现」，且**必须至少有一行点到它**——否则这条腿
+    会因为"空集给的干净"而静默失效。"""
+    lines = [ln for ln in (af_fidelity.__doc__ or "").splitlines() if "build_ir_from_nl" in ln]
+    assert lines, "af_fidelity 的 P1 范围约束段应当点到 P2 解析器的名字"
+    assert all("未实现" not in ln for ln in lines)
+    assert callable(build_ir_from_nl)
