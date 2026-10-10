@@ -26,6 +26,7 @@ from .af_ir import (
     GROUP_IR_VERSION,
     GROUP_MODES,
     GROUP_MODE_SEQUENCE,
+    IR_VERSION,
     check_expr_depth,
     check_param_depth,
 )
@@ -35,7 +36,8 @@ from enum import Enum
 from typing import Any, Callable, Iterable, Mapping, Optional, Protocol, Sequence
 
 PROTOCOL_VERSION = "af-compose/1"
-IR_VERSION = "0.2.1"
+# IR_VERSION 的真源在 af_ir/models.py；本模块属性名不能消失——af_closedloop/runtime.load_module()
+# 的调用方直接读 `mod.IR_VERSION`，靠上面那条 import 把同一个对象挂进来。
 DEFAULT_TIMEOUT = "60s"
 
 

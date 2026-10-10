@@ -8597,3 +8597,53 @@ M31 与 M33 各杀 4 条但方向不同：前者证明这条判据真的在按�
 - 存证（`E:\tmp\`，不进仓）：`arch01_pre.txt`（15751 B，第 66／99／100 行是上文引的三处原文）／`arch01_post_full.txt`（15588 B）／`arch01_post_base.txt`（795 B）／`_base_head.txt`（5488 B，HEAD 那份对照读）／`gates_arch01_a.txt`＋`gates_arch01_b.txt`（各 7824 B＝本体，末尾无 RC 标签）＋`gates_arch01_c.txt`／`gates_arch01_d.txt`／`gates_arch01_e.txt`／`gates_arch01_f.txt`（各 7835 B＝同一本体＋`GATES_RC=1`；c／d 在两份文档初稿后、e／f 在末轮措辞后复跑；六遍本体 md5 `89a4b43f53f8f07120ac97a4ea39d284`）／`run_gates_arch01_cd.sh`（两遍驱动）／`mutation_arch01.result.txt`（1996 B）／`unit_arch01.txt`（整树跑批）。变异驱动已挪出仓根，存为 `E:\tmp\mutate_arch01.py`，仓内不留未跟踪件。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `025616d`、本批落码后现读 `cee6a3a`（本批五份文件：`af_service.py` 一处站点＋`.gates-baseline.txt` 按门禁自报过期删 1 条（86 行／83 条 ⇒ 85 行／82 条）＋`check_gates_coverage.py` 判据 ⑦ 与三条射程下限＋判据两份 44 条腿（新 13 条）；八案变异副本树量：M0／M99b 全绿、六案被杀；AST 全量 98→97、error 1→0、except-pass-broad 20→19 ⇒ HEAD 上那条"98 > 上限 97"的棘轮红转绿，**`.gates-tally.txt` 未动一个数字**；门禁六遍（a／b 落码后、c／d 两份文档初稿后、e／f 末轮措辞后）本体逐字节相同 7824 字节／md5 `89a4b43f53f8f07120ac97a4ea39d284`，`GATES_RC=1` 的两枚红仍是登录线在途的 `af_api.py:984/:1005`，棘轮站现读 `全量违规 97 条 / 登记上限 97 条`；整树 `6 failed, 3028 passed, 43 skipped`，六条全部同名同因归登录线；未推 GitHub——推要 owner 点头）
+
+---
+
+## 二之九十六、收第六轮审计 ARCH-02（"版本没有单一真源"）：报告三处读数过期按现读钉回；它的建议 1 与 DCD 20261001·G 正面相撞 ⇒ 不照办；机械那两格（版本号手抄／README 鲜度与死链）AF 自决落码；发布面四问递 DCD
+
+### 一、复测：报告点名的格子逐格对撞
+
+| 报告断言 | 现读（命令原文见 §五 申请件证据表） | 定性 |
+|---|---|---|
+| 五枚版本号没有一处同源：`pyproject.toml` `0.1.0`／`__init__.py:7`／`af_service.py:127 API_VERSION`／README `v2.4`／`IR_VERSION` 两处各写一遍 | `pyproject.toml:7 version = "0.1.0"`、`src/autoforge/__init__.py:7 __version__ = "0.1.0"`；`af_service.py:127` 实为 `CONTRACT_VERSION = "1.0"`，`API_VERSION = "0.1.0"` 在 **:128**（报告 off-by-one）；`README.md` §1.1 原写「**当前版本**：`v2.4`」；`IR_VERSION` 确在两处（`af_ir/models.py:58` ＋ `af_orchestrator.py:38`，均 `0.2.1`） | **成立**（行号一格要订正）。报告还漏数第三处：`af_ir/models.py:67 GROUP_IR_VERSION = "0.3.0"`——它与 `:62 SUPPORTED_IR_VERSIONS` 同文件，属真源自身，不算手抄 |
+| `git tag` 无 | `git tag` ⇒ **1 枚** `pre-g2-dod` | **过期**（报告自己的表格里写了"仅 pre-g2-dod"，标题却写"无 tag"） |
+| `.github/workflows/ci.yml` 只有四个作业 | `grep -n "^  [a-z-]*:"` ⇒ **6 条**：`test`／`contracts`／`gates`／`architecture`／`ui`／`ui-user-mimo` | **过期**（作业数）；但「**没有 release / publish / 镜像构建作业**」这半句成立 |
+| 无 CHANGELOG | `ls CHANGELOG*` ⇒ 无匹配 | 成立 |
+| `scripts/rollback.sh` 是人工脚本而非发布链一环 | 文件在册 | 成立 |
+| `PRESENCE_CAPS_VERSION = "2.6"` 说明"对端按版本判能力"的需求真实 | `af_mqtt_bridge.py:132` 定义、使用点 `:604` | 成立——但这一格是**跨仓能力协商常量**，归契约表与 0.3.3 库面（任务 #80），不属"AF 自己升版本号"的射程 |
+
+### 二、建议 1 不照办：把版本号"收敛到 `API_VERSION` 一处"与裁定 G 相撞
+
+报告建议原文是「把版本收敛到 `af_service.API_VERSION` 一处、其余从它导入」。**这一句与 `decisions/20261001-DB目标模式与AF三题-裁定.md` §G 正面相反**：那一节裁的是「**A + C。包/API 版本保持 `0.1.0`；对外/文档统一用 `v2.x` 里程碑版本；加映射表**」，并写明「发版纪律：里程碑推进用 commit message 标签表达；`pyproject` 与 `API_VERSION` **保持 `0.1.0` 不动**」，且 §〇 那张映射表（`docs/plan/版本开发计划.md` §〇）早已按裁定交付。⇒ 本批**一枚版本号的取值都没改**：`0.1.0` 与 `v2.x` 不是"缺真源"，是**两套并行且都正确的口径**。这一格按纪律不记成"AF 判它按设计"——指得到 `decisions/` 里的文件，就引文件。
+报告建议的**第二句**「给 `IR_VERSION` 同样处理」与裁定无关（IR 版本是仓内编译格式，不是对外的版本脸）⇒ 落 AF 职权内。
+
+### 三、AF 自决落码的四格
+
+1. **手抄收敛**：`af_orchestrator.py` 的 `.af_ir` import 名单加 `IR_VERSION`，删掉原来那条重复字面量（原 `:38`）。模块属性**没消失**——`af_closedloop/runtime.py:18 load_module()` 的调用方 `af_closedloop/loop.py:233` 是直接读 `mod.IR_VERSION` 的，这一点写在改动处。
+2. **两条判据**（`tests/test_af_ir_version.py`，本批 +2 条腿）：一条 AST 扫整棵 `src/autoforge`「把 IR 版本号重新写成字面量」——用 `ast.walk` 而不是按 `tree.body` 扫，免得掉进"嵌套作用域静默零"那个坑，只放行真源 `af_ir/models.py`；一条断言 `af_orchestrator.IR_VERSION == af_ir.IR_VERSION`——防"我把 import 删干净、扫描器照样全绿"。
+3. **README 鲜度**（裁定 G 的 C 段明文允许不等裁定先行）：§1.1 由「当前版本 `v2.4`」改成**双轨说明**（`0.1.0`＝机器契约 ↔ `v2.x`＝里程碑，指向版本计划 §〇）＋当前里程碑更新为 `v2.5`（与 `docs/roadmap/版本路线图.md` §二「✅ 本地交付（NAS 部署走变更窗口）」现读一致）；里程碑表补 `v2.5` 一行。
+4. **删掉一份会过期的副本，而不是再钉一份**：README 原第 33 行钉着「回归基线 **1300 passed / 51 skipped / 7 subtests**（本机 Windows 全绿，2026-09-30 核实）」，而整树现读是 `3028 passed / 43 skipped`——差一倍多却没人回来订。这一行改成"README 不钉死计数，读数记在执行记录、门禁读数由 `gates.sh` 给出"。**同族问题顺手清了一遍可达性**：把 README 里全部仓内 `.md` 提及对撞 `git ls-files`，**13 处 `](…)` 死链**（文档早重排进 `reference/`／`architecture/`／`archive/`／`handoff/`，README 没跟着改），本轮按现读重钉 24 处字符串出现（链接文本与目标各算一处），**剩 2 处不猜目标**：`:244 docs/roadmap/ADM-路线图-AF.md`（同名文件不在盘上，两个候选都读得到——`docs/roadmap/ADM-路线图_v2.0投产.md` 与 `docs/reference/ADM-路线图模板.md`，选哪个属文档内容判断）；`:245 docs/交接卡_模板.md`（全仓读不到，交接卡实名是 `docs/handoff/handoff_v*.md`，模板那一枚确实没了）。
+
+### 四、读数
+
+- **变异**（副本树驱动 `E:\tmp\mut_arch02.py`，结果 `mutation_arch02.result.txt`；三案）：M0 空注入 `RC=0 / 6 passed`；M40 把 `IR_VERSION = "0.2.1"` 抄回 orchestrator ⇒ `RC=1 / 1 failed`，杀它的是 `test_ir_version_literal_written_only_once`；M41 摘掉那条 import ⇒ `RC=1 / 1 failed`，杀它的是 `test_orchestrator_exposes_the_canonical_ir_version`。两案方向不同：前者钉"真源只许写一遍"，后者钉"不许把消费方的入口删没了还全绿"。
+- **单测**：落码后先跑三份（`test_af_ir_version.py`＋`test_af_ir_group_apply.py`＋`test/unit/test_orchestrator.py`）`RC=0 / 35 passed`；再扩到五份（加 `test_af_ir_group_mode.py`／`test_af_spec.py`，`arch02_unit.txt`）`RC=0 / 71 passed`。
+- **门禁两遍**（`gates_arch02_a.txt`＝代码＋README §1.1 改完，`gates_arch02_b.txt`＝死链重钉改完）：与上一批的 `gates_arch01_c.txt` **三份逐字节相同**——`diff` 空、三枚 md5 全为 `3e32e25d7c38a24b496d2faf38e0aab8`（含驱动写的 `GATES_RC=1` 标签行，整份 7835 字节）。**口径要说清免得被当成与 §二之九十五 打架**：那一节记的 `89a4b43f…` 是同一本体**削掉末行**后的 md5（7824 字节），两者量的不是同一个字符串集合。⇒ 本批的改动没有移动门禁一个字节；那两枚红仍是登录线在途的 `af_api.py:984`／`:1005`（`error 0 / warn 2`），棘轮站现读 `全量违规 97 条 / 登记上限 97 条`，覆盖门现读「基线 82 条里没有一条落在关键模块名单（11 格）的硬错误规则上」。
+
+### 五、递 DCD 的那半边：发布面（tag／CHANGELOG／镜像可追溯／流水线）
+
+- 件：`E:\NAS\关键决策部\inbox\20261010-AF-发布面与镜像可追溯-决策申请.md`。四问：Q1 追溯载体档位（甲＝最小可追溯三件套：`Dockerfile.api` 接 `ARG GIT_SHA`＋`LABEL`、`/api/health` 增只读 `build` 字段（读不到＝`unknown`，不假绿）、部署镜像 tag 与 git tag 对齐不再 `:latest`／乙＝只补仓侧（打 tag＋CHANGELOG）／丙＝完整 release 流水线／**丁＝维持现状**）；Q2 `build` 字段进不进 ADM 契约表；Q3 tag 谁打（owner 手工 vs 放行 AF 打完 push）；Q4 CHANGELOG 要不要、什么形态。
+- 递件前的查重读数（`find-decision.ps1`）：「发版」命中 9 份，最近的是 `decisions/20260928-AutoFlow-10议题裁定.md:37`（重大发版走 DCD 背书、patch 不强制——另一仓先例，不是 AF 的裁定）；「CHANGELOG」只命中 homesdk／MA 两处旁证；「追溯」命中 `decisions/20261006-DPP-1.16.0发版三件套顺序与授权-裁定.md:53`（同部门判例：`main` 必须与 tag 同 commit，否则"最新 tag 在 1.16.0、main 在别处"的漂移继续长）。**AF 自己的发布面此前没有裁定** ⇒ 本件不是重递；编号那半边已裁的部分明确写在件里"不重递"。
+- 硬门自查：`validate-application.ps1` ⇒ 六道全 ✓（命名合规／可核实证据「路径 13 处、读数 26 处」／可裁问项／`file:line` 7 处／含维持现状档／有背景节），只有一条不阻断的写作建议命中"估计"哨兵（那是「预计 10 分钟」与表头「预期收益」，不是量化论断；件里对 Q1 各档的收益明写了「**量不出来**，不填估计数」）。
+- 为什么这一格不自决：镜像命名要重烤（走 NAS 变更窗）、`/api/health` 加键＝对外多一张脸、`git tag`＋push 是对远端的写动作——三样都超出"AF 职权内的自家文件"。件里证据 6 是本仓**已经付过的账**：NAS 在役面的上界今天读不出（只能确认「≥ 某枚 commit」），验收靠 `md5` 逐文件对撞而不是版本标识，这一格在任务表里挂着（#81）。
+- 纪律一句：按 `decisions/20261010-AF与DB与DPP十件-裁定.md` §六 Q3，"发布面要不要"这类政策判断**不许**在架构文档里自决记成按设计，所以 §十八 那条只写"机械半边已落、发布半边已递件等裁"。
+
+### 六、任务位与残余
+
+- ARCH-02 **半收口**：机械半边（手抄＋判据＋变异＋README 鲜度）落码，发布半边四问递件等裁。等裁期间 AF 不动 `pyproject.toml`／`API_VERSION`／`docker/Dockerfile.api`／compose 的 `image:`——后两处还叠着登录线的在途改动（`docker/docker-compose.api.yml` 现读为已修改未提交态，不碰）。
+- #98 还剩：ARCH-03（CI 交付链路——`ci.yml` 全部作业钉 `python-version: "3.11"` vs README 快速开始明写「需要 Python 3.14＋」；`pyproject` dev extra 含 `pytest-homeassistant-custom-component` 未钉版本；`addopts = "-p no:homeassistant"` ⇒ vhass 族在 CI 走 skip 分支）、ARCH-05～11 逐条复测。ARCH-02 里 `PRESENCE_CAPS_VERSION` 那一格归 #80（homesdk 0.3.3 发版窗）。
+- README 里程碑表 `v2.1` 行仍写 🟡「大部分交付」，而版本计划与 `docs/roadmap/版本路线图.md` 两处写 ✅ 已交付：这是"两份文档以谁为准"的口径差，裁定 G 那句「以代码/commit 事实为准，不以计划文档为准」要落到具体核法才动，本批不顺手改。
+- 存证（`E:\tmp\`，不进仓）：`arch02_tests.txt`（35 条）／`arch02_unit.txt`（71 条，`RC=0`）／`mutation_arch02.result.txt`（三案）／`gates_arch02_a.txt`＋`gates_arch02_b.txt`（各 7835 B，md5 `3e32e25d7c38a24b496d2faf38e0aab8`，与上一批 `gates_arch01_c.txt` 同一枚 md5）／`mutate_arch02.py`（副本树驱动，仓内不留未跟踪件）。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `0a26dd9`、本批四份文件（`af_orchestrator.py` 手抄收敛／`tests/test_af_ir_version.py` +2 条腿／`README.md` §1.1 双轨＋里程碑 v2.5＋删钉死计数＋24 处链接重钉／两份 docs 记账）；**一枚版本号取值都没改**（裁定 20261001·G 钉着 `0.1.0` 与 `API_VERSION` 不动，审计建议 1 按裁定驳回）；变异 M0 绿、M40／M41 各杀一条；相关单测 35→71 全绿；门禁两遍与上一批**逐字节相同**（md5 `3e32e25d…`）⇒ 本批没移动门禁一个字节，`GATES_RC=1` 的两枚红仍是登录线在途的 `af_api.py:984/:1005`；发布面四问已投 `20261010-AF-发布面与镜像可追溯-决策申请.md`（`validate-application.ps1` 六门全 ✓）；未推 GitHub——推要 owner 点头

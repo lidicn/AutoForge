@@ -1,7 +1,7 @@
 # AutoForge
 
 > **AutoForge = Agent 为中心的智能家居自动化平台**：让 Agent 撰写自动化，机器验证正确性，人只看自然语言。
-> 命名约定见 [`docs/NAMING.md`](docs/NAMING.md)：产品名 **AutoForge**｜CLI **`forge`**｜Python 包 **`autoforge`**｜模块前缀 **`af_*`**。
+> 命名约定见 [`docs/reference/NAMING.md`](docs/reference/NAMING.md)：产品名 **AutoForge**｜CLI **`forge`**｜Python 包 **`autoforge`**｜模块前缀 **`af_*`**。
 
 ---
 
@@ -27,10 +27,10 @@ Agent 撰写 AF-Spec / JSON IR ──▶ forge build（安全闸：静态扫描�
 
 ## 1.1 里程碑状态
 
-> **当前版本**：`v2.4`（经验闭环 + 预测 + 撤销 + 复合编排 + 安全加固 ✅）——**路线图 v0.2.0–v2.4 全部交付**。
-> **进行中**：v2.1–v2.4 剩余增量收口（F5 stage schema 生产方返回 / F6 Premiere 分级执行闸 / F1 P1 补域 / F14–F15 设计），见 [`docs/roadmap/演进路线图_AF_v2.1+.md`](docs/roadmap/演进路线图_AF_v2.1+.md)。
-> 各版本主题与交接卡见 [`docs/ROADMAP.md`](docs/ROADMAP.md) 与 [`docs/roadmap/`](docs/roadmap/)。
-> **回归基线（v2.4）**：**1300 passed / 51 skipped / 7 subtests passed**（本机 Windows 全绿，2026-09-30 核实）；覆盖 v2.1–v2.4 全部增量模块。
+> **版本双轨**（DCD 20261001《AF 三题》·G 裁定，方案 A）：**包/API 版本 `0.1.0`**（`pyproject.toml` / `af_service.API_VERSION`，`/api/health.version` 返回它，属机器契约，不随里程碑动）↔ **对外里程碑 `v2.x`**（人读叙事）。三列映射表见 [`docs/plan/版本开发计划.md`](docs/plan/版本开发计划.md) §〇——两套口径并行且都正确，不是"版本号漂移"。
+> **当前里程碑**：`v2.5`（F14 NL→IR / F15 词表真值源）——**本地已交付，NAS 部署走变更窗口**；v0.2.0–v2.4 已全部交付。剩余增量收口与后续见 [`docs/roadmap/演进路线图_AF_v2.1+.md`](docs/roadmap/演进路线图_AF_v2.1+.md)。
+> 各版本主题与交接卡见 [`docs/roadmap/版本路线图.md`](docs/roadmap/版本路线图.md) 与 [`docs/roadmap/`](docs/roadmap/)。
+> **回归读数**：README 不钉死测试计数——钉一份计数就多一份会过期的副本（此处曾长期挂 1300 passed / 51 skipped，而整树现读已 3000+ 条）。整树口径 `PYTHONPATH=src python -m pytest tests -q`，最新读数记在 [`docs/ADM联动执行记录-AF.md`](docs/ADM联动执行记录-AF.md)；门禁读数由 `gates.sh` 给出。
 
 | 阶段 | 主题 | 状态 |
 |---|---|---|
@@ -61,6 +61,7 @@ Agent 撰写 AF-Spec / JSON IR ──▶ forge build（安全闸：静态扫描�
 | **v2.2** | **意图生命周期与安全红线**（撤销 F7 ✅ / canary band 归一 F8 部分） | ✅ |
 | **v2.3** | **复合编排**（F9 group 容器 + F10 原子部署 + 跨自动化冲突预检） | ✅ |
 | **v2.4** | **经验闭环与预测**（F11 经验→catalog→predict / F12 预触发 G4 联动 / F13 evo 真 IR 内联） | ✅ |
+| **v2.5** | **NL→IR 与词表真值源**（F14 往返保真 + NL Builder + AskSpec 跨层 / F15 `af_actions.KNOWN_ACTIONS` 统一） | ✅ 本地交付，NAS 部署走变更窗口 |
 
 ### v1.0 发布说明（2026-09-15）
 
@@ -70,11 +71,11 @@ Agent 撰写 AF-Spec / JSON IR ──▶ forge build（安全闸：静态扫描�
   list（`length/contains/first/last`，与 string/math 共享多态实现）。
 - **资源上限（防 DoS）**：求值深度 `MAX_EXPR_DEPTH=32`、单次节点数 `MAX_EXPR_NODES=256` 双硬顶；
   编译期 `check_expr`（安全闸 `EXPR_INVALID`）与运行期 `evaluate` 同一套上限，未知函数/参数个数错误编译期即拦。
-- **`fn` 节点（自定义代码）保持保留位**：结论与论证见 [`docs/fn_节点设计评估.md`](docs/fn_节点设计评估.md)——
+- **`fn` 节点（自定义代码）保持保留位**：结论与论证见 [`docs/architecture/fn_节点设计评估.md`](docs/architecture/fn_节点设计评估.md)——
   CEL/Lua 均不引入，声明式白名单是 1.x 的边界。
 - 其余 0.6–0.9 版本（标签/导出备份/鉴权/跨进程）见路线图与各交接卡。
 
-详见 [`docs/ROADMAP.md`](docs/ROADMAP.md) 与各里程碑 `docs/交接卡_*.md`。
+详见 [`docs/archive/ROADMAP.md`](docs/archive/ROADMAP.md) 与 `docs/handoff/`（各里程碑交接卡）。
 
 **CLI 总览**：`forge build（--acl/--guard/--bind）｜sim｜run（--live / --persist-dir）｜watch（--persist-dir）｜conf｜diff｜store｜spec｜serve｜auth｜mcp｜pending｜credentials｜experience｜telemetry｜entities`。
 
@@ -178,7 +179,7 @@ forge sim examples/ir/case01_day_light.json
 | Windows | 默认用内置 **FakeHA**（三接口一致，Runtime 零改动；太阳历用本地桩）。`pyproject.toml` 里已默认 `-p no:homeassistant` 防止整轮 pytest 崩溃 |
 | Linux / WSL / Docker | `tests/acceptance/test_vhass_native.py` 自动启用真 vhass：`pytest tests -q -p pytest_homeassistant_custom_component.plugins`；或用 `docker/Dockerfile.test` |
 
-详见 `docs/G1_ACCEPTANCE.md` §4。
+详见 `docs/reference/G1_ACCEPTANCE.md` §4。
 
 ---
 
@@ -187,7 +188,7 @@ forge sim examples/ir/case01_day_light.json
 - **直连 HA**，不经过 Node-RED。
 - 并发 mode（`single`/`restart`/`queued`/`parallel`）、`for:` 边沿+持续语义、太阳历/日历均与 HA 对齐。
 - 有 8 处**有意偏离**（最重要的是 `restart` 会触发旧实例 `on_cancel`），全部记录在
-  [`docs/HA_SEMANTIC_DIFF.md`](docs/HA_SEMANTIC_DIFF.md)，且必须在 NL 文本中可见。
+  [`docs/architecture/HA_SEMANTIC_DIFF.md`](docs/architecture/HA_SEMANTIC_DIFF.md)，且必须在 NL 文本中可见。
 
 ---
 
@@ -197,7 +198,7 @@ forge sim examples/ir/case01_day_light.json
 
 **已交付的 P1**：✅ 实例持久化与崩溃恢复 `persist`（`forge run/watch --persist-dir`）。
 
-**后续迭代（原 P1/P2 剩余项已全部拆版排期）**：跨自动化事件 `emit`/`on event` → **v0.3.0 / v0.4.0**｜指标回灌 MA → **v0.5.0**｜标签体系与批量启停 → **v0.6.0**｜模板导出备份 → **v0.7.0**｜服务层鉴权升级 → **v0.8.0**｜跨进程 / 多写者 → **v0.9.0**｜`fn` 节点评估 → **v1.0.0**。详见 [`docs/ROADMAP.md`](docs/ROADMAP.md) §「版本路线图（v0.2.0–v1.6.0）」。
+**后续迭代（原 P1/P2 剩余项已全部拆版排期）**：跨自动化事件 `emit`/`on event` → **v0.3.0 / v0.4.0**｜指标回灌 MA → **v0.5.0**｜标签体系与批量启停 → **v0.6.0**｜模板导出备份 → **v0.7.0**｜服务层鉴权升级 → **v0.8.0**｜跨进程 / 多写者 → **v0.9.0**｜`fn` 节点评估 → **v1.0.0**。详见 [`docs/archive/ROADMAP.md`](docs/archive/ROADMAP.md) §「版本路线图（v0.2.0–v1.6.0）」。
 
 **暂不排期**（理由见 ROADMAP §「不排期项」）：`fn` 实装（CEL/Lua/Wasm）、多成员 / 多租户、多语言 NL、隐私脱敏与保留期。
 
@@ -235,14 +236,14 @@ forge sim examples/ir/case01_day_light.json
 | 文档 | 内容 |
 |---|---|
 | [`KICKOFF.md`](KICKOFF.md) | 冷启动唯一入口：定位、13 条冻结决策、红线、G1 目标、开发顺序、8 条验收 |
-| [`docs/IR_AND_RUNTIME.md`](docs/IR_AND_RUNTIME.md) | IR v0.2.1：7 节点 / 6 边、实例生命周期、快照、安全模型、vhass |
-| [`docs/NAMING.md`](docs/NAMING.md) | 命名约定与历史改名对照 |
-| [`docs/HA_SEMANTIC_DIFF.md`](docs/HA_SEMANTIC_DIFF.md) | 与 HA 的有意偏离清单 |
-| [`docs/G1_ACCEPTANCE.md`](docs/G1_ACCEPTANCE.md) | 8 条验收用例 ↔ 实现点 ↔ 测试落位（含 G4 置信度/canary 映射） |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | ① 已发布里程碑 G1–G7 + 真机接线归档；② **版本路线图 v0.2.0–v1.7.1** 与开发计划 |
+| [`docs/architecture/IR_AND_RUNTIME.md`](docs/architecture/IR_AND_RUNTIME.md) | IR v0.2.1：7 节点 / 6 边、实例生命周期、快照、安全模型、vhass |
+| [`docs/reference/NAMING.md`](docs/reference/NAMING.md) | 命名约定与历史改名对照 |
+| [`docs/architecture/HA_SEMANTIC_DIFF.md`](docs/architecture/HA_SEMANTIC_DIFF.md) | 与 HA 的有意偏离清单 |
+| [`docs/reference/G1_ACCEPTANCE.md`](docs/reference/G1_ACCEPTANCE.md) | 8 条验收用例 ↔ 实现点 ↔ 测试落位（含 G4 置信度/canary 映射） |
+| [`docs/archive/ROADMAP.md`](docs/archive/ROADMAP.md) | ① 已发布里程碑 G1–G7 + 真机接线归档；② **版本路线图 v0.2.0–v1.7.1** 与开发计划 |
 | [`docs/roadmap/ADM-路线图-AF.md`](docs/roadmap/ADM-路线图-AF.md) | 架构决策记录（ADM）路线图：已决策项与剩余项 |
 | [`docs/交接卡_模板.md`](docs/交接卡_模板.md) | 里程碑交接卡模板（文件清单/行为增量/验证/风险/合并影响） |
-| [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) | 服务层只读 API 契约（Round 1，权威形态 `/openapi.json`） |
+| [`docs/reference/API_CONTRACT.md`](docs/reference/API_CONTRACT.md) | 服务层只读 API 契约（Round 1，权威形态 `/openapi.json`） |
 
 ---
 
