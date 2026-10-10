@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, NamedTuple
 
 from .af_adapters import CallResult
-from .af_atomic import atomic_write_text
+from .af_atomic import atomic_write_text, refuse_when_shape_unreadable
 from .af_env import env_int, env_number
 from .af_time import SystemTimeSource, TimeSource
 
@@ -291,6 +291,9 @@ class UndoStore:
                 self._records = {}
 
     def _save(self) -> None:
+        # AF3（第二期第二轮确证）：`_load` 有日志但**照样重置成空**，而这里是整档覆盖——
+        # undo_log.json 一旦损坏，下一次 record() 就把全部撤销历史抹掉，撤销功能直接失效。
+        refuse_when_shape_unreadable(self.path, "撤销记录")
         atomic_write_text(self.path, json.dumps(self._records, ensure_ascii=False, indent=2))
 
     @staticmethod

@@ -28,7 +28,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .af_atomic import atomic_write_text
+from .af_atomic import atomic_write_text, refuse_when_shape_unreadable
 from .af_predict import PREDICTIONS_FILE, Predictor
 from .af_time import SystemTimeSource, ensure_aware, load_tz
 
@@ -108,6 +108,9 @@ class TriggerHistory:
         path = self.path
         if path is None:
             return
+        # AF4（第二期第二轮确证）：`_load` 损坏时冷启动（`self._events` 保持空），而这里是整档
+        # 覆盖——一次记录就把盘上全部预触发历史抹掉，预测器 learn 的历史全没。落盘前拒写。
+        refuse_when_shape_unreadable(path, "预触发历史")
         try:
             os.makedirs(self.persist_dir, exist_ok=True)
             atomic_write_text(

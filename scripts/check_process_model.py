@@ -82,7 +82,19 @@ OWNERSHIP = ("AF", "待裁", "DCD")
 #: 登记行里必须出现的字段（缺一个就判不出「谁负责收」）。
 REQUIRED_FIELDS = ("拉起", "收", "收不到会怎样", "依据", "认领")
 _MIN_REASON = 12
-_PLACEHOLDER = ("待补", "TODO", "待定", "略")
+#: 子串即算占位（多字符）。单字「略」原先也在这里，会被「属策略」「行略过」这类正常用词误命中——
+#: 那是假红，2026-10-11 被同源门 `check_observability.py` 第一次撞出来，改成整值比。
+_PLACEHOLDER = ("待补", "TODO", "待定", "待填")
+_PLACEHOLDER_EXACT = frozenset({"略", "略。", "见代码", "见注释", "无"})
+
+
+def _is_placeholder(text: str) -> bool:
+    t = text.strip()
+    return (
+        any(pp in t for pp in _PLACEHOLDER)
+        or t in _PLACEHOLDER_EXACT
+        or not t.strip("。.，,；;、 ")
+    )
 
 SITE_RE = re.compile(r"^- `(?P<path>[^`]+):(?P<lineno>\d+)` · kind=(?P<kind>[\w.]+)")
 CEIL_RE = re.compile(r"^- (?P<kind>[\w.]+) = (?P<ceiling>\d+)$")
@@ -484,7 +496,7 @@ def check(root: Path) -> tuple[list[str], dict]:
             if not any(h.is_file() for h in hits):
                 findings.append(f"B：`{key}` 的依据 `{rel}` 在仓内找不到文件——登记必须指得到一份记录")
         reason = ent.get("收不到会怎样", "")
-        if len(reason) < _MIN_REASON or any(pp in reason for pp in _PLACEHOLDER):
+        if len(reason) < _MIN_REASON or _is_placeholder(reason):
             findings.append(f"B：`{key}` 的「收不到会怎样」空、过短或写成占位词：`{reason[:36]}`")
     for key in sorted(register):
         if key not in keys:

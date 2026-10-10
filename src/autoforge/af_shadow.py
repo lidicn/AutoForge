@@ -369,7 +369,13 @@ class ShadowRunner:
             band = runner.band_of(aid)
             if band == "shadow":
                 runner.run_do(instance, node)
-                return None
+                # AF21（第二期第二十轮）：`_do` 的返回契约是「可用边集合；None = 实例已终止」
+                # （`af_executor.py` 的 `_execute` docstring + 驱动循环 `if kinds is None: return`）。
+                # 原先这里 return None ⇒ 驱动把"影子记完第一条"读成"实例终止"，实例挂在 created，
+                # 多动作自动化只回放得到第一个 do——而 shadow_log 正是 conf grading 的转正证据。
+                # ask 档那一格**不动**：它要的是"挂起等人确认"，但 `open_ask` 并不 suspend，
+                # 真去 suspend 又会让 resume 重入时无限重开 ask ⇒ 语义怎么对齐递 DCD（清单 §七）。
+                return {"then"}
             if band == "ask":
                 runner.open_ask(instance, node)
                 return None

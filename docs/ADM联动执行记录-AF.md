@@ -8858,3 +8858,82 @@ M31 与 M33 各杀 4 条但方向不同：前者证明这条判据真的在按�
 - 存证（`E:\tmp\`，不进仓）：`pm_mut.py`（副本树驱动，含逐案 restore＋"注入未生效就抛"护栏）／`pm_mut/tree`（副本树）／`mutation_arch06.result.txt`（1523 B，16 段带 `want_rc`／`got_rc`／`规则字母`／`射程红`）／`arch06_gates_a.txt`＋`arch06_gates_b.txt`＋`arch06_gates_c.txt`（各 9418 B、三份 md5 相同 `c2b574ad…`；c 跑在两份 docs 记账改完之后，`diff` a／c 为空。两份记账文档不在任何门的读取面上——这一点不是断言，是 a 与 c 逐字节相同这一事实自己给的证据）／`chunk_pm_a.txt`（邻近四份合跑 106 passed）／`chunk_pm_unit.txt`（`tests/unit` 整段 189 行：`6 failed, 3137 passed, 43 skipped`，六条全为登录线在途鉴权面）／`arch05_text.txt`（ARCH-05／06／07 原文逐字段，4440 B）。
 
 —— AutoForge 开发 · 2026-10-10 落码、跨零点提交（现读提交时刻 2026-10-11 00:33）· 基准 HEAD `d295b7f`、本批实提交 `73edce9`（`git show --stat HEAD` 现读 6 files changed / 1345 insertions / 0 deletions；本批落码四件：`docs/进程模型清单.md` 新建 160 行／`scripts/check_process_model.py` 新建 607 行／`tests/unit/test_process_model_gate.py` 新建 488 行 34 腿／`gates.sh` 23 增 0 删；另有两份 docs 记账。**没有改过任何一行运行时行为、没有自建 supervisor、没有给任何进程补钩子、没有加过一枚锁**；`af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`／`docs/audit/参考/FFL-200题测试提示词.md` 都是并发在途文件，一条不在本批改动面里）；落的是"报告说没有的那份对账第一次成为可 diff 的产物＋把已经存在的两条优雅收尾路径从巧合变成门"；复测把 `signal.signal=0` 那句过期改掉、把 `af_service.py` 的 3 枚 `FileLock` 量进射程、把报告两张表的行号换成机器读数；一处对报告建议的偏差（不落 supervisor／不落钩子，落对账资产）已显式登记请追认；三问待裁与 #99 同批递；门禁三遍逐字节相同（9418 B／`c2b574ad…`，c 跑在本文与架构说明两处记账改完之后；两枚红＝登录线在途），**未推 GitHub——推要 owner 点头**
+
+---
+
+## §二之一百零一 · 第二期 AF1…AF21 逐条复测收口＋ARCH-07 接线（2026-10-11）
+
+### 一、这一格在记什么
+
+`docs/audit/` 里第二期六份 md（第一～第五轮＋第六至二十轮合并 2437 行）与三份 HTML 一直在进件，
+但「报告说的缺陷」和「HEAD 现在的代码」之间没有一张对撞表。本节把六份 md 逐条读完并在现读 HEAD 复测，
+把结果落成一张可 diff 的表：`docs/audit/第二期审计核实与修复对账_20261011.md`。
+
+### 二、落码（六件运行时＋一件门禁资产）
+
+- **AF1**（medium，`src/autoforge/af_ir/models.py`）：新增 `MAX_IR_DEPTH = 128`／`IRDepthError`／
+  `_exceeds_container_depth`（**迭代式**，不靠调用栈）／`check_ir_depth`，接在 `validate_automation` 第一行，
+  把 `iter_errors` 的展开阶段挡在 schema 之前；`errors = sorted(validator.iter_errors(data) …)` 外面再兜一层
+  `except RecursionError → IRValidationError`。**阈值是量出来的**：合法存量 `expr` 嵌套 32 层 ⇒ 容器深度 **70**；
+  崩溃点 **250**；`json.loads` 稳定送达 **≥1000** ⇒ 取 128（两侧留余量）。报告建议的 **64 会把合法 IR 判红**（64 < 70），
+  这一条是「按报告字面采纳会新增一枚假红」的实例，登记不采纳并写明理由。
+- **AF2／AF3／AF4**（high/high/medium）：`af_fire_recorder`／`af_undo`／`af_pretrigger` 三处「读失败当没数据＋写侧全量覆盖」，
+  用本仓既有口径 `_refuse_when_*_unreadable` 的形状——新增**一枚**共享助手 `af_atomic.refuse_when_shape_unreadable()`
+  （stdlib-only、L0，三个模块本就 import `.af_atomic` ⇒ 零新增依赖边），在各自 `_save` 的**落盘调用之前**拒写。
+  `af_pretrigger` 那处插在 `if path is None: return` 之后、`try:` 之前——它的 `except OSError` 因此吞不掉这枚 `ValueError`
+  （这是本项目**第九次**撞上「护栏装在错误的阶段」）。`_load` 的裸 `except` 顺手补具名码 `FIRE_LOG_UNREADABLE`。
+- **AF18**（low，`af_insight_queue.py`）：新增 `InsightAlreadyDecided`；`append()` 先查 `decided/` ⇒ 已判定的 id 拒绝重新入队；
+  `get()` 改「判定态优先」（`(decided_dir, pending_dir)`），兜住 `move_to`「先写 decided 后删 pending」之间断电的同名双份。
+  桥侧 `submit()` 的抛出面与既有 `InsightQueueFull` 同一条路径，**没有新增失败模式**。
+- **AF21**（medium，`af_shadow.py:install`）：影子档 `_do` 从 `return None` 改为 `return {"then"}`。
+  返回契约现读为「可用边集合；None = 实例已终止」（`af_executor.py:588` docstring＋驱动循环 `if kinds is None: return`），
+  原样返回 None ⇒ 实例挂在 `created`、多动作自动化只回放得到第一个 do，而 `shadow_log` 正是 conf grading 的转正证据。
+  **ask 档那一格没动**——见 §六。
+- **ARCH-07 接线**：`gates.sh` 新增「可观测性门禁」一节（`scripts/check_observability.py` → `obs_rc`）＋两枚结论分支
+  （`-eq 2` 射程塌形状／`-ne 0` 五判据），此前这一门只在 CI 有步子、本机跑不到。
+
+### 三、判据
+
+- `tests/unit/test_phase2_audit_fixes.py`：AF1（合法 70 层不被拒／崩溃点 250 给 `IRDepthError`／150·200·300 三档不再
+  `RecursionError`／50 000 层不炸栈／「先于 schema」消息腿）＋ AF2/3/4 的**丢数据腿**（seed 3 条 → 写坏 → 重开 →
+  对**公开入口** `pytest.raises(ValueError>` → `assert` 磁盘内容仍是那枚坏串）＋ 健康写与缺文件反例＋形状错档＋
+  **护栏位置 AST 腿**（要求同一函数体内同时出现 `refuse_when_shape_unreadable` 与 `atomic_write_text`）。
+- `tests/unit/test_phase2_af18_af21_fixes.py`：AF18 的拒绝面／不静默面／断电双份面／**反例**（未判定时二次 append 照旧覆盖、
+  新 id 不受影响、未知 id 仍 None）；AF21 的边方向／三节点全回放／auto 档逐字透传／**ask 档仍返回 None**（这条是
+  「未修」的现状钉，改的那天它红是预期的红）；外加两行整行代码形状锚点（`return {"then"}` 与 `if kinds is None:` 同时在场）。
+- 既有 `test_af_shadow.py::test_decorator_blocks_in_shadow_band_and_open_ask_in_ask_band` 首枚断言由 `is None` 改 `== {"then"}`：
+  函数名仍成立——影子档照样**拦下适配器**（`executor.calls == []`），改的只是返回值方向。
+
+### 四、读数（命令原文，现读 2026-10-11）
+
+```
+$ PYTHONPATH=E:/NAS/AutoForge/src Python313/python.exe -m pytest tests/unit/test_phase2_af18_af21_fixes.py \
+    tests/unit/test_af_shadow.py tests/unit/test_af_end_to_end.py tests/unit/test_honest_ok.py \
+    tests/contract/test_af_insight_queue_contract.py -q
+66 passed, 1 warning in 11.13s
+
+$ PYTHONPATH=E:/NAS/AutoForge/src Python313/python.exe scripts/check_observability.py .   → OBS=0（143 站点／具名码 18 枚／18 站点全部在册）
+$ PYTHONPATH=E:/NAS/AutoForge/src Python313/python.exe scripts/check_process_model.py .   → PM=0（生命周期 4 枚／原语 33 枚／共享名 9 枚逐行对撞一致）
+$ grep -n pydantic pyproject.toml                                                          → 零命中（AF8 仍成立）
+$ ls docs/audit | wc -l                                                                    → 10；ls docs/audit/归档 | wc -l → 76
+```
+
+### 五、归档去向（判据写在报告外，不临时定）
+
+**每一条确证项都落到「已修＋判据」或「已证伪＋理由」才移入 `归档/`**；还剩一条「成立·未修」就留在 `docs/audit/` 并点名。
+据此：第一／二／三／第04 轮 → `归档/`；**第五轮留下**（AF8 未修）、**第六至二十轮合并留下**（AF13/AF14 在途、AF15 待裁、
+AF21 ask 半边待裁）；三份 HTML 留待各自台账收口。`docs/audit/index.md` 补第三节记这批去向与 76 的现读计数。
+
+### 六、递 DCD 的那半边（攒进 #99，今天不另投）
+
+- **AF8**：`dependencies` 里声明 pydantic 还是开 `api` extras——两种交付口径，报告自己也交回主人定夺。
+- **AF21 ask 档**：`open_ask` 不 suspend ⇒ 实例同样挂在 `created`；但真去 `_suspend_for_confirm` 会让 `resume` 重入同一 do
+  节点时被 ask 档再拦一次、无限重开提案。这是 `requires_confirm`／`pending_confirm` 的生命周期语义，不自决。
+- **AF13／AF14**：落在登录线在途文件（`af_api.py`／`af_auth.py`），本批一条不碰；AF15 的封顶口径已由
+  `check_bounded_caches.py:505,576` 收进基线、待裁。同批在攒：ARCH-02/03/04/05/06 各问。
+
+### 七、任务位与残余
+
+- 本批**没碰** `af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`／`docs/audit/参考/FFL-200题测试提示词.md`（并发在途）。
+- #98 还剩 ARCH-08（仓库卫生，README 2 处死链）／ARCH-09（名单手抄）／ARCH-10／11（原文未读）。
+- 未闭环：AF8、AF13/AF14、AF15、AF21 ask 半边；三份 HTML 的收口台账（#98／#99）。

@@ -19,9 +19,36 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from pathlib import Path
+
+
+def refuse_when_shape_unreadable(path: Path | str, label: str, *, expect: str = "dict") -> None:
+    """整档覆盖式落盘前的护栏：`path` 存在却读不出 `expect` 形状时**拒写**（fail-closed）。
+
+    这一族的共同形态（第一期 F10/F11/F12/F13，第二期第二轮 AF2/AF3/AF4）：`_load` 在文件损坏
+    时只会静默得到空容器，而写侧是**整档由内存快照重写**——于是一次正常写入就把盘上全部历史
+    抹平，坏字节的现场也一起没了。护栏必须紧邻落盘调用（第十轮 W30：装在调用方不走的方法上
+    等于没装）。文件不存在是正常首写场景，不拒。
+
+    放在本模块而不是各自抄一份，是因为这里已经是 9 站共同脚下、且只依赖标准库（见模块 docstring）：
+    加一个 `json` 不引入任何新的仓内边。
+    """
+    target = Path(path)
+    if not target.is_file():
+        return
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"{target.name} 已损坏，拒绝写入以保护已有{label}；"
+            f"请修复或隔离该文件后重试（{type(exc).__name__}）"
+        ) from exc
+    want = {"dict": dict, "list": list}[expect]
+    if not isinstance(data, want):
+        raise ValueError(f"{target.name} 形状不是{expect}，拒绝写入以保护已有{label}")
 
 
 def atomic_write_text(path: Path | str, text: str) -> None:

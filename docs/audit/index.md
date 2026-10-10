@@ -184,3 +184,23 @@ docs/audit/
     semgrep 规则面、homesdk 运行时探针、变异测试仍未纳入。这几格在 AF 台账里一律挂名为待窗项，不读成干净。
 - ⏳ **第十九轮之后仍会持续进件**：新报告到达即按"先复测 HEAD、成立项落码并补判据、已覆盖项登记'核实成立但已修'、
   不成立项写明理由"四档收口，不在核实前登记状态。
+
+---
+
+## 三、第二期（AF1…AF21）2026-10-11 现读收口
+
+- 对账全文：`第二期审计核实与修复对账_20261011.md`（逐条 file:line、PoC 读数、归档判据）。
+- **已移入 `归档/`**：`AutoForge_第二期第一轮审计报告.md`（AF1）、`…第二轮…`（AF2/AF3/AF4）、
+  `…第三轮…`（AF5 属"核实成立·已修（非本批）"，现读 `af_store.py:291-313` 已 `raise ArchiveOwnerUnknown`）、
+  `…_第04轮…`（AF7 属"核实成立·已修（非本批）"，现读 `af_ir/expr.py:268,284` 已带 `_depth` 接同一份预算）。
+- **留在原地**（按判据"还剩一条成立·未修就不归档"）：
+  - `AutoForge_第二期第五轮审计报告.md`——AF8（`pydantic` 未声明依赖，现读 `grep -n pydantic pyproject.toml` 零命中）
+    属交付口径问题，**不自决**，已进 DCD 攒批（与 ARCH-02/03/04/05/06/07 同批）。
+  - `AutoForge_第二期审计报告_第六至二十轮合并.md`——AF18／AF21 影子档半边本批已修；
+    AF13/AF14 落在登录线在途文件（`af_api.py`／`af_auth.py`）本批不碰；AF15 封顶口径已被
+    `scripts/check_bounded_caches.py:505,576` 收进基线、待裁；AF21 的 ask 档半边要动
+    `resume`／`pending_confirm` 生命周期语义，递 DCD。
+  - 三份 HTML（`AutoForge审计报告.html`／`AutoForge安全审计报告.html`／`AutoForge运行时审计报告.html`）
+    各自收口台账见执行记录 §二之九十八~一百零一。
+- 现读计数（2026-10-11）：`ls docs/audit/归档 | wc -l` = **76**（§一 写的 72 是 2026-10-08 口径，本批 +4）；
+  `ls docs/audit | wc -l` = **10**，其中报告与对账件 6 份（`*.md`＋`*.html` 现读 7 枚含本节对账件）＋`index.md`＋三个目录。

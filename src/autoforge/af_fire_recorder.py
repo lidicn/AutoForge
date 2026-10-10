@@ -14,13 +14,16 @@ recovery 语义：重启时发现 state='claimed'（崩溃在 confirm 之前）�
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-from .af_atomic import atomic_write_text
+from .af_atomic import atomic_write_text, refuse_when_shape_unreadable
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -52,10 +55,15 @@ class JsonFireStore:
             try:
                 data = json.loads(self._path.read_text(encoding="utf-8"))
                 self._records = data.get("records", {})
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError) as exc:
+                # AF2：冷启动成空是允许的，但**盘上那份读不出来**这件事必须让写侧知道，
+                # 否则一次 claim 就把全部当日记账抹平。护栏见 `_save`。
+                logger.warning("FIRE_LOG_UNREADABLE fire_log.json 读不出，冷启动为空：%s", exc)
                 self._records = {}
 
     def _save(self) -> None:
+        # AF2（第二期第二轮确证）：整档由内存快照重写，落盘前先确认盘上那份还读得出来。
+        refuse_when_shape_unreadable(self._path, "当日触发记账")
         atomic_write_text(
             self._path,
             json.dumps({"records": self._records}, ensure_ascii=False, indent=2),

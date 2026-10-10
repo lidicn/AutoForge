@@ -41,6 +41,9 @@ __all__ = [
     "check_trigger_depth",
     "check_param_depth",
     "assert_param_budget",
+    "MAX_IR_DEPTH",
+    "IRDepthError",
+    "check_ir_depth",
     "EmitDecl",
     "AskSpec",
     "AskAnswer",
@@ -176,6 +179,62 @@ def assert_param_budget(obj: Any, where: str) -> None:
                 _walk(value, _depth + 1)
 
     _walk(obj, 0)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# schema 校验前的整篇深度闸（AF1）
+# ─────────────────────────────────────────────────────────────────────
+
+#: 整篇 IR 的容器嵌套上限——**装在 jsonschema 之前**，因为 `$ref` 展开自己会先把栈打爆。
+#:
+#: 三条域预算（`MAX_EXPR_DEPTH=32`／`MAX_TRIGGER_DEPTH=32`／`MAX_PARAM_DEPTH=64`）都装在
+#: 语义编译与遍历腿上；`POST /api/build` 这条链在走到它们之前先要过 schema，而深嵌套
+#: `expr` 会让 jsonschema 在递归展开 `$ref` 时 `RecursionError`——Starlette 兜底成 **HTTP 500**
+#: 而不是 400。护栏装在调用方不走到的阶段，是本仓第九次同一形态（第一期 F10／doubao-butler D6）。
+#:
+#: 上限取 128，两个数都是现读量出来的（`sys.setrecursionlimit(1000)`，直喂 `validate_automation`）：
+#: - **合法上界 = 70**：expr 打满 `MAX_EXPR_DEPTH=32` 时整篇深度 70；trigger 打满 32 时 69；
+#:   params 打满 64 时 69；仓内 28 份合法 IR 形状的最大整篇深度只有 8。
+#:   ⇒ 审计副本里的 64 不是"错误信息变粗略"，而是**把预算内合法的 IR 直接拒掉**（64 < 70）。
+#: - **实测爆栈点 = 250**：expr 122 层（整篇 248 未崩、250 崩）。
+#:   ⇒ 128 对合法上界留 1.8 倍余量，对爆栈点留 1.9 倍余量（服务端栈先被 asyncio/starlette 用掉
+#:   一截，余量只能比裸脚本实测更保守）。
+#: - `json.loads` 要到列表深度 1000 才崩 ⇒ 深嵌套请求体确实能走到 schema 这一站，闸装在这里对得上。
+MAX_IR_DEPTH = 128
+
+
+class IRDepthError(IRValidationError):
+    """整篇 IR 嵌套超 `MAX_IR_DEPTH`（AF1）。
+
+    继承 `IRValidationError` 而不是另立门牌：`api_build`／`api_evolve`／NL 侧已经按
+    `IRValidationError` 把 400 出口写好了，深嵌套要的正是"400 + 说清是哪一类"，不是新契约。
+    """
+
+
+def _exceeds_container_depth(obj: Any, limit: int) -> bool:
+    """整篇容器深度是否超过 `limit`。**迭代**（显式栈）且一超限就退出。
+
+    本函数存在的意义就是防止递归走者被深嵌套压垮，所以它自己绝不能递归；
+    早停同时避免"为了数深度把整份大 IR 走一遍"。
+    """
+    stack: list[tuple[Any, int]] = [(obj, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > limit:
+            return True
+        if isinstance(node, Mapping):
+            stack.extend((value, depth + 1) for value in node.values())
+        elif isinstance(node, (list, tuple, set, frozenset)):
+            stack.extend((value, depth + 1) for value in node)
+    return False
+
+
+def check_ir_depth(data: Any, where: str) -> None:
+    if _exceeds_container_depth(data, MAX_IR_DEPTH):
+        raise IRDepthError(
+            f"IR 整篇嵌套深度超过上限 {MAX_IR_DEPTH}（{where}）——在 JSON Schema 校验之前拒收："
+            f"更深的话 jsonschema 展开 `$ref` 会先把调用栈压垮，错误会变成 500 而不是这条 400"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -705,13 +764,25 @@ def validate_automation(data: Mapping[str, Any], *, root_key: str | None = None)
 
     root_key 非空时校验 `#/$defs/<root_key>`（如 `child_automation`），用于 group
     子自动化——子自动化不需顶层 `ir_version`。
+
+    AF1：先过 `check_ir_depth`。三条域预算都装在语义腿上，schema 这一站没有闸，深嵌套
+    `expr` 会在 jsonschema 展开 `$ref` 时把 Python 栈压垮（实测整篇 250 层起崩），
+    Starlette 兜成 500；这一层改不成 400 的话，后面所有的预算都轮不到发言。
     """
+    check_ir_depth(data, f"validate_automation(root_key={root_key!r})")
     schema = _schema()
     validator = Draft202012Validator(schema)
     if root_key:
         # evolve 保留全文档 resolver，使子 $def 内的 `#/$defs/node` 等引用可正确解析
         validator = validator.evolve(schema=schema["$defs"][root_key])
-    errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
+    try:
+        errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
+    except RecursionError as exc:
+        # 兜底：预算之外还可能有别的递归形状（schema 自身、$ref 链）先把栈用满。宁可给一条
+        # 粗略的 400，也不让 RecursionError 穿出去变成调用方的 500——那正是 AF1 的成因。
+        raise IRValidationError(
+            f"IR 校验递归过深被中止（{type(exc).__name__}）——请降低嵌套深度后重试"
+        ) from exc
     if errors:
         detail = "; ".join(
             f"{'/'.join(str(p) for p in e.path) or '<root>'}: {e.message}" for e in errors[:10]

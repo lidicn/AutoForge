@@ -98,7 +98,9 @@ def test_decorator_blocks_in_shadow_band_and_open_ask_in_ask_band():
     asks = []
     shadow.ask_handler = lambda **kw: asks.append(kw) or "ask-1"
     shadow.install(executor)
-    assert executor._do(inst, node) is None
+    # AF21：影子档拦下适配器，但返回"前进"边而不是 None——驱动把 None 读成"实例已终止"，
+    # 原先多动作自动化只回放得到第一个 do，而 shadow_log 正是 conf grading 的转正证据。
+    assert executor._do(inst, node) == {"then"}
     assert executor.calls == []
     conf.values["a1"] = 0.30
     assert executor._do(inst, node) is None

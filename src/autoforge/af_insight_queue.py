@@ -25,7 +25,13 @@ from .af_feedback import clock_now
 from .af_atomic import atomic_write_text
 from .af_time import SystemTimeSource
 
-__all__ = ["InsightRecord", "InsightQueue", "PersistentInsightSink", "InsightQueueFull"]
+__all__ = [
+    "InsightRecord",
+    "InsightQueue",
+    "PersistentInsightSink",
+    "InsightQueueFull",
+    "InsightAlreadyDecided",
+]
 
 STATUS_PENDING = "pending"
 STATUS_APPROVED = "approved"
@@ -36,6 +42,15 @@ DEFAULT_LIMIT = 500
 
 class InsightQueueFull(RuntimeError):
     """队列满：**拒绝**入队并报错，不静默丢消息（丢了就等于 MA 从没投过）。"""
+
+
+class InsightAlreadyDecided(RuntimeError):
+    """同一 `proposal_id` 已在 `decided/` 完成判定，**拒绝**再入队成待决。
+
+    AF18（第二期第十六轮）：`get()`/面板原先先查 pending，上游（MA）重复推同一条提案时，
+    已拒绝的提案静默变回待决，用户要再拒一次——判定结果被回退且无人看得见。
+    拒绝入队而不是覆盖：既不回退判定，也不静默丢弃这一条（与 `InsightQueueFull` 同一口径）。
+    """
 
 
 @dataclass(frozen=True)
@@ -93,6 +108,12 @@ class InsightQueue:
 
     def append(self, record: InsightRecord) -> InsightRecord:
         self.pending_dir.mkdir(parents=True, exist_ok=True)
+        decided = self._find(record.proposal_id, self.decided_dir)
+        if decided is not None:
+            raise InsightAlreadyDecided(
+                f"提案 {record.proposal_id} 已在 {decided} 完成判定，拒绝重新入队为待决"
+                f"（判定结果不被静默回退；本条未入队）"
+            )
         if len(self._paths(self.pending_dir)) >= self.limit:
             raise InsightQueueFull(
                 f"洞察提案队列已满（{self.limit} 条）：请先清理 {self.pending_dir} 或调高 limit，"
@@ -129,7 +150,9 @@ class InsightQueue:
         return self._read_all(self.decided_dir)
 
     def get(self, proposal_id: str) -> InsightRecord | None:
-        for directory in (self.pending_dir, self.decided_dir):
+        # 判定态优先（AF18 的崩溃窗口半边）：`move_to` 是「先写 decided、后删 pending」——顺序本身
+        # 是对的（反过来会丢记录），但中间断电会留下同名双份，按 pending 优先读到的就是**旧**状态。
+        for directory in (self.decided_dir, self.pending_dir):
             path = self._find(proposal_id, directory)
             if path is not None:
                 return self._load(path)
