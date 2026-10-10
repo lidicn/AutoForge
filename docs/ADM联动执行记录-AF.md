@@ -8142,3 +8142,116 @@ M5 必须写清，不能拿"八枚全杀"当卖点：`not_comparable` 为真时 
 - `docs/audit` 本批开窗检查：`find docs/audit -type f -printf "%TY-%Tm-%Td %p\n" | sort -r` 现读共 **78** 份，最新一份审计报告仍是 2026-10-07 的归档（`AutoForge_第二十轮审计报告_最终轮.md`），`index.md` 2026-10-08，`参考/FFL-200题测试提示词.md` 2026-10-09（归属他人、不碰）⇒ **本批开窗没有新增审计报告**，也就没有新增待收的 bug。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `fa71f86` + §十八 B.4 收口批次（代码面 `d8f2234`：`blocked` 由三枚调用点现给、被调方不读模式；observe 档两站失明不再静默——仓内 `af_watch` 指示照落＋一条 WARNING，对端 retained 快照只在真拦下时发；band 站照裁定 §四 不看模式，本批只加 CONTROL 腿；判据 24→32 条腿（含两枚 AST 结构腿）＋副本树变异 M0 全绿、M1–M9 全部被杀；修前修后同一支探针六档原样贴回、enforce 段逐字相同；工作树那 6 条红按修前 HEAD 副本树 `48 passed / AUTH_RC=0` 反证成登录线在途；门禁八遍逐字节相同（本体 74 行／7877 字节，各遍末尾只差驱动自己写的 RC 标签行）、基线读数未动；未推枚数以 `git log origin/main..HEAD` 现读为准）
+
+## 二之九十一、落裁定 20261010 §一（§十八 B.10 拆码）**库侧那一半**：新码进目录、rc→语义的翻译收进 `homesdk.mqtt`，并把"两张清单"塌成一张配对表；AF 那一半卡在**发版动作**而不是判定，已就此递第二份申请
+
+### 一、裁定回来的三格，按"落笔在哪一仓"分栏
+
+裁定文件：`关键决策部/decisions/20261010-AF拆码与MA自更新四问-裁定.md` §一（申请来源是 §二之九十 末段那份 `inbox/20261010-AF-发布失败单码rc三类根因是否拆码-决策申请.md`）。
+
+| 问 | 裁定（逐字要点） | 落笔处 | 归哪一仓 | 本批状态 |
+|---|---|---|---|---|
+| Q1 拆不拆码 | **甲**：新增 `ADM_ERR_PUBLISH_REFUSED`，**只加一枚，不按根因铺开**，不拆 `ADM_ERR_MQTT_ACL` | `errors.py` 常量 ＋ 契约 §7.2 表加一行（含"用在哪一面"） | homesdk（库）＋ 契约文书 | **已落** |
+| Q2 rc→语义归谁 | **甲**：库侧做——`homesdk.mqtt.publish` 翻成具名异常或结构化结果；"AF 三处 `_raise_if_refused` 退成接住库侧具名异常、选码，**映射表在 AF 仓内一份都不留**" | `mqtt.py` | homesdk（库）半边 ＋ AF 半边 | **库侧已落；AF 半边等新 wheel** |
+| Q3 ACL 被拒时 retained status 哪一档 | **甲**：仍算 `degraded`（驳回丙"另开一档 refused"＝改 §7.1 state 枚举，面太大），**但 `reasons` 必须指向真因码** | AF `_account_publish_error` | AF | **未落**（与 Q2 的 AF 半边同一次改） |
+
+⇒ 本批的"能自决"边界很清楚：裁定的**落笔处两格在库侧**，AF 座位就是 homesdk 的看库人，所以那两格当场做完；Q3 甲与 Q2 甲的 AF 半边需要**盘上真装得上新代码**，那一格不归 AF 自决（见 §六）。
+
+### 二、库侧落地的形状（homesdk `37fc7aa`）
+
+1. **`adm/errors.py`**：`ADM_ERR_PUBLISH_REFUSED` 进常量面、进 `ADM_ERRORS`、进 `__all__`，`ADM_ERRORS` 现读 **7 枚**。注释里钉死裁定那句"只加这一枚，不按根因铺开"，并把枚数做成**棘轮**（`test_errors_seven_members` 断言 `len(ADM_ERRORS) == 7`，旁边一句"再多一枚必须先有裁定"）——这样 20261007 §三 那枚还没进树的 `ADM_ERR_LINKAGE_PAUSED` 落地时，一定会撞红、逼下一次改动重新有据。
+2. **`mqtt.py` 三个面**：
+   - `PublishResult(topic, rc, mid)`（frozen dataclass）＋ `.ok` ＋ `.error_code`；
+   - `classify_publish_rc(rc)`：**名字面优先、数字面兜底**（`getattr(rc,'name')` 命中就用 `MQTT_ERR_*` 名字判，读不出名字才 `int(rc)`）；
+   - `PublishRefused` ＋ `PublishResult.raise_if_refused()`：要"失败即抛"的形状得**显式**调这一句。
+3. **一张表，不是两张清单**（这是本批唯一一次返工，起因见 §三-4）：`(名字, 数字)` 只声明在 `_PUBLISH_REFUSED_PAIRS` 这一张元组表里，`_PUBLISH_REFUSED_NAMES`／`_PUBLISH_REFUSED_NUMBERS` 是它的两个投影。理由不是好看——裁定 Q2 甲 禁的是"第二份真值"，而**两张各自独立的清单在库内就是第二份**：paho 挪一个数字，名字面还绿、数字面已经判反，且没有任何一条腿会红。
+4. **`publish()` 本身不抛异常**：返回类型从 paho `MQTTMessageInfo` 换成 `PublishResult`（`.rc`/`.mid` 两格仍在），但**不新增抛出**。这一格是先量后改的（§五-2 的 import 面读数），量出来的结论是"可以换返回类型，不可以替 MA/DB 决定错误处置"。
+5. **契约 §7.2 加一行**，"用在哪一面"那格写的是**真源指针**而不是复制一张表：「真源 `homesdk.mqtt.classify_publish_rc`，调用方不许自带第二份 rc→码 表」。同批加一段**观测面**（§四-1）。
+6. **判据 +11 腿**（`tests/test_mqtt.py` 10 条 ＋ `tests/test_adm.py` 1 条结构腿）：零 rc 为 ok / 拒绝族 3-9-12-15 各一枚 / 不可达族 4,5,7,8,11,13,14,16,-1 保守归码 / 读不出的 rc 永不判 ok / 名字面先于数字面 / **配对表两面对撞 ＋ 与真 paho 常量对撞** / `mid` 与裸 int 返回都读得出 / **`publish()` 不抛** / `raise_if_refused` 带真因码且保留原始 rc / 库内三处丢弃面（`advertise`/`speak`）不因此开始抛。`test_adm.py` 那条把「`ADM_ERRORS` ↔ 契约 §7.2 表」逐码对撞，扫不出任何码算射程塌而不是干净。
+
+### 三、现读读数（原样贴，含那一次判据没咬住）
+
+1. 全量：工作树 `572 passed in 17.05s / FULL_RC=0`；**HEAD 副本树基线**（`git archive` 出去的干净树，同一条命令）`561 passed / HEAD_FULL_RC=0` ⇒ 本批 ＋11 腿对得上。
+2. 两份被改文件：`58 passed in 2.52s / RC=0`。
+3. 库门禁：`扫描完成：homesdk 新增/未获批 0 条（error 0 / warn 0），基线内存量 0 条，过期基线条目 0 条`、`计数：无违规`、`HS_GATES_RC=0`。
+4. **变异第一版：`killed=7 survived=1 invalid=0 legs=8`**，存活的那枚原文——
+   `M3 **存活** rc=0｜57 passed in 2.28s ← 判据没咬住：refused 那一族只剩 ACL`
+   注入的是"只把名字面那一张frozenset 缩小"，57 条腿全绿。⇒ 按 §二-3 把两清单塌成一张配对表，重写 M3（删一整行配对）并补 M9（把数字 9 改成 10），**副本树重建后重测**。
+5. **变异第二版（最终文本）**：`BASE（未注入） RC=0 | 58 passed in 3.38s` ⇒ `killed=9 survived=0 invalid=0 legs=9`、`COPY_RESTORE_BAD=0 []`。逐枚（红条数｜被哪几条腿抓到）：M1 3 条、M2 2 条、M3 2 条、M9 2 条、M4 4 条、M5 1 条、M6 5 条、M7 3 条、M8 1 条。M9（数字与 paho 真常量不符）由 §二-6 那条真常量对撞腿抓到，M3/M2 由配对表与名字面两条抓到——**"两张清单"那个形状从此有了一枚会红的判据**。
+6. 注入前锚点读数（当场量，不靠记忆）：9 枚锚点在副本树里各命中 **1** 次（`ANCHOR_NOT_ONE=0`），被注入的两份源码 `CR=0`；每条腿注入后过 `ast.parse`，跑的那两份判据是 `tests/test_mqtt.py tests/test_adm.py`，全程只在 `%TEMP%/hs_mut` 副本树动文件，工作树未碰。
+7. 同一支探针（`%TEMP%/probe_b10.py`）关键行原样：
+   ```
+   homesdk: 0.3.2 | ADM_ERRORS 枚数: 7
+   A 真 paho/未连接 -> PublishResult rc= 4 ok= False code= ADM_ERR_BROKER_UNREACHABLE mid= 1
+   B 字符串垃圾            rc='nope'   ok=False code= ADM_ERR_BROKER_UNREACHABLE
+   C 枚举面 rc.name= MQTT_ERR_ACL_DENIED ->  ADM_ERR_PUBLISH_REFUSED | == PUBLISH_REFUSED: True
+   D rc=12 抛 PublishRefused error_code=ADM_ERR_PUBLISH_REFUSED topic=af/status rc=12
+   E1 advertise() 在 rc=12 下正常返回，未抛 ⇒ 库内丢弃面不受影响
+   E2 speak() 走 _publish_inbox，同样未抛
+   ```
+   （E 那一腿第一次交回的是 `UnknownMember 未知 ADM 成员：'af'（允许 ['autoforge','doubao-butler','memory-agent']）`——**探针写错成员名，不是库缺陷**；按允许名单改成 `autoforge` 重跑才有上面 E1/E2，并把这两条固化成判据。）
+8. paho 常量面**本轮现读**（不是引用记忆）：`paho-mqtt 2.1.0`、`client 面 MQTT_ERR_* 枚数: 18`、`包根面 MQTT_ERR_* 枚数: 0`、`MQTTErrorCode 是 IntEnum: True | 成员数: 18`，配对表四枚逐一对撞真值 `INVAL 3=3 / PAYLOAD_SIZE 9=9 / ACL_DENIED 12=12 / QUEUE_SIZE 15=15` 全 `一致: True`。
+9. 提交自证：`git archive HEAD | tar -x` 解到空目录再跑那两份判据 ⇒ `58 passed / COMMIT_TREE_RC=0`。这条是专门为 §五-3 那半边"故意留在未提交态"的契约文档跑的——**提交里不含那 34 行也能自证**，`test_catalog_and_contract_table_agree` 读的是 §7.2 那一节，不依赖未提交的 §1.5/§1.6/§1.3 摘录行。
+
+### 四、三条"不能说已经证到"的边界
+
+1. **`ADM_ERR_PUBLISH_REFUSED` 今天覆盖不到"broker 侧 ACL 已拒绝"**。paho 2.1.0 现读：`Client.publish()`／`_send_publish` 的同步返回面只可能给 `NO_CONN`/`QUEUE_SIZE`/`SUCCESS`，真 ACL 拒绝要么表现为 QoS1 等不来的送达确认、要么走 v5 reason code。所以这枚码实际盖的是"链路在、这条被客户端/协议挡下"那一族（超长、队列满、INVAL）＋ `MQTT_ERR_ACL_DENIED` 在场时的正确归类。**把新码读成"ACL 已生效"是假绿**，真 ACL 场景要接 broker 实测——那一格还是 #76 的 NAS 合并窗（`mosquitto_sub` 同批）。这段话原样写进了契约 §7.2 后面。
+2. **未连接时的读数是"不可达"而不是"被拒"**：探针 A 行 `rc=4 → ADM_ERR_BROKER_UNREACHABLE`，这是有意保守（判不准就往"链路有问题"指，别假装知道是 ACL）。原始 `rc` 一律留在 message 里（`raise_if_refused` 用 `{self.rc!r}`），AF/运维仍能分辨。
+3. **`.ok` 对读不出的 rc 一律算"没成功"**（探针 B 行 `rc='nope' → ok=False code=ADM_ERR_BROKER_UNREACHABLE`）。这条是被 §三-5 的 M8 逼出来的：判"成没成"的接口自己去抛 `ValueError`，等于让量具在瞎的时候报绿；M8（把兜底改成 `return True`）现在有 1 条腿专门咬它。
+
+### 五、blast radius 是先量的，不是猜的
+
+1. **谁读 `mqtt.publish` 的返回值**：全生态只有 AF。现读 import 面——DB `doubao-butler/butler/bus/mqtt_client.py:14-15` 只 import `broker_settings, get_client, resolve_credentials, advertise`；MA `memory-agent` 只 import `homesdk.presence`。⇒ 换返回类型不打扰另两仓。
+2. **库内丢弃返回值的调用点**：`presence.py:111/114/222` 三处一直在丢。⇒ 若 `publish()` 改成"失败即抛"，就等 AF 座位替 MA/DB 决定了它们的错误处置面，所以只做结构化返回值 ＋ 显式 `raise_if_refused()`；探针 E1/E2 与那条"库内丢弃面不开始抛"的判据钉的就是这一格。
+3. **AF 现状仍读得通**：`af_mqtt_bridge.py:374-377` 的 `_raise_if_refused` 是 `getattr(info, "rc", None)` 真值判断，`PublishResult` 有 `.rc` ⇒ 库侧这一改不会当场把 AF 打红（这也是为什么 Q2 甲 的库半边可以先落、AF 半边能另批做）。
+
+### 六、AF 半边为什么今天不落，以及递出去的第二份申请
+
+三条现读（都是为了把"我不想做"和"我做不了"分开）：
+
+1. 本机 `import homesdk` 命中的是**实体副本**、不是 editable：`…\Roaming\Python\Python313\site-packages\homesdk\__init__.py`，`version 0.3.2`、`hasattr(homesdk.mqtt,'PublishResult')=False`、`len(ADM_ERRORS)=6`；`homesdk-0.3.2.dist-info/direct_url.json` 现读 `file:///E:/NAS/homesdk/dist/homesdk-0.3.2-py3-none-any.whl`（sha256 `19bc83a6…`）。⇒ AF 的 pytest/门禁跑的就是这份 0.3.2，AF 半边改完**本地必然 ImportError**。
+2. 镜像侧按**钉死文件名**装：`docker/Dockerfile.api:26-27` = `COPY docker/homesdk/homesdk-0.3.2-py3-none-any.whl` ＋ `pip install <那一枚>`；同批要改的还有 `pyproject.toml:61 homesdk>=0.3.2`、`Dockerfile.test`、`.github/workflows/ci.yml`。
+3. 生态纪律**禁止 agent `pip install`**（§一-1 那份 `env-multi-python-box` 记的铁律），而"发版"本身还牵动 DB 的 vendor 目录（`20261008-DB五件-裁定.md` §三 已记："0.3.2 已进 DB vendor 目录，再插 0.3.3 = #29 重来"）。
+
+⇒ 申请已落盘：`关键决策部/inbox/20261010-AF-拆码库侧已落地发版窗与消费半边前置-决策申请.md`（现读 8628 字节／85 行／`CR=0`／四格"请裁"）。三问：**Q1** 0.3.3 增量清单追认拆码为第四件（并请 DCD 定"第七枚/第七档"口径冲突——`ADM_ERR_LINKAGE_PAUSED` 在 `src/ doc/ tests/` 现读 **0 命中**，枚数只按现读、散文不追写）；**Q2** 新 wheel 的构建/投递/pin 由谁执行（甲授权 AF 发版＋owner 执行一次安装／乙全归 DCD·NAS／丙 AF 先落码用 `PYTHONPATH` 临时指库源码——**AF 明确不主张丙**，它把未发版的能力写进在途文件）；**Q3** `reasons` 换成真因码后要不要按 20261007 §五 戊A 先例给 DB 出一份读数变化说明。**AF 倾向乙，只要一个窗口**（半边是纯机械改动，版本一发就能一次做完）。同批并案 **#95**（observe 档试演期失明要不要也对端可见：甲维持现状／乙 `reasons` 加一枚指示失明的码、**码名由 DCD 定**／丙别的形状）。另递一条治理建议：同一天已有三份 20261010 裁定，而契约文书里出现只写「裁定 20261010 §三」的锚点（那份 §三 是汇总表、另一份 §三 是收件箱预拒，只能靠猜）——建议立判例"引用裁定必须带文件名"。
+
+### 七、只提交自己那一半（契约文档里那 34 行不是本批的）
+
+`homesdk/doc/ADM联动主题注册表与消息契约.md` 在改之前就已经是**未提交态**，`git diff --numstat` 现读 41 增／5 删。逐 hunk 读下来，本批的只有 **2 个 hunk（＋7 行）**——§7.2 那一行与观测面那段；其余 34／5 分属三批早前的落笔：§1.5「以 AF 为核心的联动」（20261008）、§1.6「DSL 触发上下文平键」（20261009 §四 甲）、§1.3 上限摘录与护栏 3 改写（20261010-DB与AF六件 §三/§四，那两格裁定自己写着"DCD 落笔"）。
+
+处置：不 `git add` 整份文件，用 `git apply --cached --recount` 只把那 2 个 hunk 进索引 ⇒ 现读 `git diff --cached --numstat` = 该文件 **7 增 0 删**，`git diff` 同一文件仍是 **34 增 5 删** 留在工作树（`MM` 态）。本批提交因此只含：`CHANGELOG.md`(+32)／契约(+7)／`adm/errors.py`(+5)／`mqtt.py`(+93/-2)／`test_adm.py`(+25/-2)／`test_mqtt.py`(+111)，合计 273 增／4 删。**那 34 行归谁提交、要不要归 AF 代提交，等 owner 一句话**——AF 不替别人的在途批次签自己名字。
+
+另记一句 `CHANGELOG.md` 的口径：新条目标题写的是 **「0.3.3 — 未发版（语义已入库，发版与投递动作待认领）」**，`pyproject.toml:7` 仍是 `version = "0.3.2"`。号是 DCD 已经在 `20261007 §三` 用过的 0.3.3，但**发版动作没发生**，所以文书里不能写成已发布——这一格也正是 §六 Q2 要问的。
+
+### 八、门禁、远端与开窗
+
+- 门禁本批按 §二之九十 学到的顺序做：**先把全部文本写完 → fire 一对 → 再 fire 一遍（同一文本态，验"读数稳"）→ 回填读数 → 最后 fire 一遍做逐字节对撞**，这样"回填的那几行有没有改变门禁输出"是被量出来的，不是被声称的。四遍的标签行与本体读数逐条记在下面。
+  - **回填的第一对（文本写完时 fire）**：`%TEMP%/gate_b93_a.out`／`gate_b93_b.out` 各 **7890 字节／21 段**，驱动标签行分别 `GATES_A_RC=1`／`GATES_B_RC=1`；剥掉那行后的本体 `body_b93_a.txt`／`body_b93_b.txt` 各 **7877 字节**（与 §二之九十 终稿档同尺寸），`cmp body_b93_a.txt body_b93_b.txt` ⇒ **`BODY_CMP_RC=0`**。a 档原始读数逐字（b 档除标签行外与它一致）：
+    ```
+    ══ AST 门禁（不含冒烟）═══════════════════════════════════════
+    WARN  fake-ok-const            src/autoforge/af_api.py:984                                  build_app.api_auth_has_admin  字面量 ok=True，不来自任何实际校验
+    WARN  fake-ok-const            src/autoforge/af_api.py:1005                                 build_app.api_auth_register  字面量 ok=True，不来自任何实际校验
+
+    （另有 96 条存量违规被基线吸收，只准减少不准增加）
+    扫描完成：AutoForge  新增/未获批 2 条（error 0 / warn 2），基线内存量 96 条，过期基线条目 0 条
+    计数：except-pass-broad=20 | fake-ok-const=78
+    [门禁分类] RC=1：依赖门禁判红（rc=1），且输出里没有崩溃签名——这一条是真违规
+
+    ══ 计数棘轮（全量总数对登记上限）══════════════════════════════
+    全量违规 98 条 / 登记上限 97 条
+    棘轮红：总数从 97 涨到 98。要么修掉，要么在「.gates-tally.txt」写明为什么必须上调——上调本身要评审。
+    …
+    结论：AST 门禁红（exit=1）。修，或在 .gates-baseline.txt 里逐条写明放行理由。
+    ```
+    两枚红仍是既有的 `af_api.py:984`/`:1005`（登录线 #79 的窗口，那份文件本批没碰），与本批**零关系**：这一格与 §二之八十七~九十 的读数逐字相同（96 存量／计数 20+78／全量 98／上限 97），也就是**和上一批同一张门禁**——上一批那次是"代码面动了所以要实测"，本批 AF 侧只动两份文档，红两格的归属因此是"在途登录线"，不是"本批新增"。**不据此上调 `.gates-tally.txt`、不写 `.gates-baseline.txt` 豁免。**
+  - **第三遍（`gate_b93_c.out`，与 a/b 同一份文本态）**：**7890 字节／21 段**，标签行 `GATES_C_RC=1`；`head -74` 剥出的本体 `body_b93_c.txt` **7877 字节**，`cmp body_b93_a.txt body_b93_c.txt` ⇒ **`CMP_AC_RC=0`**——门禁自身输出在这三遍里逐字节不动，所以"读数稳"是被重复量出来的，不是单次巧合。
+  - **第四遍（`gate_b93_d.out`）才是这一节要的那一撞**：它 fire 的时候，上面那些回填的行已经写进本节了，所以拿它的本体与 a/b/c 对撞，量的就是"回填的那几行有没有改变门禁输出"。**实测**：`gate_b93_d.out` **7890 字节／21 段**，标签行 `GATES_D_RC=1`；本体 `body_b93_d.txt` **7877 字节**；`cmp body_b93_a.txt body_b93_d.txt` ⇒ **`CMP_AD_RC=0`**，`cmp body_b93_c.txt body_b93_d.txt` ⇒ **`CMP_CD_RC=0`**。⇒ 回填那 20 余行（含两段原始读数与一段射程现读）**没有改变门禁任何一个字节**，四遍读的是同一张门禁；而 d 之后本节的措辞还会再动一次，那一动靠的是下面那条射程读数，不是靠运气。
+  - 顺序上有一处**不干净，如实记**：记录 d 那一撞结果的那一行，必然是在 d fire **之后**才写下的，所以"最后一遍包含全部文本"在字面上永远差一句。这一格不靠措辞兜，靠射程现读：`grep -rln "执行记录" gates.sh scripts/*.py .github/workflows/*.yml` ⇒ 只命中 `scripts/gh_ci_status.py`（**本批** `grep -n "gh_ci_status" gates.sh .github/workflows/*.yml` ⇒ `GREP_RC=1`，一站都不调它）；`grep -rln "架构与运行时" …` ⇒ `GREP_RC=1` 零命中；`gates.sh` 里唯一读文档的站是计划表口径门（`:205`），射程是 `docs/plan/开发计划_WebUI全功能接入.md`（`scripts/check_plan_ui_claims.py:129`）。另两处提到 `docs/` 的（`check_gates_coverage.py:22/:302/:312`、`check_mcp_arg_schemas.py:4`）都在注释与文案字符串里，不是文件读。⇒ **本批这两份文档的正文不在任何一站的射程内**，那一句的改动按定义不可能改变门禁读数。
+- 远端读数：本批未推。未推枚数现读 `git log origin/main..HEAD --oneline | wc -l` ⇒ **14**（AF 侧文档面 `50ca89b` 之后又落了一份记账批次；homesdk 那枚 `37fc7aa` 不在这条计数里，两仓各自的远端不同步）。推 GitHub 要 owner 点头。
+- `docs/audit` 开窗：`find docs/audit -name "*.md" -printf "%T@ %p\n" | sort -rn` 现读最新四份 = `参考/FFL-200题测试提示词.md`（归属他人、不碰）、`index.md`、`归档/AutoForge_第二十轮审计报告_最终轮.md`、`…第十九轮…` ⇒ **没有新增审计报告**，也就没有新增待收的 bug。
+- §十八 结构性残余现读：**B.1（`af_irreversible` 执行面无调用方）／B.7（`af_nl_parse` 无产品调用方）／B.10（半边落地、半边等版本窗，见本节）**。两格本批各开任务位并留下现读证据（见下一条）。
+- 开窗时顺手量的两格残余现状（不在本批范围，只把证据钉下来）：① `is_node_non_reversible`/`annotate_non_reversible`（`af_irreversible.py:47/:54`）的 src 侧消费者只有 NL 面（`af_nl.py:20`、`af_nl_parse.py:1093/:1150/:1217/:1227`）与门禁脚本（`scripts/check_ir_runtime_keys.py:25/:27/:64`），`af_undo.py`（511 行）通篇按**设备快照**决定 `restore_call`，零处读 IR 那枚 `_non_reversible` 标注 ⇒ B.1 成立（任务 #96）；② `build_ir_from_nl` 定义在 `af_nl_build.py:57`，`grep -rn "af_nl_build\|from_nl" src/` 全仓只命中一处，而且是 `af_fidelity.py:11` 那句**已过时**的 docstring（还写着"未实现"），MCP 的 `TOOLS`（`af_mcp.py:471`）里也没有它 ⇒ B.7 成立且附带一枚第二份真值（任务 #97）。
+- 存证（`%TEMP%`，不进仓）：`probe_b10.py`／`probe_b10.out`／`probe_b10_E.out`、`mut_b10.py`／`mut_b10_second.out`、`full_b10_final.out`、`hs_head`／`hs_mut`／`hs_commit`（HEAD 副本树／变异副本树／提交树解包三份）、`doc_full.patch`／`doc_mine.patch`（契约文档"只挑自己那 2 个 hunk"的对撞件）、`gate_b93_{a,b,c,d}.out`（四遍门禁，本体各 7877 字节）、`body_b93_{a,b,c,d}.txt`（剥掉驱动标签行后的本体，用于 `cmp`）。
+- 任务位：#93 由"等裁定"改成"库侧已落 ＋ AF 半边等 0.3.3 发版窗"（仍 in_progress）；#95 已并入本批申请、等裁；#80（切甲A：`advertise(degraded=/reasons=)`）与 #81（NAS 烤镜像）继续等同一版本窗——三者现在是**同一个前置**；新开 #96（B.1）、#97（B.7＋`af_fidelity.py:11` 过时 docstring）。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `50ca89b` + 裁定 20261010 §一 落库侧半边（homesdk `37fc7aa`：`ADM_ERR_PUBLISH_REFUSED` 第 7 枚进目录、`PublishResult`/`classify_publish_rc`/`PublishRefused`/`raise_if_refused` 把 rc→语义收进库侧、`(名字,数字)` 塌成一张配对表；契约 §7.2 同批改表＋观测面；判据 +11 腿含配对表两面对撞与目录↔契约逐码对撞；变异第一版 M3 存活＝两清单能各自漂移，重构成一张表后 `killed=9 survived=0 invalid=0`、`COPY_RESTORE_BAD=0`；`572 passed / FULL_RC=0` vs HEAD 副本树 `561`；库门禁 `HS_GATES_RC=0`；提交树 `git archive` 解包独立跑 `58 passed`；AF 半边三条现读（site-packages 0.3.2 实体副本／Dockerfile 钉死 wheel 名／禁 agent pip install）⇒ 已递第二份申请并案 #95；契约文档只挑本批 2 个 hunk 进索引，那 34 行早前落笔留在工作树；AF 侧门禁四遍（a/b/c/d，含回填前后各一对）本体逐字节相同——74 行／**7877 字节**，`BODY_CMP_RC=0`／`CMP_AC_RC=0`／`CMP_AD_RC=0`／`CMP_CD_RC=0`，两枚红仍是登录线在途的 `af_api.py:984/:1005`，未据此动基线）
