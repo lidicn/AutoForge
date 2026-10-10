@@ -6177,7 +6177,7 @@ COPY_REMOVED_OK
 | MCP 工具 | **31** | `len(af_mcp.TOOLS)` |
 | HTTP 路由（含 methods 的那批） | **90** | `app.routes` 逐条带 methods 计数 |
 | CLI 命令 | **18** | typer 命令表 |
-| 安全闸检查项 | **40**（现读 42，见 §二之八十三/八十四）| `len(af_scanner.CHECKS)`，注册表在 `af_scanner.py:38` |
+| 安全闸检查项 | **40**（现读 43，见 §二之八十三/八十四/八十五）| `len(af_scanner.CHECKS)`，注册表在 `af_scanner.py:39` |
 
 对撞结果：知识文档 §七 的分组表原列 **42 个名字**，多出的两个**不是检查项**：
 
@@ -7438,3 +7438,141 @@ AST 取码那一腿先前写法错了（按 `ast.Compare` 的比较子找），�
 - 待办：#87 收口。#83/#84 不变（等 owner 勾名单与部署机）；#79 等登录线窗口；#75/#76 等卡2 与 NAS 合并窗。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `086cf09` + 拒绝出口诊断批次（提交态现读：代码面 `60600df`、本格记账 `0862b81`）
+
+## 二之八十五、收 §十八 残余 B.9 的后半格：收件箱载荷超长在编译期先拒（第 43 枚 `INBOX_PARAM_TOO_LONG`）；同批把"上限"从手抄数字改成库侧常量本身，形状返工一次、如实记账
+
+> 现场：本机 · 2026-10-10 · 基准 HEAD `8efc134`（上一格 §二之八十四＝拒绝出口诊断那批）
+> 触发物：`docs/architecture/AF完整架构与运行时说明.md` §十八 残余第 9 条后半格（「长度上限只在库侧 `_len_bounded` 把、编译期不提前拒，于是这条 IR 要跑到执行才红」）＋裁定 20261009（第二份）§三 那条纪律：新增诊断码**必须**进 `CHECKS`/`CODE_HINT`，AF 点名的「发诊断却不注册」旧缺口不许再造第二枚。
+
+### 一、缺口的形状：不是"运行期会出错"，是"编译期把必死的东西放行进库"
+
+收口前两半的分工是歪的：
+
+| 半格 | 收口前 | 现在 |
+|---|---|---|
+| 长度由谁把 | 库侧 `homesdk.presence._len_bounded`（`presence.py:209`）——超长抛 `ValueError` ⇒ 桥转 `ADM_ERR_PAYLOAD_INVALID`。**这半格一直是对的**，0.3.2 规格 §三.1「谁定 schema 谁把校验」 | 一字未动 |
+| 编译期看得看见 | **看不见**：`forge scan` 里没有长度这一项，于是这条 IR 能编译、能进库、能进演练台账、能在 `af show` 里长得像一条配好的投递，**要跑到执行才红** | 新增第 43 枚 `INBOX_PARAM_TOO_LONG`（`af_scanner.py:709-728`，**ERROR 级**）：`adapter: inbox` 的 `do` 节点里 `text`/`title`/`body`/`content` 任一枚超上限，逐字段各出一条 |
+| 契约根据 | §1.3 四道护栏之二：载荷 schema fail-closed，**DB 侧对超长直接丢弃**并审计 | 所以"发出去也必死"不是推测，是契约写明的后果 |
+
+级别取 ERROR 而不是 §二之八十四 那种 WARN，理由要写清（并已写进 `CHECKS` 那格文案）：`CONFIRM_WITHOUT_DENY_PATH` 管的是"合法形状在图里读不出来"，运行期照 Q2 裁的甲落 `done` 没问题；这一枚管的是**运行期一定失败**的 IR——放它进库等于把"必然失败"伪装成"已配置好"。同族先例是 `L2_NEEDS_CANARY`（也是 ERROR、也是"发出去服务端不放行"）。`ScanResult.ok = not errors` ⇒ 这条真拦发布，判据 `TestBlocksPublication` 钉的就是这一格，与上一批那条"不拦发布"的腿口径相反。
+
+满射程（编译期量的＝运行期那份长度）的依据不是"应该差不多"，是 `af_executor.py:741` 那句 `adapter.call(node.action or "", dict(node.params))`：IR 的 `params` 原样交给适配器、运行期不做插值。这一条由腿 `test_executor_forwards_params_verbatim` 用正则钉住源码形状——执行器哪天改成运行期拼参数，这条腿先红，本批的满射程自证就要重核。
+
+### 二、上限从哪儿来：一张格子里放"库侧常量本身"的表（形状返工过一次）
+
+AF 侧唯一的手抄面是 `(主题 kind → 受限字段名)` 这层映射，数值一个都不抄。终版形状：
+
+| 落点 | 现读 | 内容 |
+|---|---|---|
+| `af_adapters/inbox.py:32` | — | `from homesdk.presence import INBOX_MAX_BODY, INBOX_MAX_TEXT, INBOX_MAX_TITLE` |
+| `INBOX_LEN_LIMITS` | `:57-61` | `{"speak": {"text": INBOX_MAX_TEXT}, "notify": {"title": INBOX_MAX_TITLE, "body": INBOX_MAX_BODY}, "tv": {"content": INBOX_MAX_TEXT}}`——格子里放的就是那三枚常量对象本身 |
+| `inbox_overlong_fields()` | `:74-89` | 唯一判定入口：只量**字面量字符串**；非字符串取值不在这条射程（那是"形态错"，归库侧 `TypeError` 那一路管，混进来会把形态问题误报成"超长"） |
+| `af_scanner.py:17` | — | `from .af_adapters.inbox import inbox_overlong_fields`：扫描器不另起一份上限 |
+| `CHECKS` / `CODE_HINT` | `:71` / `:129-131` | 枚数 42 → **43**，两本键集仍全等；hint 文案点名三枚常量名与"DB 侧对超长 fail-closed 丢弃" |
+| 调用点 | `:379`（紧跟 `_check_param_budget :378`） | 每 `do` 节点一站 |
+
+**形状返工一次，记成缺陷而不是改成漂亮话**：初版把常量**名**存进表、运行期 `getattr(_presence, 名字)` 现读，`gates.sh` 里 `test_mqtt_writers_gate.py::test_real_src_is_clean_with_measured_counts` 当场红——«`src/autoforge/af_adapters/inbox.py:65: 桥外用 getattr(_presence, …)`»。三条路里选了唯一诚实的那条：
+
+- ✗ 把别名 `_presence` 改个名字骗过按名字匹配的门——门是静态的，骗过一次就再也没人记得为什么有这枚门；
+- ✗ 就地写 `# mqtt-writers: exempt(理由)`——那格 `exempted == 0` 本身就是棘轮（§二之四十四立的口径），加豁免＝把全仓的额度用掉一格；
+- ✓ 改成直接 `import` 三枚常量：既不碰机制层入口，又让"库侧改名"从**运行期** `AttributeError` 提前成 **import 期** `ImportError`——比原来那版更响亮，不是更弱。
+
+这条返工自身也有反例自证（§五 MU8）：把表格改回按名派发，`scripts/check_mqtt_writers.py src` 与那条 pytest 门都真的红，说明门在有牙地罩着这一格。
+
+另一处按仓内既有判例办：仓里那条"名字哨兵罩住 docstring"的教训（知识文档 §十六 第 10 条）要求同源腿**走 AST 而不是按名字 grep**，所以本批三条同源腿全部是 `ast.parse`/`inspect.signature` 形状；顺带把 `inbox.py` 注释里那句原本直写 `getattr(_presence, …)` 的散文改掉，免得下一批加"零 getattr 派发"腿时被自家注释误伤。
+
+### 三、判据：30 条腿，五组射程各自挡一种不同的塌法
+
+`tests/unit/test_inbox_param_length_diagnostic.py`（新增，CR=0）。文件头写全了缺口形状、ERROR 与 WARN 的取舍理由、八条射程和反例族。
+
+| 组 | 腿 | 挡什么 |
+|---|---|---|
+| 注册面（2） | `test_code_is_in_both_catalogs_by_name` | 裁定点名那一格：两本目录任一缺席即红——"不许造第二枚 `L2_NEEDS_CANARY`"的执行机制 |
+| | `test_hint_tells_the_agent_where_the_limit_comes_from` | hint 非空且**逐字出现** `INBOX_MAX` 与 `presence`：不许写成套话，Agent 拿到诊断就知道去库侧读，而不是来 AF 找数字 |
+| 同源面（5） | `test_limit_table_matches_library_source` | AST 解析库侧源码，取三个 builder 里 `_len_bounded(arg, CONST, "field")` 的名单：kind 键集、每 kind 的字段键集、每格值 == `getattr(_presence, CONST)` 现读值，三层逐枚相等。库侧改名/换常量/新增受限字段 ⇒ 这条先红 |
+| | `test_bounded_arg_is_a_real_positional_parameter_of_the_builder` | `_len_bounded` 第一参必须真是 builder 的入参名且是 `POSITIONAL_OR_KEYWORD`——否则 `params` 里那个键到不了这道闸，编译期判的是空气（桥 `positional = [params[k] for k in required]` 的传法也接不住） |
+| | `test_scanner_holds_no_length_number` | 扫描器方法体内**零整数字面量**且必须调用 `inbox_overlong_fields`：上限不许被手抄进 `af_scanner.py`，也不许另起一份 |
+| | `test_table_values_are_the_library_constant_objects` | 表格值**就是**库侧那枚常量对象（`is` 同一性）——数值相等不等于同源，`500` 与 `INBOX_MAX_TEXT` 在 `==` 下无差别，在 `is` 下有 |
+| | `test_adapter_module_has_no_run_time_attribute_fetch` | 本文件零 `getattr` 调用、零整模块 `import homesdk.presence`、三枚常量确实直接 `ImportFrom` 进来——把 §二 那条返工钉成门，而不是一次性口头裁定 |
+| 发出面（19） | `test_overlong_field_fires_exactly_one_error[speak-text / notify-title / notify-body / tv-content]`（×4） | 四枚字段各发**恰好一条**、`level == ERROR`、`node_id` 对、message 里带得出**现读上限数字**、`diag.hint == CODE_HINT[CODE] != ""` |
+| | `test_boundary_is_pair_not_slop[…同四枚]`（×4） | 边界成对：恰好等于上限**不报**（误杀合法 IR）、上限 +1 **报**（闸慢了）。差一在两端各有一只脚 |
+| | `test_notify_reports_each_overlong_field_separately` | `title` 与 `body` 同时超长 ⇒ 两条，逐字段点名。删掉循环只报第一条就红 |
+| | `test_bare_action_name_and_dotted_both_fire` | DSL 把 `do d1 inbox.speak {…}` 切成 `adapter=inbox`+`action=speak`，IR JSON 里两种写法都在用——归一由 `kind_of` 单点做，两头都钉 |
+| | `test_short_enough_payload_is_clean` / `test_other_adapters_are_not_taxed` | 不误伤：短载荷干净；`ha` 适配器里放一枚同名 `text` 长字段不判（收件箱的契约不加到全仓头上） |
+| | `test_non_string_values_are_out_of_scope[12345/None/dict/list/float]`（×5） | 形态错归库侧 `TypeError` 那一路，混进来会把"类型不对"误报成"超长" |
+| | `test_unregistered_kind_is_not_judged_here` | 未登记的 kind（`inbox.shout`）不发本码：可投递主题白名单真源是 `presence.INBOX_TOPICS`、判它的是桥，这里不抄第二份名单 |
+| | `test_empty_or_absent_params_are_clean` | 空/缺 `params` 干净，且直接调 `inbox_overlong_fields(…, None)` 不炸 |
+| 拦截面（1） | `test_ok_is_false_and_code_is_in_errors` | ERROR 的另一半脸：进 `errors`、`ScanResult.ok` 为假——与 §二之八十四 那条 `test_warning_keeps_scan_ok` 口径相反，两个级别别混 |
+| 两端同判面（3） | `test_executor_forwards_params_verbatim` | 正则钉 `af_executor.py:741` 那句原样转交——满射程的依据在源码里，不在记忆里 |
+| | `test_same_overlong_payload_fails_the_adapter_call` | 同一份超长 `params` 在运行期 `success is False` 且 `data["code"] == ADM_ERR_PAYLOAD_INVALID`（dry_run 也在库里走一遍 builder，照样抛） |
+| | `test_at_limit_payload_passes_the_adapter_call` | 恰好等于上限在运行期过得去——两端用的是同一个数、同一枚常量 |
+
+目录判据 `tests/unit/test_diagnostic_code_catalog.py` 的枚数腿 42→**43**，那条通用反向腿（`_NON_LITERAL_KEYS` 名单）的锚点随本批重钉：`:1147`（`CROSS_DEP_CYCLE`）/`:1152`（`EMIT_SELF_LOOP`）/`:1158`（`ENTITY_DEP_CYCLE`）/`:1287-1290`（四枚 `LIVE_*`，用于 `:1313/:1321/:1329/:1347`）。
+
+### 四、读数（当场真跑，副本树 `%TEMP%/afmut88` 与工作树各一轮）
+
+| 判据 | 读数 | 出处 |
+|---|---|---|
+| BASE-a：HEAD 的 `af_scanner.py`+`af_adapters/inbox.py`，只跑目录判据 | **`1 failed, 7 passed`，`rc=1`**，红名 `test_catalog_size_reading_is_pinned` | `%TEMP%/mut88b.log`。枚数面在 HEAD 上确实是 42 ⇒ 这条腿复现得出"本批新增了一枚" |
+| BASE-b：同一 HEAD 状态跑本批新判据整份 | **`rc=2`、`1 error`**，逐字：`ImportError: cannot import name 'INBOX_LEN_LIMITS' from 'autoforge.af_adapters/inbox.py'` | 同上。诚实记账：这一腿不是逐名红，是**整份 import 不进**——判据依赖本批新增的表，HEAD 里没有。它证明"判据不空转"，但证明力弱于 #87 那批的七条具名红，所以补腿 MU1-MU7 逐枚把射程钉上 |
+| TGT：工作树装修后（新判据 30 + 目录 8） | **`38 passed`，`rc=0`**；三份合上新增 `test_mqtt_writers_gate.py` 后 **`60 passed`，`rc=0`**（副本树与工作树各跑一遍，两遍同值） | `%TEMP%/mut88.log` / `mut88c.log` |
+| 相关面定向（按文件名逐份列出，可复现） | **`171 passed`，`rc=0`**，`15.27s` | 工作树 `%TEMP%/t88_named147.out`。命令原样：`pytest tests/unit/test_inbox_param_length_diagnostic.py tests/unit/test_inbox_adapter.py tests/unit/test_inbox_contract_keys.py tests/unit/test_inbox_pipelines.py tests/unit/test_af_mqtt_bridge.py tests/unit/test_diagnostic_code_catalog.py tests/unit/test_confirm_exit_diagnostic.py tests/unit/test_mqtt_writers_gate.py -q`。另跑一族关键字口径 `-k "inbox or diagnostic or mqtt or scanner"` ⇒ **`296 passed, 2684 deselected`**（`%TEMP%/t88_family.out`）。**更正**：本段首稿在这里写的是"定向 147"，那份读数的文件清单没落盘、当场复现不出，已按现读改成上面这两条可复现口径（同集合的三份核心文件另读 `60 passed`，与副本树那份同值） |
+| `scripts/check_mqtt_writers.py src` | **`rc=0`**，读数：出向写者 3 处/1 文件、事件生产者 2 处/1 文件、桥内 `_publish` 2 处（载荷出自 `_envelope()` 2 处）、机制层 `_presence` 入口 **6 处/1 文件**、现场豁免 **0 处** | 返工后终值：`exempted` 仍是 0，`presence_files` 仍是 1（只有桥） |
+| 全量整树（工作区混合态，含并发登录线） | **`6 failed, 2931 passed, 43 skipped in 187.22s`，`PYTEST_RC=1`** | `%TEMP%/t88_full.out`（`tests/unit`）。六条红逐名：`test_dcd_20261004_auth_limits`（`owner_face_still_sees_plaintext` / `third_party_write_token_gets_the_mask_not_the_code`）、`test_v0_8_auth`（`legacy_single_token_backward_compat` / `multi_token_scope_grading` / `revocation_immediate_over_http`）、`test_v1_4_token_expiry::expired_token_is_403_over_http` |
+| 归属自证①：同一份 HEAD 树只叠本批四份文件（`git archive HEAD` 解出后覆盖 `af_scanner.py`/`af_adapters/inbox.py`/两份判据，登录线那两份保持 HEAD） | **`9 failed, 2928 passed, 43 skipped in 216.48s`**，且**六条 auth 腿全绿**（不在红名里） | `%TEMP%/t88_headunit.out`（`%TEMP%/af88head`）。那 9 条红全在"要读真实仓面"的门-meta 腿上（`test_gates_coverage_gate` 4 / `test_mqtt_runtime_dep_gate` 3 / `test_pkg_markers_gate` 1 / `test_atomic_write_gate` 1）——这棵树我 `git archive` 时没带 `.github/`、`.gates-baseline.txt`、`.git`，是**取数面残缺**，不是产品红也不是本批引入。两棵树的 collected 总数同为 2937，红名集合互不相交 |
+| 归属自证②：副本树=工作树混合态，逐名跑那 6 条 | `2 failed, 4 passed`（`owner_face…` / `third_party…`）；再把 `af_api.py`/`af_auth.py` 换成 HEAD 那份、其余一字不动 ⇒ **`6 passed`，`rc=0`** | `%TEMP%/mut88.log`（AUTHATTR-1/2）+ `mut88c.log`（工作树同集合复现 `2 failed, 4 passed`）。⇒ 这六条红源自并发登录线的未提交改动，AF 不接手；剩下四条在全量顺序下才红、单跑绿，属同族的状态顺序相关，仍落在 auth 家族那两份文件里 |
+
+### 五、变异自证（七枚行为/注册面 + 一枚形状反例，全在副本树，工作树没被注入过一字节）
+
+副本树 `af_scanner.py` md5 `d9b7adce6c5c235867447160fd78f290`、`af_adapters/inbox.py` md5 `e2a85455444595df25d4dced15be0add`，与工作树逐份相同；每腿跑完按字节还原，四份文件终读 `restored_same=True`。注入前核 `count==1`、注入后 `ast.parse`（不合格拒写盘）；行尾按各文件自身口径拼（`af_scanner.py` 工作区整份 CRLF：1354 行 / 1354 枚 CR，比 §二之八十四 的 1327 正好 **+27**；`inbox.py` 与两份判据 CR=0）。
+
+| 腿 | 注入（原样） | 杀掉（逐名，存证 `%TEMP%/mut88.log`） | 这枚证明的是 |
+|---|---|---|---|
+| MU1 | `CHECKS` 里那枚键整行删除 | **3 failed**, 35 passed：`test_code_is_in_both_catalogs_by_name` / 通用主判据 `test_every_emitted_diagnostic_code_is_registered_in_CHECKS` / `test_catalog_size_reading_is_pinned` | "发诊断却不注册"这枚旧缺口再造不出来：点名腿、§二之八十三 的通用腿、枚数腿三路各挡一路 |
+| MU2 | `CODE_HINT` 那格三行整删 | **8 failed**, 30 passed：`both_catalogs_by_name` / `hint_is…`（本文件那枚 `hint_tells_the_agent_where_the_limit_comes_from`）/ `test_every_emitted_diagnostic_code_carries_a_non_empty_hint` / `catalog_size` / 四枚 `overlong_field_fires_exactly_one_error`（它们各自断言 `diag.hint == CODE_HINT[CODE] != ""`） | 第二层后果真在：注册了却没 hint＝到 Agent 手上半张脸，而这条硬门的诊断**正是**给 Agent 自修正用的 |
+| MU3 | 方法里 `ERROR` → `WARNING` | **5 failed**, 33 passed：`test_ok_is_false_and_code_is_in_errors` + 四枚 `overlong_field_fires_exactly_one_error` | 级别面与拦截面各有一双脚：改了级别，既红"级别断言"也红"`ok` 为假" |
+| MU4 | `found.append(...)` 后加 `break`（只报第一条） | **1 failed**, 37 passed：`test_notify_reports_each_overlong_field_separately` | 逐字段发不被"合一条含糊的"替代——只有这一条腿管它，说明腿是分得开的 |
+| MU5 | 比较 `>` → `>=` | **4 failed**, 34 passed：四枚 `test_boundary_is_pair_not_slop` | 差一在两端都红：`>=` 会误杀恰好等于上限的合法 IR |
+| MU6 | 表格里 `"speak": {"text": INBOX_MAX_TEXT}` → `{"text": 500}` | **1 failed**, 37 passed：`test_table_values_are_the_library_constant_objects` | **`==` 判不出手抄，`is` 判得出**：500 与库侧那枚常量数值相等，同源腿（`==`）全绿，只有同一性腿红——这正是 MU6 要证明的那一格，也是本批为什么坚持"格子里放常量对象本身" |
+| MU7 | 删掉 `_scan_automation` 里 `:379` 那行调用点 | **11 failed**, 27 passed：`bare_action_name_and_dotted_both_fire` / 四枚 `boundary_is_pair…` / `notify_reports…` / `ok_is_false…` / 四枚 `overlong_field_fires…` | 行为面塌而静态面不塌：码字面量、表、hint 全在源码里，注册腿与同源腿一概不红——所以调用站必须单钉（§二之八十四 MU5 同形） |
+| MU8（形状反例） | 把 `speak` 那一格换成 `int(getattr(_presence, "INBOX_MAX_TEXT"))` 并 `from homesdk import presence as _presence`（代码可运行、键集与数值都对） | 仓门红：**`scripts/check_mqtt_writers.py src` → `rc=1`**，逐字 «`src/autoforge/af_adapters/inbox.py:59: 桥外用 \`getattr(_presence, …)\`»；pytest 面 `test_mqtt_writers_gate.py::test_real_src_is_clean_with_measured_counts` **1 failed, 21 passed** | 本批返工的依据不是"我觉得不行"，是**门真的会红**。同时如实登记反证面：这枚注入在 30 条判据里一条都不红（它数值正确、名单正确）——门管形状、判据管语义，两半缺一半就漂移 |
+
+### 六、门禁（`GATES_PYTHON=python bash gates.sh` 连跑两遍，逐字节对撞）
+
+- 两遍同值：**`GATES_RC=1`（A、B 各一次）**，21 个 `══` 段 = 2 红 + 19 绿，`✓` 行 16；两份输出各 **7890 字节**，`diff` 只报我自己追加的那行标签（`GATES_RC_A=1` vs `GATES_RC_B=1`），正文零差异（`%TEMP%/gates88diff.txt` 40 字节即那一行）。
+- 与 §二之八十四 那份 `gates87a.out` 对撞，正文只差**两处读数**：undefined-name 门禁 `扫描 206 个文件` → **`207 个文件`**（本批新增那份判据文件被数进去）；有界缓存门 `4051 个名字被读到过` → **`4056 个名字`**（新文件里的名字净增 5 枚）。其余逐字相同 ⇒ **本批没引入新红**。
+- 两枚红仍是登录线那两条，与 §二之七十七/七十八/八十/八十一/八十三/八十四 同形同因：`[棘轮] 总数从 97 涨到 99`（未获批的 AST `fake-ok-const` 两条）＋末段「结论：AST 门禁红（exit=1）」。**AF 不自上调 `.gates-tally.txt`、不塞 `.gates-baseline.txt`**——那两条属于 #79 那格在途窗口，归登录线收口。
+- 起手按 §二之八十四 的教训带上 `GATES_PYTHON=python`（`gates.sh:23` 缺省 `python3`，这台机器上会当场 `GATES_RC=2` 报"homesdk 未安装"）。
+
+### 七、锚点连锁：`git diff -U0` 现读五枚 hunk（+1 / +1 / +3 / +1 / +21 = **27**）⇒ `af_scanner.py` 1327 → **1354 行**（新方法块之后一律 **+27**）
+
+hunk 头逐枚（`git diff -U0 -- src/autoforge/af_scanner.py` 原样）：`@@ -16,0 +17 @@`（import）、`@@ -69,0 +71 @@`（`CHECKS`）、`@@ -126,0 +129,3 @@`（`CODE_HINT`）、`@@ -373,0 +379 @@`（调用点）、`@@ -702,0 +709,21 @@`（方法块 `:709-729`＝注释 5 行 + `def`…`)` 15 行 + 空行 1）。**上一批写的是"两本目录插 4 行 + 新方法 20 行"，与本批现读不等**：两本目录共插 1+3＝4 行无误，但方法块连注释带尾随空行是 **21** 行，所以总账是 `1+1+3+1+21＝27`（+17 那行 import 原先没单项列出）。
+
+| 段 | §二之八十四 钉 | 本批现读 | 位移 |
+|---|---|---|---|
+| `CHECKS` 声明 | `:38` | **`:39`** | +1（那本目录多插一行） |
+| `Diagnostic.__post_init__` hint 回退 | `:174-176` | **`:179-181`** | +5 |
+| `CONFIRM_WITHOUT_DENY_PATH` 键 / hint | `:55` / `:99-100` | **`:56`** / **`:99-100`**（键 +1，hint 未动） | +1 / 0 |
+| L2 策略表整段 | `:406-430` | **`:412-436`**（`if level == "L2":` `:413`、`elif not node.canary:` `:425`、发出点 `:429`） | +6 |
+| `_check_confirm_exit` 调用点 / 方法 | `:364` / `:503-521` | **`:369`** / **`:509-527`**（字面量 `:520`） | +5 |
+| `_check_param_budget` | — | **`:693`** | |
+| 新检查方法 `_check_inbox_payload_len` | — | **`:709-728`**（注释 709-713、`def` 714、码字面量 `:720`、收尾 `)` `:728`；新增 hunk 为 `+709,21`，第 21 行是尾随空行 `:729`），调用点 `:379` | 本批新增 |
+| 变量传码三枚 | `:1120/:1125/:1131` | **`:1147` / `:1152` / `:1158`** | +27 |
+| `LIVE_*` 常量 | `:1260-1263` | **`:1287-1290`**（用于 `:1313/:1321/:1329/:1347`） | +27 |
+| `--dry-live` 组 | `:1272/1299/1309-1310` | **`:1299/1326/1336-1337`**（`live_preflight` `:1293`） | +27 |
+
+`af_adapters/inbox.py` 侧：`INTENTS_MAX :46`、`INBOX_LEN_LIMITS :57-61`、`kind_of :64`、`inbox_overlong_fields :74-89`、`class InboxAdapter :92`（模块 169 行、CR=0）。连锁重钉落在：知识文档 §〇/§七 标题与族表（"出站与覆盖"那行 += 本枚）、§七 新增一段本诊断的落点、§八"编译期三张脸"那行的 L2 表范围（`:406-430`→`:412-436`，并写明"上一批钉 `:406-430`，本批按现读再钉"）、§十六 残余第 8 条（收掉一半）；说明文档 §〇 取证口径、§二 模块表、§三 运行链、§五 `--dry-live` 那组、§七 那一格、§五 收件箱那行（改成常量名 + "AF 只做三件事"）、§十八 第 8/9 条；执行记录 §〇 读数口径表那行（"现读 42 / `:38`"→"现读 43 / `:39`"）。
+
+### 八、记账位
+
+- 本批改动清单：`src/autoforge/af_scanner.py`（import 1 行、`CHECKS` +1 行、`CODE_HINT` +3 行、调用点 1 行、方法块 21 行 ⇒ `git diff --numstat` 现读 **27 0**）、`src/autoforge/af_adapters/inbox.py`（表 + 判定函数 + 文档串去掉手抄的 `text≤500`/`title≤80`/`body≤500`；含一次形状返工）、`tests/unit/test_inbox_param_length_diagnostic.py`（新增 30 条腿）、`tests/unit/test_diagnostic_code_catalog.py`（枚数 42→43 + `_NON_LITERAL_KEYS` 锚点重钉）、`docs/architecture/AF完整知识文档.md`、`docs/architecture/AF完整架构与运行时说明.md`。**不进**：`af_api.py`、`af_auth.py`、`docker/*`、`ui-user-mimo/*`、`docs/audit/参考/FFL-200题测试提示词.md`（并发登录线在途/归属他人）、计划文档（按纪律保持 unstaged）。
+- 目录读数：`len(CHECKS)` 42 → **43**、`len(CODE_HINT)` 42 → **43**，两本键集全等（现读已核：`CHECKS= 43 CODE_HINT= 43 equal= True`，`INBOX_PARAM_TOO_LONG` 两本都在）。
+- 交 DCD 的一格（**不是自决口径**）：ERROR-vs-WARN 的取舍。AF 按契约 §1.3「DB 侧对超长 fail-closed 丢弃」与 `L2_NEEDS_CANARY` 先例选了 **ERROR＝拦发布**，理由是放一条必死 IR 进库等于把"必然失败"伪装成"已配置好"；代价是它同时会拦下**演练台账**里这类 IR 的入库。回执 `E:\NAS\关键决策部\inbox\20261010-AF-收件箱载荷编译期预拒落地与ERROR级别追认.md` 里请 DCD 认这两条：① 级别裁 ERROR 还是降 WARN；② 同批另开的护栏 3 申请（`20261010-AF-契约护栏3每来源限流的N与执行人-决策申请`）仍等 N 值与执行人。
+- 回执里多要了一格（本批新发现的第三份手抄面，不是 AF 能自决的）：契约 §1.3 那三行「text ≤500 / title ≤80 / body ≤500」是**散文里的数字**，真源是库侧 `INBOX_MAX_*`——请 DCD 在表后补一句"数字为摘录，改数须同批改本表"，否则将来库侧调上限时契约文档就是最会漂的那一份（AF 侧已用 `is` 同一性把自己那份钉死，管不到 DB 读哪一份）。
+- 本段的**两处自我更正**（不改写当时的读数，按现读另记）：① §七 首稿把 hunk 组成写成"两本目录插 4 行 + 新方法 20 行"，`git diff -U0` 现读是 `+1/+1/+3/+1/+21`＝27，已按 hunk 头逐枚改正；② §四 首稿那行"定向 `147 passed`"的文件清单没落盘、当场复现不出（§二之八十四 也订正过同名的 147，见 `:6466`），已换成两条可复现口径（命名 8 份文件 `171 passed` / 关键字族 `296 passed, 2684 deselected`，存证 `%TEMP%/t88_named147.out`、`t88_family.out`）。
+- §十八 残余第 9 条现在只剩护栏 3 那一格；`mosquitto_sub` 那半边归 NAS 合并窗（#76），不是仓内可收的。
+- 仓根那四份未跟踪产物（`docker-compose.api.yml.tmp`、`issued_tokens.json.tmp`、`issued_tokens_clean.json`、`docker/docker-compose.api-test.yml`）不删不动（归属不明）。
+- 远端读数：本批未推。未推枚数一律以 `git log origin/main..HEAD` 现读为准，不在散文里追写计数。推 GitHub 要 owner 点头。
+- 待办：#88 收口。#83/#84 不变（等 owner 勾名单与部署机）；#79 等登录线窗口（那两条门禁红也押在这里）；#75/#76 等卡2 与 NAS 合并窗；#80 等 homesdk 0.3.3。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `8efc134` + 收件箱长度预拒批次（代码面已提交 **`328dde5`**：`af_scanner.py` +27／`inbox.py` +49−4／新判据 321 行／目录判据 9 处／两份架构文档；本记账格另起一提交）
