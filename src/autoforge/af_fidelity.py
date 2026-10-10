@@ -23,6 +23,7 @@ from typing import Any, Mapping
 
 from .af_ir import Automation, ParamDepthError, Trigger, check_param_depth, check_trigger_depth
 from .af_ir.condition_norm import LeafUnserializable, normalize_condition
+from .af_ir.models import IRDepthError
 from .af_nl import render_automation
 
 __all__ = [
@@ -277,7 +278,19 @@ def verify_roundtrip(ir: Mapping[str, Any]) -> FidelityReport:
     词汇表外的形状不再抛穿：落成 `not_comparable` 一档，`ok=False`，`detail` 带位置与原因。
     """
     detail: list[str] = []
-    auto = Automation.from_dict(dict(ir))
+    try:
+        auto = Automation.from_dict(dict(ir))
+    except (IRDepthError, ParamDepthError) as exc:
+        # 环/超深在 schema 之前就被 AF1 那道闸拦掉，轮不到下面的遍历——这里接住它，
+        # 否则「自引用容器」那一格又以另一种具名错抛穿校验器（本函数的本职是拒绝这一格）。
+        return FidelityReport(
+            ok=False,
+            nl_deterministic=False,
+            nl_full_coverage=False,
+            projection_fidelity=False,
+            detail=[f"无法比较（不是不等）：入口解析即抛 {type(exc).__name__}：{exc}"],
+            not_comparable=True,
+        )
 
     # IR→NL：确定性（同图必得同文）+ 全节点覆盖
     nl1 = render_automation(auto)

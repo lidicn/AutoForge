@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -103,7 +104,11 @@ def test_af_atomic_depends_on_nothing_but_stdlib():
         elif isinstance(node, ast.ImportFrom):
             mods.append(node.module or "")
             assert node.level == 0, "相对 import 会成环"
-    assert all(not m.startswith("autoforge") and m.split(".")[0] in {"os", "tempfile", "pathlib", "__future__"} for m in mods), mods
+    # 真源取解释器自己的标准库名单：上一版把允许名单手抄成 4 个名字，af_atomic 加一枚 `import json`
+    # 就把这条腿判红——手抄名单在"标准库"这个口径上必然过期。
+    assert all(
+        not m.startswith("autoforge") and m.split(".")[0] in sys.stdlib_module_names for m in mods
+    ), mods
 
 
 # ── 九个调用点：落盘后可读回、目录里没有 tmp 残留 ─────────────────────

@@ -13,6 +13,8 @@ ignore_errors=True)`，把"整份旧归档还躺在盘上（而读侧看不见�
 2. **日志读数面先自证**：`af_store` 的 logger 名是 `autoforge.store`（不是 `autoforge.af_store`），
    挂错名字的 handler 会让"0 条"恒真。`store_logs` 这个 fixture 在 setup 里先发一枚哨兵、抓不到
    就当场失败，所以任何一条断言里的"0 条/1 条"都是被验证过的读数面量出来的。
+3. **注入本身要自证落过**：`break_delete` 返回命中清单，每条腿 `assert hits`。predicate 一站没中
+   就等于这条腿什么都没测——CI（POSIX）上按整条路径认目标的三条腿正是这样静默读绿的。
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from __future__ import annotations
 import ast
 import logging
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -73,26 +76,55 @@ def store_logs():
 
 @pytest.fixture
 def break_delete():
-    """把删除失败注入到遍历内部（真实现场形状），teardown 一定还原。"""
-    originals = (os.unlink, os.rmdir)
+    """把删除失败注入到遍历内部（真实现场形状），teardown 一定还原。
 
-    def _apply(predicate) -> None:
+    `shutil.rmtree` 在 POSIX 走 fd 版遍历，传给 `os.unlink` 的是**裸文件名**（`v9.json`）而不是
+    整条路径——按路径认目标的 predicate 会一站都不中，注入静默失效、腿照样绿（CI 实测就是这一形）。
+    这里把 `_use_fd_functions` 按回 False（Windows 本来就 False），两侧同形；命中清单由腿自己核对。
+    """
+    originals = (os.unlink, os.rmdir)
+    fd_original = shutil._use_fd_functions
+    shutil._use_fd_functions = False
+
+    def _apply(predicate) -> list[str]:
+        hits: list[str] = []
+
         def _wrap(real):
             def inner(path, *args, **kwargs):
                 if predicate(str(path)):
+                    hits.append(str(path))
                     raise OSError(13, "injected delete failure", str(path))
                 return real(path, *args, **kwargs)
 
             return inner
 
         os.unlink, os.rmdir = _wrap(originals[0]), _wrap(originals[1])
+        return hits
 
     yield _apply
     os.unlink, os.rmdir = originals
+    shutil._use_fd_functions = fd_original
 
 
 def _warns(records: list[tuple[int, str]]) -> list[str]:
     return [message for level, message in records if level >= logging.WARNING]
+
+
+def test_injection_predicate_is_handed_full_paths(tmp_path, break_delete):
+    """predicate 收到的是整条路径，不是裸文件名——这条腿钉住跨平台同形的那一格。
+
+    fd 版遍历（POSIX 默认）传的是 `entry.name`，按路径认目标的 predicate 会一站不中；
+    fixture 把 `_use_fd_functions` 按回 False，两侧都必须被这条腿验一次，而不是靠人记得。
+    """
+    root = tmp_path / "store"
+    (root / "deep").mkdir(parents=True)
+    (root / "deep" / "x.json").write_text("{}", encoding="utf-8")
+
+    hits = break_delete(lambda path: path.endswith("x.json"))
+    _purge_tree(root)
+
+    # 命中项必须带得上目录前缀：fd 版遍历只交 `entry.name`，那样 predicate 认的是裸文件名
+    assert hits and all(str(root) in hit for hit in hits), hits
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -183,8 +215,9 @@ def test_unreclaimed_backup_is_counted_reported_and_warned(tmp_path, store_logs,
     store = _build(root, times=1)
     bundle = _bundle(tmp_path)
 
-    break_delete(lambda path: BACKUP_DIR_SUFFIX in path)
+    hits = break_delete(lambda path: BACKUP_DIR_SUFFIX in path)
     report = store.import_bundle(bundle, "overwrite")
+    assert hits, "删除注入一站没落——这一腿什么都没测到"
 
     backup = _backup_dir(root)
     on_disk = sum(1 for p in backup.rglob("*") if p.is_file())
@@ -217,8 +250,9 @@ def test_residual_files_counted_from_disk_not_from_error_stations(tmp_path, brea
     (root / "deep" / "a.json").write_text("{}", encoding="utf-8")
     (root / "deep" / "b.json").write_text("{}", encoding="utf-8")
 
-    break_delete(lambda path: path.endswith("a.json"))
+    hits = break_delete(lambda path: path.endswith("a.json"))
     reclaimed, residual, errors = _purge_tree(root)
+    assert hits, "删除注入一站没落——这一腿什么都没测到"
 
     assert reclaimed is False
     assert residual == 1, "盘上只剩 a.json，残留数就该是 1"
@@ -239,9 +273,10 @@ def test_stale_backup_blocks_stash_with_the_real_reason(tmp_path, break_delete):
     live_before = store.versions("demo")
     backup = _seed_stale_backup(root)
 
-    break_delete(lambda path: BACKUP_DIR_SUFFIX in path)
+    hits = break_delete(lambda path: BACKUP_DIR_SUFFIX in path)
     with pytest.raises(store_mod.BackupNotReclaimed) as excinfo:
         store.import_bundle(_bundle(tmp_path), "overwrite")
+    assert hits, "删除注入一站没落——这一腿什么都没测到"
 
     message = str(excinfo.value)
     assert BACKUP_DIR_SUFFIX in message
@@ -293,10 +328,11 @@ def test_rollback_with_unreclaimed_shell_leaves_one_warning(tmp_path, store_logs
         return original(*args, **kwargs)
 
     store.save_version_raw = boom  # type: ignore[method-assign]
-    break_delete(lambda path: BACKUP_DIR_SUFFIX in path)
+    hits = break_delete(lambda path: BACKUP_DIR_SUFFIX in path)
 
     with pytest.raises(RuntimeError, match="injected write failure"):
         store.import_bundle(bundle, "overwrite")
+    assert hits, "删除注入一站没落——这一腿什么都没测到"
 
     # 旧归档回到正式区（这一档本来就没坏），原错没被吞
     assert store.versions("demo") == [1]
@@ -315,8 +351,9 @@ def test_rollback_blocked_keeps_backup_whole_and_logs_error(tmp_path, store_logs
     half_written.write_text("half-written", encoding="utf-8")  # 正式位置被删不掉的实体占着
     backup = _seed_stale_backup(root)
 
-    break_delete(lambda path: Path(path).name == "demo")
+    hits = break_delete(lambda path: Path(path).name == "demo")
     GraphStore(root)._unstash_archive("demo", backup)
+    assert hits, "删除注入一站没落——这一腿什么都没测到"
 
     errors = [message for level, message in store_logs if level >= logging.ERROR]
     assert len(errors) == 1

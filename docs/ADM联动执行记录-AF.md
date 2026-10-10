@@ -9207,3 +9207,73 @@ RC=1
 - **回执**：发布面裁定已在原裁定书 `## 执行回填` 区落短回执（Q1 未落码＋窗口三件套）；13问裁定的回执**欠**，与上面的行数对撞一并交。
 - **变异自证取形偏差**：本批用注入式双向判据腿替代 E 盘副本树文本变异（理由见 §一 第 2 条）；若下一批把这类"读远端"的脚本正式纳入门禁装配，需要按 `preflight.sh` 那条线补一次真机跑动的读数。
 - 任务位：#111（本批脚本＋判据腿）已完；#112（仓外两格）已完；#81 保持 pending 并注明"现读上界＝NAS 工作副本 HEAD `68c30ae`"。
+
+## §二之一百一十 · CI 的七条红逐条定性（run 137 读数为基准）＋三处修复（2026-10-11）
+
+### 一、远端读数（仓内只读通道 `scripts/gh_ci_status.py`，命令原样）
+
+```
+PYTHONPATH=E:/NAS/AutoForge/src …Python313/python.exe scripts/gh_ci_status.py
+total_count=138 listed=10   success runs: []
+run 138 id=38080318062 58ed74e status=in_progress conclusion=None event=push
+run 137 … 908a48d ｜ 136 1f9603c ｜ 135 c1c362f ｜ 134 ef6adda ｜ 133 fb700b5
+ ｜ 132 503c4a0 ｜ 131 509214f ｜ 130 4501074 ｜ 129 033866f —— 全部 conclusion=failure
+（可见窗口 129–138 无一绿；更早的 run 不在这次列出的 10 条里，不外推）
+
+… jobs 38075828484
+pytest: completed/failure  failed_steps=['Run tests']
+quality-gates: completed/failure  failed_steps=['Run quality gates']
+ui-typecheck-build / layering-gates / adm-linkage-contracts / ui-user-mimo-judgments: success
+
+… log 114282458686 passed   →  7 failed, 3987 passed, 51 skipped, 1 warning in 195.17s
+… log 114282458823 门禁分类 →  [门禁分类] RC=1：依赖门禁判红（rc=1），且输出里没有崩溃签名——这一条是真违规
+… log 114282458823 WARN     →  WARN fake-ok-const  src/autoforge/af_api.py:980 / :1001
+```
+
+### 二、复现口径：**CI 跑的是没有未提交改动的那棵树**
+
+`git archive HEAD | tar -x -C /e/tmp/ci-head`（只读 git 对象，不碰工作树、不动共享工作树里的任何东西）。
+在这棵干净树上逐条门，才把「两棵树都红」与「只有 HEAD 红」分开——这个区分决定了归属。
+
+| # | 红 | 干净树读数 | 定性 |
+|---|---|---|---|
+| 1 | `test_dcd_20261004_atomic_write_nine_sites.py:106` | 红（两棵树同形） | **真缺陷·本批已修** |
+| 2 | `test_fidelity_canon_vocabulary.py:94` | 红（两棵树同形） | **真缺陷·本批已修** |
+| 3 | `test_overwrite_backup_reclaim.py:255` | **绿** | **POSIX-only 静默失效·本批已修** |
+| 4 | `test_observability_gate.py:108`（`assert 89 == 91`）＋ `:135` | 红，工作区绿 | HEAD-only 漂移 |
+| 5 | `test_process_model_gate.py:201`（5 处） | 红，工作区绿 | HEAD-only 漂移 |
+| 6 | `test_trust_boundary_gate.py:353`（2 处） | 红，工作区绿 | HEAD-only 漂移 |
+| 7 | quality-gates 作业（同一三条门）＋ 依赖门禁 2 枚 `fake-ok-const` | 门红同上；fake-ok 两棵树都在（脏树位置 `:984`／`:1005`） | HEAD-only 漂移＋窗内缺陷 |
+
+**1 的成因**（不是环境）：那条腿把"标准库"手抄成 4 枚名字 `{os, tempfile, pathlib, __future__}`，而 `c035656` 给 `af_atomic.py` 加了 `import json`（`git log -S"import json" --oneline -- src/autoforge/af_atomic.py` ⇒ 唯一命中 `c035656`）——名单没跟着动，于是腿红的是**名单**不是依赖。修法取真源：`sys.stdlib_module_names`（解释器自己的名单，3.11 起就在），⛔ 不把手抄名单补一枚 `json` 了事。
+
+**2 的成因**：`c035656` 同一批把 AF1 的深度闸装在 `validate_automation` 入口（`src/autoforge/af_ir/models.py:772` 调 `check_ir_depth`），而 `verify_roundtrip` 第一行就是 `Automation.from_dict(dict(ir))`（`af_fidelity.py:280`）——自引用容器在**下面那段遍历闸门之前**就被入口拦下并抛 `IRDepthError`，正好破掉本模块自己的纪律「词汇表外的形状不再抛穿，落成 `not_comparable` 一档」（§十八 B.2 那一族）。修法：入口 `try` 接住 `IRDepthError`／`ParamDepthError` ⇒ `not_comparable=True`、`ok=False`、`projection_fidelity=False`，`detail` 带具名类名（不许读成"不等"）。现读 `verify_roundtrip` 无生产调用方（`grep -rn verify_roundtrip src scripts` ⇒ 只有本模块与 `af_nl_build` 的 docstring），所以这不是契约变更。
+
+**3 的成因**（这条最贵，因为它是**假绿**不是红）：`shutil.rmtree` 在 POSIX 走 fd 版遍历，递给 `os.unlink` 的是裸文件名（`v9.json`）而不是整条路径；三条腿的 predicate 按 `BACKUP_DIR_SUFFIX in path` 认目标 ⇒ 在 CI 上一站不中，备份被真删、注入没落、`reclaimed=True`，最后才在"那份可捞回的备份还在不在"这一格露出。本机永远看不见这一格：CI 是 Python 3.11（`.github/workflows/ci.yml:16`／`:36`／`:57`／`:90`），本机 3.13.2 且 **Windows 上 `_use_fd_functions` 本来就是 False**（`os.supports_dir_fd` 不含 `os.unlink`），走的正是整条路径那一支。修三处：fixture 把 `shutil._use_fd_functions` 按回 False（teardown 还原）让两侧同形；`_apply` 返回命中清单，五条腿各自 `assert hits, "删除注入一站没落——这一腿什么都没测到"`；再加一条钉住"predicate 拿到的是整条路径"的同形腿。纪律第 3 条已写进该文件 docstring。
+
+**4–7 的成因（一族，⛔ 不在本批自决）**：上一批在**带着未提交登录线改动**的工作树上跑了 `--write` 与抬钉，然后只提交了文档和测试、把代码留在在途面。字节级证据（干净树 vs 文档）：`af_auth.py:563/759/984/1064` 对文档 `568/764/989/1069`（整枚 +5）、`af_api.py:475/472/457` 对 `479/476/461`（+4）、`Depends` 引用数现读 **89** 对文档与腿钉的 **91**、`GET /api/user/agents` 现读 `requires(read)` 对清单 `dep+requires(read)`。**HEAD 因此自相矛盾**：文档描述的是没提交的那份代码。
+
+### 三、修完的读数
+
+```
+…Python313.exe -m pytest tests/unit/test_fidelity_canon_vocabulary.py
+    tests/unit/test_dcd_20261004_atomic_write_nine_sites.py tests/f14 -q
+→ 137 passed, 1 skipped in 6.81s        RC=0
+… -m pytest tests/unit/test_overwrite_backup_reclaim.py -q
+→ 12 passed in 3.42s                    RC=0
+变异自证（副本树 /e/tmp/ci-head，不碰工作树）：把 predicate 换成永不命中的 "NOSUCHSITE" in path
+→ 3 failed, 9 passed，红文案正是护栏那句
+  E  AssertionError: 删除注入一站没落——这一腿什么都没测到
+M0 对照＝上面那条 12 passed（什么都没改的那一遍）
+GATES_PYTHON=…Python313 bash gates.sh > /e/tmp/gates_after_cifix.txt 2>&1
+→ GATES_RC=1，红源仍只有那两枚 fake-ok-const（af_api.py:984 / :1005，脏树位置）；
+  与上一批 /e/tmp/gates_ui_deploy.txt（9792 B）逐字节对撞，diff 只有一行 = 我自己 echo 的 `GATES_RC=1`
+  ⇒ 本批在门禁面移动 0 字节（三处改动都在 `src/autoforge/af_fidelity.py` 与两份 tests/unit，不是 `check_*.py` 的射程）
+CR 面：`tr -dc '\r' | wc -c` 三个文件均 0；`git show HEAD:<f>` 侧亦 0
+```
+
+### 四、本批明确不自决的两格（归属）
+
+- **`check_*.py` 三份清单＋`test_observability_gate` 的钉值要不要按干净 HEAD 重生成**：按干净树重生成＝我现在就动登录线落地那一提交要写的同一批文件；不重生成＝CI 继续红到 #79 提交。两案各有道理且都牵涉外窗 ⇒ **不自决**，随 13问回执一并递 DCD（回执欠账同 §二之一百零九 第五条）。owner 若点头"按 clean HEAD 重生成并单独提交"，一条命令就能收：`git archive HEAD | tar -x -C /e/tmp/ci-head` 后在副本树里跑那三个 `--write`，把生成的三份文档搬回来＋把钉值改成 89。
+- **依赖门禁那两枚 `fake-ok-const`**（`api_auth_has_admin`／`api_auth_register` 的字面量 `ok=True`）：**两棵树都红**，修它要动 `src/autoforge/af_api.py`＝#79 窗内文件；另一条路是往 `.gates-baseline.txt` 逐条写放行理由，⛔ 我不自写豁免。登记给 #79：那一提交要么把 `ok` 接上真校验，要么带上写明理由的基线行。
+- 任务位：本批新增一格 **#113「CI 永久红：HEAD-only 文档漂移族＋fake-ok 两枚的收法——等 #79 窗或 DCD 点头」**；#111／#112 已在 §二之一百零九 记完。
