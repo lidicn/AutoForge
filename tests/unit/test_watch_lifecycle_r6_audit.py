@@ -451,9 +451,11 @@ def test_every_watchdog_claim_says_the_self_heal_is_not_wired():
 def test_tick_watchdog_still_has_no_production_caller():
     """接线那天这条会红——那是故意的：红的时候必须**同时**改声明与这条腿，不许只改一边。
 
-    为什么不顺手把 watchdog 接上：`_tick_exit_reason` 是模块级全局，ticker 线程写、主线程读且无锁，
-    把 watchdog 接进主循环就恰好造出第六轮 BUG-11 描述的那个竞态；而"意外死亡自动重启 vs 停机等人"
-    是运行期语义决策。按裁定 `20261010-AF与DB与DPP十件` §六 Q3，这类"该不该有消费者"归 DCD 结案。
+    为什么不顺手把 watchdog 接上：`_tick_exit_reason` 是模块级全局，ticker 线程写、主线程读。
+    裁定 `20261011-AF第六轮与第二期审计攒批十三问` §3 Q7.3 已把这类跨线程读写钉进
+    `af_live._live_state_lock`（RLock），**锁有了，但"接不接线"仍是另一件事**：把 watchdog 接进主循环
+    就恰好造出第六轮 BUG-11 描述的那个竞态形状（读线程与读原因之间不再有交错），而"意外死亡自动重启
+    vs 停机等人"是运行期语义决策。按裁定 `20261010-AF与DB与DPP十件` §六 Q3，这类"该不该有消费者"归 DCD 结案。
     """
     calls = [
         (py.name, node.lineno)

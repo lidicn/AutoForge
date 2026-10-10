@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import threading
 
 from autoforge.af_bus import BusEvent
@@ -303,11 +304,35 @@ def _set_watchdog_state(monkeypatch, *, thread, reason):
     return al
 
 
+def _watchdog_pass_with_deadline(al, *, restart, timeout: float = 3.0) -> str:
+    """带时限地跑一次 watchdog，而不是在主线程里裸调。
+
+    为什么必须是时限：`tick_watchdog_pass` 现在持锁跑（裁定 20261011 §3 Q7.3），它体内还会再取一次
+    同一枚锁（`_set_tick_exit_reason`）与 restart 回调里的那一次。这要求那枚锁**可重入**。
+    如果哪天有人把 `RLock()` 换成 `Lock()`，裸调会让主线程当场自锁死——整份文件连同 CI 一起挂到超时，
+    读数只有一句"作业超时"，指不出是谁改坏的。挪进带 join(timeout) 的线程，同一件事就变成一条能说理的 FAIL。
+    """
+    box: list[str] = []
+
+    def _run() -> None:
+        box.append(al.tick_watchdog_pass(restart=restart))
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=timeout)
+    assert not worker.is_alive(), (
+        f"tick_watchdog_pass 在 {timeout}s 内没返回：锁不能同线程重入——"
+        "af_live._live_state_lock 必须是 RLock（裁定 20261011《十三问》§3 Q7.3）"
+    )
+    assert len(box) == 1, box
+    return box[0]
+
+
 def test_watchdog_does_not_restart_after_safe_halt(monkeypatch):
     """硬验收：SAFE HALT 后 watchdog **绝不**重启（否则会抵消安全闸，退化成方案 B）。"""
     calls = []
     al = _set_watchdog_state(monkeypatch, thread=_FakeDeadThread(alive=False), reason="safe_halt")
-    result = al.tick_watchdog_pass(restart=lambda: calls.append(1))
+    result = _watchdog_pass_with_deadline(al, restart=lambda: calls.append(1))
     assert result == "held_safe_halt"
     assert calls == [], "SAFE HALT 停机不得被 watchdog 重启"
 
@@ -316,7 +341,7 @@ def test_watchdog_restarts_on_unexpected_death(monkeypatch):
     """意外终止 → watchdog 自愈重启（方案 C 唯一可重启分支）。"""
     calls = []
     al = _set_watchdog_state(monkeypatch, thread=_FakeDeadThread(alive=False), reason="unexpected")
-    result = al.tick_watchdog_pass(restart=lambda: calls.append(1))
+    result = _watchdog_pass_with_deadline(al, restart=lambda: calls.append(1))
     assert result == "restarted"
     assert calls == [1]
     assert al._tick_exit_reason == "running"
@@ -324,13 +349,113 @@ def test_watchdog_restarts_on_unexpected_death(monkeypatch):
 
 def test_watchdog_no_action_when_thread_alive(monkeypatch):
     al = _set_watchdog_state(monkeypatch, thread=_FakeDeadThread(alive=True), reason="unexpected")
-    result = al.tick_watchdog_pass(restart=lambda: (_ for _ in ()).throw(AssertionError("不应重启")))
+    result = _watchdog_pass_with_deadline(
+        al, restart=lambda: (_ for _ in ()).throw(AssertionError("不应重启"))
+    )
     assert result == "alive"
 
 
 def test_watchdog_honors_manual_stop(monkeypatch):
     calls = []
     al = _set_watchdog_state(monkeypatch, thread=_FakeDeadThread(alive=False), reason="stop")
-    result = al.tick_watchdog_pass(restart=lambda: calls.append(1))
+    result = _watchdog_pass_with_deadline(al, restart=lambda: calls.append(1))
     assert result == "stopped"
     assert calls == []
+
+
+# ── 裁定 20261011《十三问》§3 Q7.3：tick 三枚模块级 global 必须进锁 ────────────
+_LOCK = "_live_state_lock"
+_TRIO = {"_tick_exit_reason", "_tick_supervisor", "_ticker_thread"}
+
+
+def _live_tree():
+    from pathlib import Path
+
+    src = Path(__file__).parents[2] / "src/autoforge/af_live.py"
+    return ast.parse(src.read_text(encoding="utf-8"))
+
+
+def _fns_with_global(tree) -> list[tuple[str, ast.AST, set[str]]]:
+    out = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        names = {nm for g in ast.walk(fn) if isinstance(g, ast.Global) for nm in g.names}
+        if names & _TRIO:
+            out.append((fn.name, fn, names & _TRIO))
+    return out
+
+
+def test_every_trio_writer_wraps_itself_in_the_live_state_lock():
+    """改写 tick 三枚 global 的函数，体内必须出现 `with _live_state_lock`。
+
+    形状锚点而非计数：只把 `with` 换成别的（或整块搬走）都会让这条红。
+    """
+    writers = _fns_with_global(_live_tree())
+    assert {nm for _, _, names in writers for nm in names} == _TRIO, writers
+    assert {name for name, _, _ in writers} == {"start_ticker", "_set_tick_exit_reason"}, writers
+    bare = [
+        name
+        for name, fn, _ in writers
+        if not any(
+            isinstance(w, ast.With)
+            and any(_lock_name(it) == _LOCK for it in w.items)
+            for w in ast.walk(fn)
+        )
+    ]
+    assert not bare, f"这些函数改写 tick 状态却没进 {_LOCK}：{bare}"
+
+
+def _lock_name(item) -> str | None:
+    """`with <这里>:` 的那个表达式；只认裸名字（本仓这枚锁是模块级 `Name`）。"""
+    expr = getattr(item, "context_expr", None)
+    return expr.id if isinstance(expr, ast.Name) else None
+
+
+def test_exit_reason_has_exactly_one_writer_function():
+    """退出原因的唯一写者是 `_set_tick_exit_reason`——多一处直接 global 就红。
+
+    审计那句"先改状态、后清线程的时序约定没有强制"要的正是这个：写点可被机械数出来，
+    才谈得上"每一处都在锁里"。
+    """
+    trio_writers = _fns_with_global(_live_tree())
+    writers = [name for name, _, names in trio_writers if "_tick_exit_reason" in names]
+    assert writers == ["_set_tick_exit_reason"], writers
+
+
+def test_watchdog_decision_body_reads_under_the_lock():
+    """读侧也要有锁：`tick_watchdog_pass` 那串「读线程＋读原因」的复合读必须在锁内。
+
+    §2.3 那一列是按 `global` 声明筛函数的，**纯读改写不过来的函数它读不到**——这一腿补的就是那个缝。
+    同时钉住"它不再声明 global"：一旦有人把写点搬回 watchdog，唯一写者那条会红，而这里会跟着变红提醒两处同步。
+    """
+    fns = [f for f in ast.walk(_live_tree())
+            if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and f.name == "tick_watchdog_pass"]
+    assert len(fns) == 1, f"`tick_watchdog_pass` 在 af_live.py 里有 {len(fns)} 处定义，这条腿判不出唯一真源"
+    body = fns[0]
+    locked = any(
+        isinstance(w, ast.With) and any(_lock_name(it) == _LOCK for it in w.items)
+        for w in ast.walk(body)
+    )
+    assert locked, "watchdog 的复合读不在锁内：读到的线程与原因可能来自两个时刻"
+    decls = {nm for g in ast.walk(body) if isinstance(g, ast.Global) for nm in g.names}
+    assert not (decls & _TRIO), f"退出原因的写点搬进了 watchdog（{decls}），与唯一写者那条冲突"
+
+
+def test_watchdog_restart_can_re_enter_the_lock_without_deadlocking(monkeypatch):
+    """行为面：`tick_watchdog_pass` 是**持锁**调 `restart()` 的，而 restart 回到 `start_ticker` 再取一次同一枚锁。
+
+    这就是用 RLock 不用 Lock 的全部理由，也是 `_watchdog_pass_with_deadline` 存在的理由：
+    换成 Lock 时这一腿判红（并给出"必须是 RLock"那句话），而不是把 CI 挂死。
+    """
+    import autoforge.af_live as al
+
+    done: list[str] = []
+
+    def _restart() -> None:
+        with al._live_state_lock:          # 模拟 start_ticker 在同线程重入
+            done.append("re-entered")
+
+    _set_watchdog_state(monkeypatch, thread=_FakeDeadThread(alive=False), reason="unexpected")
+    assert _watchdog_pass_with_deadline(al, restart=_restart) == "restarted"
+    assert done == ["re-entered"], "restart 没有在锁内被调用——重入面没被测到"

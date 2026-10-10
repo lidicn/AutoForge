@@ -224,21 +224,33 @@ def test_real_repo_primitive_counts_pinned():
     prims = cpm.scan_primitives(trees, REPO)
     inproc = [r for r in prims if r["prim"] in cpm.INPROC_PRIMS]
     cross = [r for r in prims if r["prim"] in cpm.CROSSPROC_PRIMS]
-    assert (len(inproc), len({r["path"] for r in inproc})) == (17, 10)
+    assert (len(inproc), len({r["path"] for r in inproc})) == (18, 11)
     assert (len(cross), len({r["path"] for r in cross})) == (16, 6)
     assert sum(1 for r in cross if r["path"].endswith("af_service.py")) == 3
     doc = (REPO / DOC_REL).read_text(encoding="utf-8")
-    assert "进程内 17 站点／10 个文件 · 跨进程 16 站点／6 个文件" in doc
+    assert "进程内 18 站点／11 个文件 · 跨进程 16 站点／6 个文件" in doc
 
 
 def test_real_repo_shared_names_tick_trio():
+    """裁定 20261011《十三问》§3 Q7.3 落地后的形状：tick 三枚 global 已进锁，其余六枚仍未进。
+
+    修前三枚的机器读数是 `locks==0` 且所在函数体内无 `with`（审计那句"漏网点"）。
+    这一腿双向都要成立：三枚必须**有** `with`＋**有**锁，其余六枚必须**没有**——
+    只写前者就退化成"全项目都加锁了"的假读数，而 `with` 的探测面也确实还分辨得出来。
+    """
     trees = load_trees(REPO)
     shared = {(r["name"], r["path"]): r for r in cpm.scan_shared_names(trees, REPO)}
-    live = [r for r in shared.values() if r["path"].endswith("af_live.py")]
-    assert {r["name"] for r in live} == {"_tick_exit_reason", "_tick_supervisor", "_ticker_thread"}
-    assert all(r["locks"] == 0 for r in live)          # 报告那句"漏网点"的机器读数
-    assert all(r["with"] is False for r in shared.values())  # 全 9 枚所在函数都没有 with
-    assert len(shared) == 9
+    live = {r["name"]: r for r in shared.values() if r["path"].endswith("af_live.py")}
+    assert set(live) == {"_tick_exit_reason", "_tick_supervisor", "_ticker_thread"}
+    assert all(r["with"] is True for r in live.values()), {k: v["with"] for k, v in live.items()}
+    assert all(r["locks"] == 1 for r in live.values())
+    # 退出原因只有一个写者：绕开 `_set_tick_exit_reason` 直接 global 改写就破坏这条
+    assert live["_tick_exit_reason"]["fns"] == "_set_tick_exit_reason"
+    others = [r for r in shared.values() if not r["path"].endswith("af_live.py")]
+    assert all(r["with"] is False for r in others), [
+        (r["name"], r["path"]) for r in others if r["with"]
+    ]
+    assert len(shared) == 9 and len(others) == 6
 
 
 def test_real_doc_register_covers_every_site():

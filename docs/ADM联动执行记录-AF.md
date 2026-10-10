@@ -9277,3 +9277,114 @@ CR 面：`tr -dc '\r' | wc -c` 三个文件均 0；`git show HEAD:<f>` 侧亦 0
 - **`check_*.py` 三份清单＋`test_observability_gate` 的钉值要不要按干净 HEAD 重生成**：按干净树重生成＝我现在就动登录线落地那一提交要写的同一批文件；不重生成＝CI 继续红到 #79 提交。两案各有道理且都牵涉外窗 ⇒ **不自决**，随 13问回执一并递 DCD（回执欠账同 §二之一百零九 第五条）。owner 若点头"按 clean HEAD 重生成并单独提交"，一条命令就能收：`git archive HEAD | tar -x -C /e/tmp/ci-head` 后在副本树里跑那三个 `--write`，把生成的三份文档搬回来＋把钉值改成 89。
 - **依赖门禁那两枚 `fake-ok-const`**（`api_auth_has_admin`／`api_auth_register` 的字面量 `ok=True`）：**两棵树都红**，修它要动 `src/autoforge/af_api.py`＝#79 窗内文件；另一条路是往 `.gates-baseline.txt` 逐条写放行理由，⛔ 我不自写豁免。登记给 #79：那一提交要么把 `ok` 接上真校验，要么带上写明理由的基线行。
 - 任务位：本批新增一格 **#113「CI 永久红：HEAD-only 文档漂移族＋fake-ok 两枚的收法——等 #79 窗或 DCD 点头」**；#111／#112 已在 §二之一百零九 记完。
+
+## §二之一百一十一 · 裁定 20261011《十三问》Q7.3 落地：`af_live` 三枚 tick 状态 global 进锁（2026-10-11）
+
+裁定原文（`decisions/20261011-AF第六轮与第二期审计攒批十三问-裁定.md` §3 Q7.3）：「**`af_live` global 加锁：做**。
+现读 `af_live.py` global 4 处（`:100/:444/:445/:456`），申请件称『9 枚改写点所在函数体内一个 `with` 都没有』——
+**加锁**，并把这 4 处登记进并发审计面。」四枚 `global` 全部不在 #79 窗内文件，本批直接落。
+
+### 一、落码形状（`src/autoforge/af_live.py`，`git diff --numstat` 读数 ＋47／−28 行）
+
+- 模块级 `_live_state_lock = threading.RLock()`（`:72`）。**取 RLock 不是 Lock**，理由是可证的不是偏好：
+  `tick_watchdog_pass` 现在整体持锁跑，它体内还会再取一次同一枚锁（`_set_tick_exit_reason`），而 `restart()`
+  回到 `start_ticker` 还要第三次取——同线程重入，换 `Lock()` 就是当场自锁死。这一条被 M1 变异案钉住（见 §三）。
+- `_tick_exit_reason` 的**唯一写者**收成一个函数 `_set_tick_exit_reason(reason)`（`:75`）：`_loop` 里五处赋值
+  全部改走它，`tick_watchdog_pass` 里那处读改写也改走它。这样「谁在写退出原因」变成机械可数的形状，
+  而不是靠"先写原因、后清线程"的时序约定（审计 §4.1 点名的正是这个）。
+- 三枚 getter（`get_tick_supervisor`／`get_ticker_thread`／`get_tick_exit_reason`）与
+  `tick_watchdog_pass` 的整段决策体进锁；`start_ticker` 的 `_tick_supervisor = supervisor` 与
+  `_ticker_thread = t` 两处赋值进锁。
+- `start_ticker` 的 `global _ticker_thread, _tick_exit_reason` 收窄成 `global _ticker_thread`——
+  该函数体内已无直接改写，留着就是假声明。修后 `af_live.py` 的 `global` 语句从 4 处降到 **3** 处（`ast.Global`
+  现读：`:78` `_tick_exit_reason`／`:462` `_tick_supervisor`／`:463` `_ticker_thread`；HEAD 是 `:100/:444/:445/:456`
+  四处）。降的那一处不是删掉写，而是 `_tick_exit_reason` 的写全部收进 `_set_tick_exit_reason`，模块里只剩它一枚声明。
+- ⛔ 没有把 watchdog 接线（那是 §六 的另一格，裁定只授权加锁）：`tick_watchdog_pass` 生产调用点仍为 0，
+  判据腿 `test_tick_watchdog_still_has_no_production_caller` 仍在。
+
+### 二、并发审计面登记（`docs/进程模型清单.md`，自动段 `--write` 重生成＋手工段两处更新）
+
+```
+PYTHONPATH=E:/NAS/AutoForge/src …Python313/python.exe scripts/check_process_model.py --write
+→ ✓ 已重新生成 `docs/进程模型清单.md` 自动段（生命周期 4 枚／原语 34 枚／共享名 9 枚；手工段未动）
+git diff -U0 docs/进程模型清单.md | grep -E '^[-+][^-+]'
+-| FileLock | `src/autoforge/af_live.py:133` | …  +| FileLock | `…af_live.py:151` | …      （本文件行号自漂）
++| threading.RLock | `src/autoforge/af_live.py:72` | `<module>` | `_live_state_lock` |    （新增一枚）
+-现读计数：进程内 17 站点／10 个文件 …  +现读计数：进程内 18 站点／11 个文件 …
+-| `_tick_exit_reason` | … | `_loop,start_ticker,tick_watchdog_pass` | 84,394,394,455 | 否 | 0 |
++| `_tick_exit_reason` | … | `_set_tick_exit_reason`                 | 75              | 是 | 1 |
+-| `_tick_supervisor` | … | `start_ticker` | 394 | 否 | 0 |  +| … | `start_ticker` | 412 | 是 | 1 |
+-| `_ticker_thread`   | … | `start_ticker` | 394 | 否 | 0 |  +| … | `start_ticker` | 412 | 是 | 1 |
+-现读计数：9 枚名／6 个文件；其中函数体内没有任何 `with` 的 9 枚
++现读计数：9 枚名／6 个文件；其中函数体内没有任何 `with` 的 6 枚
+```
+
+`diff` 证明改动面**只有 af_live 那三行＋§2.2 新增一行＋两行计数**，其余六枚名（含报告点名的 `af_auth.py`
+BUG-03 那族）一字未动——它们在登录线在途文件里，⛔ 不在本批射程。手工段另更新两处：§五 末段把
+"9 枚全读否"改成现读的"6 否／3 是"并写清 RLock 的理由，§六 问 1／2／3 补上"已裁"的裁定号
+（问 3 已落地，问 1／问 2 的仓内半边仍未落 ⇒ 收尾句从"等裁期间"改成"三问都已裁、问 1／2 落地前"）。
+
+### 三、判据腿与变异自证
+
+`tests/unit/test_process_model_gate.py`：
+- `test_real_repo_primitive_counts_pinned` 钉值 17／10 ⇒ **18／11**（新增的那枚 RLock 是我自己带来的，不是放宽）；
+- `test_real_repo_shared_names_tick_trio` 从"三枚 `locks==0` 且全 9 枚无 `with`"**改成双向**：
+  af_live 三枚必须 `with is True`＋`locks == 1`＋`_tick_exit_reason` 的 `fns == "_set_tick_exit_reason"`，
+  其余六枚必须仍 `with is False`。只写前半就退化成"全项目都加锁了"的假读数，所以两半都在一条腿里。
+
+`tests/unit/test_af_live.py` 新增四条腿：AST 形状锚点（改写三枚 global 的函数体内必须有
+`with _live_state_lock`，且写者集合恰为 `{start_ticker, _set_tick_exit_reason}`）、唯一写者、
+**读侧**持锁（`tick_watchdog_pass` 体内必须有该 `with` 且不得再声明 `global`——§2.3 那列按 `global` 筛函数，
+纯读侧搬出锁它读不到，这条专门补那个缝）、行为面重入不死锁。
+
+改判一条既有形状：watchdog 那四条旧腿原来在主线程裸调 `tick_watchdog_pass`。加锁之后，一旦有人把
+`RLock` 换成 `Lock`，裸调会让主线程当场自锁死 ⇒ 整份文件连同 CI 挂到作业超时，读数只剩"超时"三个字。
+所以四条腿统一改走 `_watchdog_pass_with_deadline(...)`（daemon 线程＋`join(3.0)`，超时判红并直接说出
+"必须是 RLock"）。语义断言一字未改，改的只是调用侧的时限。
+
+变异自证（副本树 `E:\tmp\q73_mut\tree`，工作树不碰；驱动 `E:\tmp\q73_mut.py`，
+结果 `E:\tmp\q73_mutation.result.txt`）：
+
+```
+M0_nothing_injected:                want_rc=0 got_rc=0  red=[]                       summary=['27 passed in 1.16s']      OK
+M1_rlock_becomes_plain_lock:        want_rc=1 got_rc=1  4 条 watchdog 腿判红          summary=['4 failed, 23 passed in 14.23s']  OK
+M2_writer_leaves_the_lock:          want_rc=1 got_rc=1  red=['test_every_trio_writer_wraps_itself_in_the_live_state_lock']  OK
+M3_second_direct_writer_appears:    want_rc=1 got_rc=1  red=['test_exit_reason_has_exactly_one_writer_function']            OK
+M4_watchdog_reads_unsynchronized:   want_rc=1 got_rc=1  red=['test_watchdog_decision_body_reads_under_the_lock']            OK
+总计 5 案，未达预期 0 案
+```
+
+M1 第一趟不是这样过的：注入 `Lock()` 后驱动报 `got_rc=124`（挂死），尾部只有 20 个点。现读定位到
+挂的是**既有腿** `test_watchdog_restarts_on_unexpected_death`——它裸调 watchdog，主线程在嵌套取锁处自锁死。
+那正是上面"改判一条既有形状"的来由；换成带时限的调用后 M1 变成 14.23s 内四条腿判红。**挂死也算杀，
+但说不清是谁改坏的杀不是好判据**，这一案的形状变化记在这里，不写成"一次就过"。
+
+### 四、读数
+
+```
+PYTHONPATH=… src …python.exe -m pytest tests/unit/test_af_live.py -q                 → 27 passed in 1.82s
+同上 tests/unit/test_process_model_gate.py -q                                        → 34 passed in 55.98s
+同上 四份合跑（af_live／watch_lifecycle_r6／arch01_health_trail／tick_supervisor）    → 65 passed in 11.67s
+同上 十五份 af_live 相关面合跑（contract＋unit，含 v0_9_multiproc／orchestrator 等）  → 247 passed, 1 warning in 49.13s
+PYTHONPATH=… scripts/check_process_model.py（校验模式）                              → RC=0，✓ 进程模型门禁干净（同步原语 34 枚、共享名 9 枚逐行对撞一致）
+GATES_PYTHON=…Python313 bash gates.sh ×2                                             → 两遍 GATES_RC=1，各 9792 B、md5 同为 9a8cc8829f4bf3fc3d5714d6891027a1、diff 空
+CR 面：`tr -dc '\r' | wc -c` 五份文件均 0
+```
+
+门禁 `GATES_RC=1` 的红源仍是 #113 那两枚 `fake-ok-const`（`af_api.py:984`／`:1005`，登录线在途文件），
+本批没动 `af_api.py`。与上一批捕获 `/e/tmp/gates_after_cifix.txt`（9781 B、md5 `187344ac…`）逐行对撞，
+门禁本体只有两行移动：进程模型那行的 `同步原语 33 枚 → 34 枚`（本批新增的 RLock），与有界缓存那行的
+`4106 → 4108 个名字被读到过`（新增判据腿引用了名字）；`增长容器 129／基线冻结 114／就地豁免 16／死写 0`
+四格分毫未动，`.gates-tally.txt`／`.gates-baseline.txt` 一字未改，⛔ 未动用任何豁免。
+
+### 五、本批明确不做与归属
+
+- **`af_auth.py` 的 BUG-03 那族（`subjects()` 体内无 `with`）不在本批**：登录线在途文件，#79 窗内；
+  裁定 §3 Q3 的读数半边同样排在窗口之后。
+- **watchdog 接线**：裁定只授权加锁，没授权把 `tick_watchdog_pass` 接进生产链路 ⇒ 未接，
+  判据腿仍钉"零调用点"，接线与否归 `20261010-AF与DB与DPP十件` §六 Q3 那条待裁。
+- **13问回执仍欠**：Q7.3 是第一批落地的问，回执与 §〇-1 行数对撞等攒够几条一起交（裁定 §3 明写
+  Q1／Q3／Q6.3／Q8.2／Q11／Q12 都排在窗口之后 ⇒ 回执不该逐条挤）。
+- 任务位：#114（本批）已完。下一批按裁定继续可窗内落的：Q7.1 的"serve 退出前收子进程"兜底＋Q7.2 信号钩子、
+  Q8.3 两枚安全降级升 ERROR、Q13 只对 `DEPLOY_AUDIT` 落盘、Q4.1 解释器口径、Q4.3 仿真依赖下界、
+  Q3 乙的门禁半边（`check_bounded_caches.py` 另立"持久化单调集"档）。
