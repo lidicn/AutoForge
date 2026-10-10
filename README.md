@@ -253,8 +253,8 @@ forge sim examples/ir/case01_day_light.json
 | [`docs/architecture/HA_SEMANTIC_DIFF.md`](docs/architecture/HA_SEMANTIC_DIFF.md) | 与 HA 的有意偏离清单 |
 | [`docs/reference/G1_ACCEPTANCE.md`](docs/reference/G1_ACCEPTANCE.md) | 8 条验收用例 ↔ 实现点 ↔ 测试落位（含 G4 置信度/canary 映射） |
 | [`docs/archive/ROADMAP.md`](docs/archive/ROADMAP.md) | ① 已发布里程碑 G1–G7 + 真机接线归档；② **版本路线图 v0.2.0–v1.7.1** 与开发计划 |
-| [`docs/roadmap/ADM-路线图-AF.md`](docs/roadmap/ADM-路线图-AF.md) | 架构决策记录（ADM）路线图：已决策项与剩余项 |
-| [`docs/交接卡_模板.md`](docs/交接卡_模板.md) | 里程碑交接卡模板（文件清单/行为增量/验证/风险/合并影响） |
+| [`docs/roadmap/ADM-路线图_v2.0投产.md`](docs/roadmap/ADM-路线图_v2.0投产.md) | 架构决策记录（ADM）路线图：已决策项与剩余项（原 `doc/ADM-路线图-AF.md`，目录归并后已换名） |
+| [`docs/handoff/交接卡_模板.md`](docs/handoff/交接卡_模板.md) | 里程碑交接卡模板（文件清单/行为增量/验证/风险/合并影响） |
 | [`docs/reference/API_CONTRACT.md`](docs/reference/API_CONTRACT.md) | 服务层只读 API 契约（Round 1，权威形态 `/openapi.json`） |
 
 ---
