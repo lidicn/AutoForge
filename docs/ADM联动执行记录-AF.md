@@ -8252,6 +8252,110 @@ M5 必须写清，不能拿"八枚全杀"当卖点：`not_comparable` 为真时 
 - §十八 结构性残余现读：**B.1（`af_irreversible` 执行面无调用方）／B.7（`af_nl_parse` 无产品调用方）／B.10（半边落地、半边等版本窗，见本节）**。两格本批各开任务位并留下现读证据（见下一条）。
 - 开窗时顺手量的两格残余现状（不在本批范围，只把证据钉下来）：① `is_node_non_reversible`/`annotate_non_reversible`（`af_irreversible.py:47/:54`）的 src 侧消费者只有 NL 面（`af_nl.py:20`、`af_nl_parse.py:1093/:1150/:1217/:1227`）与门禁脚本（`scripts/check_ir_runtime_keys.py:25/:27/:64`），`af_undo.py`（511 行）通篇按**设备快照**决定 `restore_call`，零处读 IR 那枚 `_non_reversible` 标注 ⇒ B.1 成立（任务 #96）；② `build_ir_from_nl` 定义在 `af_nl_build.py:57`，`grep -rn "af_nl_build\|from_nl" src/` 全仓只命中一处，而且是 `af_fidelity.py:11` 那句**已过时**的 docstring（还写着"未实现"），MCP 的 `TOOLS`（`af_mcp.py:471`）里也没有它 ⇒ B.7 成立且附带一枚第二份真值（任务 #97）。
 - 存证（`%TEMP%`，不进仓）：`probe_b10.py`／`probe_b10.out`／`probe_b10_E.out`、`mut_b10.py`／`mut_b10_second.out`、`full_b10_final.out`、`hs_head`／`hs_mut`／`hs_commit`（HEAD 副本树／变异副本树／提交树解包三份）、`doc_full.patch`／`doc_mine.patch`（契约文档"只挑自己那 2 个 hunk"的对撞件）、`gate_b93_{a,b,c,d}.out`（四遍门禁，本体各 7877 字节）、`body_b93_{a,b,c,d}.txt`（剥掉驱动标签行后的本体，用于 `cmp`）。
+- 等裁／等窗两件的**现读**（不写成"应该快了吧"）：① `关键决策部/decisions/` 按时间排序最新一枚是 2026-10-10 13:07 的 `20261010-AF拆码与MA自更新四问-裁定.md`，本批那份 `inbox/20261010-AF-两格已实现无调用方的定性与NL面是否开工具-决策申请.md` 与上一批那份 `20261010-AF-拆码库侧已落地发版窗与消费半边前置-决策申请.md` **都还在 `inbox/` 顶端、没有对应裁定文件** ⇒ B.1（Q1）与对外 NL 脸（Q2）本批无落码动作；② #93 的 AF 半边前置仍未满足：`homesdk/pyproject.toml:7` 现读 `version = "0.3.2"`，`homesdk/dist/` 里最新的 wheel 是 `homesdk-0.3.2-py3-none-any.whl`（2026-10-07 00:47），**没有 0.3.3**，而库侧代码已先行（`git log --oneline -2` ⇒ `ad5e9a7` docs ＋ `37fc7aa` 拆码本体）⇒ "库侧已落、消费侧装不到"这一格是被量出来的，不是推测。
 - 任务位：#93 由"等裁定"改成"库侧已落 ＋ AF 半边等 0.3.3 发版窗"（仍 in_progress）；#95 已并入本批申请、等裁；#80（切甲A：`advertise(degraded=/reasons=)`）与 #81（NAS 烤镜像）继续等同一版本窗——三者现在是**同一个前置**；新开 #96（B.1）、#97（B.7＋`af_fidelity.py:11` 过时 docstring）。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `50ca89b` + 裁定 20261010 §一 落库侧半边（homesdk `37fc7aa`：`ADM_ERR_PUBLISH_REFUSED` 第 7 枚进目录、`PublishResult`/`classify_publish_rc`/`PublishRefused`/`raise_if_refused` 把 rc→语义收进库侧、`(名字,数字)` 塌成一张配对表；契约 §7.2 同批改表＋观测面；判据 +11 腿含配对表两面对撞与目录↔契约逐码对撞；变异第一版 M3 存活＝两清单能各自漂移，重构成一张表后 `killed=9 survived=0 invalid=0`、`COPY_RESTORE_BAD=0`；`572 passed / FULL_RC=0` vs HEAD 副本树 `561`；库门禁 `HS_GATES_RC=0`；提交树 `git archive` 解包独立跑 `58 passed`；AF 半边三条现读（site-packages 0.3.2 实体副本／Dockerfile 钉死 wheel 名／禁 agent pip install）⇒ 已递第二份申请并案 #95；契约文档只挑本批 2 个 hunk 进索引，那 34 行早前落笔留在工作树；AF 侧门禁四遍（a/b/c/d，含回填前后各一对）本体逐字节相同——74 行／**7877 字节**，`BODY_CMP_RC=0`／`CMP_AC_RC=0`／`CMP_AD_RC=0`／`CMP_CD_RC=0`，两枚红仍是登录线在途的 `af_api.py:984/:1005`，未据此动基线）
+
+## 二之九十二、开 §十八 的 B.1／B.7 两格"已实现无调用方"：B.7 里 AF 职权的那半是一句**过时的能力声明**，改完钉成判据并做四腿变异；两格的**其余半边都不是"能不能实现"的问题**，已按"要不要多一道闸／多一张脸"递 DCD，等裁期间不预先落码
+
+### 一、开窗先把两格的"调用方"量成符号级读数，不采信任何一句现成结论
+
+审计 §十八 给这两格的定性分别是「`af_irreversible` 执行面无调用方」（B.1）与「`build_ir_from_nl` 无产品调用方」（B.7）。本批开窗按符号逐个现读：
+
+| 面 | 现读读数 | 取数方式 |
+|---|---|---|
+| `af_nl_build` 在 `src/` 里的引用 | **1 个文件命中，且不是 import**：唯一命中是 `af_fidelity.py:11` 那句 docstring（还写着"未实现"）；`grep` import 形态 rc=1 | `grep -rn "import .*af_nl_build\|from autoforge.af_nl_build" src/` ＋ `grep -rln af_nl_build src/` |
+| `af_nl_parse` 在 `src/` 里的引用 | **0**（`grep -rln af_nl_parse src/` 输出为空，连 docstring 提及都没有） | 同上两条，模块名换 `af_nl_parse` |
+| ⇒ 结论 | 架构文档 §十八 第 7 条只点名 `af_nl_parse`、审计 B.7 点名 `af_nl_build`：**两格都成立，不是笔误**，但两处各说了一半 ⇒ 文档那条已补现读并拆开 | 见上两行 |
+| NL→IR 的对外脸 | 已有两张，**缺的只是中文自由文本这一张**：AF-Spec 文本 `af_service.py:1423 compile_text`→`af_api.py:648`（HTTP）→`af_cli.py:1030`（CLI）；意图 JSON 走 MCP `_t_draft` `af_mcp.py:367` | 逐处 file:line 解引用 |
+| MCP 工具位 | `TOOLS`（`af_mcp.py:471`，`AnnAssign`＋列表字面量）现读 **31** 枚（AST 取 `len(elts)`，按名 grep 会漏同名词），其中唯一带 `build` 字样的是 `af_build`（`:674-687`），而它 `required: ["ir"]`（`:683`）——输入必须是 IR dict，"自然语言"在它的描述里是**输出**（IR→NL 渲染），不是输入 ⇒ 中文→IR 这张脸在 MCP 面上确实不存在 | 脚本：AST 找 `TOOLS` 的 `ast.List` 元长度，并逐元取首字段名 |
+| mimo UI | `ui-user-mimo` 里"自然语言" **0 命中** ⇒ 不存在"UI 已经在等这枚工具"的既成事实 | `grep -r 自然语言 ui-user-mimo/src` |
+| `af_irreversible` 四枚 helper | `nl_runtime_note`（`:66`）src 消费者 **2 处**（`af_nl.py:20` import、`:404` 调用）；`runtime_fields_of :42`／`is_node_non_reversible :47`／`annotate_non_reversible :54` **各 0 处**，只由 `tests/f14/test_ask_irreversible.py:139-148` 跑 | 逐符号 `grep -rn` 排除自身模块 |
+| `af_irreversible` 两枚常量 | `af_nl_parse.py:40-43` import 后在 `:1093/:1150/:1217/:1227/:1284/:1303/:1306` **写**标注；`scripts/check_ir_runtime_keys.py:67/:92/:97` 拿它做 schema 白名单硬门 | 同上 |
+| 确认闸真正读的键 | `requires_confirm`：编译期派生 `af_orchestrator.py:683`、运行期消费 `af_executor.py:648-651`（裁定 20261009 §三 已落 ⇒ §二之八十），**不读 `_non_reversible`** | `grep -rn requires_confirm src/autoforge/af_executor.py af_orchestrator.py` |
+| 撤销的真值源 | `af_undo.py:359 inspect()` 自己给 `undoable/expired/domain_mapped/domain_unmapped/confirm_required` 五档，与 IR 标注无关 | `grep -n "def inspect" af_undo.py` |
+
+⇒ 两格的"无调用方"是真的，但**它们各自缺的东西不同**：B.7 缺的是一张对外脸（要不要开＝契约决策），B.1 缺的是一个**定性**（这条标注到底该不该被执行面读——它自己的 docstring 说它管 NL↔IR 保真，审计把它读成撤销输入）。
+
+### 二、B.7 里 AF 职权的那半：把会漂移的散文声明改成现状，并钉一条"点名＋属实"的判据
+
+`af_fidelity.py` 的模块 docstring 长期写着 P1 范围约束「NL→IR 自由文本解析属 P2（`build_ir_from_nl` 未实现）」——而解析器早已在树里，且本批用来测它的那支文件（`tests/f14/test_nl_build.py`）一直在跑。这类声明不会随代码自己更新，属于"写在源码里的第二份真值"，AF 职权内可自决，已改（`c99047e`，2 文件／**18 插入／4 删除**）：
+
+- docstring 现在写的是现状：**P1 用结构化投影、P2 用受限文法解析器，两条半程互不替换**，并给出 P2 的行为口径（零 LLM、超文法即 `ValueError`）与判据位置。
+- 新增判据 `test_p1_scope_note_does_not_claim_the_p2_parser_is_missing`（`tests/f14/test_nl_build.py`）：凡点到 `build_ir_from_nl` 的 docstring 行都不许带「未实现」，且**必须至少有一行点到它**。第二枚断言是反"空集给的干净"——只写"不许带未实现"的话，将来谁把点名整行删掉，这条腿会绿着失效。
+
+变异自证（副本树 `%TEMP%/af_mut97`，四腿按功能不按长度）：
+
+| 腿 | 注入 | 期望 | 现读 |
+|---|---|---|---|
+| M0 | 什么都不改（控制腿） | 全绿 | `RC=0`，85 passed |
+| M1 | 把声明改回"未实现"（推翻真话） | 被杀 | `RC=1`，1 failed／84 passed |
+| M2 | 删掉点名（整行去掉名字） | 被杀 | `RC=1`，1 failed／84 passed |
+| M3 | 同义改写但**仍然属实** | 必须仍全绿（证明这条腿不是 diff 探测器） | `RC=0`，85 passed |
+
+`ANCHOR_HITS=1`、`SENTENCE_HITS=1`、`COPY_RESTORE_BAD=0`。跑量对照：工作树 `tests/f14` **85 passed／`NL_FID_RC=0`**，`git archive HEAD` 副本树同目录 **84 passed／`HEAD_RC=0`**（多的那 1 条就是本批新腿）。提交树再独立解包对撞（`git archive c99047e` → `%TEMP%/af_commit97`）：`tests/f14/test_nl_build.py` **75 passed／`COMMIT_TREE_RC=0`**，并且直接从**提交物字节**量 docstring——点到 `build_ir_from_nl` 的行数 `NAMED_LINE_COUNT=1`、其中含「未实现」的行 `DOC_HAS_未实现_on_named_line=False` ⇒ 判据钉的是进树的那份，不是工作树里恰好开着的那份。
+
+### 三、B.1 复测把审计的框架推翻了一半，因此**交裁而不是结案**
+
+`af_irreversible.py:1-12` 的模块 docstring 自己写明这套标注服务于 **NL↔IR 往返保真**（运行时字段不算"可逆核心"，`[运行时]` 占位是"承认它存在、但不假装能还原它"），从没主张它是撤销或确认闸的输入。而执行面读的是 `requires_confirm`（`af_executor.py:648-651`），撤销读的是 `af_undo.py:359 inspect()` 那五档——**两把闸各自已有真值源**。所以"执行面没调用方＝缺陷"这个前提不成立到可以直接照它落码：
+
+- 若按设计理解 ⇒ B.1 应结案，四枚 helper 里那 0 消费者的三枚属"给 NL 面复用的内部工具"，不是死码待清；
+- 若要它参与闸 ⇒ 那是**新增语义**，且要与 `requires_confirm` 排先后（两把闸谁先拒、拒了对端读什么），属对外行为。
+
+AF 不主张后者，故不预先落码，交 DCD（Q1 三档：甲＝按设计结案／乙＝接进 `requires_confirm` 闸／丙＝撤销台账加一格，但押 `af_api.py` 并发窗口）。同批把架构文档 §十八 第 1 条与 §9.3 那格的措辞补成**按符号的现读**（写侧在 `af_nl_parse.py`，而它自己正卡在 B.7；读侧 `af_nl.py`），并把"执行面没调用方"与"标注无消费者"分开写——原文那句"只有 NL 渲染侧调用方"少算了写侧一处，现已订正。
+
+### 四、工作树那 6 条红：按副本树反证成登录线在途，不是本批带的
+
+全量跑（`GATES_PYTHON` 同源解释器、工作树）：`6 failed, 3730 passed, 53 skipped, 1 warning, 65 subtests passed in 1036.77s`、**`FULL_RC=1`**。六条全在鉴权面，且都在并发登录线的在途文件上：`tests/unit/test_dcd_20261004_auth_limits.py::test_owner_face_still_sees_plaintext`（期望明文，实读 `{'********'}`）、`::test_third_party_write_token_gets_the_mask_not_the_code`、`tests/unit/test_v0_8_auth.py::test_legacy_single_token_backward_compat`／`::test_multi_token_scope_grading`／`::test_revocation_immediate_over_http`（三条都是 `_probe_write` 实读 400、期望 403）、`tests/unit/test_v1_4_token_expiry.py::test_expired_token_is_403_over_http`（400 vs 403）。
+
+归因不是"看名字像"，用两条腿量开（都不碰工作树，跑在 `%TEMP%` 副本树）：
+
+| 腿 | 树内容 | 读数 |
+|---|---|---|
+| X | `git archive HEAD` 副本树（无登录线在途改动）跑这三支文件 | **48 passed／`HEAD_AUTH_RC=0`**（66.97s） |
+| Y | 同一副本树**只把本批两文件换成我的工作树版本** | **48 passed／`SWAP_AUTH_RC=0`**（93.02s），同树 `tests/f14/test_nl_build.py` **75 passed／`SWAP_F14_RC=0`** |
+
+⇒ 这 6 条在 HEAD 上是绿的，本批两文件进树后仍是 48 绿 ⇒ 红来自 `src/autoforge/af_api.py`／`af_auth.py` 的在途改动（掩码分层与 403→400 两处语义），属登录线自己收口，AF 不碰这两个文件、也不替它改判据。副本树用完按 `git show HEAD:<f>` 逐文件对撞还原，`PRISTINE_OK` ×2。
+
+### 五、DCD 申请：两格各三档，把成本与 blast radius 一起交出去
+
+`E:\NAS\关键决策部\inbox\20261010-AF-两格已实现无调用方的定性与NL面是否开工具-决策申请.md`（落盘现读 **10396 字节／88 行／CR=0／6 处「请裁」**）：
+
+- **Q1（B.1 定性）** 甲／乙／丙 三档，AF 明确不主张乙、丙。
+- **Q2（B.7 要不要开 NL 脸）** 甲＝MCP 加一枚工具（成本与 blast radius 最小，只多一张库外的调用脸）；乙＝HTTP 端点＋mimo 面板（押在 #79 的 `af_api.py` 窗口上，AF 不把它写成"随时能做"）；丙＝维持库面，并引 `decisions/20260928-*` §:23／§:32 那句「AF 的 compose/draft 在这个 ADM 生态里没有真实用户流量入口」为据 ⇒ **AF 倾向丙**（这是本批唯一一次表态，理由是它=零改动、零新契约面）。
+- **Q3（治理归属口径）**"审计说这是死码／AF 说这是库面"这类分歧，结案权在谁——请裁一个**口径**而不是一个结论，免得每格都重问一次。
+
+§四 明确写了"不预先落码"：等裁期间 AF 侧只有本批 §二 那一格（过时声明）动了代码，两格都没在文档里写成已修。
+
+### 六、门禁、远端与开窗
+
+- 门禁按 §二之九十 学到的顺序做：**先把全部文本写完 → fire 一对（a／b）→ 再 fire 一遍（同一文本态，验"读数稳"，记 c）→ 回填读数 → 最后 fire 一遍做逐字节对撞（记 d）**。下面先回填 a／b／c 三遍，d 的读数写在它自己跑完之后（这一处**不干净，如实记**，见本条倒数第二小点）。
+  - **a／b 这一对（文本写完时 fire）**：`%TEMP%/gate_b95_a.out`／`gate_b95_b.out` 各 **7890 字节／21 段**，驱动标签行分别 `GATES_a_RC=1`／`GATES_b_RC=1`；剥掉标签行后的本体 `body_b95_a.txt`／`body_b95_b.txt` 各 **7877 字节／74 行**，`cmp` ⇒ **`CMP_A_B=0`**。a 档原始读数逐字（b 档除标签行外与它一致）：
+    ```
+    ══ AST 门禁（不含冒烟）═══════════════════════════════════════
+    WARN  fake-ok-const            src/autoforge/af_api.py:984                                  build_app.api_auth_has_admin  字面量 ok=True，不来自任何实际校验
+    WARN  fake-ok-const            src/autoforge/af_api.py:1005                                 build_app.api_auth_register  字面量 ok=True，不来自任何实际校验
+
+    （另有 96 条存量违规被基线吸收，只准减少不准增加）
+    扫描完成：AutoForge  新增/未获批 2 条（error 0 / warn 2），基线内存量 96 条，过期基线条目 0 条
+    计数：except-pass-broad=20 | fake-ok-const=78
+    [门禁分类] RC=1：依赖门禁判红（rc=1），且输出里没有崩溃签名——这一条是真违规
+
+    ══ 计数棘轮（全量总数对登记上限）══════════════════════════════
+    全量违规 98 条 / 登记上限 97 条
+    棘轮红：总数从 97 涨到 98。要么修掉，要么在「.gates-tally.txt」写明为什么必须上调——上调本身要评审。
+    …
+    结论：AST 门禁红（exit=1）。修，或在 .gates-baseline.txt 里逐条写明放行理由。
+    ```
+    两枚红仍是并发登录线在途的 `af_api.py:984/:1005`（本批没碰这两个文件），棘轮那格的 98/97 也仍是它们的存量：**本批不动 `.gates-tally.txt`、不写 `.gates-baseline.txt` 豁免**。
+  - **c（同一文本态再 fire 一遍，验"读数稳"）**：`gate_b95_c.out` **7890 字节**、本体 `body_b95_c.txt` **7877 字节**、`GATES_c_RC=1`；`cmp body_b95_a.txt body_b95_c.txt` ⇒ **`CMP_AC=0`**，`cmp body_b95_b.txt body_b95_c.txt` ⇒ **`CMP_BC=0`** ⇒ 三遍之间没有任何"看着绿其实抖动"的缝。
+  - **另外多做的两遍（本批文本定稿前 fire 的一对，改名 `gate_b95_pre_{a,b}.out`）**：这两遍是在我补三处文本订正（基准 HEAD 改 `91c1ba2`、`TOOLS` 那行改成 AST 现读、加提交树解包读数）**之前**开跑的，本来只能算作废，但它们的本体各 **7877 字节**、`cmp pre_a pre_b` ⇒ **`CMP_PRE_AB=0`**，且 `cmp body_b93_a.txt body_b95_a.txt` ⇒ **`CMP_B93_REC_A=0`**（跨批次逐字节相同）⇒ 本批的**代码面 `c99047e` 与全部散文新增，没有让门禁输出移动过一个字节**。这条不是靠"文档在射程外"论证来的，是拿两遍实测撞出来的。
+  - **顺序上有一处不干净，如实记**：报告 d 这一遍结果的那一行，必然写在 d 跑完之后——所以"回填后再 fire 一遍"这一格永远无法由文字本身闭合。上一批（§二之九十一）用**射程**把它钉住：能读散文的门禁站只有 `check_plan_ui_claims.py`（`gates.sh:205` 口径，只读 `docs/plan/开发计划_WebUI全功能接入.md`，`check_plan_ui_claims.py:129`），`gh_ci_status.py` 之外无站读执行记录，`gates.sh`／workflows 里没有一处引用这两份文档 ⇒ 本批两份文档同样在所有站的射程外。**本批没有重跑这组射程读数**，引用的是上一批现读；若下批动 `gates.sh` 需重量。上面那对 pre 遍给出的跨批次逐字节对撞，是这一格的第二份独立证据。
+  - **d（回填读数之后再 fire 一遍，做逐字节对撞）**：`gate_b95_d.out` **7890 字节／21 段**、`GATES_d_RC=1`，剥标签后的本体 `body_b95_d.txt` **7877 字节**；`cmp body_b95_a.txt body_b95_d.txt` ⇒ **`CMP_AD=0`**，`cmp body_b95_c.txt body_b95_d.txt` ⇒ **`CMP_CD=0`** ⇒ 本批回填进去的那几行（含 a 档原始读数的整段引用）**没有改变门禁输出**，这是量出来的不是声称的。四遍合计：a／b／c／d 本体全为 74 行／7877 字节，两两逐字节相同，外加文本定稿前的 pre_a／pre_b 与上一批的 `body_b93_a.txt` 也逐字节相同（共六遍同本体）。
+- 远端读数：本批未推。未推枚数 `git log origin/main..HEAD --oneline | wc -l` **现读 16**（本批代码面 `c99047e` 进树后）。推 GitHub 要 owner 点头。
+- `docs/audit` 本批开窗检查：`find docs/audit -type f -printf "%TY-%Tm-%Td %p\n" | sort -r` 于 15:17 现读共 **78** 份，最新一份审计报告仍是 2026-10-07 的归档（`AutoForge_第二十轮审计报告_最终轮.md`），`index.md` 2026-10-08，`参考/FFL-200题测试提示词.md` 2026-10-09（归属他人、不碰）⇒ **量到的那一刻没有新增报告**。但**同一分钟（15:17:15）落进来一枚新报告**，记账时重查已变成 **79** 份：`docs/audit/AutoForge审计报告.html`（未跟踪，**107180 字节**，`<title>` 自署「AutoForge 只读审计报告 · bug 与架构缺陷」，标 **第六轮**）⇒ 这一格**不写成"本批无新增"**，改成"开窗时无、开窗的同一分钟有"。它的自述基线是 `HEAD 91c1ba2`、相对 `origin/main` 领先 15 笔（与本批现读一致），内容是 **15 条 bug（2 严重／4 高／5 中／4 低）＋ 11 项架构缺陷与缺失 ＋ 误报清单 ＋ 凭据泄漏扫描 ＋ 未覆盖范围 ＋ 建议处置顺序**，且明确写着**"全程只读，未运行项目、未复现测试读数"** ⇒ 下一批按老口径先逐条复测（存在性结论要按 file:line 抽查、全仓 grep 反证）再采信，不在本批里替它背书，也不在本批动它。
+- 任务位：#97 由"给 NL 面开一枚产品调用方"改成"**过时声明已落并钉成判据；开不开对外脸等裁**"（仍 in_progress）；#96 等 Q1 裁定（保持 pending，本批零代码改动）；#93／#95／第二份发版窗申请继续等裁。
+- 存证（`%TEMP%`，不进仓）：`full_b97.out`（全量 6 failed／3730 passed、`FULL_RC=1`）、`af_head97/`（HEAD 副本树，腿 X）、腿 Y 的同树换文件跑、`af_fidelity.headcopy.py`／`test_nl_build.headcopy.py`（副本树原始件，用于 PRISTINE 对撞）、`af_commit97/`（`git archive c99047e` 解包树，`75 passed`）、`af_mut97/`＋`mut_b97.py`（四腿变异）、`gate_b95_{a,b,c,d}.out`／`body_b95_{a,b,c,d}.txt`（四遍门禁与剥标签本体）、`gate_b95_pre_{a,b}.out`／`body_b95_pre_a.only.txt`／`body_b95_pre_b.txt`（文本定稿前那两遍；`pre_a` 的本体改名时手滑加了 `.only` 后缀，第一版 `cmp` 因此报 `CMP_PRE_AB=2`——那是**驱动脚本自己的错**，不是门禁读数，重算后为 `0`）。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `91c1ba2` + §十八 B.1／B.7 开窗（代码面 `c99047e`：`af_fidelity` 的 P1 范围声明改成现状并钉一条"点名＋属实"判据，副本树变异 M0 全绿／M1 改回"未实现"被杀／M2 删点名被杀／M3 同义改写必须仍绿；B.1 复测发现审计框架被推翻一半——标注自己的 docstring 说的是 NL↔IR 保真，执行面读 `requires_confirm`、撤销读 `af_undo.inspect()`，两把闸已各有真值源 ⇒ 交裁不结案；两格剩余半边按 Q1／Q2／Q3 递 DCD（10396 字节／88 行／CR=0），AF 只在"开不开 NL 脸"上表态一次（倾向丙＝零改动零新契约面）；工作树 6 条红按两腿副本树反证成登录线在途（HEAD 树 48 passed，换入本批两文件后仍 48 passed）；提交树 `git archive c99047e` 解包独立跑 `75 passed／COMMIT_TREE_RC=0`，并从提交物字节量出"点名行=1、含未实现=0"；等裁／等窗两件现读：两份申请仍在 `inbox/` 无对应裁定文件，`homesdk/pyproject.toml:7` 仍 `0.3.2`、`dist/` 无 0.3.3 wheel；AF 门禁六遍（文本定稿前的 pre_a／pre_b ＋ a／b／c／d）本体逐字节相同——74 行／**7877 字节**，`CMP_A_B=0`／`CMP_AC=0`／`CMP_BC=0`／`CMP_AD=0`／`CMP_CD=0`，且与上一批 `body_b93_a.txt` 也相同 ⇒ 本批代码与散文没有移动门禁一个字节；两枚红仍是登录线在途的 `af_api.py:984/:1005`，未据此动 tally／baseline；开窗的同一分钟落进一枚新审计报告（`docs/audit/AutoForge审计报告.html`，107180 字节，第六轮，15 条 bug＋11 项架构缺陷，自述全程只读未复现）⇒ 登记为下批逐条复测对象，本批不替它背书；未推枚数 `git log origin/main..HEAD` 现读 16）
