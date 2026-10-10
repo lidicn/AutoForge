@@ -2724,7 +2724,7 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
     # 写 PID 文件（供 `stop_watch` 用）。内容仍是裸数字——**可信身份不在这里**，而在 sidecar 的
     # `owner`（`{hostname}-{pid}-{uuid8}`）：停之前两边必须对得上，见 `_verified_pid`。
     try:
-        pid_file.write_text(str(proc.pid), encoding="utf-8")
+        atomic_write_text(pid_file, str(proc.pid))
     except OSError:
         pass
     # 等 sidecar 出现，同时做健康探测。

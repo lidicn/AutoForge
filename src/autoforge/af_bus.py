@@ -316,8 +316,8 @@ class EventBus:
     # ── 内部 ──────────────────────────────────────────────────────────
     def _is_duplicate(self, event: BusEvent) -> bool:
         # P1-6 修复：自定义事件 dedup_key 含唯一 event_id，永远不会被判重，却会占用
-        # 共享 4096 LRU 槽位、把真实实体事件的去重窗口挤掉。自定义事件本就不去重，
-        # 直接放行且不污染共享缓存。
+        # 共享 4096 FIFO 槽位、把真实实体事件的去重窗口挤掉。自定义事件本就不去重，
+        # 直接放行且不污染共享缓存。形状是 FIFO 不是 LRU：`:328-329` 命中不重排、淘汰队首。
         if event.event is not None:
             return False
         key = event.dedup_key

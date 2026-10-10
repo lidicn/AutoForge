@@ -108,7 +108,7 @@ _OFFSET_KEY_SUFFIX = "TZ_OFFSET_HOURS"
 
 
 def homesdk_time():
-    """机制层 `homesdk.time` 模块；不可用时返回 None（vendor 的 wheel 里没有该模块）。
+    """机制层 `homesdk.time` 模块；不可用时返回 None（库侧没装、或装的是不含 `time` 的旧版时走这一档）。
 
     缺席是**可观测**的，不是静默的：`house_tz_status()["mechanism"]` 会写 `"af_local"`。
     """

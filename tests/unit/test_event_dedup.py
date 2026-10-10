@@ -1,4 +1,6 @@
 """SSE 事件去重单测 — 验证 mimo 增量的 epoch:ha_event_id 去重。"""
+import json
+
 import pytest
 
 from autoforge.af_live import iter_sse_blocks, parse_ha_event, HAEventStream
@@ -92,6 +94,51 @@ def test_ha_event_stream_dedup_same_epoch():
     assert len(evs) == 2
     assert evs[0].entity_id == "light.x"
     assert evs[1].entity_id == "light.y"
+
+
+def test_dedup_table_evicts_least_recently_seen_not_first_seen():
+    """BUG-13：容量淘汰过去是"按首次插入顺序砍前一半"，命中不重排——注释里的 LRU 是假的。
+
+    同一个 id 在重连窗口里最容易被再送一次，所以它必须活得最久；而真正该被淘汰的旧 id
+    要确实被丢掉，否则这条上限只是名义上的（表会一直肥下去）。两头都要量到。
+    """
+    ids = (
+        ["hot"]
+        + [f"c{i}" for i in range(1, 4096)]  # 填到 4096 枚，尚未触发淘汰
+        + ["hot"]                              # 命中 → 挪到队尾（旧形状留在队首）
+        + ["c4096"]                            # 第 4097 枚 → 淘汰队首 2048 枚
+        + ["hot"]                              # 再命中：真 LRU 下仍被去重
+        + ["c1"]                               # 已被淘汰 → 这一次应当放行
+    )
+
+    def opener(req, timeout=None):
+        blocks = []
+        for n, ev_id in enumerate(ids):
+            data = json.dumps(
+                {
+                    "event_type": "state_changed",
+                    "data": {
+                        "entity_id": f"light.{n}",
+                        "new_state": {"state": "on", "last_changed": f"T{n}"},
+                    },
+                }
+            )
+            blocks += [
+                f"id: {ev_id}\n".encode(),
+                b"event: state_changed\n",
+                f"data: {data}\n".encode(),
+                b"\n",
+            ]
+        return iter(blocks)
+
+    stream = HAEventStream(
+        base_url="http://ha:8123", token="t", opener=opener, max_retries=0, backoff_s=0
+    )
+    seen = [ev.payload.get("ha_event_id") for ev in stream.events()]
+
+    assert seen.count("hot") == 1, "命中过三次的 id 被半量淘汰带走 ⇒ 淘汰看的还是首次顺序"
+    assert seen.count("c1") == 2, "队首旧 id 没被淘汰 ⇒ 上限形同虚设，表会无限肥"
+    assert len(seen) == len(ids) - 2, (len(seen), len(ids))
 
 
 if __name__ == "__main__":

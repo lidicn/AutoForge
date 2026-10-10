@@ -305,6 +305,57 @@ def test_runtime_restore_honors_lease(tmp_path):
     assert rt3.restored[0].instance_id == instance.instance_id
 
 
+# ── BUG-10：租约"读不出"必须与"没有租约"分家（第六轮审计，裁定 20261010 §五 Q4 甲）──
+
+
+def test_claims_treats_unreadable_lease_as_still_held(tmp_path, caplog):
+    """有主却读不出到期 ≠ 没有租约：缺键／坏格式／空值一律按仍被持有处理。"""
+    clock = VirtualTimeSource(datetime(2026, 9, 14, 8, 0, tzinfo=timezone.utc))
+    store = PersistStore(tmp_path, owner="worker-b", lease_s=600.0)
+    held = {"owner": "worker-a", "lease_until_wall": "2027-01-01T00:00:00+00:00"}
+
+    assert store.claims(dict(held), clock) is False
+    for unreadable in (
+        {k: v for k, v in held.items() if k != "lease_until_wall"},
+        {**held, "lease_until_wall": ""},
+        {**held, "lease_until_wall": None},
+        {**held, "lease_until_wall": "2027/01/01 00:00"},
+        {**held, "lease_until_wall": "not-a-timestamp"},
+    ):
+        assert store.claims(unreadable, clock) is False, unreadable
+
+    # 两种"读不到"不能混：无主（旧版本记录）与本进程自己所有，都仍可接管。
+    assert store.claims({"lease_until_wall": "2027-01-01T00:00:00+00:00"}, clock) is True
+    assert store.claims({"owner": "worker-b", "lease_until_wall": "garbage"}, clock) is True
+
+    with caplog.at_level("WARNING"):
+        store.claims({k: v for k, v in held.items() if k != "lease_until_wall"}, clock)
+    assert any("读不出" in r.getMessage() for r in caplog.records), "拒绝接管必须留可见读数"
+
+
+def test_runtime_skips_restore_when_lease_unreadable(tmp_path):
+    """端到端：到期时间被抹掉的在租实例不恢复、不删文件，且审计里看得见。"""
+    persist_dir = tmp_path / "p"
+    rt1 = _runtime(_wait_ir(), persist_dir)
+    instance = rt1.emit("binary_sensor.m", "on", last_changed="t1")[0]
+    assert instance.state == SUSPENDED
+    record_path = next((persist_dir / "instances").glob("*.json"))
+
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["owner"] = "other-proc"
+    record.pop("lease_until_wall")
+    _sha_key = af_persist_mod._SHA256_KEY
+    record[_sha_key] = af_persist_mod._record_checksum(
+        {k: v for k, v in record.items() if k != _sha_key}
+    )
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    rt2 = _runtime(_wait_ir(), persist_dir)
+    assert rt2.restored == [], "读不出到期不能当成没租约——双跑会同时动真设备"
+    assert any(e.type == INSTANCE_LEASE_HELD for e in rt2.audit)
+    assert record_path.is_file(), "跳过恢复时不得删除落盘文件"
+
+
 # ── watch 多实例协调 ──────────────────────────────────────────────────
 
 

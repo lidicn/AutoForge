@@ -8455,3 +8455,78 @@ AF 不主张后者，故不预先落码，交 DCD（Q1 三档：甲＝按设计�
 - 存证（`E:\tmp\`，不进仓）：`mut_r6/`（16 份 `<案>.pytest.txt` ＋ 16 份 `<案>.patch.err`）、`mutation_r6.result.txt`（2702 B，含"哪几案跑在 87 腿版"的对照说明）、`mutate_r6.py`（6922 B，15 条注入案）／`run_mutations_r6.sh`（2109 B）、`gate_attr/head`＋`mine`＋`mine7`（三棵副本树；`mine7`＝HEAD＋本批 7 份文件，鉴权三文件 48 passed／判据三文件 89 passed 都读自这棵）、`gate_attr/gates_a.txt`＝`gates_b.txt`（各 7877 B）、`audit_r7.txt`（34151 B）／`audit_sec.txt`（2424 行）两份报告的纯文本抽取、`关键决策部/inbox/20261010-AF-第六轮审计严重项匿名换owner令牌并穿透F3-决策申请.md`（9770 B／97 行／CR 0）。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `62a859f`（本批七份文件：`af_service.py`／`af_mqtt_bridge.py`／`af_cli.py` 三份落码 ＋ `af_live.py`／`af_tick_supervisor.py` 两份只改声明 ＋ 判据两份，共 30 条新腿；十六案变异在副本树量：M0 `89 passed in 9.04s`／M99 `89 passed in 8.74s` 全绿，其余十四案 RC=1 全被杀，其中 M12 专门证明"定义侧那半条断言"不是装饰；归属三读全在 `HEAD＋本批 7 份文件` 那棵副本树上现取：鉴权三文件 `48 passed in 32.40s`、判据三文件 `89 passed in 15.26s`、AST 全量 head=98／mine7=98／工作树=98 ⇒ 本批零新增违规；两枚红仍是登录线在途的 `af_api.py:984/:1005`，未据此动 `.gates-tally.txt`／`.gates-baseline.txt` 一个字；落码授权来自 `decisions/20261010-AF与DB与DPP十件-裁定.md` §五 Q4 甲"其余落在 AF 可动文件的条目由 AF 按老口径逐条复测后自行收口"，同裁定 §六 Q3 把"死码／无调用方"的定性收归 DCD ⇒ tick 自愈那格本批只把声明改成与控制流一致并钉成两条腿，接线／降档攒进下一批集中申请（Q3 允许"攒一批"）；同窗三份新报告只做归属登记不做二次落码；未推枚数 `git log origin/main..HEAD` 现读 17）
+
+## 二之九十四、收第六轮审计余下三格（BUG-10 租约 fail-open／BUG-12 裸 `write_text`／BUG-13 假 LRU）：落码 + 5 条判据腿 + 九案变异；早前那条"两棵树 severity 对不上"经复核是**副本树没带 `.gates.toml`**，不是本批改了严重度
+
+授权口径同 §二之九十三：`decisions/20261010-AF与DB与DPP十件-裁定.md` §五 Q4 甲派给 AF 的"AF 可动文件逐条复测后自行收口"，三格都在 AF 职权内的文件（`af_persist.py`／`af_cli.py`／`af_service.py`／`af_live.py`），不涉及跨仓词汇，因此不需要新的申请；而**同一形状在架构文档里怎么定性**仍按 §六 Q3 走（本批没有需要交裁的定性——三格都是"判据读得出行为差"的机械格，不是"死码／无调用方"那种生态判断）。
+
+### 一、三格的落码形状（全部现读锚点）
+
+1. **BUG-10｜`af_persist.claims()`："读不出到期"不等于"没到期"，更不等于"可接管"**。修前 `owner` 有值、`_parse_iso(lease_until_wall)` 却返回 `None` 时直接 `return True`——把一条**证明不了**已过期的实例交给另一个进程，两条实例会同时驱动真设备。现在的形状（`src/autoforge/af_persist.py:188-208`）：命中 `lease is None` 落一条 WARNING，把 owner 与**原始值本身**一起贴出来（`:203`，读数面只有日志这一处，所以判据要断言那句真存在），然后 `return False`（`:207`）。下游消费没改：`af_runtime.py:176-189` 拿到 `False` 就是**跳过且不动那份文件**，并记 `INSTANCE_LEASE_HELD`。为什么宁跳过不接管：跳过的代价只是这条实例暂不恢复且已记账，接管的代价是双跑。
+   报告建议的另一半仍**不成立**（照 §二之九十三 第 五 节的口径登记，不改判）：租约要跨进程、跨重启，单调时钟只在同进程内可比，做不到；真风险是时钟回跳且无漂移告警，那半格归 #10（homesdk.time 接入窗）。
+2. **BUG-12｜三条导出命令的产物写盘不是原子的**：`af_cli.py:946`（`forge export` bundle）／`:1058`（spec）／`:1168`（经验导出，喂 MA 那份）三处裸 `Path(out).write_text(...)` → `atomic_write_text`（import 在 `:23`）。同形状自查查出**审计没点名的第四处**：`af_service.py:2727` 的 watch PID 文件（同一份文件 `:2689` 那份 IR 快照早就走助手，唯独 pid 这一格漏了）。
+   **这一格为什么门禁从没报过**：`scripts/check_atomic_write_sites.py` 的 D 腿（授权面）射程按"这条写的路径表达式看得出指向 `.auth`"收紧（`:356-374`，写明的理由是不收紧就会把 `build_app` 那种几百行装配函数里所有裸写都算成授权面落盘），E 腿只管"状态落盘腿"。导出命令和 pid 文件两样都不在那两条交叉线上——所以门禁读数从头到尾都是"裸写 0 处"，这是**门自己的盲区**，不是"报了没修"。补的同源判据覆盖整个 `src/autoforge`（见第 二 节）。
+3. **BUG-13｜`_seen_ids` 的"LRU"是名字，不是行为**：`af_live.py:25` 加 `from collections import OrderedDict`，`:290` 换 `OrderedDict`，命中时 `move_to_end`（`:303`），满 4096 淘汰队首 2048（`:307-311`）。修前 dict 的迭代序＝插入序，命中不重排，删的是"最老插入"那一半而不是"最久没再见过"那一半——注释承诺的语义和码的行为相反。
+
+### 二、新增判据 5 条腿（全在既有测试面里，没新开文件）
+
+| 腿 | 位置 | 量的是哪一侧 |
+|---|---|---|
+| `test_claims_treats_unreadable_lease_as_still_held` | `tests/unit/test_v0_9_multiproc.py:311` | 五种"有主却读不出到期"的形状全判 `False`；对照档**必须仍然放行**——无主（旧版本记录）与本进程所有各判 `True`，否则这条腿就是在教"永远不接管"。另断言日志里真出现"读不出" |
+| `test_runtime_skips_restore_when_lease_unreadable` | `tests/unit/test_v0_9_multiproc.py:336` | 端到端：抹掉 `lease_until_wall` 后按 `af_persist_mod._record_checksum` 刷新校验和（否则先撞checksum门，测不到租约腿），断言 `rt.restored == []`、`INSTANCE_LEASE_HELD` 在场、那份记录**还在盘上** |
+| `test_no_bare_whole_file_writes_left_in_src` | `tests/unit/test_atomic_write_sites_fixes.py:326` | AST 扫 `src/autoforge` 全部 `write_text`/`write_bytes` 整份覆盖写 ⇒ 命中集合必须为空。豁免语法 `atomic-write: exempt(理由)`（`:304`），**理由为空仍判红** |
+| `test_the_bare_write_scan_actually_catches_a_planted_site` | `tests/unit/test_atomic_write_sites_fixes.py:335` | 反向自证：临时树里植三行（两条裸写、一条带理由的豁免），要求命中行号**恰为** `["2","3"]`——扫描器不是摆设，豁免也不是万能钥匙 |
+| `test_dedup_table_evicts_least_recently_seen_not_first_seen` | `tests/unit/test_event_dedup.py:99` | 造 4100 枚事件：`hot` 在表满前后各命中一次、`c1` 只在开头出现过。断言方向**两头相反**——`count("hot")==1`（热 id 不该被带走）＋ `count("c1")==2`（队首旧 id 必须真被丢掉、于是被重放）＋ 总量 `len(ids)-2`。所以"什么都不淘汰"和"淘汰错的那一半"都杀得掉 |
+
+### 三、九案变异自证（副本树 `E:\tmp\mut_r6b\tree_<案>`，工作树一个字都不改）
+
+驱动 `E:\tmp\mutate_r6b.py`（9 案 + M0 对照），运行器 `E:\tmp\run_mutations_r6b.sh`，读数存证 `E:\tmp\mutation_r6b.result.txt`（3625 B）。每案新建一份 `cp -r src tests scripts` + `pyproject.toml` + `.atomic-write-baseline.txt` 的副本；测试面 7 份文件与 M0 读数同口径。**原样贴回**：
+
+```
+M0_noop RC=0 :: 134 passed, 2 skipped, 1 warning in 32.39s            # 对照：不改一个字必须全绿
+M20_unreadable_lease_claims_takeover RC=1 :: 2 failed, 132 passed, 2 skipped in 46.52s
+    killed: test_v0_9_multiproc.py::test_claims_treats_unreadable_lease_as_still_held
+    killed: test_v0_9_multiproc.py::test_runtime_skips_restore_when_lease_unreadable
+M21_refusal_goes_silent RC=1 :: 1 failed, 133 passed, 2 skipped in 39.29s
+    killed: test_v0_9_multiproc.py::test_claims_treats_unreadable_lease_as_still_held
+M22_cli_bundle_write_bare RC=1 :: 1 failed, 133 passed, 2 skipped in 41.47s
+    killed: test_atomic_write_sites_fixes.py::test_no_bare_whole_file_writes_left_in_src
+M23_cli_spec_write_bare RC=1 :: 1 failed, 133 passed, 2 skipped in 36.93s
+    killed: test_atomic_write_sites_fixes.py::test_no_bare_whole_file_writes_left_in_src
+M24_cli_experience_write_bare RC=1 :: 1 failed, 133 passed, 2 skipped in 33.04s
+    killed: test_atomic_write_sites_fixes.py::test_no_bare_whole_file_writes_left_in_src
+M25_watch_pid_file_write_bare RC=1 :: 1 failed, 133 passed, 2 skipped in 29.49s
+    killed: test_atomic_write_sites_fixes.py::test_no_bare_whole_file_writes_left_in_src
+M26_dedup_hit_stays_in_place RC=1 :: 1 failed, 133 passed, 2 skipped in 36.68s
+    killed: test_event_dedup.py::test_dedup_table_evicts_least_recently_seen_not_first_seen
+M27_dedup_cap_never_evicts RC=1 :: 1 failed, 133 passed, 2 skipped in 39.17s
+    killed: FAILED tests/unit/test_event_dedup.py::test_dedup_table_evicts_least_recently_seen_not_first_seen
+M99b_synonymous_truthful_reword RC=0 :: 134 passed, 2 skipped, 1 warning in 39.94s
+```
+
+三点如实登记：① M20 是"改回修前形状"（`lease is None → return True`），它一次杀**两条**腿，说明这两条不是同一断言抄了两遍；② M21 保留 fail-closed、只删那条 WARNING，杀的是 caplog 那半——即"看不见"这一格本身有判据，不是只测返回值；③ M26 与 M27 打的是**同一条去重腿的不同断言**（M26 死在"热 id 不该被带走"，M27 死在"队首旧 id 必须真被丢掉"），这一点在存证里点名过，免得读成"两条独立腿"。M99b 只动 `af_persist` 那段散文、语义与读数不变，仍全绿 ⇒ 上面那些腿测的是功能，不是 diff。
+
+工作树同面复跑（本批最后一次，含 `test_af_bus.py` 共 8 份文件）：`142 passed, 2 skipped, 1 warning in 55.33s`，`WRITE_SURFACE_RC=0`。
+
+### 四、门禁：两遍逐字节相同，本批零新增违规；一处归属复核**改变了结论**
+
+`GATES_PYTHON=C:/Users/lidicn/AppData/Local/Programs/Python/Python313/python.exe bash gates.sh` 跑四遍：`RC_A=1`、`RC_B=1`、`RC_C=1`、`RC_D=1`，整份均 7877 字节，去掉首行后 body 四份均 7724 字节、`cmp` 两两无差、md5 同为 `9074c173fa39224a04aefec737b11cbb`。**c／d 两遍是刻意补的**：a／b 跑在 `af_bus.py` 注释更正、`af_time.py` docstring 更正与本节记账落盘**之前**，只拿它们说"逐字节相同"会把"改完之后没复跑"藏起来；c 复跑在 `af_bus` 之后、d 复跑在 `af_time` 之后，两遍都与 a／b 逐字节相同 ⇒ 这几处声明面改动没动任何计数。关键读数原样：`新增/未获批 2 条（error 0 / warn 2）`＝登录线在途的 `af_api.py:984 api_auth_has_admin`／`:1005 api_auth_register`；`计数：except-pass-broad=20 | fake-ok-const=78`；棘轮 `全量违规 98 条 / 登记上限 97 条`。⇒ **本批一个计数都没加**，`.gates-tally.txt` 与 `.gates-baseline.txt` 一个字节没动，也没写任何新豁免（两条红都不属本批，按老口径不自己上调）。
+
+归属复核那一格：§二之九十三 结尾留了一条待查——同一份 `af_service.py:285 health` 在 `head` 树读成 ERROR、在 `mine` 树读成 WARN，总量与逐规则计数却完全一致，当时已经排除过"拷贝 `pyproject.toml`"这一种解释。**结论是副本树缺 `.gates.toml`**：严重度由 `homesdk/gates/scan.py:145 self.is_critical = matches_glob(rel_path, config.critical_globs)` 决定，而关键模块名单就在仓库根 `.gates.toml` 的 `critical_globs` 里（`af_service.py` 在名单内，是第六轮 REG-3 那批加进去的）。`git archive HEAD` 那棵树带得到（含 `.gates.toml`／`.gates-baseline.txt`／`.gates-tally.txt`／`.atomic-write-baseline.txt`），我只叠了 `src` 的那棵树带不到 ⇒ 同一行代码在两棵树里被算成不同严重度。把 `.gates.toml` 补进 `mine` 后两树逐字同读 `扫描完成：新增/未获批 98 条（error 1 / warn 97）`、`计数：except-pass-broad=20 | fake-ok-const=78`、`RC=1`（此处用 `--no-baseline`，故 error 面是未吸收的全量口径，与工作树那两遍的 `2 条` 不同口径，不能混引）。**登记这一格是因为它会教出错误的修法**：如果按最初的读数写"本批把一处 ERROR 降成了 WARN"，下一步就会是"把 `af_service.py` 补回关键模块名单"——而名单一直都在，动它才是真错。
+
+### 五、同形状自查的另两处（`grep` 全仓 `LRU`／`4096` 得到）
+
+`af_bus.py:317-330` 的去重表**行为无缺陷**：`set` + `deque`，命中不重排、`popleft` 淘汰队首，这是一条**真 FIFO**，恰与 `af_live` 修前那个"名字叫 LRU、行为是插入序淘汰"不同形——那边的"淘汰队首"是有意的，不需要跟着改。它的问题只在注释：`:319` 写着"共享 4096 LRU 槽位"，把机制说反了。本批把措辞改成 FIFO 并点名淘汰站点（`:319-320`），属声明面与控制流对齐，不占残余格；`af_evo.py:506`／`af_health.py:456` 那两枚 `history_max: int = 4096` 只是默认容量参数，与淘汰策略无关，不动。
+
+### 六、任务位与存证
+
+- #100 三格收口（BUG-10 成立半边／BUG-12 全部四站点／BUG-13），本文与架构文档 §十八 16／17／18 同时改判"已收＋读数"、§十九 加一行。
+- #98 还剩：ARCH-02～11 逐条复测、ARCH-01 的口径更正（`.gates-baseline.txt` 现读 **86 行／83 条生效**，报告把行数当成了条数）；BUG-02/03/08/09/15 五格随登录线同窗（#79），AF 只交复测证据。
+- #99 仍在：第二轮运行时审计 9 条对账，其中 tick 自愈"接线 vs 降档"按裁定 §六 Q3 攒批递 DCD。
+- 存证（`E:\tmp\`，不进仓）：`mutate_r6b.py`（注入器，9 案 + M0）、`run_mutations_r6b.sh`（运行器）、`mutation_r6b.result.txt`（3625 B，上文引的九案读数逐字来自它）、`mut_r6b/tree_<案>`（每案一份副本）、`gates_r6b_a.txt`／`gates_r6b_b.txt`／`gates_r6b_c.txt`／`gates_r6b_d.txt`（四份门禁输出，各 7877 B；c 复跑在 `af_bus.py` 之后、d 复跑在 `af_time.py` 之后）、`gate_attr/head`＋`gate_attr/mine`（归属复核两棵树，`mine` 现已补上 `.gates.toml`）。
+- **另按 owner 转来的八份裁定逐份对了一遍账**（`20261010-DB与AF六件`／`20261009-AF确认闸预演档与拒绝终态`／`20261009-AF两件ok字面量与平键登记`／`20261010-AF与DB与DPP十件`／`20261001-AF-homesdk接入四问`／`20260930-deepseek-pp-路线图-v1.17+架构审计`／`20261010-AF拆码与MA自更新四问`／`20261010-AF测试区删除面守卫与政策口`）：AF 侧需要落码的格子前几批都已收，逐格对到位次（按现读 `grep` 文件名回指所在小节）：`20261009-AF两件ok字面量与平键登记`→§二之八十，`20261009-AF确认闸预演档与拒绝终态`→§二之八十三／八十四，`20261010-DB与AF六件`→§二之八十六，`20261010-AF测试区删除面守卫与政策口`→§二之八十八，`20261010-AF拆码与MA自更新四问`→§二之九十／九十一，`20261010-AF与DB与DPP十件`→§二之九十三。**两件本批新查出、都不需落码但需要如实登记**：
+  ① `20261001-AF-homesdk接入四问-裁定.md` **今天 17:27 被 DCD 追加了一段《台账补正 2026-10-10》**（我上一轮读的是补正之前的版本），内容两格：AF 2026-10-05 交的那份回填告知**只落在 `inbox/`、没回填进裁定末尾**（制度 §6.7 的"回执与台账分家"形态）；该件顺带提出的**"双源 fallback（`af_local`）应切除、改单源 `homesdk.time`"仍是待裁，不是已裁**。现读复核两格都对得上：`af_time.py:238` 的 `af_local` 那一源还在，`decisions/20261010-AF与DB与DPP十件-裁定.md` 全文 `homesdk.time`／`af_local`／`双源` 三个关键词 0 命中（第 §一 条那条"A 档：`homesdk.time` 由 DCD 在 0.3.x 写"至今没有新裁定覆盖它）⇒ AF 侧今天没有可自决的动作，切除与否**等裁**，而这条"等裁"必须写在这里，不能读成"已裁要切、只是没做"。查这一格时顺手量到**一处过期声明并就地修了**：`af_time.py:111` 的 docstring 原写"不可用时返回 None（**vendor 的 wheel 里没有该模块**）"，而现读两面都不成立——本机 `af_time.house_tz_status()` 报 `{'tz_name': 'Asia/Shanghai', 'source': 'fallback', 'mechanism': 'homesdk.time', 'resolved_by_name': True, 'utc_offset': 8.0}`；镜像面用 `zipfile` 直读 `docker/homesdk/homesdk-0.3.2-py3-none-any.whl` ⇒ `namelist()` 含 `homesdk/time.py`；本仓自己的 `tests/unit/test_af_homesdk_time.py:47` 还直接断言 `mechanism == "homesdk.time"`。⇒ 措辞改成"库侧没装、或装的是不含 `time` 的旧版时走这一档"（`af_time.py:111`，改动只在这一行，CR 计数改前后都是 447）。**这条读数同时把"切除双源"的生态前提量清楚了**：库侧模块已在场，那一格卡的只剩裁定，不再卡版本窗。
+  ② `20260930-deepseek-pp-路线图-v1.17+架构审计.md` **不是裁定**，是 DCD 自己的《空壳登记》（该文件创建即 0 字节，2026-10-04 台账核查时就地登记说明；今天又补了一句"登记自己把那个空填上了"）：正文 §四 明写"无需补写、不构成裁定、不影响任何已裁事项"，它原本要装的三块内容已由 `20260930-deepseek-pp断流与架构审计-报告.md`／`20260930-deepseek-pp执行架构评审-native-vs-pyodide.md`／`deepseek-pp/doc/version-roadmap-v2.md:46` 分别承接。⇒ AF 无动作，登记在此只为下次再看到这文件名不必再当"漏收的裁定"查一遍。
+  **回填该由谁写**：补正要求的是把《执行回填》补进 DCD 的裁定文件末尾，而 `E:\NAS\关键决策部` **不是 git 仓**（现读 `git rev-parse` ⇒ `not a git repository`），AF 直接往对方台账里写字没有回退路径 ⇒ 这一格按"跨仓共享台账"处理，等 owner 点头后再动（要么 AF 追加、要么由 DCD 自己回填、AF 只递一份可直接粘贴的回填稿）。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `219dd93`（本批六份落码文件 `af_persist.py`／`af_cli.py`／`af_service.py`／`af_live.py`／`af_bus.py`／`af_time.py`（后两份只改声明面措辞：FIFO／`time` 模块在场性，控制流一个字节没动）＋ 判据三份 `test_v0_9_multiproc.py`／`test_atomic_write_sites_fixes.py`／`test_event_dedup.py`，共 5 条新腿；九案变异：M0＋M99b 全绿、七案被杀；门禁四遍逐字节相同 7877 字节、`GATES_RC=1`，两条红仍归登录线，未动 tally／baseline；未推 GitHub——推要 owner 点头）

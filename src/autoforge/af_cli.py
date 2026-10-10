@@ -20,6 +20,7 @@ from typing import Any
 import typer
 
 from .af_adapters import DEFAULT_HA_URL, HAAdapter, HAStateProvider, HATransport
+from .af_atomic import atomic_write_text
 from .af_conf import ConfidenceStore, AUTO_MIN, SHADOW_LOW
 from .af_ir import IRValidationError, load_graph
 from .af_nl import render_graph
@@ -942,7 +943,7 @@ def store_export(
     bundle = store.export_bundle()
     rendered = json.dumps(bundle, ensure_ascii=False, indent=2)
     if out:
-        Path(out).write_text(rendered, encoding="utf-8")
+        atomic_write_text(Path(out), rendered)
         typer.echo(f"· 已导出 {len(bundle['entries'])} 个归档 → {out}（checksum={bundle['checksum'][:16]}…）")
     else:
         typer.echo(rendered)
@@ -1054,7 +1055,7 @@ def spec_compile(
     payload: Any = raws[0] if len(raws) == 1 else {"automations": raws}
     rendered = json.dumps(payload, ensure_ascii=False, indent=2)
     if out:
-        Path(out).write_text(rendered, encoding="utf-8")
+        atomic_write_text(Path(out), rendered)
         typer.echo(f"· 已写入 {out}")
     else:
         typer.echo(rendered)
@@ -1164,7 +1165,7 @@ def experience_export(
     data = ExperienceStore(root).export(limit=limit)
     text = json.dumps(data, ensure_ascii=False, indent=2)
     if out:
-        Path(out).write_text(text, encoding="utf-8")
+        atomic_write_text(Path(out), text)
         typer.echo(f"已导出到 {out}（{len(data['pairs'])} 对 / {len(data['entities'])} 实体）")
     else:
         typer.echo(text)

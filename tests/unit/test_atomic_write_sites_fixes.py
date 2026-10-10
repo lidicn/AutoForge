@@ -18,6 +18,7 @@ import ast
 import json
 import os
 import pathlib
+import re
 
 import pytest
 
@@ -295,3 +296,51 @@ def test_catalog_save_and_alias_leave_no_fixed_name_tmp(tmp_path):
     assert not residue, residue
     assert cat.remove_alias("书桌灯")["ok"] is True
     assert cat._load_aliases() == {}
+
+
+# ── BUG-12（第六轮审计）：src/ 的整份裸写归零，且这条扫描本身要能抓 ──────────
+
+_BANNED_WRITES = {"write_text", "write_bytes"}
+_ATOMIC_EXEMPT = re.compile(r"atomic-write:\s*exempt\(([^)]*)\)")
+
+
+def _bare_whole_writes(src_dir: pathlib.Path) -> list[str]:
+    """`src_dir` 里所有整份覆盖写站点；带**非空理由**的就地豁免才放行。"""
+    hits: list[str] = []
+    for py in sorted(src_dir.glob("*.py")):
+        text = py.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        for node in ast.walk(ast.parse(text)):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in _BANNED_WRITES:
+                continue
+            line = lines[node.lineno - 1] if 0 < node.lineno <= len(lines) else ""
+            mark = _ATOMIC_EXEMPT.search(line)
+            if mark and mark.group(1).strip():
+                continue
+            hits.append(f"{py.name}:{node.lineno}: {line.strip()}")
+    return hits
+
+
+def test_no_bare_whole_file_writes_left_in_src():
+    """落盘一律走 `af_atomic.atomic_write_text`（BUG-12 的四处里 CLI 导出三处 + watch 的 pid 文件）。
+
+    裸 `write_text` 先把目标截断，序列化/编码中途抛错就留下一份半截文件，把上一份好数据换掉了；
+    导出面看着"写了"，读侧却拿不到合法 JSON。
+    """
+    assert _bare_whole_writes(ROOT / "src" / "autoforge") == []
+
+
+def test_the_bare_write_scan_actually_catches_a_planted_site(tmp_path):
+    """这条腿要能抓——不然它只是给"现在恰好为零"盖一枚章。"""
+    (tmp_path / "planted.py").write_text(
+        "from pathlib import Path\n"
+        "def a(): Path('x').write_text('1')\n"
+        "def b(): Path('y').write_bytes(b'2')  # atomic-write: exempt()\n"
+        "def c(): Path('z').write_text('3')  # atomic-write: exempt(一次性导出，无第二个写者)\n",
+        encoding="utf-8",
+    )
+    hits = _bare_whole_writes(tmp_path)
+    assert [h.split(":")[1] for h in hits] == ["2", "3"], hits
+    assert "write_text" in hits[0] and "write_bytes" in hits[1], hits

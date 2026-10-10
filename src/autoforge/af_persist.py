@@ -189,14 +189,22 @@ class PersistStore:
         """租约仲裁：本进程可否接管这条落盘实例。
 
         无主（旧版本记录）/ 本进程所有 / 租约已过期 → True；
-        租约仍在其他进程手上 → False（恢复时应跳过且**不删文件**）。
+        租约仍在其他进程手上、**或读不出到期时间** → False（恢复时应跳过且**不删文件**）。
         """
         owner = str(record.get("owner", ""))
         if not owner or owner == self.owner:
             return True
-        lease = _parse_iso(record.get("lease_until_wall"))
+        raw = record.get("lease_until_wall")
+        lease = _parse_iso(raw)
         if lease is None:
-            return True
+            # 有主却读不出到期，不是"没有租约"：双跑的代价是两条实例同时动真设备，
+            # 跳过的代价只是这条暂时不恢复，而且 af_runtime 会把它记成 INSTANCE_LEASE_HELD。
+            _logger.warning(
+                "af_persist: 实例租约属 %s 但到期时间读不出（原始值 %r），按仍被持有处理",
+                owner,
+                raw,
+            )
+            return False
         return clock.now() >= lease
 
     def remove(self, instance_id: str) -> bool:

@@ -22,6 +22,7 @@ import logging
 import threading
 import time
 import urllib.request
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Optional, TYPE_CHECKING
 
@@ -286,7 +287,7 @@ class HAEventStream:
             escalate_after=10,
         )
         epoch = 0
-        _seen_ids: dict[str, bool] = {}
+        _seen_ids: OrderedDict[str, bool] = OrderedDict()
         while True:
             drop_exc: BaseException | None = None
             try:
@@ -299,11 +300,13 @@ class HAEventStream:
                         # mimo 增量：epoch:ha_event_id 去重（防跨 SSE 重连 event_id 回绕）
                         dedup_key = f"{epoch}:{ev.payload.get('ha_event_id', '')}" if ev.payload.get('ha_event_id') else None
                         if dedup_key and dedup_key in _seen_ids:
+                            _seen_ids.move_to_end(dedup_key)
                             continue
                         if dedup_key:
                             _seen_ids[dedup_key] = True
                             if len(_seen_ids) > 4096:
-                                # LRU: 清掉最早的一半
+                                # 半量淘汰：命中会挪到队尾，所以队首就是"最久没再见过"的那一半。
+                                # 修之前这里按首次插入顺序淘汰、命中不重排，注释里的 LRU 是假的。
                                 for k in list(_seen_ids.keys())[:2048]:
                                     del _seen_ids[k]
                         yield ev
