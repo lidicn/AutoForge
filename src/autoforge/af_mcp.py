@@ -416,10 +416,18 @@ def _t_test_report(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _t_test_clear(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    """清空测试区。无参数。"""
-    from .af_test import get_test_channel
+    """清空测试区。无参数——删除目标由服务端定，Agent 递不进路径。
+
+    守卫的对照量就是这个 dispatch 手里那枚 `store.root`（正式区真值），不是配置文件里的第二份读数；
+    守卫拒判（`TestGuardError`）如实回 `ok: False` + 具名 `code`，不塌成"清完了"。
+    """
+    from .af_test import get_test_channel, TestGuardError
+
     channel = get_test_channel()
-    return channel.clear()
+    try:
+        return channel.clear(protected_root=store.root)
+    except TestGuardError as e:
+        return {"ok": False, "cleared": False, "code": e.code, "error": str(e)}
 
 
 def _t_catalog(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
@@ -524,7 +532,7 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
     ),
     (
         "af_test_clear",
-        "【测试通道】清空测试区（/data/test/）。无参数。测试完调用此工具清理，不影响正式环境。",
+        "【测试通道】清空测试区（服务端定的那个 test_root，Agent 递不进路径）。无参数。删除前过形状守卫：目标等于或包住正式存储根时拒判并如实回 ok=False，不会连带删掉正式归档。",
         {"type": "object", "properties": {}},
         _t_test_clear,
         "write",

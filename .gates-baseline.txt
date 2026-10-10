@@ -84,4 +84,3 @@ src/autoforge/af_service.py#fake-ok-const#start_watch
 src/autoforge/af_service.py#fake-ok-const#submit_pending
 src/autoforge/af_store.py#fake-ok-const#GraphStore.import_bundle
 src/autoforge/af_telemetry.py#fake-ok-const#TelemetryStore.usage
-src/autoforge/af_test.py#fake-ok-const#TestChannel.clear

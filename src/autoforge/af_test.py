@@ -2,6 +2,15 @@
 
 与正式环境完全隔离：/data/test/ vs /data/
 不碰真机，只过 build + simulate。
+
+`clear()` 是这条线上唯一的**不可逆删除面**（经 MCP 工具 `af_test_clear` 直达，scope `write`），
+所以它删之前必过守卫、删之后必实测残留：
+
+- 守卫的对照量是**这个进程真正在用的正式存储根**（`store.root`，由调用方递进来），不是本模块
+  另抄的一份配置——`/data/test` 这种字面默认值当不了判据，`test_root` 指到哪算哪更不行；
+- `shutil.rmtree(..., ignore_errors=True)` 已撤：那一档把"没删掉"抹平成 `cleared: True`，
+  与仓内"没做成都不许报成 done"那一族同形（`af_adapters/inbox.py` 的投递失败、桥的缺凭据拒发）。
+  现在残留是**数出来的**（`residual`），删除失败现场按 `onerror` 收进 `errors` 并如实带条数上限。
 """
 
 from __future__ import annotations
@@ -19,13 +28,73 @@ from .af_spec import graph_to_raw
 from . import af_service
 from .af_store import GraphStore
 
-__all__ = ["TestChannel", "TestError"]
+__all__ = ["TestChannel", "TestError", "TestGuardError", "assert_test_area_deletable"]
 
 MAX_BATCH_SIZE = 500
+#: `clear()` 的删除现场最多列几条——常驻服务里不能因为一次失败删除就攒出无界清单（BUG-01 同族）。
+DELETE_ERRORS_MAX = 20
+
+GUARD_ERR_FILESYSTEM_ROOT = "TEST_ROOT_IS_FILESYSTEM_ROOT"
+GUARD_ERR_COVERS_PRODUCTION = "TEST_ROOT_COVERS_PRODUCTION"
 
 
 class TestError(Exception):
     """测试通道错误。"""
+
+
+class TestGuardError(TestError):
+    """删除守卫拒判：测试区的形状不可信。带具名 `code` 给调用方如实回（不许塌成 `ok: True`）。"""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+
+
+def _count_entries(root: Path) -> int:
+    """`root` 之下的条目数（不含它自己）；目录不存在算 0。"""
+    if not root.is_dir():
+        return 0
+    return sum(1 for _ in root.rglob("*"))
+
+
+def _covers(target: Path, protected: Path) -> bool:
+    """target 与 protected 同径，或 protected 落在 target 里面（删下去会连带销毁正式区）。"""
+    if target == protected:
+        return True
+    try:
+        protected.relative_to(target)
+    except ValueError:
+        return False
+    return True
+
+
+def assert_test_area_deletable(test_root: str | Path, protected_root: str | Path) -> None:
+    """删除前的形状守卫：只拦"删下去必然出格"的两种目标，合法测试区照常放行。
+
+    两枚码各自挡一种真实事故（都在临时树里复现过，见执行记录 §二之八十六）：
+
+    - `TEST_ROOT_IS_FILESYSTEM_ROOT`：目标就是盘根（`/`、`C:\\`），不可能是测试区；
+    - `TEST_ROOT_COVERS_PRODUCTION`：目标**等于**正式存储根，或是它的**祖先**——部署里正式根是
+      `forge serve --store-root`（缺省 `DEFAULT_STORE_ROOT = ".forge"`，相对路径），测试区约定在它下面的
+      `test/`，所以"祖先"这一档就是把手补在正式区头上把整条归档线删掉。对照量由调用方现递
+      `store.root`（同一个进程真正在用的那一份），本模块不另抄一份配置，也不拿 `/data/test`
+      这种字面默认值当判据。
+
+    两侧都 `resolve()` 再比：正式根常写成相对路径（`DEFAULT_STORE_ROOT = ".forge"`），
+    不 resolve 就会让"同一条路径的两种写法"看起来互不包含——那等于守卫形同虚设。
+    """
+    target = Path(test_root).resolve()
+    protected = Path(protected_root).resolve()
+    if target.parent == target:
+        raise TestGuardError(
+            GUARD_ERR_FILESYSTEM_ROOT,
+            f"删除目标 {target} 就是文件系统根，不可能是测试区",
+        )
+    if _covers(target, protected):
+        raise TestGuardError(
+            GUARD_ERR_COVERS_PRODUCTION,
+            f"删除目标 {target} 覆盖正式存储根 {protected}（同径或为其祖先），拒删",
+        )
 
 
 class TestChannel:
@@ -226,11 +295,37 @@ class TestChannel:
                 continue
         return reports
 
-    def clear(self) -> dict[str, Any]:
-        """清空测试区。"""
-        shutil.rmtree(self.test_root, ignore_errors=True)
+    def clear(self, *, protected_root: str | Path) -> dict[str, Any]:
+        """清空测试区：删之前过守卫、删之后数残留，报的数就是盘上的数。
+
+        `protected_root` 是**必填的关键字参数**（不是可选保险）：调用方必须把"这个进程真正在用的
+        正式存储根"递进来，守卫才有对照量。少递一个就是 `TypeError`——宁可当场炸，也不让一次
+        不可逆删除在"没人知道正式区在哪"的状态下发生。
+        """
+        assert_test_area_deletable(self.test_root, protected_root)
+        target = self.test_root
+        before = _count_entries(target)
+        errors: list[str] = []
+
+        def _collect(_func, path, exc_info) -> None:  # noqa: ANN001 - shutil.rmtree 的 onerror 形状
+            errors.append(f"{path}: {exc_info[0].__name__}")
+
+        if target.is_dir():
+            shutil.rmtree(target, onerror=_collect)
+        residual = _count_entries(target)   # 先量残留再重建目录，否则 `_ensure_dirs()` 会把三条空目录算成残留
         self._ensure_dirs()
-        return {"ok": True, "cleared": True, "test_root": str(self.test_root)}
+        cleared = residual == 0
+        out: dict[str, Any] = {
+            "ok": cleared and not errors,
+            "cleared": cleared,
+            "test_root": str(target),
+            "entries_before": before,
+            "residual": residual,
+        }
+        if errors:
+            out["errors"] = errors[:DELETE_ERRORS_MAX]
+            out["errors_total"] = len(errors)
+        return out
 
 
 # 全局测试通道实例

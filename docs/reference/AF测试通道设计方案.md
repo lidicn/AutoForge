@@ -166,7 +166,10 @@ class TestChannel:
         return {"ok": True, "cleared": True}
 ```
 
+> **落地后的偏离（2026-10-10 · 执行记录 §二之八十六）**：上面这段是当初的设计草图，原文保留不追改。落地后的 `clear()` 与它有两处不同——① 删之前必过形状守卫 `assert_test_area_deletable(test_root, protected_root)`（目标就是盘根，或等于/包住这个进程真正在用的正式存储根 ⇒ 拒判），`protected_root` 由调用方现递、是必填关键字参数；② 草图里那个"删完直接报成功"的返回形状已撤，残留改成按盘面数出来的 `residual`，部分失败如实回 `ok: false` 并带封顶 20 条的现场明细。口径详见 `docs/architecture/AF完整架构与运行时说明.md` §十 与 `AF完整知识文档.md` §九。
+
 ### 3.3 MCP 工具注册
+
 
 ```python
 # af_mcp.py 新增
