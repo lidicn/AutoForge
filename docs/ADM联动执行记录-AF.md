@@ -9669,3 +9669,92 @@ CI 3.11 与镜像 base 3.14 这条差本批没动，只是把它认领得能被�
 - 任务位：#117 本批。裁定 `20261011-AF第六轮与第二期审计攒批十三问-裁定.md` 的 `## 执行回填`
   §3 Q4.1／Q4.3 两行与本批同批改（回执落在裁定书，不是本件）。
 - 同批记账：`docs/architecture/AF完整架构与运行时说明.md` §十八 新增第 26 条、§十九 新增一行（两处都指回本件 §二之一百一十四）。
+
+### 七、本批推送后的远端读数，顺带挖出一族「真仓腿钉错了树」的红（登记为 #118，不在本批修）
+
+`git push origin master:main` ⇒ `9785dd2..f884d47`；`git ls-remote origin refs/heads/main` ⇒
+`f884d47be3ad9903e30de91d3d8a0981e75e14b4`，与 `git rev-parse HEAD` 逐字节相同。
+
+`python scripts/gh_ci_status.py` 现读 run 143（上一批的 `9785dd2`）**completed/failure**，作业面两条红：
+`pytest`（job `114327720300`，失败步骤 `Run tests`）与 `quality-gates`。取 pytest 日志（`… jobs 38091165267` →
+`… log 114327720300 "FAILED"`）⇒ 四条真仓腿：
+
+- `tests/unit/test_observability_gate.py::test_real_repo_http_face_readings_are_pinned` ⇒ `assert 89 == 91`
+- `…::test_real_repo_gate_is_green` ⇒ 「`docs/可观测性清单.md` 的自动段与现读不一致（4 行漂移）」
+- `tests/unit/test_process_model_gate.py::test_real_repo_gate_green` ⇒ 「✗ 进程模型门禁发现 5 处」
+- `tests/unit/test_trust_boundary_gate.py::test_real_repo_is_green_and_pinned` ⇒
+  「`GET /api/user/agents` 清单写 `dep+requires(read)`，现读是 `requires(read)`」＋
+  「`DELETE /api/user/agents/{agent_id}` 清单写 `requires(write)+security:HTTPBearer`，现读是 `requires(write)`」
+
+**根因不是代码缺陷，是取数的树错了**：这四条腿的期望值是在**并发登录线未提交的工作树**上量出来的
+（`af_api.py`／`af_auth.py` 现读仍带 `M`），而 CI 跑的是 committed HEAD ⇒ HEAD 里没有那两枚新增 `Depends`、
+没有那两条路由的档位变化，本地全绿而远端必红。`gates.sh` 不跑 pytest，所以这条差**只在远端暴露**——
+与上一批偏差 §三-3（`b345955` 把三条红腿推上 `main`）是同一族的第二击。
+
+对照组：run 142（`81b5550`）`pytest` 同样 failure，但红的是另外三条
+（`test_real_repo_site_readings_are_pinned` `assert 146 == 143`／`…_named_code_readings…` `assert 21 == 18`／
+`…_every_named_code_is_registered` `21 == 18`）⇒ 那三条已被上一批按现读重钉，本批这四条是新露出来的一层。
+
+**不在本批修**，理由写清楚：把期望值从 91 改成 89 只是把红推到下一次登录线提交那一刻（它一提交 HEAD 就又是 91）。
+真修法两选一，且要先定口径：① 真仓腿改跑在 `git archive HEAD` 出来的**干净副本树**；② 把这族腿标 CI-only
+并按 HEAD 口径重钉。⇒ 新任务位 **#118**（AF 名下，窗内可做但不与本批混）。本批自身的两条真仓腿
+（`test_ci_interpreter_gate`／`test_sim_dep_floor_gate`）读的是 `README.md`／`pyproject.toml`／`ci.yml`／两份
+Dockerfile＋`docs/` 两处锚点，**全部在本批提交面内、且没有一枚落在登录线在途文件上**，远端读数见下节。
+
+### 八、run 144（本批 `f884d47`）远端读数：同一族四条腿逐字原样再红一次，本批零新增红
+
+`python scripts/gh_ci_status.py` 现读（2026-10-11）：
+
+```
+run 144 id=38092963976 f884d47 status=completed conclusion=failure event=push
+run 143 id=38091165267 9785dd2 status=completed conclusion=failure event=push
+```
+
+`python scripts/gh_ci_status.py jobs 38092963976` 现读六个作业：
+
+```
+pytest: completed/failure job_id=114332987737 failed_steps=['Run tests']
+quality-gates: completed/failure job_id=114332987833 failed_steps=['Run quality gates']
+layering-gates: completed/success
+adm-linkage-contracts: completed/success
+ui-user-mimo-judgments: completed/success
+ui-typecheck-build: completed/success
+```
+
+`python scripts/gh_ci_status.py log 114332987737 "FAILED"` 现读四条，与 run 143 那四条**逐字相同**：
+
+```
+FAILED tests/unit/test_observability_gate.py::test_real_repo_http_face_readings_are_pinned - assert 89 == 91
+FAILED tests/unit/test_observability_gate.py::test_real_repo_gate_is_green - AssertionError: A：`docs/可观测性清单.md` 的自动段与现读不一致（4 行漂移）……
+FAILED tests/unit/test_process_model_gate.py::test_real_repo_gate_green - AssertionError: ✗ 进程模型门禁发现 5 处：
+FAILED tests/unit/test_trust_boundary_gate.py::test_real_repo_is_green_and_pinned - AssertionError: ['A：清单与现读路由表不一致（2 处）：', …]
+```
+
+**本批两条真仓腿没有出现在这份名单里**（`test_ci_interpreter_gate` / `test_sim_dep_floor_gate` 均不在失败集），
+且同一棵**在途工作树**上现读这四条是绿的：
+
+```
+$ PY -m pytest tests/unit/test_observability_gate.py::test_real_repo_http_face_readings_are_pinned \
+    tests/unit/test_observability_gate.py::test_real_repo_gate_is_green \
+    tests/unit/test_process_model_gate.py::test_real_repo_gate_green \
+    tests/unit/test_trust_boundary_gate.py::test_real_repo_is_green_and_pinned -q
+4 passed in 23.73s
+```
+
+⇒ #118 那族诊断（期望值取自并发在途工作树、CI 跑 committed HEAD）拿到第二次独立复现：**同一棵树、同一批腿，
+本地 4 passed、远端 4 FAILED**，差的只有 `af_api.py`／`af_auth.py` 那部分未提交内容。
+
+**给 #118 补一条新事实（扩大射程，不是收窄）**：`quality-gates` 作业同样红，且红的是同一族——
+`log 114332987833 "✗"` 现读
+
+```
+✗ 信任边界门禁发现 3 处：
+✗ 进程模型门禁发现 5 处：
+✗ 可观测性门禁发现 5 处：
+```
+
+这三处走的是 `gates.sh` 而不是 pytest。⇒ **#118 的修法若只治测试腿（选项 ②「标 CI-only 并按 HEAD 重钉」），
+`gates.sh` 这三个门在 HEAD 上仍然红**：它们比对的清单文档（`docs/可观测性清单.md`、信任边界与进程模型两份清单）
+里被提交的那一段，同样是按在途工作树现读写出来的。所以选项 ①（真仓腿＋门禁一起改跑
+`git archive HEAD` 的干净副本树）才是把这族一次拔掉的那一个；选项 ② 只能拔 pytest 那一半。
+本批不动它们：改口径要先定"清单文档到底该跟哪棵树"，那是 #118 的第一格，不是本批的。
