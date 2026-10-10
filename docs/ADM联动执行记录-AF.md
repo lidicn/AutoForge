@@ -7904,6 +7904,11 @@ M5 必须写清，不能拿"八枚全杀"当卖点：`not_comparable` 为真时 
   ```
 
   ②那一跑照样把"导入成功"报出来（`imported=['demo'] errors=[]`），而盘上留着**整份旧归档的副本**（`v1.json`/`v2.json` 都在），读侧一张脸都看不见——`history()` 的 glob 是 `root.glob("*/v*.json")`（`:399`），备份里的形状是 `backup/versions/v*.json`，深一层，`names()` 又只从 `history()` 派生（`:477-484`），日志 **0 条 WARNING/ERROR**。同族里还带着"只增不减"那一半：反复 overwrite 一旦碰上占句柄，备份目录就在盘上越攒越多，谁也数不清。判据面：`grep -rn "__ovbak__" tests --include=*.py` ⇒ **0 命中**（overwrite 相关腿有 4 条，没有一条核备份目录是否被回收）。
+
+  > **§二之八十九 就地更正两处**（登记面的原话不改，读者按这两条现读校准）：
+  > ① **"越攒越多"不成立**。备份目录名固定为 `{目录名}.__ovbak__`（`_stash_archive:614`，修前号），同名再导入是**复用同一枚**，不会数出第二枚。实测两档（`probe_b92.py` ②③）：清理正常时第二次同名 overwrite 把它回收掉（`备份目录=[]`）；清理仍失败时让位那一步在 rename 上撞死、抛 `FileExistsError [WinError 183]`，正式区完好（`live 版本 前=[1,2] 后=[1,2]`）。⇒ 代价的准确形状是"**一份完整旧归档长期躺在盘上 + 下一次同名 overwrite 要么静默回收要么抛一柄伪装成撞车的错**"，不是数量增长。上一批把它写成"只增不减"是把 B.3 那一族的说法顺带套了过来，没现读。
+  > ② **"没有清理触发点"也说重了**（两份架构文档 §十八 B.14／§十六 13 同一条措辞随本批改写）：`:615-616` 那枚"让位前先清掉残留"就是触发点，而且是**唯一**一枚——只对同名、只有下次 overwrite 才走，且它自己那一档删失败同样是静默的。判据里现在把这一档钉成两条腿（回收成功腿 + 回收失败具名拒判腿），不再欠一句散文承诺。
+  > ③ **那份"0 条日志"当时是无读数面的**：探针把 handler 挂在 `logging.getLogger("autoforge.af_store")`，而本模块 logger 名现读是 **`autoforge.store`**（`af_store.py:33`）——挂错名字下"0 条"恒真。§二之八十九 用挂根 handler + 哨兵正控制（`[正控制] sentinel 抓到=True`）重测，**结论没变**（修前确实 0 条 WARNING/ERROR，因为那五个站点根本没有日志语句），但方法面必须记：判据文件里的 `store_logs` fixture 现在若抓不到哨兵就当场失败。
 - **探针第一版注错形状，这个错本身量出一件语义，如实记下**：原先我把 `shutil.rmtree` 整个换成"见 `__ovbak__` 就抛"，结果 `RC=1` 从 `:658` 直接抛穿。原因不是"AF 其实有留痕"，而是 `ignore_errors=True` 吞的是 rmtree **内部遍历**各站的错误，函数一进门就抛的那一种它不吞——真实现场（NAS/Windows 上文件被别的进程占着）落在内部，所以第二版把注入点改到 `os.unlink`/`os.rmdir`，才拿到上面那份"报成功 + 残留 + 零日志"。**落判据时也必须走内部注入**，否则等于把一条假绿的反证当证据（与 §十五 那条"门自己得先被反证跑过"同口径）。
 - 与 §二之八十六 那一格的差别要写清，别混着报：B.3 修的是"越界删掉正式区"＋"没删掉却回 `cleared: True`"（有输出面、且输出面在说谎）；这一格**没有越界风险**（目标恒为 `self.root / f"{name}.__ovbak__"`，由被删对象自己的 root 派生，正合判例要求的"不自带第二份真值"），它的缺陷形状只有一个——**静默**。所以本批只登记、不顺手改：改成什么（`logger.warning` 带残留明细／还是让 `_drop_stash` 返回残留数并由 import 报告如实带出）涉及 `import_bundle` 的报告语义，另起一批（任务 #92）。
 
@@ -7920,3 +7925,78 @@ M5 必须写清，不能拿"八枚全杀"当卖点：`not_comparable` 为真时 
 - 远端读数：本批未推。未推枚数一律 `git log origin/main..HEAD --oneline` 现读，不追写计数。推 GitHub 要 owner 点头。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `a734a02` + 裁定 20261010（测试区删除面）回执批次（纯文档面：三格全甲 ⇒ 零代码改动；说明文档 §十 拆成射程边界／权限面板／判例原文三条，§十八 B.3 收尾并新登记 B.14；知识文档 §九 ⚠️ 与 §十六 第 5 条同步；门禁两遍逐字节相同 7877 字节；未推枚数以 `git log origin/main..HEAD` 现读为准）
+
+---
+
+## 二之八十九、收 §十八 B.14：overwrite 让位备份的回收从"静默"改成三枚读数面——五枚 `ignore_errors=True` 全撤、删除收成一个入口，那柄伪装成撞车的 `FileExistsError` 换成具名 fail-closed
+
+### 一、触发物，以及上一批没量到的第二格
+
+上一批（§二之八十八 §三）只登记不顺手改，并把两条钉成硬要求：**判据的失败注入必须走 rmtree 遍历内部**（否则等于把一条假绿的反证当证据），修法要落的那一格（报告键 vs 只打日志）另起一批。本批照此办，注入点一律 `os.unlink`/`os.rmdir`。
+
+修前重跑探针（`%TEMP%/probe_b92_before.out`，handler 挂**根** logger、setup 先发哨兵，`[正控制] sentinel 抓到=True`）四档原样：
+
+```
+[①] imported=['demo'] errors=[] keys=['errors', 'imported', 'ok', 'renamed', 'skipped']
+[①] live 版本=[1, 2]
+[①] 备份残留(相对 root)=['demo.__ovbak__', 'demo.__ovbak__\\versions', ... '\\.lock', ... '\\.lock.info', ... '\\v1.json']
+[①] WARNING/ERROR 日志=[]
+[②] 第二次 overwrite 成功 imported=['demo'] ／ 备份目录=[]
+[③] 抛 FileExistsError: [WinError 183] 当文件已存在时，无法创建该文件。: '…\store\demo' -> '…\store\demo.__ovbak__\versions'
+[③] live 版本 前=[1, 2] 后=[1, 2]（正式区是否被这一下弄坏）
+[④] 写新失败按预期抛 RuntimeError ／ 旧归档回滚到位 versions=[1] ／ 备份壳残留=['demo.__ovbak__'] ／ 日志=[]
+```
+
+①④ 是上一批登记过的形状（报成功＋留整份旧归档＋零日志）。**③ 是本批新量出来的一格**：上一轮的备份没回收掉、这一轮又回收失败时，正式目录会被 `rename` 进那枚**已存在且非空**的备份目录，于是抛给调用方的是 `[WinError 183] 当文件已存在时…` ——一条与真因（"上一轮的旧归档还没被回收，请先释放占用"）毫不相干的"文件系统撞车"读数。这一格不在上一批的登记里，本批一并修。
+
+### 二、修法：一个删除入口 + 三枚读数面
+
+1. **`_purge_tree(target)`（`af_store.py:73-95`）** 成为本模块唯一删除入口：`shutil.rmtree(target, onerror=_collect)`（`:86`，全仓 `af_store.py` 里 rmtree 只有这一处站点，由 AST 判据钉死），返回 `(是否删干净, 盘上残留文件数, 失败站点明细)`。残留数按盘上 `rglob` **现数**，**不拿 `len(errors)` 代替**——遍历可以只失败一半（实测：注入一枚 unlink 失败 ⇒ 站点 3 处、盘上文件 1 个，两个数本来就不等价）。
+2. **三档后果各归其位**（各有自己的读数面，不混用）：
+   - **写新成功后回收失败**（报告面）：`_drop_stash`（`:738`）从 `-> None` 改成返回 `{path, residual_files, errors, errors_total}`；`import_bundle` 收集进**新格 `residual_backups`**（`:806` 初始化、`:867-869` 收集），并落 WARNING `:749`。这一格**不进 `errors`**（那条会被读成"这个条目没导入成功"，而导入确实做成了），也**不动 `ok`/`imported`**；docstring `:787-791` 把为什么不合并写死。
+   - **回滚那两档**（日志面，因为在 `raise` 路径上、没有报告可写）：`_unstash_archive`（`:699`）尾部回收失败 ⇒ WARNING `:732`；同一函数里"半截写入目录清不掉"改 `logger.error` `:711` 后**直接 `return`、不做 rename**，把那份可捞的旧归档整份留在备份里（修前是照样 rename、再撞一柄新异常）。`_stash_archive` 里 `not moved` 那格回收失败也补 WARNING `:691`（空壳会挡住下一次同名让位）。
+   - **让位前预清理失败**（具名异常面）：碰正式区之前就 `raise BackupNotReclaimed`（`:58`，抛出点 `:673`），替掉 ③ 那柄伪装撞车。继承 `ValueError` 与 `FidelityNotComparable` 同口径（调用方按既有"导入被拒"接得住，CLI 那侧打成一行 `[导入失败] …` 而不是 traceback）。
+   - 真源：后缀 `BACKUP_DIR_SUFFIX :53`（判据钉全模块只剩这一枚字面量）、明细封顶 `BACKUP_ERROR_DETAIL_MAX :55`（只封顶明细条数，残留个数不受它影响）。
+3. **消费面**：MCP `_t_import` 整份透传报告（判据钉它"恰好一枚 `Return` 且值是 `Call`"，防的是"改成摘几个键"）；CLI `af_cli.py:956-959` 有新格 echo；HTTP 路由原样返回这份 dict，但 `_svc`（`af_api.py:777-784`）只映射 `ServiceError`/`IRValidationError` ⇒ `BackupNotReclaimed` 到 API **仍是 500**，与修前同形（原来是 `FileExistsError` 的 500）。接进 `:474` 那组 409 处理器要动登录线在途文件 ⇒ 本批不改，登记成 #79 的子项。
+
+### 三、修后读数（同一支探针，`%TEMP%/probe_b92_after.out`）
+
+```
+[①] imported=['demo'] errors=[] keys=['errors', 'imported', 'ok', 'renamed', 'residual_backups', 'skipped']
+[①] 备份残留(相对 root)=['demo.__ovbak__', 'demo.__ovbak__\\versions', ... ×3]
+[①] WARNING/ERROR 日志=['WARNING:overwrite 导入已落新归档，但旧归档的备份没能回收：…demo.__ovbak__（残留 3 个文件，站点 …']
+[③] 抛 BackupNotReclaimed: overwrite 导入前清不掉上一轮遗留的备份目录 …（盘上仍残留 1 个文件，失败站点 3 处：…v9.json: PermissionError; …）
+[③] live 版本 前=[1, 2] 后=[1, 2]
+[④] 日志=['WARNING:overwrite 导入已回滚、旧归档回到正式区，但备份目录没能回收：…（残留 0 个文件，站…']
+```
+
+①的新键真的进了对外报告、WARNING 带路径与盘上现数的残留个数；③报的是真因而不是撞车，且抛后正式区一字未动、那份可捞的备份整份还在；④回滚成功、壳有留痕。
+
+### 四、判据 11 条腿与变异自证
+
+- `tests/unit/test_overwrite_backup_reclaim.py` **11 条腿全绿**（工作树现读 `11 passed in 16.26s`）：正常档 2 条（`test_clean_overwrite_reclaims_backup_and_reports_nothing`、`test_purge_tree_reports_done_only_when_target_is_gone`）、收尾回收失败 2 条（`test_unreclaimed_backup_is_counted_reported_and_warned` 同时核"报告残留数==盘上现数""`errors_total>=1`""`ok is True`""恰好 1 条 WARNING 且带路径与 `{n} 个文件`"、`test_residual_files_counted_from_disk_not_from_error_stations`）、让位前 2 条（`test_stale_backup_blocks_stash_with_the_real_reason`、`test_next_same_name_overwrite_is_the_reclamation_trigger`）、回滚 2 条（`test_rollback_with_unreclaimed_shell_leaves_one_warning`、`test_rollback_blocked_keeps_backup_whole_and_logs_error`）、静态 3 条（无 `ignore_errors`＋rmtree 站点全在 `_purge_tree` 内、后缀只剩一枚字面量、CLI/MCP 两张调用脸真读报告键）。
+- 副本树变异 **9 枚全部被杀**（`%TEMP%/mut92.py` → `%TEMP%/mut92.out`，只在副本树跑、工作树未碰）：`M0 什么都不改 ⇒ RC=0 红 0 条`；`M1 ignore_errors 回到唯一删除入口 ⇒ 红 3`；`M2 _drop_stash 恒回 None ⇒ 红 1`；`M3 让位前不拒判 ⇒ 红 1`；`M4 报告里没有 residual_backups 这一格 ⇒ 红 4`；`M5 残留数写成 len(errors) ⇒ 红 1`；`M6 告警降级成 debug ⇒ 红 1`；`M7 回滚受阻那格照样 rename ⇒ 红 1`；`M8 CLI 读不到残留那一格 ⇒ 红 1`；`M9 备份后缀重抄第二份字面量 ⇒ 红 1`。九枚**都命中**，没有"锚点作废/语法作废"。
+- **方法面两处如实记**：
+  - 变异驱动用 `read_text()` ＋ `write_text(newline="")` 还原，那次还原把副本树那份文件的 **CRLF 写成了 LF**（`af_store.py` CR 由 1210 → 0）。工作树未碰，`diff --strip-trailing-cr` 内容全等；M0 全绿是在同一份 LF 文本上量的，所以"红了"的比较自洽——但**"副本树字节等于工作树"这句不成立**，以后落这种驱动要么 `read_bytes`/成对 `newline=""` 读，要么别写这句。
+  - 上一批那句"0 条 WARNING/ERROR"当时挂在 `autoforge.af_store` 上量，而本模块 logger 名现读是 **`autoforge.store`**（`:33`），挂错名字下"0 条"恒真。本批挂根 handler + 哨兵正控制重测，**结论没变**（那五个站点确实一条日志语句都没有），判据里的 `store_logs` fixture 现在抓不到哨兵就当场失败。
+- 上一批登记措辞的两处更正已经写在 §二之八十八 §三 的引用块里（清理触发点不是"没有"而是只有修前 `:615-616` 那一枚；"盘上越攒越多"不成立，备份目录名按归档固定、同名复用同一枚）。
+
+### 五、全量与相邻面（红在哪、归谁）
+
+- 工作树全量：`6 failed, 3721 passed, 53 skipped, … 65 subtests passed in 264.37s`，`PYTEST_RC=1`（`%TEMP%/full92.out`）。
+- 那 6 条红逐条定性：全在 auth 面（`test_dcd_20261004_auth_limits.py` 2 条、`test_v0_8_auth.py` 3 条、`test_v1_4_token_expiry.py` 1 条，最新一条是 `assert (400 == 403)`）。**不是本批的**，两份副本树反证跑过：① HEAD 干净树（`git archive HEAD`）上这三份文件 `48 passed`、`HEAD_RC=0`；② HEAD＋本批四枚文件（`af_store.py`/`af_cli.py`/`af_service.py`＋新判据）的副本树里同一批套件 `70 passed`、`MINE_RC=0`。⇒ 这 6 条红来自工作树里**在途未提交的 `af_api.py`/`af_auth.py`（登录线）**，本批不替它修，也不据此判自己红；除这 6 条以外全树没有别的红，本批 11 条与相邻的 export/import 套件都在那 3721 条里。
+- 行尾按各文件自己的口径核过（不是"全树 LF"）：`af_store.py` 工作树 CR=1210 而 HEAD blob CR=1103（差＝本批新增 107 行，仍是 CRLF）；`af_cli.py` 工作树 1487／blob 1483（+4 行）；`af_service.py` 与新判据、三份文档 CR=0（这几份本来就是 LF）。`git diff --stat` 是 125 插／12 删，不是整份重写。
+
+### 六、门禁
+
+`GATES_PYTHON=<Python313> bash gates.sh` 跑三遍：代码面进树后一遍（`%TEMP%/gate_b92_pre.out`）、文档面全部进树后两遍（`gate_b92_a.out`、`gate_b92_b.out`）。三遍读数与 §二之八十七／八十八 那几遍**一模一样**，两遍 `diff` 逐字节相同（各 **7877 字节**）：`GATES_RC=1`、`新增/未获批 2 条（error 0 / warn 2）`、`基线内存量 96 条`、`过期基线条目 0 条`、`except-pass-broad=20 | fake-ok-const=78` ⇒ 全量 98／上限 97。⇒ 本批**动了代码面**，所以"按定义不可能新增违规"这句在这里不适用，实测口径是：新代码没有新增任何一条 AST 违规，那 2 枚未获批仍是既有的 `af_api.py:984`/`:1005`（登录线 #79），AF 不自上调上限、不写豁免。散文也没踩名字哨兵。
+
+### 七、记账位
+
+- 本批文件：代码面**已提交 `3ace9b6`**（`src/autoforge/af_store.py`、`src/autoforge/af_cli.py`、`src/autoforge/af_service.py`、`tests/unit/test_overwrite_backup_reclaim.py`）；文档面＝本批第二枚提交（`docs/ADM联动执行记录-AF.md`、`docs/architecture/AF完整架构与运行时说明.md`、`docs/architecture/AF完整知识文档.md`）。**不进**：`af_api.py`、`af_auth.py`、`docker/*`、`ui-user-mimo/*`、`docs/audit/参考/FFL-200题测试提示词.md`（并发登录线在途／归属他人）、计划文档（按纪律保持 unstaged）。
+- 存证（`%TEMP%`，不进仓）：`probe_b92.py`／`probe_b92_before.out`／`probe_b92_after.out`（修前修后同一支探针）、`mut92.py`／`mut92.out`（变异驱动与读数）、`full92.out`（全量）、`gate_b92_pre.out`／`gate_b92_a.out`／`gate_b92_b.out`（门禁三遍）。
+- **不交 DCD** 的理由：`residual_backups` 是加法式诊断键，MCP／CLI／HTTP 三张调用脸早已整份透传，不动权威归属、不动面板与路由、不涉及跨仓词汇或部署事实；唯一"要不要改对外报告语义"的分叉（进 `errors` 还是另开一格）在上一批就写清是 AF 自决范围。剩的 HTTP 那半边（500→409）不是新决策，是归属问题——要动在途文件，随 #79。
+- 待办：#92 收口。§十八 结构性残余现读剩 **B.1／B.4／B.7／B.10**（B.10 归 DCD）。**#79 多一枚子项**：把 `BackupNotReclaimed` 接进 `af_api.py:474` 那组 409 处理器（现在仍是 500，与修前同形）。其余阻塞格不变：#75/#76 等卡2 与 NAS 合并窗、#80 等 homesdk 0.3.3、#83/#84 等 owner、#81 等部署机。
+- 远端读数：本批未推。未推枚数一律 `git log origin/main..HEAD --oneline` 现读，不追写计数。推 GitHub 要 owner 点头。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `d6802bc` + §十八 B.14 收口批次（代码面 `3ace9b6`：五枚 `ignore_errors=True` 全撤、删除收成 `_purge_tree` 一个入口、报告新格 `residual_backups`、伪装成撞车的 `FileExistsError` 换成 `BackupNotReclaimed` fail-closed；判据 11 条腿＋变异 9 枚全杀；修前修后同一支探针各四档原样贴回；工作树那 6 条红按两份副本树反证定性成登录线在途、非本批；门禁三遍 7877 字节逐字节相同；未推枚数以 `git log origin/main..HEAD` 现读为准）
