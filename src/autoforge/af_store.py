@@ -38,6 +38,7 @@ __all__ = [
     "WriteConflictError",
     "ArchiveNameConflict",
     "ArchiveOwnerUnknown",
+    "BackupNotReclaimed",
     "diff_graphs",
     "find_node",
     "dump_confidence",
@@ -47,6 +48,56 @@ __all__ = [
 ]
 
 DEFAULT_STORE_ROOT = ".forge"
+
+# overwrite 导入的让位备份目录后缀（唯一真源：`_stash_archive` 与判据都读它，不另抄一份）
+BACKUP_DIR_SUFFIX = ".__ovbak__"
+# 报告/日志里最多带几处失败站点明细（残留个数永远按盘上现数，不受这个封顶影响）
+BACKUP_ERROR_DETAIL_MAX = 20
+
+
+class BackupNotReclaimed(ValueError):
+    """overwrite 让位前清不掉上一轮遗留的备份目录 ⇒ 拒绝动正式归档（fail-closed）。
+
+    旧形状是 `rmtree(backup, ...)` 删失败被抹平，紧接着把正式目录 `rename` 进那个**已存在且非空**
+    的备份目录，于是抛出来的是 `FileExistsError: [WinError 183] '…/demo' -> '…/demo.__ovbak__/versions'`
+    ——一条与真因（上一轮的备份没回收掉）毫不相干的"文件系统撞车"读数。这里在还没碰正式区之前
+    就把真因说清楚，让人去处理那个目录，而不是让导入伪装成撞车失败。
+
+    继承 `ValueError` 与 `FidelityNotComparable` 同一口径：调用方按既有的"导入被拒"处置接得住
+    （CLI 那侧 `except ValueError` 会把它打成 `[导入失败] …` 而不是 traceback），而判据仍能点名这一枚。
+    现读 `af_api.py:777-784` 的 `_svc` 只映射 `ServiceError`/`IRValidationError`，所以 HTTP 面这一格
+    仍是 500——与 HEAD 同形（原来是 FileExistsError 的 500），接进 `:474` 那组 409 处理器要动在途文件。
+    """
+
+
+def _purge_tree(target: Path) -> tuple[bool, int, list[str]]:
+    """删掉一棵子树，并把"没删掉"如实数出来：返回 (是否删干净, 盘上残留文件数, 失败站点明细)。
+
+    本模块的备份生命周期原先全靠 `ignore_errors=True`，那一档吞的是 `rmtree` **遍历内部各站**的错误，
+    于是"整份旧归档还躺在盘上"与"备份已回收"在调用方看来一模一样。残留个数按盘上现数，不拿
+    `len(errors)` 代替——遍历可以只失败一半，两个数不是一回事。
+    """
+    errors: list[str] = []
+
+    def _collect(_func, path, exc_info) -> None:  # noqa: ANN001 - shutil.rmtree 的 onerror 形状
+        errors.append(f"{path}: {exc_info[0].__name__}")
+
+    if target.is_dir():
+        shutil.rmtree(target, onerror=_collect)
+    elif target.exists():
+        try:
+            target.unlink()
+        except OSError as exc:
+            errors.append(f"{target}: {exc.__class__.__name__}")
+    if target.is_dir():
+        residual = sum(1 for p in target.rglob("*") if p.is_file())
+    else:
+        residual = 1 if target.exists() else 0
+    return not target.exists(), residual, errors
+
+
+def _detail(errors: list[str]) -> str:
+    return "; ".join(errors[:BACKUP_ERROR_DETAIL_MAX])
 
 
 def _utc_now_iso() -> str:
@@ -606,14 +657,25 @@ class GraphStore:
         `overwrite` 导入用它替代「先 `_delete_archive()` 再写」：删除不可逆，一旦
         后续写新版本失败，旧归档就永久没了。改成 rename 让位后，失败可原样回滚。
         调用前必须已通过 `assert_deletable()`（归属核对不能因为换实现而丢）。
+
+        让位前那次"先清掉上一轮残留"是全模块**唯一**的备份回收触发点，而且只对同名、只有下次
+        overwrite 才会走到——它一旦删失败，旧做法是让 rename 去撞一柄伪装的 `FileExistsError`
+        （见 `BackupNotReclaimed`）。现在改成：清不干净就在碰正式区之前抛具名异常。
         """
         directory = self._dir(name)
         conf_path = self.root / f"{directory.name}.conf.json"
         if not directory.is_dir() and not conf_path.exists():
             return None
-        backup = self.root / f"{directory.name}.__ovbak__"
+        backup = self.root / f"{directory.name}{BACKUP_DIR_SUFFIX}"
         if backup.exists():  # 上一轮未清理干净的残留，先清掉再让位
-            shutil.rmtree(backup, ignore_errors=True)
+            reclaimed, residual, errors = _purge_tree(backup)
+            if not reclaimed:
+                raise BackupNotReclaimed(
+                    f"overwrite 导入前清不掉上一轮遗留的备份目录 {backup}"
+                    f"（盘上仍残留 {residual} 个文件，失败站点 {len(errors)} 处：{_detail(errors)}）；"
+                    f"拒绝让位——正式目录 {directory} 尚未被改动，请先释放对备份目录里文件的占用"
+                    f"（关闭占用进程/修权限）或人工移走它，再重试导入"
+                )
         backup.mkdir(parents=True, exist_ok=True)
         moved = False
         if directory.is_dir():
@@ -624,7 +686,13 @@ class GraphStore:
             conf_path.rename(backup / "conf.json")
             moved = True
         if not moved:
-            shutil.rmtree(backup, ignore_errors=True)
+            reclaimed, residual, errors = _purge_tree(backup)
+            if not reclaimed:
+                logger.warning(
+                    "overwrite 让位没搬动任何东西，回收刚建的备份目录又失败：%s（残留 %d 个文件，站点 %d 处：%s）"
+                    "——正式归档未被改动，但这个空壳会挡住下一次同名 overwrite 的让位",
+                    backup, residual, len(errors), _detail(errors),
+                )
             return None
         return backup
 
@@ -637,7 +705,16 @@ class GraphStore:
         try:
             if (backup / "versions").is_dir():
                 if directory.exists():
-                    shutil.rmtree(directory, ignore_errors=True)
+                    reclaimed, residual, errors = _purge_tree(directory)
+                    if not reclaimed:
+                        # 半截的新写入目录挡着，rename 回正名必然撞车；此时**不搬**，让备份整份留在原地可捞
+                        logger.error(
+                            "overwrite 导入失败后回滚受阻：写入中的目录 %s 清不掉"
+                            "（残留 %d 个文件，站点 %d 处：%s），未做 rename——"
+                            "旧归档仍完整保留在备份 %s，请按日志处理后重试",
+                            directory, residual, len(errors), _detail(errors), backup,
+                        )
+                        return
                 # fixed-tmp: exempt(回滚让位的逆操作，把备份改回正名；理由同 _stash_archive)
                 (backup / "versions").rename(directory)
             if (backup / "conf.json").is_file():
@@ -650,12 +727,36 @@ class GraphStore:
                 "overwrite 导入失败后恢复旧归档出错，备份仍保留在 %s：%s", backup, name, exc_info=True
             )
             return
-        shutil.rmtree(backup, ignore_errors=True)
+        reclaimed, residual, errors = _purge_tree(backup)
+        if not reclaimed:
+            logger.warning(
+                "overwrite 导入已回滚、旧归档回到正式区，但备份目录没能回收：%s（残留 %d 个文件，"
+                "站点 %d 处：%s）——盘上多出一份旧归档副本，读侧看不见它，下一次同名 overwrite 会再试一次回收",
+                backup, residual, len(errors), _detail(errors),
+            )
 
-    def _drop_stash(self, backup: Path | None) -> None:
-        """写新成功：丢弃备份（此时旧归档已不再需要）。"""
-        if backup is not None and backup.exists():
-            shutil.rmtree(backup, ignore_errors=True)
+    def _drop_stash(self, backup: Path | None) -> dict[str, Any] | None:
+        """写新成功：丢弃备份（此时旧归档已不再需要）。
+
+        删不干净不再抹平：返回残留明细由 `import_bundle` 如实带进报告（导入本身确实做成了，
+        这一格说的是"旧归档副本还躺在盘上"，两者是两件事，不合并进 `ok`）。
+        """
+        if backup is None or not backup.exists():
+            return None
+        reclaimed, residual, errors = _purge_tree(backup)
+        if reclaimed:
+            return None
+        logger.warning(
+            "overwrite 导入已落新归档，但旧归档的备份没能回收：%s（残留 %d 个文件，站点 %d 处：%s）"
+            "——读侧看不见这份副本，下一次同名 overwrite 会再试一次回收",
+            backup, residual, len(errors), _detail(errors),
+        )
+        return {
+            "path": str(backup),
+            "residual_files": residual,
+            "errors": errors[:BACKUP_ERROR_DETAIL_MAX],
+            "errors_total": len(errors),
+        }
 
     def _unique_name(self, base: str) -> str:
         """为 rename 策略找一个未占用名字：`base_import` / `base_import2` …"""
@@ -683,7 +784,10 @@ class GraphStore:
         - `owner`（R20-01）：导入操作者的归属主体。overwrite 时若现有归档归属
           与 `owner` 不同则拒绝（与 save_graph 的所有权隔离对称）；导入后新记录
           的 owner 字段写此值。
-        返回报告：{imported, skipped, renamed, errors}。
+        返回报告：{imported, skipped, renamed, errors, residual_backups}。
+        `residual_backups` 只有一格要说清：overwrite 的让位备份在写完新版本后应当被回收，
+        回收失败**不影响**"新归档已落盘"这个事实，所以它不进 `errors`（那条会被读成"这个条目
+        没导入成功"），也不动 `ok`；它单独占一格，因为盘上确实留着一份读侧看不见的旧归档副本。
         """
         if not isinstance(bundle, dict) or bundle.get("format") != "autoforge-bundle":
             raise ValueError("不是合法的 AutoForge bundle（缺少 format=autoforge-bundle）")
@@ -699,6 +803,7 @@ class GraphStore:
             "skipped": [],
             "renamed": {},
             "errors": [],
+            "residual_backups": [],
         }
         for entry in bundle.get("entries", []):
             name = str(entry.get("name", ""))
@@ -759,7 +864,9 @@ class GraphStore:
             except Exception:
                 self._unstash_archive(name, stash)
                 raise
-            self._drop_stash(stash)
+            dropped = self._drop_stash(stash)
+            if dropped is not None:
+                report["residual_backups"].append({"name": target, **dropped})
             report["imported"].append(target)
 
         # 置信度快照：跟随 rename 映射到新名字；skip 的归档不恢复其 conf

@@ -953,6 +953,10 @@ def store_import(
         raise typer.Exit(code=EXIT_IR_ERROR)
     typer.echo(f"· 导入完成：imported={report['imported']} skipped={report['skipped']} "
                f"renamed={report['renamed']} errors={report['errors']}")
+    residual_backups = report.get("residual_backups") or []
+    if residual_backups:
+        typer.echo(f"⚠ 旧归档的让位备份没被回收（新归档已落盘，但盘上多了一份读侧看不见的旧副本，"
+                   f"日志里有残留明细）：{residual_backups}", err=True)
 
 
 # ── v0.8.0：令牌管理（主体模型 + 撤销黑名单）──────────────────────────

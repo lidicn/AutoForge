@@ -2123,7 +2123,9 @@ def import_store(
 ) -> dict[str, Any]:
     """导入 bundle（v0.7.0）。冲突策略 skip/overwrite/rename，见 GraphStore.import_bundle。
 
-    返回导入报告 {imported, skipped, renamed, errors}。
+    返回导入报告 {imported, skipped, renamed, errors, residual_backups}。最后一格是
+    「新归档已落盘、但 overwrite 的让位备份没能回收」的如实读数（`import_bundle` 里写清语义：
+    它不进 `errors`，因为导入这件事确实做成了）。
 
     v1.3.0：默认受**爆炸半径**约束。导入天然是批量动作，故**常见做法是显式传
     `allow_bulk=True`**——但默认关着，能让「误导入整个 bundle」这类事故先被拦一下。
