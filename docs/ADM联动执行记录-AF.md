@@ -8803,3 +8803,58 @@ M31 与 M33 各杀 4 条但方向不同：前者证明这条判据真的在按�
 - 存证（`E:\tmp\`，不进仓）：`tb_gate_now.txt`／`tb_unit_now.txt`／`tb_mut.py`（副本树驱动，含逐案 restore 与"注入未生效"护栏）／`tb_mut/tree`（副本树）／`mutation_arch05.result.txt`（15＋1 案，`FAIL 0`）／`chunk_unit.txt`＋`chunk_contract.txt`＋`chunk_f14.txt`＋`chunk_acceptance.txt`＋`chunk_rest.txt`（五段单测）／`arch05_gates_a.txt`＋`arch05_gates_b.txt`＋`arch05_gates_c.txt`（各 9088 B，三份 md5 相同 `1c13299d…`；b 跑在两份 docs 记账之后、c 是复跑确认）。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `079facc`、本批实提交 `fe34e2b`（7 files changed / 1113 insertions / 3 deletions，`git show --stat HEAD` 为证；`af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`／`docs/audit/参考/FFL-200题测试提示词.md` 都是并发在途文件，一条不在本批改动面里。本批七份文件：`docs/信任边界清单.md` 新建 162 行／`scripts/check_trust_boundary.py` 新建 477 行／`tests/unit/test_trust_boundary_gate.py` 新建 390 行 32 腿／`gates.sh` 26 增 0 删／`README.md` §4.1 8 增 3 删／两份 docs 记账。**没有改过任何一处鉴权装配、没有新增路由、没有动过任何一枚 scope**）；落的是"边界从可读的代码变成可 diff 的产物"：87 装饰器／86 运行期第一方／90 路由对象三个数对上，`/api/metrics` 那句过期口径按现读改掉，报告没点名的四条匿名 POST 与第二份裸挂载表量进射程，五判据各自可红＋八种射程塌 `exit 2`＋十五案变异 `FAIL 0`；对报告建议的一处偏差（不落声明键、落"未登记即红"）已显式登记请追认；四问待裁与 #99 同批递；门禁三遍逐字节相同（9088 B／`1c13299d…`，两枚红＝登录线在途），**未推 GitHub——推要 owner 点头**
+
+## 二之一百、收第六轮审计 ARCH-06（进程模型与并发归属：三套互不相识的同步原语＋无 supervisor＋无优雅停机）：报告那句「`src/` 全树 `atexit`／`signal.signal` 命中数为 0」**半句已过期**（SIGTERM 那半句被 §二之九十三 那批改掉了），"缺一份共享状态归属对账"这半句成立 ⇒ 新门五判据（生命周期站点默认拒绝／每类上限只减不增／三张表现读对撞／serve 与 watch 两条收尾形状锚点）＋十六案变异；supervisor 归谁／serve 要不要信号钩子／`af_live` 三枚 `global` 要不要加锁 三问不自决
+
+### 一、复测对撞表（报告每一句 vs 现读）
+
+现读口径：`GATES_PYTHON=…Python313 python scripts/check_process_model.py`（对 `src/autoforge/*.py` 整棵做 `ast.parse`，不导入 `autoforge`、不碰网络），2026-10-10 15:5x。**全部行号都是当次读数**，报告那两张清点表的行号按现读重钉。
+
+| 报告的话（`docs/audit/AutoForge审计报告.html` §ARCH-06） | 现读 | 定性 |
+| --- | --- | --- |
+| 「`src/` 全树 `atexit`／`signal.signal` 命中数为 0」 | `atexit.register` **0** 站点；`signal.signal` **1** 站点＝`af_cli.py:631`（`signal=signal.SIGTERM;handler=_on_sigterm`，外层函数 `watch`） | **半句过期**：SIGTERM 那一半已经在 §二之九十三 那批落地，本批把它钉成判据 E |
+| 「整个运行时**没有停机钩子这个概念**」 | serve 侧 `af_cli.py:1480` 的 `try` 其 `finally` 是 `if bridge is not None: bridge.stop()`；watch 侧 SIGTERM→同一 `finally`（`stop.set()`→`ticker.join(…)`→`coord.release()`） | **部分不成立**：概念有两半（收尾 `finally`），缺的是信号钩子面（serve 无处理器、无 `atexit`）⇒ 落形状锚点 D／E，补钩子递裁 |
+| threading 那行锚点（`af_auth.py` 5 处／`af_config.py:44`／`af_pending.py:42`／`af_service.py:851/1549`／`af_telemetry.py:48`…） | 进程内 **17 站点／10 个文件**；`af_auth.py` 5 ✓、`af_config.py:44` ✓、`af_pending.py:42` ✓、`af_telemetry.py:48` ✓；`af_service.py` 现在 `:853`／`:1551` | **成员成立、行号在漂（±2）**——报告自己"只能逐个模块推断"的成本，正是本清单要换成机器读数的东西 |
+| FileLock 那行（`af_store`／`af_catalog`／`af_experience`／`af_live.WatchCoordinator`／`af_cli.py:1435`） | 跨进程 **16 站点／6 个文件**；serve 租约在 `af_cli.py:1451`（off-by-16）；报告**漏了** `af_service.py` 自己的 3 枚（`:239 write_gate`／`:1853 _single_writer_check`／`:2545 _lock_is_free`） | **成立但清点不全**（少 1 个文件、少 3 枚站点） |
+| 模块级全局散落（`af_live` ticker／退出原因、`af_health.py:847/858`、`af_version.py:818`、`af_premiere.py:547`、`af_test.py:337`、`af_flock._LOCAL_HELD`） | 六个文件全中；`global` 改写到的名共 **9 枚／6 个文件**（`af_live` 3、`af_premiere` 2、其余各 1）；行号读作 `af_health.py:846/857`、`af_version.py:816`、`af_premiere.py:542`、`af_test.py:335`；`_LOCAL_HELD`（`af_flock.py:49`）是就地 `add/discard`、不需 `global` | **成员成立、行号在漂（±1～5）** |
+| 「缺 supervisor：子进程挂了要拉起、父进程挂了子进程要收，没有任何组件负责」 | 全树 `Popen` **1 枚**（`af_service.py:2716`，`kws=env,start_new_session,stderr,stdout;start_new_session=True`）、`os.kill` **2 枚**（`:2604 stop_watch`／`:2682 start_watch`）；仓内 `af_tick_supervisor.py` 是 **tick 的内监护**（`af_live.py:448` 接线），不是进程 supervisor | **成立**，但要把两件事分开：tick 层有 supervisor、进程层没有 |
+| 「缺统一的状态归属模型：没有等价物锁住『共享可变状态的归属』」 | 本批之前 12 道 `scripts/check_*.py` 里**没有一道**看过这三套原语 | **成立 ⇒ 本批落的就是这一格** |
+
+本批自己量出来、报告没写的一条：§2.3 那列"函数体内有 `with`"**九枚全读作「否」**，其中 `af_live.py` 一个模块占 3 枚名而该模块进程内锁数为 **0**。报告说"已出现漏网点（BUG-03 的 `subjects()`）"，同一形状在 tick 状态上是真的——但要不要补锁属运行时语义，进 §六 问 3，不在本门射程。
+
+### 二、落的机械半边（四件，全是新增）
+
+1. **`docs/进程模型清单.md`（新建 160 行／15.8 KB，CR=0）**：§一 口径五条（射程含"含什么、不含什么"——`scripts/`／`tests/` 的子进程**明写排除**而不是静默；"门判的是对账不是缺陷"这条也写在口径里，防止下一个人把 §2.3 那列「否」读成九个 bug）；§二 自动段三张表（生命周期站点 4 行＋计数行／同步原语 33 行＋计数行／`global` 共享名 9 行＋计数行）；§三 生命周期站点登记 4 行（每行五字段：拉起／收／收不到会怎样／依据／认领）；§四 每类上限 14 行（**多数为 0 是基线不是噪音**：任何一枚从 0 变 1 都必须先认领）；§五 上面那张复测对撞表；§六 递裁三问。
+2. **`scripts/check_process_model.py`（新建 607 行）**：五判据各自单独可红——A 自动段逐行对撞现读（含计数行，所以**计数下降也逼人来重生成**）、B 生命周期站点默认拒绝（登记行的 `kind=` 要与现读一致、五字段齐、依据要指得到仓内真实文件、后果不许写「待补」、认领只认 `AF`／`待裁`／`DCD`、过期登记要删）、C 每类上限只减不增、D serve 的 `uvicorn.run` 所在 `try` 其 `finally` 必须还在停桥、E 装 SIGTERM 的那个函数里必须有 `finally` 同时做 `stop.set()`／`ticker.join(`／`coord.release()`。九种射程塌法走 `exit 2`，其中第 ⑧ 种是本门的反空集腿：**全树读不出任何一枚生命周期站点＝扫描器坏了，不是代码干净**。真源从盘上现取（对整棵 `src/autoforge` 做 AST），门里没有第二份名单可抄；判调用只认 `ast.Call` 节点，注释里出现 `Popen`／`install_api` 那种名字不算（§二之九十九 那一格的同源教训）。
+3. **`tests/unit/test_process_model_gate.py`（新建 488 行／34 腿）**：真仓 9 腿（把 `Popen=1／os.kill=2／signal.signal=1／atexit=0`、`进程内 17 站点／10 个文件 · 跨进程 16 站点／6 个文件`、`af_live` 三枚名且锁数 0、九枚全「否」、D／E 两条形状在位这几枚**读数本身**钉死）＋合成树 25 腿（B 六种红法、C 一枚、A 一枚、D 一枚、E 两枚、`exit 2` 七枚，另含"整段登记被改成散文时仍逐枚点名 4 枚"这枚反退化腿与"变异锚点没命中就抛"这枚自证腿）。合成树的站点行号由门自己的扫描结果生成，不写死；注入用"末尾追加"与"单行替换"两种形状，保证不移动既有站点行号——否则一处用例会顺带把别的登记读成过期，红了也不知道红在哪。
+4. **`gates.sh` 纯加法接入（23 增／0 删，LF，`bash -n` RC=0）**：新节标题＋12 行来历注释＋运行；结论分两档（`-eq 2` 射程塌九种／`-ne 0` 五判据），覆盖门自认现读「盘上 `check_*.py` **23** 个，`gates.sh` 覆盖 **22** 个，工作流覆盖 1 个，echo 文案 **77** 行」⇒ 新门不需要任何豁免。
+
+### 三、读数（命令原文＋现读）
+
+- `python scripts/check_process_model.py` → `✓ 进程模型门禁干净（现读生命周期 4 枚全部在册且认领可读；同步原语 33 枚、模块级共享名 9 枚逐行对撞一致；serve 与 watch 两条收尾形状锚点都在）`，`RC=0`。
+- `python -m pytest tests/unit/test_process_model_gate.py -q` → **`34 passed in 39.41s`**，`RC=0`（首跑 `1 failed, 32 passed`：那枚失败是我自己把"登记整段变散文"错期望成 `exit 2`——现读语义是"每枚站点单独点名才叫红"，改成 RC=1＋逐枚点名断言，另补一枚"行形状整体改写才走 `exit 2`"，两条各管一头）。
+- 邻近合跑 `pytest tests/unit/test_process_model_gate.py test_trust_boundary_gate.py test_watch_lifecycle_r6_audit.py test_atomic_write_sites_fixes.py -q` → **`106 passed, 1 skipped in 106.91s`**，`RC=0`。
+- 整段 `python -m pytest tests/unit -q`（含本批 34 腿）→ **`6 failed, 3137 passed, 43 skipped, 1 warning in 361.00s`**，`UNIT_RC=1`。六条 FAILED 逐名与架构说明 §十八 A 表 2026-10-09 混合态追注**同名同因**，全在登录线在途鉴权面：`test_dcd_20261004_auth_limits`（owner 明文／第三方 write 令牌掩码 2 条）、`test_v0_8_auth`（legacy 单令牌兼容／多令牌分档／撤销即时生效 3 条）、`test_v1_4_token_expiry`（过期令牌 HTTP 侧读到 `400` 而非 `403`）；本批那份 `test_process_model_gate.py` 在这段里一条 FAILED 都没进。**这一条差点被我记成"截断没跑完"**：后台进程其实跑完了，是我在它落盘的中途去读了它——按盘上完整输出（`E:\tmp\chunk_pm_unit.txt` 189 行，末三行＝FAILED 名单＋汇总＋`UNIT_RC=1`）重记一次，并把"读数要以文件末行为准"当作现读证据。
+- `python scripts/check_gates_coverage.py` → `RC=0`（见 §二 第 4 格那串现读数）。
+- 副本树十六案（`E:\tmp\pm_mut.py`，逐案 restore，驱动把结果落 `E:\tmp\mutation_arch06.result.txt` 1523 B 再报）：**`总计 16 案，未达预期 0 案`**。M0 不注入 `RC=0`；M99 登记行同义改写 `RC=0`（证明门判的是字段在不在、不是措辞）；M60 追加未登记 `Popen`／M61 删登记行／M62 `kind` 不符／M63 依据指不到／M64 后果写「待补」／M65 超上限／M66 手改自动段／M67 拆掉停桥／M68 摘掉 SIGTERM／M69 收尾不放开协调锁 ⇒ **十案 `RC=1` 全被杀**，规则字母各自对上（M67 只出 D、M69 只出 E、M65 只出 C、M66 只出 A）；M70 清单消失／M71 塞一份语法坏文件／M72 登记行形状整体改写／M73 掏空 `src/autoforge` ⇒ **四案 `RC=2` 全落射程档**。
+- 门禁 `GATES_PYTHON=…Python313 bash gates.sh`：**a／b／c 三遍整份逐字节相同 9418 B／md5 `c2b574ade9286275e97945a0ff4a5ad2`**（a／b 跑在四件代码＋清单落完之后，c 跑在本文件与架构说明两处记账改完之后；`diff arch06_gates_a.txt arch06_gates_c.txt` 为空），`GATES_RC=1`。两枚红与本批无关：`新增/未获批 2 条（error 0 / warn 2）`＝登录线在途 `af_api.py:984`／`:1005`；`计数：except-pass-broad=19 | fake-ok-const=78`、`全量违规 97 条 / 登记上限 97 条`（棘轮不溢出）。**`.gates-tally.txt`／`.gates-baseline.txt` 一字未动**。
+
+### 四、与上一批（ARCH-05，9088 B／`1c13299d…`）的字节对撞
+
+`diff` 只有四处移动，全部解释得开：① 新节三行（标题＋`✓` 行＋空行）**329 B**，加上节前的那一枚空行 `echo` 共 **+330 B**＝总差值分毫不差；② `undefined-name` 扫描 215→**216** 个文件（多的那枚就是本批新脚本），③④ 覆盖门自认 `check_*.py` 22→**23**／`gates.sh` 覆盖 21→**22**／echo 文案 74→**77** 行——**全是等长数字，不贡献字节**。AST 面与上一批逐行同读。
+
+### 五、对报告建议的偏差（显式登记，请追认）
+
+报告的三格"缺什么"是**统一状态归属模型／supervisor／优雅停机**。本批落的是它们**下面的那一层**——把"谁拉起、谁收、哪份状态被谁改写"变成可 diff 的对账资产，并把已经存在的两条收尾路径钉成形状锚点；**没有自建进程 supervisor、没有给 serve 加信号钩子、没有给 `af_live` 的三枚 `global` 加锁**。这不是漏做：三件事都要改变常驻进程的运行时语义或部署口径，按 §六 递 DCD。等裁期间清单 §六 那一节既不写"进程模型已闭环"，也不写"按设计不需要 supervisor"。
+
+### 六、递 DCD 的那半边（攒批，不今天单投）
+
+三问进 #99 那批：① 进程 supervisor 归谁（compose 的 `restart:`／NAS 那条通道／仓内自建"serve 退出前收子进程"兜底）；② serve 要不要信号钩子（`atexit`／SIGTERM 现读 0 命中就是那一格）；③ `af_live` 那三枚 `global`（`_ticker_thread`／`_tick_supervisor`／`_tick_exit_reason`）要不要按成文约定补锁。同批还在攒：ARCH-03 口径三问、ARCH-04 两侧真跑、ARCH-05 四问、ARCH-02 发布面四问等裁。**今天不再投第二份 AF 件**（`20261010-AF-发布面与镜像可追溯-决策申请.md` 是本日已投那份）。
+
+### 七、任务位与残余
+
+- ARCH-06 **收口**：机械半边（清单＋五判据＋34 腿＋十六案变异＋接线）落码；口径半边三问递裁。本批**没碰** `af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`，也没改任何一行运行时代码——落的是资产与门。
+- #98 还剩：ARCH-07（可观测性：无指标后端／无追踪／无分级日志约定）、ARCH-08（仓库卫生；README 剩 2 处死链在那一格）、ARCH-09（名单手抄）、ARCH-10／11（原文未读）逐条复测。
+- 存证（`E:\tmp\`，不进仓）：`pm_mut.py`（副本树驱动，含逐案 restore＋"注入未生效就抛"护栏）／`pm_mut/tree`（副本树）／`mutation_arch06.result.txt`（1523 B，16 段带 `want_rc`／`got_rc`／`规则字母`／`射程红`）／`arch06_gates_a.txt`＋`arch06_gates_b.txt`＋`arch06_gates_c.txt`（各 9418 B、三份 md5 相同 `c2b574ad…`；c 跑在两份 docs 记账改完之后，`diff` a／c 为空。两份记账文档不在任何门的读取面上——这一点不是断言，是 a 与 c 逐字节相同这一事实自己给的证据）／`chunk_pm_a.txt`（邻近四份合跑 106 passed）／`chunk_pm_unit.txt`（`tests/unit` 整段 189 行：`6 failed, 3137 passed, 43 skipped`，六条全为登录线在途鉴权面）／`arch05_text.txt`（ARCH-05／06／07 原文逐字段，4440 B）。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `d295b7f`＋本批未提交改动（本批四份文件：`docs/进程模型清单.md` 新建 160 行／`scripts/check_process_model.py` 新建 607 行／`tests/unit/test_process_model_gate.py` 新建 488 行 34 腿／`gates.sh` 23 增 0 删；另有两份 docs 记账。**没有改过任何一行运行时行为、没有自建 supervisor、没有给任何进程补钩子、没有加过一枚锁**；`af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`／`docs/audit/参考/FFL-200题测试提示词.md` 都是并发在途文件，一条不在本批改动面里）；落的是"报告说没有的那份对账第一次成为可 diff 的产物＋把已经存在的两条优雅收尾路径从巧合变成门"；复测把 `signal.signal=0` 那句过期改掉、把 `af_service.py` 的 3 枚 `FileLock` 量进射程、把报告两张表的行号换成机器读数；一处对报告建议的偏差（不落 supervisor／不落钩子，落对账资产）已显式登记请追认；三问待裁与 #99 同批递；门禁三遍逐字节相同（9418 B／`c2b574ad…`，c 跑在本文与架构说明两处记账改完之后；两枚红＝登录线在途），**未推 GitHub——推要 owner 点头**
