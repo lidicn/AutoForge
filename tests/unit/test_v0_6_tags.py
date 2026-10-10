@@ -138,10 +138,12 @@ except ImportError:
     _HAVE_FASTAPI = False
 
 
-def _client(tmp_path, *, noauth: bool = True):
-    import os
+def _client(tmp_path, monkeypatch, *, noauth: bool = True):
+    # conftest 那段警告的口径：noauth 走 monkeypatch（每条测试结束自动回收），
+    # 不用 `os.environ.setdefault`——后者把值写进全局环境且 monkeypatch 不回收，
+    # pytest 按字母序收集时会把 AF_ALLOW_NOAUTH 带给后面故意测 fail-closed 的那几条。
     if noauth:
-        os.environ.setdefault("AF_ALLOW_NOAUTH", "1")
+        monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
     store = GraphStore(str(tmp_path / "store"))
     store.save(_graph(enabled=True), "g1", tags=["lighting"])
     store.save(_graph(enabled=True), "g2", tags=["other"])
@@ -149,8 +151,8 @@ def _client(tmp_path, *, noauth: bool = True):
 
 
 @pytest.mark.skipif(not _HAVE_FASTAPI, reason="fastapi not installed")
-def test_api_graphs_tag_filter(tmp_path):
-    client, _ = _client(tmp_path)
+def test_api_graphs_tag_filter(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
     items = client.get("/api/graphs?tag=lighting").json()["items"]
     assert {i["name"] for i in items} == {"g1"}
     assert {i["name"] for i in client.get("/api/graphs").json()["items"]} == {"g1", "g2"}
@@ -158,8 +160,7 @@ def test_api_graphs_tag_filter(tmp_path):
 
 @pytest.mark.skipif(not _HAVE_FASTAPI, reason="fastapi not installed")
 def test_api_graphs_tags_set(tmp_path, monkeypatch):
-    monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
-    client, store = _client(tmp_path)
+    client, store = _client(tmp_path, monkeypatch)
     body = client.post("/api/graphs/tags", json={"name": "g1", "tags": ["a", "b"]}).json()
     assert body["ok"] is True
     assert store.get_tags("g1") == ["a", "b"]
@@ -167,8 +168,7 @@ def test_api_graphs_tags_set(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(not _HAVE_FASTAPI, reason="fastapi not installed")
 def test_api_graphs_enable_disable_by_tag(tmp_path, monkeypatch):
-    monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
-    client, store = _client(tmp_path)
+    client, store = _client(tmp_path, monkeypatch)
     client.post("/api/graphs/disable", json={"tag": "lighting"})
     ver = store.latest("g1")
     assert all(not a.enabled for a in store.load("g1", ver))

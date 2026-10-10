@@ -12,8 +12,12 @@ IR_WITH_DO = {
     "version": 1,
     "automations": [{
         "id": "auto_x", "name": "x", "confidence": None,
-        "nodes": {"n1": {"id": "n1", "kind": "do", "action": "turn_on",
-                          "entities": ["light.study"]}},
+        # 这份夹具原来抄的是 `entities: [...]`——IR 节点根本没有这枚字段，它是照着
+        # `_ir_writes_devices()` 的错误读法长出来的，于是"strict 闸拦住了写设备"这条判据
+        # 一直在拿一份真部署里不会出现的 IR 自证。改成 `params.entity_id`（真源见
+        # `af_ir/models.py::Node.target_entities`）之后，F-09 那条腿才有东西可判。
+        "nodes": {"n1": {"id": "n1", "kind": "do",
+                          "params": {"entity_id": "light.study", "service": "turn_on"}}},
     }],
 }
 

@@ -86,8 +86,17 @@ class Config:
 
     def _load_revision(self) -> int:
         try:
-            return int(json.loads(self._revision_path().read_text(encoding="utf-8")).get("revision", 0) or 0)
-        except (OSError, ValueError):
+            body = json.loads(self._revision_path().read_text(encoding="utf-8"))
+            if not isinstance(body, dict):
+                # 与 _load_credentials 同一条失败方向：`null` / `42` / `[]` 都是合法 JSON，
+                # 但对它们调 `.get` 会当场 AttributeError 抛穿到 get_config()——启动炸、运行中炸。
+                _logger.warning(
+                    "CONFIG_REVISION_BAD_SHAPE revision.json 形状不是对象，按读不出来处理: type=%s",
+                    type(body).__name__,
+                )
+                return 0
+            return int(body.get("revision", 0) or 0)
+        except (OSError, ValueError, TypeError):
             return 0
 
     def get_ha_token(self) -> str:

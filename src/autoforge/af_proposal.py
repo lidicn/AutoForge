@@ -141,16 +141,35 @@ class StaticGuardPolicy:
         return None
 
 
+#: `Node.target_entities()`（`af_ir/models.py`）认的两副形状：`params.entity_id`，
+#: 以及 `params.target.{entity_id,device_id,area_id}`。名字哨兵见
+#: `tests/unit/test_stability_r3_20261011.py`——这里手抄的键名一旦和真源漂移，那条腿判红。
+_TARGET_PARAM_KEYS = ("entity_id", "device_id", "area_id")
+
+
+def _node_targets_something(node: Mapping[str, Any]) -> bool:
+    params = node.get("params")
+    if not isinstance(params, Mapping):
+        return False
+    if params.get("entity_id"):
+        return True
+    target = params.get("target")
+    return isinstance(target, Mapping) and any(target.get(k) for k in _TARGET_PARAM_KEYS)
+
+
 def _ir_writes_devices(ir: Mapping[str, Any]) -> bool:
-    """判断 IR 文档里是否存在写设备的 do 节点（duck typing dict 结构）。"""
+    """判断 IR 文档里是否存在写设备的 do 节点（duck typing dict 结构）。
+
+    原来这里查的是 `node["entities"]` / `node["target_entities"]`——IR 节点根本没有这两枚字段，
+    于是函数恒返 False，strict 静态闸对"低置信度却写设备"整体放行（判据腿曾零命中，因为它没有测试）。
+    """
     for auto in ir.get("automations", []) or []:
         nodes = auto.get("nodes", {})
         node_iter = nodes.values() if isinstance(nodes, Mapping) else (nodes or [])
         for node in node_iter:
-            if node.get("kind") != "do":
+            if not isinstance(node, Mapping) or node.get("kind") != "do":
                 continue
-            entities = node.get("entities") or node.get("target_entities") or []
-            if entities:
+            if _node_targets_something(node):
                 return True
     return False
 

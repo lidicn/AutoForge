@@ -874,14 +874,18 @@ class Predictor:
                 logger.warning("预测模型条目损坏（%r）→ 跳过", aid)
                 continue
             model = _Model(str(aid))
+            corrupt_rows = 0
             for raw in blob.get("events") or []:
+                # 读盘时坏行只跳过、**不累加进 `dropped`**：这四枚计数器落盘的是绝对值，
+                # 上一次读盘时计过的那几行仍原样躺在文件里，本次再计一遍就是每次重启叠加一次
+                # （坏行越多、翻倍越快，`stats()` 的丢弃率从此失真）。
                 if not isinstance(raw, Mapping):
-                    model.dropped += 1
+                    corrupt_rows += 1
                     continue
                 try:
                     at = _event_datetime(_event_time_value(raw))
                 except (TypeError, ValueError):
-                    model.dropped += 1
+                    corrupt_rows += 1
                     continue
                 model.events.append(
                     {
@@ -891,11 +895,17 @@ class Predictor:
                     }
                 )
             model.events.sort(key=lambda e: _parse_iso(e["at"]))
+            if corrupt_rows:
+                logger.warning(
+                    "PREDICT_CORRUPT_ROWS_SKIPPED 预测模型 %s 读盘时跳过 %d 条损坏事件（不计入 dropped）",
+                    model.automation_id,
+                    corrupt_rows,
+                )
             mark = blob.get("predicted")
             model.predicted = dict(mark) if isinstance(mark, Mapping) else None
             try:
                 model.learned = int(blob.get("learned", 0))
-                model.dropped += int(blob.get("dropped", 0))
+                model.dropped = int(blob.get("dropped", 0))
                 model.pruned = int(blob.get("pruned", 0))
                 model.skipped_predicted = int(blob.get("skipped_predicted", 0))
             except (TypeError, ValueError):  # pragma: no cover - 防御

@@ -129,7 +129,17 @@ class Scheduler:
             del self._pending[key]
             if not self._still_holds(pending):
                 continue  # 条件在到期前已被破坏
-            auto = self.graph.get(pending.automation_id)
+            auto = self._find(pending.automation_id)
+            if auto is None:
+                # 挂起期间该自动化被从 graph 删掉：`graph.get` 是 `self._by_id[id]`，直接
+                # KeyError 会冒泡到 tick 的调用方（af_cli 五处／af_live 一处），整个 tick 循环停摆。
+                logger.warning(
+                    "SCHED_PENDING_AUTO_GONE [TICK] 持续条件到期，但自动化 %s 已不在图里，丢弃这条挂起",
+                    pending.automation_id,
+                )
+                continue
+            if not getattr(auto, "enabled", True):
+                continue  # 三条触发路径都守 enabled：handle_event／_fire_time_triggers／这里
             instance = self._try_fire(auto, auto.node(pending.node_id), pending.event)
             if instance is not None:
                 fired.append(instance)
@@ -150,6 +160,19 @@ class Scheduler:
     # ─────────────────────────────────────────────────────────────────
     # mode 与配额（先决策，再动实例）
     # ─────────────────────────────────────────────────────────────────
+    def _find(self, automation_id: str) -> Automation | None:
+        """按 id 找自动化，找不到给 None 而不是 KeyError。
+
+        `Graph.get` 走的是 `self._by_id[id]`，而调度器里两处（tick 到期／排空队列）拿着一个
+        "注册时还在、现在未必在"的 id——`_drain_queues` 原来写 `graph.get(...)` 之后
+        还判 `auto is None`，那道守卫永远不可能为真，是假绿的一种。
+        手动触发 `trigger()` 保持抛 KeyError：调用方给错 id 是调用方的错，不该静默。
+        """
+        try:
+            return self.graph.get(automation_id)
+        except KeyError:
+            return None
+
     def _try_fire(self, auto: Automation, node: Node, event: BusEvent | None) -> Instance | None:
         key = (auto.id, node.id)
         if node.debounce:
@@ -238,9 +261,9 @@ class Scheduler:
         for auto_id, queue in list(self._queues.items()):
             if not queue:
                 continue
-            auto = self.graph.get(auto_id)
+            auto = self._find(auto_id)
             if auto is None or not auto.enabled:
-                continue  # v0.6.0 启停：禁用项队列不排空
+                continue  # v0.6.0 启停：禁用项队列不排空；已删除的同样不排空
             if len(self.instances.active_of(auto_id)) >= self.quota.per_automation:
                 continue
             event = queue.popleft()

@@ -39,6 +39,10 @@ STATUS_REJECTED = "rejected"
 
 DEFAULT_LIMIT = 500
 
+#: 坏文件诊断清单的环形上限：与 `af_linkage_feed.UNREADABLE_MAX` 同一族（只写清单、不参与判定）。
+#: `/api/insights/pending` 是周期轮询的读侧，坏文件不被清理时每次轮询都 append 一条，无上限即无界增长。
+UNREADABLE_MAX = 50
+
 
 class InsightQueueFull(RuntimeError):
     """队列满：**拒绝**入队并报错，不静默丢消息（丢了就等于 MA 从没投过）。"""
@@ -190,6 +194,8 @@ class InsightQueue:
         except (OSError, ValueError, TypeError) as exc:
             # 记账而不是咽下：坏文件会让"这条投过"变成"这条没投过"，必须看得见
             self.unreadable.append(f"{path.name}: {type(exc).__name__}: {exc}")
+            if len(self.unreadable) > UNREADABLE_MAX:
+                del self.unreadable[: len(self.unreadable) - UNREADABLE_MAX]
             return None
 
     def _read_all(self, directory: Path) -> list[InsightRecord]:

@@ -9388,3 +9388,104 @@ CR 面：`tr -dc '\r' | wc -c` 五份文件均 0
 - 任务位：#114（本批）已完。下一批按裁定继续可窗内落的：Q7.1 的"serve 退出前收子进程"兜底＋Q7.2 信号钩子、
   Q8.3 两枚安全降级升 ERROR、Q13 只对 `DEPLOY_AUDIT` 落盘、Q4.1 解释器口径、Q4.3 仿真依赖下界、
   Q3 乙的门禁半边（`check_bounded_caches.py` 另立"持久化单调集"档）。
+
+---
+
+## §二之一百一十二 · 稳定性第三轮审计（F-01…F-22 ＋ §六 A–K）现读对撞：7 条窗内落码／2 条证伪／13 条仍开（2026-10-11）
+
+对撞对象 `docs/audit/AutoForge_稳定性与功能性审计报告_20261011.md`（681 行，自称 base `1f9603c（含 8 个未提交改动）`、
+解释器 `.venv314`、平台 Linux）。逐条落点与判据在 `docs/audit/稳定性第三轮审计核实对账_20261011.md`，本节只记手法与坑。
+
+### 一、这一份的前提方向和上一份相反，同一条纪律要用两次
+
+上一批的形状是「zip 快照旧、HEAD 新 ⇒ 报告说仍未修的东西其实已经修了」；这一批是**反方向**：
+报告自称 base 含 8 个未提交改动，而那 8 格里就有登录线的在途 diff ⇒ F-01／F-02 的"已复现"复现的是
+**在途工作树**，不是 HEAD。现读 `git show HEAD:src/autoforge/af_auth.py` 里那两格是 `user: dict` 的无占位形状，
+报告说的"None 占位却 return 非 None"在 HEAD 上不存在那行代码。
+
+所以两边用的其实是同一句话：**对撞只用 `git show HEAD:<file>`**——既不能拿审计包附的片段当 HEAD，
+也不能拿当前工作树当 HEAD（后者这次的错法更隐蔽，因为它"看起来更新"）。这条纪律在本仓已第三次生效，
+只是这次翻的是另一面。
+
+### 二、本批落码七条
+
+- **F-03**（测试环境污染源）：`tests/unit/test_v0_6_tags.py` 用 `os.environ.setdefault("AF_ALLOW_NOAUTH", "1")`
+  直写全局环境且不复原 ⇒ 同一 pytest 进程里后面的用例被静默提权。改 `monkeypatch.setenv`，并新增一条扫描腿
+  `test_no_test_file_writes_os_environ_directly` 把"测试文件不许直写 `os.environ`"钉成判据。
+- **F-05**：`af_config.py` 的 `_load_revision` 补非 dict 形状分支并带码 `CONFIG_REVISION_BAD_SHAPE`。
+- **F-06**：`af_scheduler.py` 持续条件到期那格，`_find()` 由 KeyError 直取改为返回 None；命中不到就丢弃这条挂起
+  并带码 `SCHED_PENDING_AUTO_GONE`；三条触发路径统一守 `enabled`。
+- **F-09**：`af_proposal.py` 的"这条改动会不会写设备"原来盯的是 IR 里不存在的键。改成
+  `_TARGET_PARAM_KEYS = ("entity_id", "device_id", "area_id")` ＋ `_node_targets_something()` ＋
+  `_ir_writes_devices()` 读真实字段。
+- **F-11**：`af_store.py` 加 overwrite 整档一致闸——一条归档里任一版本校验未过就整条跳过，正式目录与旧版本
+  零字节不动，错误进 `report["errors"]` 而不进 `imported`。修的是"新旧混档＋`latest()` 指回旧版本＋这条还被记成功"。
+- **F-13**：`af_insight_queue.py` 的 `unreadable` 花名册加 `UNREADABLE_MAX = 50` 环形裁剪。
+- **F-15**：`af_predict.py` 读盘时损坏行只在本地计数，不再叠进已落盘的绝对 `dropped`（叠了会逐次自增加），
+  带码 `PREDICT_CORRUPT_ROWS_SKIPPED`。
+
+另 **2 条证伪**：F-04／F-10 已修于 `464e0de`（标准库名单取解释器真源／`verify_roundtrip` 入口不再抛穿）。
+
+### 三、判据与变异自证
+
+`tests/unit/test_stability_r3_20261011.py` 新增 345 行／26 条腿，每条缺陷都是**双向**：正向对照＋注入必红。
+F-11 那一对最能说明为什么要成对——一条证"掺一个坏版本就整档不动"（含导出 bundle 后把 v2 的 graph 换成坏形状、
+**再重签 checksum**：不重签就在 bundle 入口被整体拒了，走不到逐版本校验那一步，测不出混档），
+一条证"全合法时 overwrite 仍然照做"。只写前半，把整条 overwrite 功能关掉也能绿。
+
+变异自证（副本树 `E:\tmp\r3_mut\tree`，工作树不碰；驱动 `E:\tmp\r3_mut.py`）6 案 0 未达预期。
+**M1 第一趟是 FATAL 而不是红**：注入后字节没变，护栏按"这条案什么都没测到"拒绝上报一次假的杀。
+根因是 CRLF 文件里锚点带 `\n` 永远匹配不上 ⇒ 改成按各文件自身行尾适配，并把 `import os` 补回注入文本
+（原文件已不 import os，不补就测不到原形状）。挂死／没落地都算杀过，但说不清是谁改坏的杀不是好判据。
+
+### 四、两次门禁红都是本批自己带出来的，处理方式都记在这里
+
+1. **进程模型门 A 段行号漂移**：`af_config.py:199 → :207`——F-05 在那枚 `threading.Lock` 之上插了 8 行，
+   原语一枚没增减。按清单 §三 那句"代码漂了行号就要跟着漂"跑 `check_process_model.py --write` 重生成。
+2. **可观测性门 §四 `warning = 83` 无码上限被顶破（一度 86）**。**没有抬上限、没有写豁免**：给三处新增 WARNING
+   各带一枚具名码（`CONFIG_REVISION_BAD_SHAPE`／`SCHED_PENDING_AUTO_GONE`／`PREDICT_CORRUPT_ROWS_SKIPPED`）
+   并在 §三 逐条认领，具名码 18→21、站点 143→146、无码回到 83。这正是清单 §一 第 5 条本来的意图——
+   "新增一枚不带码的留痕才需要人来处理"，处理方式是写码，不是抬闸。
+3. **我写错的一格登记**：§三 第一稿给 `CONFIG_REVISION_BAD_SHAPE` 的理由写的是"半截写、重启即自愈"。
+   现读 `grep _revision_path` 显示唯一写者是 `af_config.py:179` 的 `_atomic_write` ⇒ 那句是编的，
+   改回与 `*_BAD_SHAPE` 同族的"需人介入"。登记表的理由栏也是会被下一个人当依据读的，写之前要现读。
+
+### 五、三处"现读落点"其实抄了报告，抓出来改了；一处自纠纠错了
+
+- `_child_entity_ops` 在 `af_apply.py:241`（唯一调用点 `:265`），**不在** `af_proposal.py:241-254`；
+- `clear_prediction` 生产面零调用点成立，但报告那句"全仓只有定义"不成立——`tests/test_af_predict.py:433` 有测试腿在调；
+- `entry_nodes()[0]` 现读是**两处**（`af_scheduler.py:157` 与 `:270`），报告只点了 QUEUED 出队那一处
+  ⇒ 登记为下一批同批处理：只修一处会留下第二张假绿；
+- `_check_snapshot` 的 def 在 `af_scanner.py:748`。
+- **28→29→28**：我先按"应该不止 28 份"把分块回归的文件数改成 29，现读
+  `grep -rl -E 'af_scheduler|af_config|af_predict|af_insight_queue|af_proposal' tests --include='*.py' | wc -l` = **28**
+  ⇒ 原始读数对、那条"纠正"错。按 28 份重跑三块并刷新了 §五 的读数。**自纠也要现读**，否则改一次错一次。
+
+另登记一条本批自己量出来的：`tests/unit/test_p0_9_compare_digest.py` 带 UTF-8 BOM，用 `encoding="utf-8"` 直读会
+`SyntaxError: invalid non-printable character U+FEFF`，F-03 那条扫描腿只能改 `utf-8-sig`。文件不在本批射程，登记不修。
+
+### 六、读数
+
+```
+tests/unit/test_stability_r3_20261011.py                                        → 26 passed in 10.88s
+F-03 污染组合跑（改前 → 改后）                                                   → 11 failed → 2 failed, 79 passed
+28 份引用五模块的测试按文件名排序分三块（9/9/10）                                → 145 passed＋7 subtests / 195 passed＋2 skipped / 94 passed＋1 skipped，RC 全 0
+af_store 面回归（test_af_store＋test_dcd_archive_name_alias＋新文件）            → 77 passed in 20.98s
+变异自证 E:\tmp\r3_mut.py（M0 26 passed／M1→F-03 腿／M2→2 条／M3→2 条／M4→1 条／M5→1 条）→ 总计 6 案，未达预期 0 案
+GATES_PYTHON=…Python313 bash gates.sh ×4（加日志码前后各一轮＋提交前复跑）  → GATES_RC=1、各 9781 B、md5 全同 2f27d26ab397b1341aeaa3d773406000、逐行 diff 空
+CR 面：CRLF 三份保持 CRLF（af_config 226/226、af_store 1224/1224、test_v0_6_tags 176/176），LF 六份 CR=0
+```
+
+红源仍是 `fake-ok-const` 两枚（`af_api.py:984`／`:1005`，登录线在途文件；现读 §六 那两行 WARN 与
+`计数：fake-ok-const=78`），本批未动 `af_api.py`、未动用任何豁免、`.gates-tally.txt`／`.gates-baseline.txt` 一字未改。
+
+### 七、本批明确不做与归属
+
+- **F-01／F-02／§六 I（`api_agent_delete`／`api_agent_rename` 无主体校验）＝安全模型语义**：在途文件 ＋ 不自决 ⇒ 同一件递 DCD。
+- **F-07／F-08**：补 `Scheduler.later` 会点亮 CONF_GRADING／shadow／canary 三条未审面 ⇒ 不自决。
+- **F-14 数据保留策略、F-16 AF-Spec 是否开 group 往返、F-17 兜底 IR 模板＋部署后果面、
+  F-18 `issued_tokens_clean.json` 归属与令牌存活、F-19／F-20 后端契约半边、F-22 测试镜像来源** ⇒ 攒一份集中裁决申请。
+- **F-19／F-20／F-21／F-22 的前端半边**：`ui-user-mimo/*` 在途且未评审，一律 📎 不落地。
+- 下一批窗内候选：§六 B 嵌套 `and`、G 观察者逐个隔离（现读 `af_runtime.py:262-263` 无 try/except，
+  与 `af_bus.py:372-387` 的逐 handler 隔离纪律不一致）、H 两处 `entry_nodes()[0]` 同批、D／E 租约线，外加那份 BOM。
+- 任务位：#115 本批收口（13 条仍开项按归属挂 #79 窗／DCD／前端）。

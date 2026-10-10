@@ -832,6 +832,20 @@ class GraphStore:
                         {"name": target, "version": ver.get("version"), "error": str(exc)}
                     )
                     entry_has_error = True
+            # F-11（第三轮稳定性审计）：部分版本校验失败时，下面那道让位守卫因
+            # `not entry_has_error` 不成立而跳过 stash，可合法版本照写不误——于是盘上新旧混档、
+            # `latest()` 指回旧版本，而这条归档还被无条件记进 `imported`。
+            # overwrite 的语义是"整档换掉或整档不动"，所以这里按整条归档判，一个版本都不写。
+            if entry_has_error and strategy == "overwrite":
+                failed = len(entry.get("versions", [])) - len(validated)
+                report["errors"].append({
+                    "name": target,
+                    "error": (
+                        f"overwrite 要求整档一致：{failed} 个版本校验未过，整条归档跳过，"
+                        "正式目录与旧版本一个字节都没动（明细见同名的逐条错误）"
+                    ),
+                })
+                continue
             # overwrite 策略：全部版本校验通过后才动旧归档，且**改名让位而非删除**——
             # 写新版本中途失败时旧归档可原样回滚，不留下不可逆的空洞
             # （新增审计 BUG-11；P1-17 的「先校验后删」只挡住了校验失败那一半）。
