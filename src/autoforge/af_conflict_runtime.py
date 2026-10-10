@@ -295,9 +295,11 @@ class ConflictService:
             # 裁定 20261008 §二 裁 A① + 判例 1：内省抛异常（超预算或任何代码 bug）= 守卫自己瞎了
             # = 锁必然装不上 = 放行等于把锁失效静默化（第十八轮 F12 那次覆盖的形状）。拒绝执行。
             self._audit_degraded("introspect", exc, "", automation_id, fail_open=observe)
+            # 试演期"照常执行"不等于"没人知道守卫瞎了"：仓内常驻指示照落，只是它没拦东西，
+            # 所以不出对端快照（详见 `_notify_guard_blind`）。
+            self._notify_guard_blind(automation_id, "introspect", exc, entity_ids, blocked=not observe)
             if observe:
                 return original(instance, node)      # 试演期只观测：不改行为，否则判据没法对比
-            self._notify_guard_blind(automation_id, "introspect", exc, entity_ids)
             return self._abort(executor, instance, node, RequestDecision.REJECT,
                                f"introspect_failed:{type(exc).__name__}")
 
@@ -311,8 +313,11 @@ class ConflictService:
             # 授权档的语义就是"不知道就按最保守的来"，不是"不知道就按最冒进的来"。
             self._audit_degraded("band_read_failed", Exception("conf.band() raised"),
                                  entity_ids[0], automation_id, fail_open=False)
+            # 这一档**不看模式**：裁定 §四 裁的是"读不出来就拒发"，observe 也不例外，
+            # 所以它永远是 blocked——出向降级快照照发。
             self._notify_guard_blind(automation_id, "band_read_failed",
-                                     RuntimeError("conf.band() returned None"), entity_ids)
+                                     RuntimeError("conf.band() returned None"), entity_ids,
+                                     blocked=True)
             return self._abort(executor, instance, node, RequestDecision.REJECT, "band_read_failed")
         if band in PASSIVE_BANDS:                      # shadow：只读比对，不执行真实动作（F8 ① 单一真值源）
             return original(instance, node)
@@ -330,10 +335,10 @@ class ConflictService:
             # 与内省那一档同形：request 抛出 = 这次动作根本没拿到锁，后面的 note_af_action /
             # release 全是空转。裁定只点名"内省"，本站是按判例 1 同族推广（逐站理由已投 DCD inbox 求追认）。
             self._audit_degraded("request", exc, entity_ids[0], automation_id, fail_open=observe)
+            self._notify_guard_blind(automation_id, "request", exc, entity_ids, blocked=not observe)
             if observe:
                 decision = RequestDecision.ALLOW     # 同上：试演期不改行为
             else:
-                self._notify_guard_blind(automation_id, "request", exc, entity_ids)
                 return self._abort(executor, instance, node, RequestDecision.REJECT,
                                    f"request_failed:{type(exc).__name__}")
 
@@ -466,19 +471,34 @@ class ConflictService:
                 "af_watch 聚合冲突证据失败（不影响下发）：%r", exc
             )
 
-    def _notify_guard_blind(self, automation_id: str, phase: str, exc: BaseException, entity_ids: Sequence[str]) -> None:
+    def _notify_guard_blind(self, automation_id: str, phase: str, exc: BaseException,
+                            entity_ids: Sequence[str], *, blocked: bool) -> None:
         """裁定 20261008 §二 Q2=是：拒绝不能只躺在日志里——监护视图常驻指示 + 出向事件。
 
+        两半边按**这一跑拦没拦**分栏（`blocked` 由调用点现给，不按模式判）：
+        - `blocked=True`（真拒发了）：仓内常驻指示 + 对端降级快照，就是 Q2 裁的形状。
+        - `blocked=False`（observe 试演期照常执行）：只落仓内常驻指示。对端 retained
+          `af/status` 的"降级"那一格是给分档策略用的词汇，而这一跑什么都没拦；拿"守卫瞎了"
+          去占它是给没发生的事下结论。试演期失明要不要也对端可见＝跨仓词汇，AF 不自加，
+          已登记 §十八 残余等裁。
+
         视图侧走 af_watch 的 conflict 列，与 `record_cap_warning()` 那档"常驻指示"同一用法：
-        它是"守卫失明所以这一跑被拒"，不进 `failed_in_prod`（被挡下 ≠ 生产验证失败，
+        它是"守卫这一跑瞎了"，不进 `failed_in_prod`（被挡下 / 没验成 ≠ 生产验证失败，
         同 `test_reject_feeds_conflict_evidence` 立的三档分栏）。
         出向侧只登记降级码 + 发 retained status：`publish_failed` 的唯一生产者是
         `af_mqtt_bridge.observe_terminal`，本模块再开一个写者会撞 `check_mqtt_writers` 判据 B；
-        而对端拿不到的通知不叫通知。通知失败**不得**改变拒判结果，但原因必须进日志。
+        而对端拿不到的通知不叫通知。通知失败**不得**改变本次判定，但原因必须进日志。
         """
         self._feed_watch_conflict(
-            automation_id, "guard_blind", phase=phase, error=repr(exc), entity_ids=list(entity_ids)
+            automation_id, "guard_blind", phase=phase, error=repr(exc),
+            entity_ids=list(entity_ids), blocked=blocked,
         )
+        if not blocked:
+            logging.getLogger("autoforge.conflict").warning(
+                "冲突守卫失明但处于试演档（phase=%s，动作照常执行）：只落监护视图常驻指示，"
+                "不发对端降级快照（这一跑没拦东西；该档出向语义未裁）", phase
+            )
+            return
         try:
             from homesdk.adm.errors import ADM_ERR_INTERNAL
 

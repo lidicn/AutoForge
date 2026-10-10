@@ -628,3 +628,259 @@ def test_notification_failure_does_not_change_the_verdict(monkeypatch):
     service2.attach(executor2)
     assert executor2._do(make_instance("A", "i-1"), _blind_node(object())) == {"on_error"}
     assert service2.auditor.events[-1].details["fail_open"] is False
+
+
+# ── §十八 B.4：试演档（observe）的守卫失明半边 ─────────────────────────────
+#
+# 修前实测（`/tmp/probe_b94` 那支探针）：observe 的 introspect / request 两站连一条
+# `guard_blind` 指示都不落、桥一次都没被调用——"这段时间的降级通知由 `_notify_guard_blind`
+# 承担"这句写在文档上的话，对这两站根本不成立。收口后的形状是**两半边分栏**：
+# 仓内常驻指示（owner 面板读的那一列）在试演期照落，对端 retained status 照不发作——
+# 这一跑什么都没拦，拿"守卫瞎了"去占对端的"降级"一格是给没发生的事下结论，
+# 那半边的词汇归 DCD，AF 不自加（见下面 `..._does_not_publish_...` 那条腿的正对照）。
+
+
+class BandBrokenConf(FakeConf):
+    """置信库读 band 就抛——`_safe_band` 回 None，走裁定 §四 那一档。"""
+
+    def band(self, automation_id: str) -> str:
+        raise RuntimeError("confidence store down")
+
+
+def _watch_records(monkeypatch):
+    """把 `af_watch.record_conflict` 换成"记一笔再转调真身"的 spy，返回那只列表。
+
+    必须转调：不转调时 af_watch 里根本没落数据，`_watch_row("A")` 就永远是 None——
+    本批第一版探针正是这么把 enforce 档也读成 0 的，那种 0 不算读数。
+    """
+    af_watch = _load("af_watch")
+    seen: list = []
+    original = af_watch.record_conflict
+
+    def spy(automation_id, status, at, detail=None):
+        seen.append((automation_id, status, detail or {}))
+        return original(automation_id, status, at, detail)
+
+    monkeypatch.setattr(af_watch, "record_conflict", spy)
+    return seen
+
+
+def _blind_records(seen):
+    return [detail for _, _, detail in seen if detail.get("reason") == "guard_blind"]
+
+
+def test_observe_introspect_blindness_still_executes_but_leaves_an_indicator(monkeypatch):
+    """试演期的承诺没变（动作照跑），变的是"瞎了"这件事从此在监护视图里看得见。"""
+    _reset_watch()
+    seen = _watch_records(monkeypatch)
+    log = []
+    service = make_service(mode="observe")
+    executor = FakeExecutor(log)
+    service.attach(executor)
+    assert executor._do(make_instance("A", "i-1"), _blind_node(_deep_params())) == {"then"}
+    assert ("call", "light.turn_on") in log                          # 通知半边不改执行行为
+    blind = _blind_records(seen)
+    assert len(blind) == 1 and blind[0]["phase"] == "introspect"
+    assert blind[0]["blocked"] is False
+    assert "ParamDepthError" in blind[0]["error"]
+    row = _watch_row("A")
+    assert row is not None and row["conflict"] == 1
+    assert row["failed_in_prod"] == 0                                 # 没验成 ≠ 生产验证失败
+    assert _degraded(service)[-1].details["fail_open"] is True        # 台账仍说"放了行"
+    _reset_watch()
+
+
+def test_observe_request_blindness_still_executes_but_leaves_an_indicator(monkeypatch):
+    """request 那一站同形：试演期放行，但失明要留指示。"""
+    _reset_watch()
+    seen = _watch_records(monkeypatch)
+    log = []
+    service = make_service(mode="observe")
+    executor = FakeExecutor(log)
+    service.attach(executor)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("arbiter down")
+
+    service.arbiter.request = boom
+    assert executor._do(make_instance("A", "i-1"), make_node()) == {"then"}
+    assert ("call", "light.turn_on") in log
+    blind = _blind_records(seen)
+    assert len(blind) == 1 and blind[0]["phase"] == "request"
+    assert blind[0]["blocked"] is False
+    assert _watch_row("A")["conflict"] == 1
+    assert _degraded(service)[-1].details["fail_open"] is True
+    _reset_watch()
+
+
+def test_enforce_blindness_still_marks_the_indicator_as_blocked(monkeypatch):
+    """同一枚 `blocked` 键在两档都得说实话：enforce 那档拦了东西，指示里就是 True。
+
+    反向 CONTROL：如果 `blocked` 被写成常量 False（或干脆不传），这条腿先红。
+    """
+    _reset_watch()
+    seen = _watch_records(monkeypatch)
+    service = make_service()
+    executor = FakeExecutor([])
+    service.attach(executor)
+    assert executor._do(make_instance("A", "i-1"), _blind_node(_deep_params())) == {"on_error"}
+    blind = _blind_records(seen)
+    assert len(blind) == 1
+    assert blind[0]["blocked"] is True
+    assert _watch_row("A")["conflict"] == 1
+    _reset_watch()
+
+
+def test_observe_blindness_does_not_publish_the_peer_degraded_snapshot(monkeypatch):
+    """试演期不出对端快照：没拦东西却报"降级"，是把未发生的结论递给分档策略。
+
+    正对照在同一条腿里跑 enforce——spy 若抓不到 enforce 的那一次，上面的 0 就是假的。
+    """
+    from homesdk.adm.errors import ADM_ERR_INTERNAL
+
+    af_mqtt_bridge = _load("af_mqtt_bridge")
+    bridge = FakeBridge()
+    monkeypatch.setattr(af_mqtt_bridge, "current_bridge", lambda: bridge)
+
+    service = make_service(mode="observe")
+    executor = FakeExecutor([])
+    service.attach(executor)
+    assert executor._do(make_instance("A", "i-1"), _blind_node(_deep_params())) == {"then"}
+    assert bridge.codes == [] and bridge.published == 0
+
+    service2 = make_service()
+    executor2 = FakeExecutor([])
+    service2.attach(executor2)
+    assert executor2._do(make_instance("A", "i-1"), _blind_node(object())) == {"on_error"}
+    assert bridge.codes == [ADM_ERR_INTERNAL] and bridge.published == 1
+
+
+def test_band_read_failure_blocks_and_notifies_even_in_observe(monkeypatch):
+    """裁定 §四 不给试演档开口子：band 读不出来就是拒发，出向快照照发。
+
+    钉的是"三站不按模式统一"这一处不对称本身。把这一站也改成 observe 放行，或让
+    对端快照跟着模式走，都会在这里变红——那条改法看着更整齐，但它推翻的是已裁的
+    fail-closed，不是 AF 能自己改口的东西。
+    """
+    from homesdk.adm.errors import ADM_ERR_INTERNAL
+
+    _reset_watch()
+    seen = _watch_records(monkeypatch)
+    af_mqtt_bridge = _load("af_mqtt_bridge")
+    bridge = FakeBridge()
+    monkeypatch.setattr(af_mqtt_bridge, "current_bridge", lambda: bridge)
+    log = []
+    service = make_service(mode="observe", conf=BandBrokenConf({"A": 0.9}))
+    executor = FakeExecutor(log)
+    service.attach(executor)
+    assert executor._do(make_instance("A", "i-1"), make_node()) == {"on_error"}
+    assert not any(item[0] == "call" for item in log)
+    assert _degraded(service)[-1].details["fail_open"] is False
+    blind = _blind_records(seen)
+    assert len(blind) == 1 and blind[0]["phase"] == "band_read_failed"
+    assert blind[0]["blocked"] is True
+    assert bridge.codes == [ADM_ERR_INTERNAL] and bridge.published == 1
+    assert _watch_row("A")["conflict"] == 1
+    _reset_watch()
+
+
+def test_observe_blindness_leaves_a_warning_on_the_log_face(caplog):
+    """日志是这一档的第二个读数面（对端不收、面板之外只剩它），所以也要有腿钉住。
+
+    先自证接得住：朝同一个 logger 发哨兵，抓不到就是 fixture 接错了 logger 名，
+    下面的条数不作数（af_store 那批就栽在 logger 名对不上，"0 条日志"是假读数）。
+    """
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="autoforge.conflict"):
+        logging.getLogger("autoforge.conflict").warning("SENTINEL_B94")
+        assert any("SENTINEL_B94" in r.getMessage() for r in caplog.records)
+
+        service = make_service(mode="observe")
+        executor = FakeExecutor([])
+        service.attach(executor)
+        executor._do(make_instance("A", "i-1"), _blind_node(_deep_params()))
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    hits = [m for m in warnings if "试演档" in m and "introspect" in m]
+    assert len(hits) == 1, f"试演档失明该留一条 WARNING，实际 {warnings!r}"
+    assert "不发对端降级快照" in hits[0]
+
+
+def _conflict_service_class():
+    tree = ast.parse(pathlib.Path(af_conflict_runtime.__file__).read_text(encoding="utf-8"))
+    return next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ConflictService")
+
+
+def _method(name):
+    return next(n for n in _conflict_service_class().body
+                if isinstance(n, ast.FunctionDef) and n.name == name)
+
+
+def _dispatch_function():
+    return _method("dispatch")
+
+
+def _notify_calls(dispatch):
+    return [
+        n for n in ast.walk(dispatch)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "_notify_guard_blind"
+    ]
+
+
+def test_every_guard_blind_call_point_declares_whether_it_blocked():
+    """结构腿①：三站都调通知，且各自**现给**拦没拦——不许被调方拿模式自己推。
+
+    两种"修了等于没修"的写法在这里变红：把某一站的调用点摘掉（站数先不对）；
+    或在 `_notify_guard_blind` 里改读 `self.settings.mode`（关键词就少了 `blocked`，
+    而 band 那站会被推成"试演期没拦"，对端快照跟着消失）。
+    """
+    dispatch = _dispatch_function()
+    calls = _notify_calls(dispatch)
+    assert len(calls) == 3, "introspect / band_read_failed / request 三站都得通知"
+    declared = {}
+    for call in calls:
+        keywords = {k.arg: ast.unparse(k.value) for k in call.keywords}
+        assert "blocked" in keywords, "调用点必须现给 blocked"
+        phase = ast.unparse(call.args[1]).strip("'\"")
+        declared[phase] = keywords["blocked"]
+    assert declared["band_read_failed"] == "True", "band 那站不看模式：读不出就是拦了"
+    assert declared["introspect"] == "not observe"
+    assert declared["request"] == "not observe"
+
+    # 被调方一律用调用点递进来的 `blocked`，不许自己回头读模式（第二份真值 + band 那站会读反）
+    notify = _method("_notify_guard_blind")
+    assert "blocked" in ast.unparse(notify.args), "形参里必须有 blocked"
+    assert "settings.mode" not in ast.unparse(notify), "通知半边自己读了模式，band 那站就被推成没拦"
+
+
+def test_notification_precedes_the_observe_passthrough_at_both_blind_sites():
+    """结构腿②：通知必须站在"模式回落"之前——这正是本格缺陷的原形状。
+
+    修前那两站是 `if observe: return original(...)` 走在通知前面，于是试演期整个静默。
+    把调用点挪回 enforce 分支里，行为腿全绿、只有这条腿红。
+    """
+    dispatch = _dispatch_function()
+
+    def handler_of(needle):
+        trial = next(t for t in ast.walk(dispatch)
+                     if isinstance(t, ast.Try) and needle in ast.unparse(t))
+        return trial.handlers[0].body
+
+    def first_index(stmts, attr):
+        for i, stmt in enumerate(stmts):
+            if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                   and n.func.attr == attr for n in ast.walk(stmt)):
+                return i
+        return None
+
+    for needle, phase in (("extract_entity_ids(", "introspect"), ("self.arbiter.request(", "request")):
+        stmts = handler_of(needle)
+        notify_at = first_index(stmts, "_notify_guard_blind")
+        passthrough_at = next(
+            (i for i, s in enumerate(stmts)
+             if isinstance(s, ast.If) and ast.unparse(s.test) == "observe"), None)
+        assert notify_at is not None and passthrough_at is not None, f"{phase} 站形状变了"
+        assert notify_at < passthrough_at, f"{phase} 站的通知又被挪到回落之后了"
+
