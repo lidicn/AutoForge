@@ -7577,3 +7577,176 @@ hunk 头逐枚（`git diff -U0 -- src/autoforge/af_scanner.py` 原样）：`@@ -
 - 待办：#88 收口。#83/#84 不变（等 owner 勾名单与部署机）；#79 等登录线窗口（那两条门禁红也押在这里）；#75/#76 等卡2 与 NAS 合并窗；#80 等 homesdk 0.3.3。
 
 —— AutoForge 开发 · 2026-10-10 · 基准 HEAD `8efc134` + 收件箱长度预拒批次（代码面已提交 **`328dde5`**：`af_scanner.py` +27／`inbox.py` +49−4／新判据 321 行／目录判据 9 处／两份架构文档；本记账格 **`69d5ec3`**）
+
+## 二之八十六、收 §十八 结构性残余 B.3：测试区那条"唯一不可逆删除面"补上形状守卫与实测残留——`ignore_errors=True` 撤掉的那一格，报的数从此必须是盘上的数
+
+> 现场：本机 · 2026-10-10 · 基准 HEAD `bf8c563`（上一格 §二之八十五＝收件箱长度预拒那批）
+> 触发物：`docs/architecture/AF完整架构与运行时说明.md` §十八 残余第 3 条（`af_test.clear()` 的无守卫 `rmtree`，§十）＋第十八轮 F12 判例（归属未知不放行、`assert_deletable` 那一族）。同批回执 `decisions/20261010-DB与AF六件-裁定.md` §二/§三/§四。
+
+### 一、缺陷的形状：两格，且两格都在 HEAD 上真实成立
+
+`TestChannel.clear()` 收口前整份是三行（HEAD `af_test.py:229-233`）：`shutil.rmtree(self.test_root, ignore_errors=True)` → `_ensure_dirs()` → 返回 `{"ok": True, "cleared": True, "test_root": ...}`。这条线经 MCP 工具 `af_test_clear`（scope `write`）直达，是测试通道上**唯一的不可逆删除面**——它既没有归属/前缀守卫，也没有"删完核一遍"。
+
+先证再修。临时树探针（脚本 `%TEMP%/probe_b3.py`，跑完自删那棵树）逐字：
+
+```
+[假绿格] clear() 返回={'ok': True, 'cleared': True, 'test_root': '...af_b3_probe_ba7uy9hg\\area1'}
+[假绿格] 返回说 cleared=True，盘上那份还在吗=True
+[假绿格] 判定=真：报称清空却仍有残留
+[越界格] 删之前 latest(front-door)=1  目录存在=True
+[越界格] clear() 返回={'ok': True, 'cleared': True, 'test_root': '...\\data'}
+[越界格] 正式 store 根还在吗=False  latest 现在=None
+[越界格] 判定=真：正式区随 test_root 一起没了，且报称 ok/cleared
+```
+
+两格各自挡的是不同的事，不能混成一格记账：
+
+| 格 | 形状 | 为什么不是"配置写错才会踩" |
+|---|---|---|
+| 假绿 | `ignore_errors=True` 把删除失败抹平成 `cleared: True` | 与仓内"没做成都不许报成 done"那一族同形（`af_adapters/inbox.py` 的投递失败、桥的缺凭据拒发）。锁文件、只读属性、权限档都会走到这一格，报数与盘不一致时**没人知道** |
+| 越界 | 无守卫 ⇒ 目标等于或包住正式根时照删 | 部署里正式根是 `forge serve --store-root`，缺省 `DEFAULT_STORE_ROOT = ".forge"` 是**相对路径**；`get_test_channel(test_root=...)` 的形参允许任意路径。把测试区指成正式根的**父目录**，一次 `clear()` 连整条归档线一起没了，还报 `ok: True` |
+
+### 二、修法：守卫只管"必然出格"的两档，对照量由调用方现递
+
+| 落点 | 现读 | 内容 |
+|---|---|---|
+| 两枚具名码 | `af_test.py:37-38` | `GUARD_ERR_FILESYSTEM_ROOT = "TEST_ROOT_IS_FILESYSTEM_ROOT"`、`GUARD_ERR_COVERS_PRODUCTION = "TEST_ROOT_COVERS_PRODUCTION"` |
+| 带码的异常 | `:45-50` | `class TestGuardError(TestError)`，`__init__(code, message)` 把 `code` 存成属性——调用方要**如实回**，不许塌成 `ok: True` |
+| 守卫本体 | `:71-97` | `assert_test_area_deletable(test_root, protected_root)`：① `target.parent == target` ⇒ 盘根档（`/`、`C:\` 不可能是测试区）；② `_covers(target, protected)`（`:60-69`：同径**或** protected 落在 target 里面）⇒ 覆盖正式根档 |
+| 两侧都 `resolve()` | `:88-89` | 正式根常写成相对路径，不 resolve 就让"同一条路径的两种写法"看起来互不包含——那等于守卫形同虚设 |
+| 删除本体 | `:298-328` | `clear(self, *, protected_root: str \| Path)`：先 `assert_test_area_deletable` 再动盘；`onerror=_collect` 收现场（`f"{path}: {exc_info[0].__name__}"`）；`residual = _count_entries(target)` **量在 `_ensure_dirs()` 之前**；`cleared = residual == 0`；`ok = cleared and not errors`；明细 `errors[:DELETE_ERRORS_MAX]` 封顶、另带如实 `errors_total` |
+| 封顶常量 | `:35` | `DELETE_ERRORS_MAX = 20`——常驻服务里不能因一次失败删除攒出无界清单（BUG-01 同族） |
+| 对照量的来源 | `af_mcp.py:428` | `channel.clear(protected_root=store.root)`——就是这个 dispatch 手里那枚正式区真值，本模块不另抄一份配置、不拿 `/data/test` 字面默认值当判据 |
+| 拒判的信封 | `af_mcp.py:418-430` | `except TestGuardError` ⇒ `{"ok": False, "cleared": False, "code": e.code, "error": str(e)}`——守卫拒判是**工具语义**，不抛给对端 |
+| schema | `af_mcp.py:534-539` | 仍是 `{"type": "object", "properties": {}}`，**零参数** ⇒ 删除目标 Agent 递不进；`write` scope 不变 |
+
+**一处取舍要写明**：对照量为什么是 `store.root` 而不是"目录形状"。现读：正式根下也有 `pending/`，测试区也是 `pending/graphs/reports` 三件套——**形状不具区分性**，按形状判会把正式区认成测试区。唯一可信的对照量是"这个进程真正在用的那一份存储根"，由调用方现递；`protected_root` 因此做成**必填关键字参数**，少递就是 `TypeError`（腿⑮），宁可当场炸也不让一次不可逆删除在"没人知道正式区在哪"的状态下发生。
+
+修后同一棵树五档现读（`%TEMP%/probe_b3_after.py` → `probe_b3_after.out`，脚本本身见批末）：
+
+```
+[①合法] 返回={'ok': True, 'cleared': True, 'test_root': '...case1\\.forge\\test', 'entries_before': 5, 'residual': 0}
+[①合法] 正式归档 latest=1 三子目录重建=['True', 'True', 'True']
+[②残留] 返回={'ok': False, 'cleared': False, ..., 'entries_before': 4, 'residual': 2,
+              'errors': ['...\\reports\\locked.json: PermissionError', '...\\reports: OSError', '...: OSError'],
+              'errors_total': 3}
+[②残留] 那份还在盘上=True 报数与盘一致=True
+[③越界] 拒判 code=TEST_ROOT_COVERS_PRODUCTION 消息=...: 删除目标 ...case3 覆盖正式存储根 ...case3\.forge（同径或为其祖先），拒删
+[③越界] 归档 latest 删前=1 删后=1 目录还在=True
+[④盘根] 拒判 code=TEST_ROOT_IS_FILESYSTEM_ROOT 消息=...: 删除目标 C:\ 就是文件系统根，不可能是测试区
+[⑤缺对照] TypeError: TestChannel.clear() missing 1 required keyword-only argument: 'protected_root'
+```
+
+②那一档在修前报的正是 `cleared: True`——同一棵树、同一个锁法（`os.chmod(..., stat.S_IREAD)`），修的只有代码。探针首稿在这里用的是"开着句柄不放"，本机实测**并不挡删除**（Windows 语义），换成只读属性才复现出残留；这一格按实际生效的写法记账。
+
+### 三、判据：17 条腿，五组射程各挡一种不同的塌法
+
+`tests/unit/test_test_area_delete_guard.py`（新增 373 行、CR=0、md5 `fba6b3c1693c4fc263f0702766156ea6`）。三处形状坑在首跑当场暴露并按现读改掉：① IR 的 `id` 必须匹配 `^[a-z][a-z0-9_]*$`，示例名 `front-door` 整族改成 `front_door`（12 条腿起初就是被这条 `IRValidationError` 打红的）；② 从模块 `import TestChannel/TestGuardError` 会让 pytest 把它们当测试类收集（`PytestCollectionWarning`），改成 `af_test_mod.` 限定访问；③ 部分失败腿起初断言"异常类名"，本机 `os.rmdir` 对非空目录抛的映射不保证跨平台，改成平台中立断言（`"reports" in errors[0]`）。
+
+| 组 | 腿（`:115` 起） | 挡什么 |
+|---|---|---|
+| 越界形状（4） | `test_target_equal_to_production_root_is_refused_and_archive_untouched` `:115` | 同径档：拒判**且正式归档一字不动**（不是"拒了但已删一半"） |
+| | `test_ancestor_of_production_root_is_refused` `:127` | 祖先档：`test_root = 正式根的父目录` 必须拒——探针③那一格的可复现版 |
+| | `test_relative_production_root_still_matches_absolute_test_root` `:138` | `monkeypatch.chdir` + `protected_root=".forge"`：相对写法与绝对目标必须认得出包含关系（MU4 专杀不 `resolve()`） |
+| | `test_filesystem_root_is_refused` `:149` | 盘根档：直接叫守卫函数取 `Path("C:\\")`/`Path("/")`，**不构造 `TestChannel`**（那会在真的 `C:` 上建目录） |
+| 删除诚实性（6） | `test_guard_runs_before_any_deletion` `:156` | 顺序：守卫必须在任何 `rmtree` 之前——MU3 把守卫挪到删除后杀这条 |
+| | `test_legitimate_child_is_deleted_for_real_and_recreated` `:171` | 不误伤：合法子目录**真删干净**（`rglob` 计数 == 3 条重建目录）、正式归档字节不变 |
+| | `test_missing_test_root_clears_to_a_green_ok_without_touching_production` `:187` | 目标本来不存在 ⇒ `ok: True` 且正式区不动（空树不是失败） |
+| | `test_no_op_deletion_is_not_reported_as_cleared` `:201` | `rmtree` 被 patch 成空操作 ⇒ `residual == 种下数`、`cleared: False`、`ok: False`——**修前就在这格报 `cleared: True`** |
+| | `test_partial_failure_reports_survivors_and_error_count` `:215` | 部分失败：真 `os.rmdir` 非空目录 ⇒ `residual 3`、`errors_total == 1`、现场指向 `reports`——"没删干净"不许报成"清完了" |
+| | `test_error_list_is_bounded_but_the_count_is_honest` `:244` | 封顶：明细长度 `== DELETE_ERRORS_MAX`，而 `errors_total == MAX+5`——**明细有界、条数如实** |
+| 静态面（4） | `test_ignore_errors_keyword_is_gone_from_af_test` `:270` | AST 扫 `af_test.py`：`rmtree` 调用里不许再有 `ignore_errors`——假绿那格的关键词从此不在源码里 |
+| | `test_guard_compares_against_the_argument_not_a_default_path` `:280` | AST：守卫函数体必须读 `protected_root`，且除 docstring 外**零 `/data` 字面量**——名字哨兵罩住 docstring 的既有判例（CODE/PROSE 分口径） |
+| | `test_protected_root_is_required_keyword_only` `:298` | `inspect.signature`：`protected_root` 是 `KEYWORD_ONLY` 且**无默认值** |
+| | `test_mcp_clear_call_site_passes_store_root` `:356` | AST 钉调用点：`_t_test_clear` 里必须是 `clear(protected_root=store.root)`——对照量被换成字面路径就红（MU7） |
+| 接缝面（3） | `test_clear_without_protected_root_deletes_nothing` `:304` | 不递对照量 ⇒ `TypeError` **且盘上一条没少**（炸要有价值） |
+| | `test_mcp_gives_the_agent_no_way_to_name_a_delete_target` `:323` | 工具 schema 零 `properties`；且经 `dispatch` 递未声明的 `test_root` 被拒（#32 那道"声明即契约"的门在这一脸上也成立） |
+| | `test_mcp_guard_rejection_becomes_an_honest_envelope` `:338` | 守卫拒判经 MCP 出去是 `ok:false` + 具名 `code`，异常不逃逸、正式归档还在 |
+
+`__all__` 从此导出 `TestGuardError` 与 `assert_test_area_deletable`（`:31`）——守卫是公开面，判据不必伸手进私有。
+
+### 四、读数（当场真跑，输出全部落盘可复现）
+
+| 判据 | 读数 | 存证 |
+|---|---|---|
+| 工作树：本批新判据整份 | **`17 passed in 15.96s`**，`RC_A=0` | `%TEMP%/t89_new.out` |
+| TGT 副本树 `%TEMP%/af89head`（`git archive HEAD` 解出 + 本批三份文件叠上去，`PYTHONPATH=src`） | **`17 passed in 4.90s`**，`RC_COPY=0`；模块面自证逐字：`MODULE af_test: C:\Users\...\af89head\src\autoforge\af_test.py`、`MODULE af_mcp: ...\af89head\src\autoforge\af_mcp.py`（不是指回工作树）；三份文件 md5 与工作树逐份相同（`b38da2b0…`/`81f5863e…`/`fba6b3c1…`） | `%TEMP%/t89_copy.out` |
+| BASE 副本树 `%TEMP%/af89pure`（纯 HEAD，只把新判据拷进去） | **`rc=2`、`1 error`（收集期）**，逐字：`ImportError: cannot import name 'DELETE_ERRORS_MAX' from 'autoforge.af_test' (C:\...\af89pure\src\autoforge\af_test.py)`；同一棵树上先核模块面 `MODULE: ...af89pure...`、`has DELETE_ERRORS_MAX: False` | `%TEMP%/t89_base.out`。诚实记账：这一腿不是逐名红，是**整份 import 不进**——判据依赖本批新增的常量/守卫，HEAD 里没有。逐名证明由 §五 的 14 枚变异承担，其中 **MU1 就是 HEAD 形状复现**（把 `ignore_errors` 与"残留写 0"注回去 ⇒ 4 条具名红） |
+| 相关面定向（六份文件，命令原样可复现） | **`90 passed, 1 warning in 37.44s`**，`RC_NAMED=0` | `%TEMP%/t89_named.out`。那 1 条 warning 是第三方 `StarletteDeprecationWarning`（`site-packages/fastapi/testclient.py:1`），与本批无关、上几批同现 |
+| 全量 `tests/unit`（工作区混合态，本批文件 + 并发登录线在途文件同树） | **`7 failed, 2947 passed, 43 skipped, 1 warning in 883.44s (0:14:43)`**，`PYTEST_RC=1`。七枚逐名：`test_dcd_20261004_auth_limits.py::test_owner_face_still_sees_plaintext`、`::test_third_party_write_token_gets_the_mask_not_the_code`、`test_v0_8_auth.py::test_legacy_single_token_backward_compat`、`::test_multi_token_scope_grading`、`::test_revocation_immediate_over_http`、`test_v1_4_token_expiry.py::test_expired_token_is_403_over_http`（这六枚全在 auth 一族，读的是工作树里在途的 `af_api.py`/`af_auth.py`，§二之八十五 同现）、`test_v0_9_multiproc.py::test_tags_read_modify_write_survives_concurrent_processes`（下一行单独归因） | `%TEMP%/t89_full.out`。**本批 17 条腿在全量里一条没红**（那七枚的名字与本批判据文件名无交集） |
+| 上面那一枚 multiproc 的归因（单独重跑同一份文件） | **`9 passed in 76.24s (0:01:16)`**，`RC=0`。全量那次的现场逐字：`TimeoutError: 获取文件锁超时（10.0s）：C:\Users\lidicn\AppData\Local\Temp\pytest-of-lidicn\pytest-1379\test_tags_read_modify_write_su0\tags.lock，持有者：{'owner': 'DESKTOP-J17LDCU-18640-7622d6f1', 'acquired_at': '2026-10-10T01:23:53.326219+00:00'}` | `%TEMP%/t89_mp.out`。归因＝**同时有别的跑批在飞**（那 14 分 43 秒里门禁与副本树腿也在跑），锁的持有者是另一条 pytest 进程而不是死锁；单跑即绿 ⇒ 不是本批缺陷、也不是产品缺陷。AF 侧自记纪律（不占 DCD 格子，与 §二之八十六 变异腿串行那条同源）：全量读数里若现这一枚同名红，**先单跑再登记归因**，不许直接写成"既有红" |
+
+定向那六份的文件名逐枚，命令原样：`pytest tests/unit/test_test_area_delete_guard.py tests/unit/test_af_mcp.py tests/unit/test_dcd_20261004_mcp_default_deny.py tests/unit/test_dcd_20261007_mcp_failure_envelope.py tests/unit/test_af_store.py tests/unit/test_mcp_arg_schemas_gate.py -q`——选它们的理由是同一张脸（MCP 工具表 + `dispatch` + `GraphStore` 删除语义）与同一条链（F12 归属守卫那族）。副本树两腿的命令原样：`cd %TEMP%\af89head && PYTHONPATH=src pytest tests/unit/test_test_area_delete_guard.py -q`（TGT）与同一形式落在 `af89pure`（BASE，先把新判据文件拷进那棵树），两腿都先跑一句 `python -c "import autoforge.af_test as m; print(m.__file__)"` 证模块面指回那棵树而不是工作树。
+
+### 五、变异自证：14 枚，逐枚点名杀腿，全在副本树
+
+副本树 `%TEMP%/afmut89`（工作树没被注入过一字节）；每腿跑完按字节还原，两批终读都是 `还原后与工作副本逐份相同=True` / `终读还原相同=True`。注入前核 `count==1`、注入后 `ast.parse` 合格才写盘；行尾按各文件自身口径拼（`af_test.py` 工作区整份 CRLF：340 行 / 340 枚 CR，`af_mcp.py` 1133 / 1133；HEAD blob 分别 245 / 1125 枚 CR——判 CR 一律按文件自身行尾，不跨面混）。
+
+第一批（`%TEMP%/mut89.log`，10 枚）：
+
+| 腿 | 注入 | 杀掉（逐名） | 这枚证明的是 |
+|---|---|---|---|
+| MU1 | HEAD 形状复现：`ignore_errors=True` 回来 + `residual = 0` | **4 failed, 13 passed**：`no_op_deletion…` / `partial_failure…` / `error_list_is_bounded…` / `ignore_errors_keyword_is_gone…` | 假绿那一格在 HEAD 上真实成立，且判据不是绕着新代码写的——把它改回旧形状立刻红四条 |
+| MU2 | 守卫调用整行摘掉 | **4 failed, 13 passed**：`target_equal_to_production_root…` / `ancestor…` / `guard_runs_before_any_deletion` / `mcp_guard_rejection…` | 守卫本体在不在，四路各验一次（含跨 MCP 那一腿） |
+| MU3 | 守卫挪到删除之后（先删再判） | **4 failed, 13 passed**：同 MU2 那四名 | "顺序"这一档单独可测：调用还在、位置错，照样红 |
+| MU4 | 对照量不 `resolve()` | **1 failed, 16 passed**：`relative_production_root…` | 相对/绝对两种写法必须认得出包含关系，不 resolve 就是形同虚设 |
+| MU5 | 祖先档不判（只判同径） | **2 failed, 15 passed**：`ancestor…` / `guard_runs_before_any_deletion` | 探针③那一格由第二枚腿交叉守着 |
+| MU6 | `protected_root` 改成可选 + `/data/test` 字面默认值 | **2 failed, 15 passed**：`protected_root_is_required_keyword_only` / `clear_without_protected_root_deletes_nothing` | "必填关键字参数"这一档不是风格：可选 ⇒ 一次不可逆删除能在没对照量的状态下发生 |
+| MU7 | MCP 调用点对照量换成字面 `/data/test` | **2 failed, 15 passed**：`mcp_guard_rejection…` / `mcp_clear_call_site_passes_store_root` | 守卫的输入来源被钉住：本模块不许自带第二份真值（判例见 §七） |
+| MU8 | 明细不封顶（`errors` 全量返回） | **1 failed, 16 passed**：`error_list_is_bounded…` | 有界那一档单独有腿；封顶与"条数如实"是两件事，分开钉 |
+| MU9 | MCP 不再捕 `TestGuardError`（异常抛给对端） | **1 failed, 16 passed**：`mcp_guard_rejection…` | 拒判必须是工具语义而不是崩给 Agent；信封形状有专属腿 |
+| MU10 | `if errors:` 那两行改空（现场整格丢） | **2 failed, 15 passed**：`partial_failure…` / `error_list_is_bounded…` | "只报 `residual` 不报现场"不算诚实：删失败的原因也是数据 |
+
+第二批（`%TEMP%/mut89b.log`，4 枚）：
+
+| 腿 | 注入 | 杀掉（逐名） | 这枚证明的是 |
+|---|---|---|---|
+| MU11 | 盘根那一档摘掉 | **1 failed, 16 passed**：`filesystem_root_is_refused` | 两枚码各有独立腿，不互相代 |
+| MU12 | 守卫一刀切（任何目标都算覆盖正式根） | **5 failed, 12 passed**：`legitimate_child…` / `missing_test_root…` / `no_op_deletion…` / `partial_failure…` / `error_list_is_bounded…` | 反向自证：守卫过严同样有账——合法测试区必须照常能删（门不许把功能闸死） |
+| MU13 | 守卫里把对照量换成硬编码部署路径 `/data/test` | **6 failed, 11 passed**：`target_equal…` / `ancestor…` / `relative…` / `guard_runs_before_any_deletion` / `guard_compares_against_the_argument…` / `mcp_guard_rejection…` | 本批最要害的一枚：拿字面默认值当判据 ⇒ 守卫在真实部署里全是错的（静态腿与行为腿六路同红） |
+| MU14 | MCP 给 `af_test_clear` 开一格 `test_root` 参数 | **1 failed, 16 passed**：`mcp_gives_the_agent_no_way_to_name_a_delete_target` | "零参数 schema"是被钉住的设计，不是巧合：Agent 从此递不进删除目标 |
+
+### 六、门禁：两遍逐字节相同 + 那一格"删过期指纹"为什么不算新增豁免
+
+- `GATES_PYTHON=python bash gates.sh` 连跑两遍：**`GATES_RC=1`（A、B 各一次）**，两份输出各 **8097 字节**，`diff` 只报我自己追加的那行标签（`GATES_A_RC=1` vs `GATES_B_RC=1`），正文零差异（`%TEMP%/g89a.out`、`g89b.out`）。起手按既有教训带 `GATES_PYTHON=python`（`gates.sh:23` 缺省 `python3`，这台机器会当场 `rc=2` 报"homesdk 未安装"）。
+- 两遍里 AST 门逐字：`失败：基线只准减少。请删除已不再命中的条目后重跑。` + 两条 WARN（`af_api.py:984` / `:1005`）+ `STALE 基线条目已不再命中，请从 .gates-baseline.txt 删除：src/autoforge/af_test.py#fake-ok-const#TestChannel.clear` + `扫描完成：… 新增/未获批 2 条（error 0 / warn 2），基线内存量 96 条，过期基线条目 1 条` + `计数：except-pass-broad=20 | fake-ok-const=78`；棘轮段 `全量违规 98 条 / 登记上限 97 条` ⇒ `棘轮红：总数从 97 涨到 98`。
+- **那格 `STALE` 的处理**：本批把 `TestChannel.clear` 的返回从字面量 `"ok": True` 改成按盘上实测派生（`ok = cleared and not errors`），`fake-ok-const` 因此 79 → **78**，那条基线指纹**不再命中**。门禁自己的判定是 `is_red = bool(active) or bool(stale)` —— **留着过期条目就是判红**，而它给的修法只有一条：从 `.gates-baseline.txt` 删掉不再命中的行。于是按语义删那一行（文件 87 → **86 行**，`git diff --numstat` 现读 `0 1`，行尾 CRLF 保持）。删完现读：`基线内存量 96 条，过期基线条目 0 条`，`计数：except-pass-broad=20 | fake-ok-const=78`，`--no-baseline` 面 `98 条（error 1 / warn 97）`。
+- **上限一个字都没动**：`.gates-tally.txt` 仍写 `97 # 2026-10-06 登记`，AF 没自上调；也没新增任何豁免条目。**剩下那 2 枚红仍属登录线**——`api_auth_has_admin`/`api_auth_register` 的 `ok=True` 在 HEAD 上就红，改它们要动并发在途的 `af_api.py`（#79，裁定把窗口钉在登录线提交之后）。
+- 归属现读（不假设，量给你）：纯 HEAD 副本树 `%TEMP%/af89pure` 上 `全量 99 条 / 过期 0 条`；叠上本批三份文件的同一棵树 `98 条 / 过期 1 条`。⇒ 99→98 是本批**净减一条**违规（不是我给它加了豁免），而 `98 > 97` 的红差值仍是登录线那两枚，与 §二之七十七/八十/八十五 同形同因。
+- **第三遍（本批所有文档改动写完之后再跑一次，防止"只记了中间态"）**：`GATES_RC=1`、输出 **7877 字节**（`%TEMP%/g89c.out`）。与第一遍 `diff` 现读只剩三处差异，且每一处都是"删掉那条过期指纹之后应有的样子"：① 少了 `失败：基线只准减少。请删除已不再命中的条目后重跑。` 那一行，② 少了 `STALE 基线条目已不再命中…` 那一行、扫描行从 `过期基线条目 1 条` 变 `0 条`，③ 少了我自己追加的标签行 `GATES_A_RC=1`。**未获批仍是那 2 条**（`af_api.py:984`/`:1005` 两条 WARN，`error 0 / warn 2`）、棘轮段逐字仍是 `全量违规 98 条 / 登记上限 97 条` ⇒ `棘轮红：总数从 97 涨到 98`、`计数：except-pass-broad=20 | fake-ok-const=78`。⇒ 本批没引入新红，也没有任何一格的读数是凭中间态写的。
+- 有界缓存门没被我动到：本批新增的 `errors: list[str]` 是返回体里的局部量，不是增长容器；`[有界缓存]` 那行现读两遍逐字相同——`扫到增长容器 129 个，其中基线冻结 114 个、就地豁免标记 16 处；死写容器 0 个（判据 E 按名字在全仓数读取点，4067 个名字被读到过）`（`%TEMP%/g89a.out:64` 与 `%TEMP%/g89c.out:62`，行号差 2 正是上面那两行 STALE 消失所致）。
+
+### 七、锚点连锁：`af_test.py` 245 → **340 行**（净 +95），`af_mcp.py` 1125 → **1133 行**（净 +8）
+
+`git diff -U0` 现读 hunk 头逐枚：`af_test.py` ＝`@@ -4,0 +5,9 @@`（docstring +9）、`@@ -22 +31 @@`（`__all__` 同行改）、`@@ -24,0 +34,5 @@`（+5 常量）、`@@ -30,0 +45,55 @@`（+55 异常/助手/守卫）、`@@ -229,3 +298,18 @@`（clear 头 −3+18）、`@@ -233 +317,12 @@`（clear 尾 −1+12）⇒ 插入 100、删除 5，与 numstat `100 5` 相符；`af_mcp.py` ＝`@@ -419,2 +419,7 @@`、`@@ -422 +427,4 @@`、`@@ -527 +535 @@`（工具描述改写）⇒ `12 4`。
+
+| 段 | 收口前钉（§十/§十八 旧文） | 本批现读 | 位移 |
+|---|---|---|---|
+| `MAX_BATCH_SIZE` | `:24` | **`:33`** | +9 |
+| `TestChannel.__init__`（`test_root` 缺省） | `:40` | **`:109`** | +69 |
+| 三子目录 | `:41-49` | **`:111-117`** | +69 |
+| 批次上限 `TestError` | `:71-72` | **`:139-141`** | +68/+69 |
+| `_submit_one` 单条流程 | `:86-161` | **`:155-230`** | +69 |
+| build + simulate | `:120` | **`:189`**（注释起 `:186`） | +69 |
+| 失败归类 / 报告键 | `:171-182` / `:184-193` | **`:240-251`** / **`:253-262`** | +69 |
+| `_save_report` | `:195-200` | **`:264-269`** | +69 |
+| `get_report` / `list_reports` | `:202-208` / `:210-227` | **`:271-277`** / **`:279-296`** | +69 |
+| `clear()` | `:229-233`（三行） | **`:298-328`**（守卫 + 实测残留） | 本批重写 |
+| `get_test_channel` | `:240` | **`:335`** | +95 |
+| 新增面 | — | `DELETE_ERRORS_MAX :35`、两枚 `GUARD_ERR_* :37-38`、`TestGuardError :45-50`、`_count_entries :53-58`、`_covers :60-69`、`assert_test_area_deletable :71-97` | 本批新增 |
+| MCP 实现三枚 | `af_mcp.py:395-422` | **`:395-430`**（`_t_test_clear :418-430`，调用点 `:428`） | 尾部 +8 |
+| MCP 工具元组 | `:499` / `:513` / `:526` | **`:507`** / **`:521`** / **`:534`** | +8 |
+
+两份架构文档随本批同步：说明文档 §十 整张表按现读重钉、"清理"行改成守卫+实测形状、边界第 2 条从"没有任何守卫"改写为"已接守卫 + 剩政策半边"；§十八 A 的 AST 棘轮格改成现读（99→98、存量 97→96、过期那条已删、上限未动），B.3 按 §二之八十三 起的惯例**收口但保留编号**（后面 4-13 不重号），第 9/11 条的护栏 3 口径按裁定 20261010 §四 收尾；知识文档 §九 工具表与两条 ⚠️/已落地条、§十六 第 5/8 项、§十九 变更记录各一行。两文档 §十九 都加本批行。
+
+### 八、记账位
+
+- 本批改动清单（代码与文档面**已随 `125c646` 提交**，本记账格紧随其后）：`src/autoforge/af_test.py`（+100−5）、`src/autoforge/af_mcp.py`（+12−4）、`tests/unit/test_test_area_delete_guard.py`（新增 373 行 17 腿）、`.gates-baseline.txt`（−1 条已不再命中的过期指纹，`0 1`）、`docs/architecture/AF完整架构与运行时说明.md`、`docs/architecture/AF完整知识文档.md`、`docs/reference/AF测试通道设计方案.md`（在 §3.2 旧草图**下方**加"落地后的偏离"引用块：旧草图那两段 `ignore_errors=True` / `{"ok": True, "cleared": True}` 按"设计稿留痕"原则**一字未改**，偏离块写的是现读真值与判据文件名）、本执行记录。**不进**：`af_api.py`、`af_auth.py`、`docker/*`、`ui-user-mimo/*`、`docs/audit/参考/FFL-200题测试提示词.md`（并发登录线在途/归属他人）、计划文档（按纪律保持 unstaged）。
+- 裁定 20261010 三格回执（详见 DCD 申请 §六）：§二 出口词汇三枚集 `{no, on_timeout, default}` **不扩**、`on_cancel` 不算拒绝出口 ⇒ AF 侧同源判据已在 `tests/unit/test_confirm_exit_diagnostic.py:140-143`（正则钉执行器的 `pick_edge(..., {kind, "default"})`／`resume(instance, "on_timeout")`／`{"no", "default"}`），本批零代码改动；§三 ERROR 追认 + 上限真源口径 ⇒ 已现读核对契约 §1.3 表内那句"数字为摘录，真源＝`homesdk.presence.INBOX_MAX_*`"在位；§四 护栏 3 裁**甲（DB 消费侧执行）+ 不设独立分钟级 N** ⇒ **AF 侧无可落码半边**，只把两份架构文档的残余格按裁定收尾。
+- 交 DCD 的一格（**不是自决口径**）：`E:\NAS\关键决策部\inbox\20261010-AF-测试区删除面守卫落地与剩余政策口-决策申请.md`。请三格：① 删除目标要不要收成白名单（甲 维持形状守卫／乙 只准删 `{root}/test` 前缀／丙 接进 F12 归属守卫那一套）——AF 建议甲，乙列为候选但需要 DB 给权威树的现读路径，否则前缀就是 AF 自己抄的第二份部署事实；② `af_test_clear` 的权限与面板可见性（现读两棵第一方 UI 树对 `af_test` **零引用** ⇒ 只有 MCP 脸）——AF 建议维持现状；③ 判例请求：**不可逆操作的守卫，对照量必须由调用方现递，被守卫的模块不许自带第二份真值**。
+- 未收的边界（登记，不含糊）：守卫拦的是"必然出格"，**同级目录（如正式根旁边的 `other/`）仍照删**——这一档在 DCD 裁下来之前不自行收紧；`test_root` 仍由 `get_test_channel` 的形参决定，本批没改它的缺省。
+- 仓根那四份未跟踪产物（`docker-compose.api.yml.tmp`、`issued_tokens.json.tmp`、`issued_tokens_clean.json`、`docker/docker-compose.api-test.yml`）不删不动（归属不明）。探针与变异脚本（`probe_b3*.py/.out`、`mut89*.log`、`t89_*.out`、`g89*.out`）在 `%TEMP%`，是本轮存证，不进仓。
+- 远端读数：本批未推。未推枚数不写在散文里，一律 `git log origin/main..HEAD --oneline` 现读（本批代码面 `125c646` 已在其中，本格记账提交紧随其后）。推 GitHub 要 owner 点头。
+- 待办：#89 收口。#83/#84 不变（等 owner 勾名单与部署机）；#79 等登录线窗口（门禁那两枚红押在这里）；#75/#76 等卡2 与 NAS 合并窗；#80 等 homesdk 0.3.3。§十八 结构性残余还剩 B.1／B.2／B.4／B.7／B.10 诸格未动。
+
+—— AutoForge 开发 · 2026-10-10 · 基准 HEAD `bf8c563` + 测试区删除面批次（提交态现读：代码面 `125c646`＝`af_test.py` +100−5／`af_mcp.py` +12−4／新判据 373 行 17 腿／基线 −1 条过期指纹／三份文档；本格记账紧随其后）
