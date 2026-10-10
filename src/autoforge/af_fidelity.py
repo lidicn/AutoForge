@@ -16,18 +16,81 @@ P1 的 `IR→NL→IR` 由**确定性 NL 渲染**（`af_nl.render_automation`：�
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from .af_ir import Automation, Trigger, check_trigger_depth
-from .af_ir.condition_norm import normalize_condition
+from .af_ir import Automation, ParamDepthError, Trigger, check_param_depth, check_trigger_depth
+from .af_ir.condition_norm import LeafUnserializable, normalize_condition
 from .af_nl import render_automation
 
-__all__ = ["FidelityReport", "verify_roundtrip", "fidelity_equal", "project_automation"]
+__all__ = [
+    "FidelityReport",
+    "FidelityNotComparable",
+    "verify_roundtrip",
+    "fidelity_equal",
+    "project_automation",
+]
+
+CANON_ERR_UNSUPPORTED = "FIDELITY_CANON_UNSUPPORTED"
 
 
-def _canon(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, ensure_ascii=False)
+class FidelityNotComparable(ValueError):
+    """某一格的值/键型规范化不了——**这不是「相等」，也不是「不等」，是没比成**。
+
+    第十三轮 `_leaf_key` 那一族的另一半：`json.dumps` 遇到 date/set 抛 `TypeError`、遇到自引用抛
+    `ValueError`、遇到混合键型抛 `TypeError`，三种都绕过全部遍历闸门直接抛穿 `verify_roundtrip`；
+    而更糟的是它把 `("x","y")` 与 `["x","y"]`、`{1: "a"}` 与 `{"1": "a"}` canon 成**同一个串**，
+    于是「类型不同/键型不同」在保真校验器里被判成保真——校验器的本职恰恰是拒绝这一格。
+    """
+
+    def __init__(self, where: str, detail: str) -> None:
+        self.code = CANON_ERR_UNSUPPORTED
+        self.where = where
+        self.detail = detail
+        super().__init__(f"{CANON_ERR_UNSUPPORTED}: 位置 {where} 无法规范化（{detail}）")
+
+
+def _canon(value: Any, *, where: str = "params", _depth: int = 0) -> str:
+    """把值编码成**带类型标记**的规范串：键序无关，但 tuple≠list、int 键≠str 键。
+
+    词汇表就是 JSON 那一套（null/bool/int/有限 float/str/list/dict）；表外的形状一律
+    `FidelityNotComparable` 带上位置与原因，绝不静默强转。深度预算取 `MAX_PARAM_DEPTH`
+    那份单一真值源（`check_param_depth`），环与超深都抛具名错而不是 RecursionError。
+    """
+    check_param_depth(_depth, f"保真规范化 {where}")
+    if value is None:
+        return "null"
+    if isinstance(value, bool):  # bool 是 int 的子类，必须排在 int 之前判
+        return "bool:true" if value else "bool:false"
+    if isinstance(value, int):
+        return f"int:{value}"
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise FidelityNotComparable(where, f"非有限 float {value!r}（JSON 里没有这一档，两侧无从对齐）")
+        return f"float:{value!r}"
+    if isinstance(value, str):
+        return "str:" + json.dumps(value, ensure_ascii=False)
+    if isinstance(value, Mapping):
+        for key in value:
+            if not isinstance(key, str):
+                raise FidelityNotComparable(
+                    where, f"键 {key!r} 是 {type(key).__name__} 而非 str（json 会把键强转成字符串，"
+                    f"`{key!r}` 与 `{str(key)!r}` 就塌成一格）"
+                )
+        items = ",".join(
+            f"{json.dumps(key, ensure_ascii=False)}:"
+            f"{_canon(value[key], where=f'{where}[{key}]', _depth=_depth + 1)}"
+            for key in sorted(value)
+        )
+        return "{" + items + "}"
+    if isinstance(value, (list, tuple)):
+        tag = "l" if isinstance(value, list) else "t"
+        inner = ",".join(
+            _canon(item, where=f"{where}[{i}]", _depth=_depth + 1) for i, item in enumerate(value)
+        )
+        return f"[{tag}:{inner}]"
+    raise FidelityNotComparable(where, f"值型 {type(value).__name__} 不在 JSON 词汇表内")
 
 
 def _trigger_to_dict(t: Trigger, _depth: int = 0) -> dict[str, Any]:
@@ -118,11 +181,12 @@ def _ordered_node_ids(auto: Automation) -> list[str]:
 
 
 def _node_core(node) -> dict[str, Any]:
+    nid = node.id
     return {
         "kind": node.kind,
-        "trigger": None if node.trigger is None else _canon(_trigger_to_dict(node.trigger)),
+        "trigger": None if node.trigger is None else _canon(_trigger_to_dict(node.trigger), where=f"nodes[{nid}].trigger"),
         "action": node.action,
-        "params": _canon(node.params or {}),
+        "params": _canon(node.params or {}, where=f"nodes[{nid}].params"),
         "condition": normalize_condition(node.expr),
         "targets": tuple(sorted(node.target_entities())),
         # P3：ask 结构元数据跨层一致（§2.1 nodes[].ask 结构相等）——含控件规格与挂起字段
@@ -132,7 +196,7 @@ def _node_core(node) -> dict[str, Any]:
             "session": node.session,
             "timeout": node.timeout,
             "spec": None if node.ask is None else node.ask.to_dict(),
-        }),
+        }, where=f"nodes[{nid}].ask"),
         # group 容器：编排语义与整棵子树都是核心字段。只比 kind 的话，投影丢掉一个
         # child 也算"保真通过"——那是假绿，且比 children 缺失更危险（schema 拦不住）。
         "mode": node.mode,
@@ -146,12 +210,17 @@ def _automation_core(auto: Automation) -> dict[str, Any]:
         "mode": auto.mode,
         "ir_version": auto.raw.get("ir_version"),
         "nodes": {nid: _node_core(auto.nodes[nid]) for nid in auto.nodes},
-        "edges": {_canon((e.from_, e.to, e.kind)) for e in auto.edges},
+        "edges": {_canon((e.from_, e.to, e.kind), where="edges") for e in auto.edges},
     }
 
 
 def fidelity_equal(a: Automation, b: Automation) -> bool:
-    """分层等价：核心 L0 完全相等、params 键序无关、condition 结构等价。"""
+    """分层等价：核心 L0 完全相等、params 键序无关、condition 结构等价。
+
+    某一格落在 JSON 词汇表外（date/set/自引用/非 str 键/非有限 float）时抛
+    `FidelityNotComparable` —— 返回 `False` 会被读成"两条不等"，而实情是"这条没比成"。
+    `verify_roundtrip` 捕这一枚并如实落成 `not_comparable` 档。
+    """
     ca, cb = _automation_core(a), _automation_core(b)
     if ca["id"] != cb["id"] or ca["mode"] != cb["mode"]:
         return False
@@ -196,10 +265,16 @@ class FidelityReport:
     nl_full_coverage: bool
     projection_fidelity: bool
     detail: list[str] = field(default_factory=list)
+    #: 某一格规范化不了（词汇表外/超预算/归一化不了）——**这不是不等，是没比成**，
+    #: 所以 `ok` 与 `projection_fidelity` 都必须是 False，绝不报成绿。
+    not_comparable: bool = False
 
 
 def verify_roundtrip(ir: Mapping[str, Any]) -> FidelityReport:
-    """对一条 IR 执行 IR→NL→IR 往返保真校验，返回分项报告。"""
+    """对一条 IR 执行 IR→NL→IR 往返保真校验，返回分项报告。
+
+    词汇表外的形状不再抛穿：落成 `not_comparable` 一档，`ok=False`，`detail` 带位置与原因。
+    """
     detail: list[str] = []
     auto = Automation.from_dict(dict(ir))
 
@@ -214,20 +289,27 @@ def verify_roundtrip(ir: Mapping[str, Any]) -> FidelityReport:
         detail.append(f"NL 覆盖率缺失节点：{sorted(nl1.missing)}")
 
     # NL→IR（结构化投影）保真：投影重建的 Automation 与原 Automation 分层等价
-    rebuilt = Automation.from_dict(project_automation(auto))
-    projection_fidelity = fidelity_equal(auto, rebuilt)
-    if not projection_fidelity:
+    not_comparable = False
+    projection_fidelity = False
+    try:
+        rebuilt = Automation.from_dict(project_automation(auto))
+        projection_fidelity = fidelity_equal(auto, rebuilt)
+    except (FidelityNotComparable, ParamDepthError, LeafUnserializable) as exc:
+        not_comparable = True
+        detail.append(f"无法比较（不是不等）：{exc}")
+    if not not_comparable and not projection_fidelity:
         detail.append("投影回写与原文不满足分层保真判据")
         # 定位差异供调试
         ca, cb = _automation_core(auto), _automation_core(rebuilt)
         if set(ca["nodes"]) != set(cb["nodes"]):
             detail.append(f"节点集差异：{set(ca['nodes']) ^ set(cb['nodes'])}")
 
-    ok = nl_deterministic and nl_full_coverage and projection_fidelity
+    ok = nl_deterministic and nl_full_coverage and projection_fidelity and not not_comparable
     return FidelityReport(
         ok=ok,
         nl_deterministic=nl_deterministic,
         nl_full_coverage=nl_full_coverage,
         projection_fidelity=projection_fidelity,
         detail=detail,
+        not_comparable=not_comparable,
     )
