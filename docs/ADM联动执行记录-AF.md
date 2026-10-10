@@ -8939,3 +8939,50 @@ AF21 ask 半边待裁）；三份 HTML 留待各自台账收口。`docs/audit/in
 - 未闭环：AF8、AF13/AF14、AF15、AF21 ask 半边；三份 HTML 的收口台账（#98／#99）。
 
 —— AutoForge 开发 · 2026-10-11 落码并提交（现读 `git log --oneline -1` = `c035656`，`git show --stat HEAD` 现读 **25 files changed / 5560 insertions / 12 deletions**）；基准 HEAD `25dc15f`。四处运行时改动（AF1 整篇深度门／AF2·AF3·AF4 同一枚拒写助手／AF18 判定态优先／AF21 影子档边方向）＋ARCH-07 本机接线＋四份报告归档。复测把 AF5／AF7／AF19／AF20 四条登记成「核实成立·已修（非本批）」并各附现读 file:line——这一步是必要的：不复测就会去重抄报告那句 `still_open`。**没有加过一枚锁、没有自建 supervisor、没有动过登录线在途的五个文件**；AF8／AF13／AF14／AF15／AF21 的 ask 半边一律不自决，攒进 #99 那批递 DCD；`docs/ADM联动执行计划-AF.md` 保持未暂存（按计划表归属另算）。
+
+---
+
+## §二之一百零二 · 裁定 20261010 §五 Q3 追加的现读复测（has-admin 真值＋`/api/credentials` 明文面）（2026-10-11）
+
+### 一、这一格在记什么
+
+裁定 `20261010-AF与DB与DPP十件-裁定.md` §五 留了两件 AF 侧**当场能做**的事没被闭掉：① Q3 说"`admin.json` 是否已注册只有 owner 能答"，并给了**一条自证命令**（该端点无鉴权，`af_api.py:981-984`）；② Q3 追加的**补充裁定**——`/api/credentials` 的明文面照 F-3 同形收紧，硬判据「非 owner 的 write 令牌调 `/api/credentials` ⇒ 拿不到 `ha_token`/`api_token` 明文」，并写进 §五 验收清单。仓内此前对 `/api/credentials` 的**记账为零**（`grep -n "/api/credentials" docs/ADM联动执行记录-AF.md` = 0 命中）——裁定落进台账才不至于"回执与台账分家"。
+
+### 二、Q3 现场真值（现读，命令原文）
+
+```
+$ curl -s -m 8 -w "\nHTTP=%{http_code}\n" http://192.168.2.200:8787/api/auth/has-admin
+{"ok":true,"has_admin":true}
+HTTP=200
+```
+
+⇒ 走裁定给的那一支「**已注册且完好** → 紧迫度降一档，随登录线同窗修」。owner 那句「治理台没有登录系统」的观察按裁定 §五 追核第 1 条本来就不作数（`ui/` 治理台**设计如此**是粘贴 Bearer 令牌的运营台，有密码登录的是 `/mimo` 那张脸）。**BUG-01 的 register 劫持路径此刻不可达**（`has_admin=true`），login 兼容档那条链仍在，归属与窗口按 Q2 丙／Q4 甲不变。止血动作（8787 限可信 LAN）属部署面、不在 AF 仓内，仍挂 #81 那类 NAS 窗。
+
+### 三、补充裁定的复测：**成立条件在 HEAD 上不存在**
+
+现读三处（全部 file:line，非引用裁定字面）：
+
+| 裁定说的 | 现读 HEAD | 结论 |
+|---|---|---|
+| 「`af_api.py:520` `@app.get("/api/credentials", dependencies=[Depends(_write)])`」 | **同一行，逐字相符**（`af_api.py:520-522`，返回 `get_config(store.root).describe()`） | 站点没错 |
+| 「其返回体含 `ha_token`/`api_token`（`af_config.py:132-133`）＝明文」 | `af_config.py` 全仓只有**一枚** `describe()`（`:188-193`），两个键都过 `_mask()`（`:32-36`，形状 `****len=N`，docstring 自述「只回掩码＋长度，绝不泄露任何明文片段」）；`:132-133` 在 HEAD 是 `_atomic_write` 的 `fsync`/tmp 清理段 | **明文面不成立**（行号与内容都属 zip 快照/漂移口径） |
+| 硬判据（非 owner write 令牌拿不到明文） | `grep -rn "get_ha_token()\|get_api_token()" src/` 的全部命中 = `af_adapters/ha.py:83,90`／`af_cli.py:572`／`af_live.py:246,256`／`af_config.py:190,191`（掩码站内）——**`af_api.py` 零命中**；`af_cli.py:787` 打印的也是 `describe()` 那份掩码 | 判据**已成立**，且形状是「两面都掩码」 |
+
+- 全仓哨兵 `grep -n "/api/credentials" docs/ADM联动执行记录-AF.md` = 0 → 本格补上；`ui/src/views/GovernanceView.vue:139` 印的正是 `****len=N`。
+
+### 四、偏差登记（显式请追认，不沉默）
+
+裁定要求的形状是「**owner 面给明文**，非 owner 面只给状态摘要」。HEAD 现状是**两面都只给 `****len=N`**——比裁定更严的一档。本批**不照裁定放宽成 owner 面明文**（那是新增明文面，方向相反），改为把这档更严的形状**钉成判据**，防它哪天被"按裁定字面办"退回去：新增 `tests/unit/test_credentials_face_no_plaintext.py` 9 条——
+
+- `describe()` 不含两枚明文标记、且等于 `****len=N`；
+- `_mask` 形状参数化 6 档（含 `Bearer 123…`、两枚标记），并断言**明文任意连续 4 字符片段都不得出现在掩码值里**；
+- **自证腿**：monkeypatch `_mask` 成恒等 ⇒ 明文立刻可见（证明上面那条腿不是永远绿的装饰）；
+- HTTP 面形状锚点：`af_api.py` 里两枚原始 getter 零命中 ＋ `get_config(store.root).describe()` 在场。
+
+读数：`pytest tests/unit/test_credentials_face_no_plaintext.py -q` ⇒ **9 passed in 1.61s**。
+
+### 五、还在登录线窗里的那几格（归属不变）
+
+BUG-01 Q1 甲（删兼容档、`not has_admin` 时 login 直接 409 不签令牌）／附裁（`poisoned` 标志，损坏态对 login＋register **双向 fail-closed** ＋一条可见读数）／Q4 甲（BUG-02/03/08/09/15 随登录线同窗，AF 只交复测证据）——落笔点全在 `af_api.py`/`af_auth.py` 两个在途文件，本批一条不碰，继续挂 #79。**裁定的两条硬验收**（无 admin＋任意非空凭据 ⇒ 409 且无令牌签发；损坏态 ⇒ 双向拒绝＋可见读数）已在账上，不做完不许写 PASS。
+
+—— AutoForge 开发 · 2026-10-11 现读复测并落判据；本批只动 `af_config` 的**读侧判据与文档**，运行时行为零改动。
