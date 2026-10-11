@@ -15,12 +15,14 @@
   Windows `msvcrt.locking`），sidecar 由它自己 `_stamp()` 出真身份；
 - 判"锁空／不空"只用 `svc._lock_is_free()`，那是另开句柄去探的内核真值，⛔ 不信盘上文本；
 - 每腿都有前置自证（precondition）：子进程起好后必须先读出"锁被别的进程持着"，否则这条腿测的是空气；
-- 唯一被打桩的是 `os.kill`（D1 那一格）——**信号投递**这一步在测试里不能拿真 PID 做实验，
-  而锁的状态一律真值。D2 那一格连信号都不打桩：走 POSIX 真 `fork()` 继承 fd。
+- 唯一被打桩的是 `os.kill`（C 那一格）——**信号投递**这一步在 Windows 上不能拿真 PID 做实验，
+  而锁的状态一律真值。D 两格连信号都不打桩：走 POSIX 真 `fork()` ＋真 SIGTERM ＋继承 fd。
 
-D2 只在 POSIX 跑（`os.name == "posix"`）：Windows 上 `os.kill(pid, 15)` 等价 `TerminateProcess`，
-"目标还活着但收不到信号"这一形状在本机造不出来，⛔ 不在这里假装两边一样。CI 跑 Linux，所以那格
-在远端是真的执行过的。
+D 两格只在 POSIX 跑（`os.name == "posix"`）：Windows 上 `os.kill(pid, 15)` 等价 `TerminateProcess`，
+"目标收不到信号"（D1）与"信号送到了、锁却仍被继承者持着"（D2）这两种形状在本机都造不出来，
+⛔ 不在这里假装两边一样。CI 跑 Linux，所以那两格的真值**只在远端存在**——run 164 正是靠 D1
+抓到本文件初版的一条假期望（它当时断言 `signal == "delivered"`，而那个形状里 pid 档里的进程
+是自己退的，只能读出 `already_gone`）。
 """
 from __future__ import annotations
 
@@ -36,7 +38,9 @@ from autoforge import af_service as svc
 
 SRC = pathlib.Path(__file__).resolve().parents[2] / "src"
 
-#: 子进程脚本：`mode` 决定它是否真去拿协调锁。`hold` 模式拿完锁就活着，直到被收。
+#: 子进程脚本：`mode` 决定它是否真去拿协调锁。`hold` 拿完就活着直到被收；
+#: `fork-exit`／`fork-hold` 各 `fork()` 出一枚继承同一份锁 fd 的孙进程，区别是直子进程
+#: 自己先退（前者）还是活着等 SIGTERM（后者）。
 _CHILD = r"""
 import os, sys, time, pathlib
 sys.path.insert(0, sys.argv[3])
@@ -46,16 +50,22 @@ root = pathlib.Path(sys.argv[1])
 mode = sys.argv[2]
 lock = root / "watch.lock"
 fl = FileLock(lock, timeout=20, info={"graph": "runtime-leg"})
-if mode == "fork-hold":
+if mode in ("fork-exit", "fork-hold"):
     fl.acquire()
     (root / "watch.pid").write_text(str(os.getpid()), encoding="utf-8")
     pid = os.fork()
     if pid > 0:
-        # 直子进程退出：`watch.pid` 里那个 PID 从此"已经不在"，
-        # 而锁由继承了同一份 fd 的孙进程继续持着——这是内核事实，不是模拟。
         (root / "grand_pid.txt").write_text(str(pid), encoding="utf-8")
-        os._exit(0)
-    (root / "child_ready.txt").write_text("grandchild", encoding="utf-8")
+        (root / "child_ready.txt").write_text(mode, encoding="utf-8")
+        if mode == "fork-exit":
+            # 直子进程**自己**退场：`watch.pid` 里那个 PID 从此"已经不在"，
+            # 而锁由继承了同一份 fd 的孙进程继续持着——这是内核事实，不是模拟。
+            os._exit(0)
+        # fork-hold：直子进程不退场，等 `stop_watch` 那一发真 SIGTERM 来收。
+        # 于是"信号发到了并且把目标收掉了"与"锁空了"这两件事第一次在真进程上分家。
+        while True:
+            time.sleep(0.2)
+    (root / "grand_ready.txt").write_text("grandchild", encoding="utf-8")
     while True:
         time.sleep(0.2)
 fl.acquire()
@@ -244,12 +254,17 @@ def _raise(exc: BaseException):
     return _kill
 
 
-# ── D. 连信号都不打桩（POSIX）：真发 SIGTERM，锁被继承 fd 的孙进程持着 ──
+# ── D. 连信号都不打桩（POSIX）：真 `fork()` 继承锁 fd，两档信号状态各钉一条 ──
+
+#: 这两条腿在 Windows 上一律 skip：`os.kill(pid, 15)` 在那边等价 `TerminateProcess`，
+#: 造不出"信号发到了、锁却还被人持着"的形状。⚠️ 它们的真值**只在远端 Linux 存在**，
+#: 引用时按远端读数，不拿本机 skip 冒充通过（run 164 就是靠这一格抓到本文件的一条假期望）。
+
 
 @pytest.mark.skipif(os.name != "posix", reason="Windows 的 os.kill(15) 等价 TerminateProcess，造不出"
                                               "「目标收不到信号」这一形状；CI 在 Linux 上真跑这一腿")
-def test_a_sigterm_that_leaves_the_lock_held_by_an_inheriting_child_is_not_a_clean_stop(root, fast_budget):
-    direct = _spawn(root, "fork-hold")
+def test_d1_a_lock_inherited_by_a_grandchild_outliving_the_pid_file_process_is_not_a_clean_stop(root, fast_budget):
+    direct = _spawn(root, "fork-exit")
     _wait_for(root / "child_ready.txt", root=root)
     _wait_for(root / "grand_pid.txt", root=root)
     lock = root / "watch.lock"
@@ -259,14 +274,52 @@ def test_a_sigterm_that_leaves_the_lock_held_by_an_inheriting_child_is_not_a_cle
 
     try:
         res = svc.stop_watch(store_root=str(root))
+        #: pid 档里那个进程确实"早就不在了"，`os.kill` 只能抛 `ProcessLookupError`
+        assert res["identity"] == "verified", res
+        assert res["signal"] == "already_gone", res
+        #: 而锁仍由继承了 fd 的孙进程持着 ⇒ 内核不认这次停止
         assert svc._lock_is_free(lock) is False
         assert res["ok"] is False and res["exit"] == "exit_unconfirmed", res
-        #: 信号**真的发出去了**（直子进程当场死，见上面 `direct.wait()`），而孙进程持着继承来的
-        #: 锁 fd 继续活着 ⇒ `delivered` 这一档同样不构成退场证据。
-        assert res["signal"] == "delivered", res
         assert (root / "watch.lock.info").exists() and (root / "watch.pid").exists(), res
     finally:
-        try:
-            os.kill(grand_pid, 9)
-        except ProcessLookupError:
-            pass
+        _kill_grandchild(grand_pid)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Windows 的 os.kill(15) 等价 TerminateProcess，"
+                                              "目标一律当场死，造不出「信号送到了、锁却还被人持着」")
+def test_d2_a_delivered_sigterm_that_leaves_the_lock_held_by_an_inheriting_grandchild_is_not_a_clean_stop(root, fast_budget):
+    """`delivered` 这一档同样**不是**退场证据：目标真死了，锁却还握着。
+
+    与 C 的分工：C 用打桩把 `ProcessLookupError` 造出来（因为本机不能拿可能被复用的真 PID
+    做 `os.kill` 实验），这一腿一个桩都不打——真发 SIGTERM、真把直子进程收掉（POSIX 默认处置
+    ＝终止），而孙进程靠继承的那份 fd 继续持锁。C 证"发不动不算证据"，这一腿证"发成功也不算证据"。
+    """
+    direct = _spawn(root, "fork-hold")
+    _wait_for(root / "child_ready.txt", root=root)
+    _wait_for(root / "grand_pid.txt", root=root)
+    _wait_for(root / "grand_ready.txt", root=root)
+    lock = root / "watch.lock"
+    grand_pid = int((root / "grand_pid.txt").read_text())
+    assert direct.poll() is None, "直子进程自己退了，信号就没有『送达』可言——前置塌了"
+    assert svc._lock_is_free(lock) is False, "孙进程没继承到锁 fd——这一腿的前置塌了"
+
+    try:
+        res = svc.stop_watch(store_root=str(root))
+        assert res["identity"] == "verified", res
+        assert res["signal"] == "delivered", res
+        #: 负 returncode ＝ 被信号打死（SIGTERM 默认处置），不是它自己干净退的
+        assert direct.wait(timeout=5) < 0, "SIGTERM 发出去了，目标却没被它收掉——这一腿的形状不成立"
+        #: 目标死了，锁却没死：fd 是继承来的，另一份进程持有它
+        assert svc._lock_is_free(lock) is False, "信号发成功且目标已死，锁仍被持着才是本腿要钉的形状"
+        assert res["ok"] is False and res["exit"] == "exit_unconfirmed", res
+        assert (root / "watch.lock.info").exists() and (root / "watch.pid").exists(), res
+    finally:
+        _kill_grandchild(grand_pid)
+
+
+def _kill_grandchild(pid: int) -> None:
+    """孙进程不归 `_LIVE` 管（它是被 `fork()` 出来的，`Popen` 只认直子进程），只能按 PID 收。"""
+    try:
+        os.kill(pid, 9)
+    except ProcessLookupError:
+        pass
