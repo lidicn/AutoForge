@@ -10688,6 +10688,7 @@ ARCH-08 从本批起算**已收口**（判据在场且 18 腿变异自证过）�
 - **第一枚**：`git commit` ⇒ **`648f03b`**，`git show --stat` 现读 **12 files changed, 881 insertions(+), 3 deletions(-)**。批前 HEAD `8ce85a1`（＝当时的 `origin/main`）。暂存面逐枚＝新门／新清单／新判据／`gates.sh`／`scripts/oneshot/` 五份（4 份 R100＋新 README）／两份记账＋对账文档补句。**并发在途四格（`af_api.py`／`af_auth.py`／`docker/docker-compose.api.yml`／`ui-user-mimo/*`）与 `docs/audit/参考/FFL-200题测试提示词.md`、`docs/ADM联动执行计划-AF.md` 一条没暂存**；仓根那四枚未跟踪产物与三枚审计 HTML 一个没删、没入库。
 - **订正①（归属）**：本批 §十九 那行一度把「README 2 处死链」写进本批改动面——⛔ 不实，那两行早已由 `c1c362f` 落仓；本批对 ARCH-08 只动了对账文档那一行的定性（改成"下一批已收口"）与 §二 归档判定。已就地改掉，不靠"下一批再说"。
 - **订正②（读数的遍数）**：§十九 原写"两遍逐字节相同"，实际按步 6 在记账后又跑了第三遍且逐字节相同（见 §七 第三枚子弹），已改成"三遍"并写明第三遍的时序。
-- **第二枚**＝本批记账校正（§七 的第三／第四遍读数与逐行解释、§三 的 785→786 注、§十 存证补一份、§十九 那行的两处归属订正与遍数），落 `docs/ADM联动执行记录-AF.md` ＋ `docs/architecture/AF完整架构与运行时说明.md` 两份。
+- **第二枚**＝本批记账校正（§七 的第三／第四遍读数与逐行解释、§三 的 785→786 注、§十 存证补一份、§十九 那行的两处归属订正与遍数），落 `docs/ADM联动执行记录-AF.md` ＋ `docs/architecture/AF完整架构与运行时说明.md` 两份 ⇒ **`80e013c`**（`git show --stat` 现读 `2 files changed, 13 insertions(+), 3 deletions(-)`）。
+- **推送与远端自证（写于推送之后，故本行不含在上方"四遍"读数的时序内）**：`git push origin master:main` ⇒ `8ce85a1..80e013c  master -> main`（`PUSH_RC=0`）；`git ls-remote origin refs/heads/main` ⇒ `80e013c2ad54cb6b5d5a7d7396bebf8a84bec82e` == `git rev-parse HEAD`。本节的这一行由**第三枚**提交携带（与 §二之一百二十一 同一手法），推上去之后远端会领先本机刚记的那枚 sha 一枚——这是"记账落后于事实一枚"的固有形状，⛔ 不靠把它写进第二枚来消除（第二枚写不了自己之后的读数）。
 
 
