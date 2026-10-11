@@ -10846,3 +10846,130 @@ GATES_RC=1     12279 B     md5 61b3e66c1d4b1c1eac7351dfef1025c6      ← 遍 b�
 - 落盘存证（`E:\tmp`，不进仓；md5 由 `md5sum` 现量）：`af118_ci_160_qualitygates.txt`（2884 B／`5573a3babc3ede2f1a6b8dd9d8414c76`）／`af118_ci_160_pytest.txt`（680 B／`3912391e1ef47c0c5a9dca63b9f62ff1`）／`af118_ci_161_pytest.txt`（680 B／`335b30fd1103c18d6378300c70c30a45`）。两份 pytest 存证**体积同而 md5 不同**：去掉日志时间戳前缀后 `diff` 只剩一处——耗时 `190.88s` vs `166.23s`，判定行（`1 failed, 4209 passed, 51 skipped` 与那条 `FAILED`）逐字相同。
 - ⚠️ 补记的第三枚 `3336ae2` 自身也跑了一轮 CI（run 161），终值与 run 160 **逐条同**（`1 failed, 4209 passed`／AST 2 条 warn）⇒ 记账面两份 docs 确实不在任何门的射程内，远端独立复现了遍 c／遍 d 的本地结论。
 - 本地遍 e（补完本小节**前 22 行**之后现跑；本行自身写在遍 e 之后，同属记账面、未再复跑）：`GATES_RC=1`、12279 B／md5 `6765cf78b7417adb93025b385a4547cb`，与遍 c／遍 d **`diff` 空**（RC=0）⇒ 这一批 docs 改动同样不在射程，第三次于同一 md5 上复现"记账面不进门"。
+
+
+
+## §二之一百二十四 · 收 ARCH-10 的最后一格（AF 名下能自决的那半边）：watch 生命周期**运行期腿**第一次成格，`stop_watch` 的退场证据从「盘上那个 PID」换成「内核那把锁」，顺带扫出两格真缺陷（2026-10-11）
+
+**条目**：AF 名下任务 #127（第六轮架构审计 `ARCH-10 · 测试面覆盖形状` 表第四行「没有生命周期测试（`stop` 之后收没收干净）」）。批前 HEAD 现读 `4faca60`。⛔ 本批只动 `af_service.py` 一处在途之外的那条链＋两份判据文件＋清单登记行，`af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*` 一行没碰。
+
+### 一、复测对撞表（逐条现读，改前）
+
+| 报告／对账表那一格 | 现读复测 | 分派 |
+|---|---|---|
+| 「没有生命周期测试（`stop` 之后收没收干净）」 | `tests/unit/test_watch_lifecycle_r6_audit.py` 26 格里 `svc.os.kill` 全部换成 `_KillSpy()`、`time.sleep` 换成 no-op、sidecar 里的 PID 是编的 `4242`／`9999`；`watch.lock` 在盘上但**从头到尾没有真持有者** ⇒ 探针（`FileLock.held_by_other()`）永远拿得到 ⇒ `_lock_is_free` 恒读「空」；需要「还被持着」那一格时（`:217`）是把探针**按成 `False` 来模拟**另一个进程。`test_serve_exit_reap.py` 用真子进程，但它自己的 docstring 写明「它不参与协调锁」 | 真缺陷（证据缺口，不是代码缺陷），本批补运行期腿 |
+| 「没有并发测试（BUG-03 `subjects()`／BUG-11 看门狗）」 | 落笔点在 `af_auth.py`（登录线常年在途） | ⛔ 不属本批：归 #79 窗，本批不预先声称「覆盖了」 |
+| `docs/进程模型清单.md` §三 三枚生命周期锚点 `:2605/:2683/:2717` | 改后现读：`os.kill` 站点 `:2618`、`coord_lock_held_by_other` 那档 `:2704`、`_stamp` 收尾 `:2738` | 本批改动导致漂移 ⇒ 同批重钉＋`--write` 重生成自动段（判据 A 逐行对撞逼出来的成本，非遗漏） |
+| 报告 §ARCH-10 表末那句「⛔ 本表不写"测试覆盖已补齐"」 | 本批补的是**生命周期／运行期**半边，并发半边仍空 ⇒ 那句话仍成立 | 收一半，对账表逐行写明，报告仍留 `docs/audit/` 原地 |
+
+### 二、新腿的形状（`tests/unit/test_watch_lifecycle_runtime.py`，5 格）
+
+- **持锁者是 `sys.executable` 起的真进程**，走 `af_flock.FileLock.acquire()`（POSIX `flock`／Windows `msvcrt.locking`），sidecar 由子进程自己 `_stamp()` 出真身份（`{hostname}-{pid}-{uuid8}`）⇒ 身份核验走的是系统自己的信号量，不是测试编的数字。
+- 判「锁空／不空」只用 `svc._lock_is_free()` 的**内核真值**，⛔ 不信盘上文本、不信「发过信号就算数」。
+- **每腿带前置自证**：子进程起好后必须先读出 `svc._lock_is_free(lock) is False`（真的有人持着），否则这条腿测的是空气——这一句就是本批的「注入未生效就判 FAIL」护栏，它挡住的是「锁根本没被持住 ⇒ 停完之后『锁空了』由恒真冒充」。
+- **唯一被打桩的是信号投递那一步**：⛔ 不拿一个可能被复用过的真 PID 去做 `os.kill` 实验——Windows 上 `os.kill(pid, 15)` 等价 `TerminateProcess`，命中复用后的无关进程就是不可撤销的误杀（BUG-06 禁的正是这件事）。锁的状态全程真值。
+- 五格分工：A 真持有者被收掉后内核确认锁空、且**锁文件同一枚 inode 未动**；B 下一枚真 watcher 在同一 inode 上拿到锁（⇒ 释放来自进程死亡，不来自删文件）；C 盘上 PID 早已不在而锁仍被另一个活进程持着（打桩 `ProcessLookupError`）；E 平台层抛的非子类 `OSError`；**D 连信号都不打桩**：POSIX 真 `fork()`，直子进程 `os._exit(0)` 退场、锁 fd 由孙进程继承 ⇒ 「PID 没了、锁还被人持着」是内核事实而非模拟。D 只在 `os.name == "posix"` 跑，本机 Windows 如实 skip、CI 在 Linux 真跑。
+- 退避表 `svc._WATCH_EXIT_WAIT_S` 用 `monkeypatch` 缩成 `(0.05,)*4`，⛔ 不改判定形状（真值仍来自 `_lock_is_free`）；不缩的话 C／E 两格各要真等 4.9 秒。
+
+### 三、扫出的两格与修法（都收在 `stop_watch`，判据就是这两条腿）
+
+**① `already_gone` 那一格把「发不动」读成了「退了场」。** 修前形状：`ProcessLookupError` 分支直接写 `exit_state = "exited"`，于是绕过了那圈内核锁轮询。修前读数原样（`af127_pre_fix_runtime.txt`，腿 C 的失败现场）：
+
+```
+AssertionError: 锁还被人持着，却报了成功清场：{'ok': True, 'stopped': 'DESKTOP-J17LDCU-28572-8cd52a0a',
+'graph': 'runtime-leg', 'pid': 28572, 'identity': 'verified', 'exit': 'exited',
+'cleanup': {'sidecar_removed': True, 'pid_file_removed': True, 'lock_file_kept': True, 'errors': []}}
+```
+
+对外 `ok=true`、sidecar 与 PID 文件一起删掉，而**持锁的那个活进程一个字都没动**（同腿断言 `holder.poll() is None` 成立）⇒ 下一个 watcher 起来撞锁读 `coord_lock_held_by_other`，而能解释「为什么撞锁」的现场已被这次「成功」清空。
+
+**② `os.kill` 抛的非子类 `OSError` 直接抛穿。** 修前读数：`OSError: [Errno 22] Windows 上对失效句柄的写法`，栈顶 `src\autoforge\af_service.py:2605: in stop_watch → os.kill(pid, 15)`。HTTP 面把一次停表读成 500、`serve` 退出路径读成「收尾链炸了」，而盘上状态一点没变。同一条链在 `start_watch` 早就收在 `(ProcessLookupError, PermissionError, OSError)` 里 ⇒ **两脸口径不一致**。
+
+**修法**（一处函数内部，`af_service.py:2615` 起）：`signal` 分三档记进返回值——`delivered`／`already_gone`／`not_delivered(异常名)`；⛔ 三档**都不含「对方退了场」**，那句话只能由 `_WATCH_EXIT_WAIT_S` 那圈 `_lock_is_free` 轮询来说。`PermissionError` 仍是具名早退（`kill_not_permitted`，一个文件都不清）；空退避表与「预算花完」落同一条 `exit_unconfirmed` 路径。保留的既有保证一字未退：不 unlink 协调锁、身份不核验不发信号、不升级 SIGKILL、清理失败具名进 `cleanup.errors`。
+
+### 四、口径定性：不是新政策，是收尾内部自相矛盾的对齐
+
+`stop_watch` 的 docstring 本来就写着「等目标真的退场再收尾：轮询协调锁是否已空闲（**内核真值**）」，只是 `already_gone` 那一格没照这句话执行、而平台层异常那一格根本没走到那句话。⇒ 本批**不需要**递 DCD 追认：没有动验证口径、没有动跨仓契约、没有动账本（`.gates-tally.txt`／`.gates-baseline.txt` 一个数字未动），改的是一条已写进文档的口径在实现里漏掉的两格。docstring 同步补两条子弹（三档信号都不算退场证据；平台层异常不许抛穿）并把判据文件名钉在里面。
+
+### 五、联动改面
+
+- `docs/进程模型清单.md` §三：`os.kill` 那行的登记改写（退场证据口径＋三档 `signal`），并**修掉一行错抄**——登记里把退出等待的表名写成 `_WATCH_PROBE_DELAYS_S`（那是启动探测表 11.9 秒），现读改用表是 `_WATCH_EXIT_WAIT_S`（4.9 秒）；认领字段指本节。三枚锚点按现读重钉 `:2605/:2683/:2717` → `:2618/:2704/:2738`，`check_process_model.py --write` 重生成的自动段 diff **恰为这三行**（⚠️ 先 `git add` 产品代码与判据、再 `--write`、再跑门：门读**代码**取入库面、读**清单文档**取磁盘面，未暂存的改动在门那一侧不可见——这是 §二之一百二十三 换面后留下的口径不对称，本批实测踩到一次并如实登记）。
+- `docs/architecture/AF完整架构与运行时说明.md` §四「watch 生命周期的五条规矩」升成**六条**（新第 6 条＝退场证据只有内核那把锁），该区九枚行号锚点按现读重钉（含 `:2713-2721`→`:2737-2745`、`:2745-2800`→`:2758-2787` 两枚**本批之前就已漂**的锚点）；§十八 第 34 条①由「并发／生命周期腿仍缺」订正成「生命周期腿已由本节补上／并发腿仍缺」；§十八 第 35 条末行订正为「追认件**已递未裁**」（先前写「尚未投递」是把计划名当成了实投名，现读 inbox 后订正：`E:\NAS\关键决策部\inbox\20261011-AF-门禁取数面口径-决策申请.md`，`decisions/` 现读无对应裁定书）；新增 §十八 第 36 条。
+- `docs/audit/第六轮架构审计ARCH08_11核实对账_20261011.md`：ARCH-10 表第四行按现读改写为「运行期腿已补（5 格，真子进程持锁）」并把 §二 归档判定里「未收」半边收窄成只剩**并发**腿 ⇒ 报告仍留原地。
+- ⛔ 无新增 `check_*.py`（本批落的是测试腿与产品代码口径，不是门），故 `gates.sh` 一字未动，`check_gates_coverage` 射程不变。
+
+### 六、读数（每格带命令原文）
+
+| 那一格 | 命令原文 | 现读 |
+|---|---|---|
+| 修前（新腿先红） | `python -m pytest tests/unit/test_watch_lifecycle_runtime.py -q` | **`2 failed, 2 passed, 1 skipped in 5.38s`**（collected 5：腿 C／E 各红一次，A／B 绿是因为真子进程死后锁**确实**空闲——那两格本来就通；D 本机 skip） |
+| 修后：三份 watch 生命周期文件合跑 | `python -m pytest tests/unit/test_watch_lifecycle_runtime.py tests/unit/test_watch_lifecycle_r6_audit.py tests/unit/test_serve_exit_reap.py -q` | **`38 passed, 1 skipped`**（collected 39，RC=0；`af128_lifecycle3.txt`）。⚠️ 耗时这一列不引：同一判定行三次现读 7.68s／7.55s／6.66s，起真子进程的浮动不是判据 |
+| 修后：再加生命周期门判据（四文件） | 同上 ＋ `tests/unit/test_process_model_gate.py` | **`79 passed, 1 skipped in 48.40s`**（collected 80，RC=0；`af128_lifecycle5.txt`）⇒ 锚点重钉＋自动段重生成没有把门判据洗红 |
+| 生命周期门 | `python scripts/check_process_model.py` | **`RC=0`**，结论行 296 B／md5 `81f53b822034dfdb30089986b17fd09f`——与 §二之一百二十三 那次**同一枚 md5** ⇒ 结论行一字未变，变的只是自动段三枚锚点与登记散文 |
+| 整链接遍 a／遍 b | `GATES_PYTHON=python bash gates.sh > f 2>&1; echo GATES_RC=$?` | 两遍 `GATES_RC=1`、**12279 B／md5 `d0e4feb31c749aaf31221a99e1a4e854`**，`cmp -s` **逐字节相同** |
+| 全段回归 | `python -m pytest tests/unit -q` | 见本节末「六之二」（⛔ 不预告读数，跑完补进这一行） |
+
+### 六之二、全段回归与红源归属
+
+`python -m pytest tests/unit -q` ⇒ **`2 failed, 3458 passed, 44 skipped, 1 warning in 440.52s (0:07:20)`**，`UNIT_RC=1`（存证 `af128_unit_all.txt`，6656 B／md5 `dcdc5d580c18079467c64c327c940fbe`）。两条红**同族、同文件名、同 payload 形状**，与本批零交集：
+
+```
+FAILED tests/unit/test_dcd_20261004_auth_limits.py::test_owner_face_still_sees_plaintext
+FAILED tests/unit/test_dcd_20261004_auth_limits.py::test_third_party_write_token_gets_the_mask_not_the_code
+E   AssertionError: assert '51735296' in {'********'}
+E   AssertionError: assert '86736488' in {'********'}
+```
+
+三件自证（归属，不是辩解）：
+
+1. **文件交集＝空**：本批改动面是 `af_service.py`＋两枚 watch 判据＋`docs/进程模型清单.md`；那两条读的是 `/api/…` 授权码行的 `code` 字段（`tests/unit/test_dcd_20261004_auth_limits.py:458-463` 现读：`assert code in {row["code"] for row in _rows(client, owner)}`）。
+2. **hunk 交集＝命中在途那面**：`git diff -- src/autoforge/af_auth.py src/autoforge/af_api.py` 现读 8 枚 hunk，其中 `af_auth.py` 三枚落在 `class TokenRegistry`（`@@ -362,17 +362,20 @@`／`@@ -444,7 +447,7 @@`／`@@ -453,6 +456,8 @@`），`af_api.py` 四枚落在 `build_app` 体内（含 `@@ -1163,17 +1167,21 @@`）⇒「owner 面读出明文」这一判据恰好压在登录线在途的掩码分层上。
+3. **同一对红在上一批就登记过**：§二之一百二十三 记的是同名两条，且当时已在**纯 HEAD 副本树**（`E:\tmp\af124_head`）里对同一文件跑出 `33 passed` ⇒ 红来自在途工作树，不来自已提交面。
+
+⇒ ⛔ 本批不修这两条（修它等于替登录线改在途语义），不抬 `tally`／不写 `baseline`；#79 窗内改完由它们自己转绿。
+
+### 六之三、本批自己造成并已当场收回的一格（登记为事实）
+
+写 §十九 新行时，Edit 的 `old_string` 取的是表格**最后一行**（`| 2026-09-24 | 当时 HEAD | 初版（端到端实测后） |`），新行因此**替换**了它而不是插在它前面 ⇒ 那一行一度从表里消失。发现方式：改完现读 `grep -c "初版（端到端实测后）"` 得 **0**（本仓惯例是「初版」行留在表尾，新行插在它前面）。当场把该行补回并复核行数：`git show HEAD:…| grep -c "^| 2026-"` = **37** → 工作树 = **38**（恰＋本批一行），CR 仍 0。⚠️ 教训按本仓口径钉死：**改文档任一段之前先数一次、改完再数一次**，"看着像插入"的 Edit 有可能是替换。
+
+### 七、与上一批存证的对撞（差值逐行解释）
+
+遍 a 对 §二之一百二十三 的遍 c（`af118_gates_c.txt`，12279 B／md5 `6765cf78b7417adb93025b385a4547cb`）：**字节数相同、md5 不同**，`diff` 恰三行，全部归本批那枚新判据文件：
+
+| 那一行 | 差值归属 |
+|---|---|
+| `✓ undefined-name 门禁干净（扫描 231 个文件）` → `232` | 本批 `tests/unit/test_watch_lifecycle_runtime.py` 进了被扫树（那枚门仍读磁盘面）——与 §二之一百二十二「785→786」同一形状，非缺陷 |
+| `[有界缓存] …4167 个名字被读到过` → `4168` | 同一枚新文件被那枚门计入全仓读取点（该数不是判据，判据是「注册表 4 项双腿齐全＋基线冻结 113＋就地豁免 17＋死写 0」，四项逐字未变） |
+| `读数：入库面 788 个文件` → `789` | 新文件进了**索引**（卫生门判据取入库面）；那个总数不是判据，对撞的是根目录 `.py` 0／单下划线 0／`scripts/oneshot/` 5／存量登记 0 |
+
+链上让 `GATES_RC=1` 的红源**一条没变、一字没变**：AST 门禁两枚 `fake-ok-const`（`af_api.py:984`／`:1005`，登录线在途）＋ `check_owner_subject.py` 三枚按设计红（`:1170`／`:1175`／`:1180`，归 #79 窗）；计数棘轮 `全量 97 / 上限 97`、`基线内存量 95 条 / 过期 0` 与上一批同值。⇒ 本批**没有**靠抬上限或写基线换来任何一格绿。
+
+**代码面提交＋三份 docs 记账改完之后跑遍 c**（`E:\tmp\af128_gates_c.txt`）：`GATES_RC=1`、12279 B／md5 `d0e4feb31c749aaf31221a99e1a4e854`，与遍 a／遍 b **`cmp -s` 逐字节相同**（`diff` 空）⇒「记账面不在任何门的射程内」这一格第三次由逐字节对撞**实测**而非推导（本批记账改动量：执行记录新增整节＋架构说明 §四/§十八/§十九＋对账文档三处）。
+
+### 八、存证清单（`E:\tmp`，不进仓；md5 由 `md5sum` 现量）
+
+| 文件 | 内容 | 字节／md5 |
+|---|---|---|
+| `af127_pre_fix_runtime.txt` | 修前新腿现场：腿 C 的成功清场假绿原样 payload＋腿 E 抛穿的 `OSError` 栈 | 5213 B／`b0525b077cd6efd2b9f35d2d2121973d` |
+| `af127_post_fix_lifecycle.txt` | 修后三文件合跑第一遍 | 719 B |
+| `af124_post_fix_lifecycle.txt` | 修后四文件合跑（`79 passed, 1 skipped in 51.45s`） | 881 B／`ccb8e2ec0ca66f448a8c5f201333c673` |
+| `af127_gate_process_model_prefix.txt` | `check_process_model.py` 入库面绿结论行 | 296 B／`81f53b822034dfdb30089986b17fd09f` |
+| `af128_lifecycle3.txt` | 三文件合跑（本批引用的那一遍） | 112 B／`b4f0aff814482030c0d505f9701ac9cd` |
+| `af128_lifecycle5.txt` | 四文件合跑（本批引用的那一遍） | 194 B／`75f542109e552e237a1a42a76871245c` |
+| `af128_unit_all.txt` | `tests/unit` 全段回归（`2 failed, 3458 passed, 44 skipped`，两条红见 §六之二） | 6656 B／`dcdc5d580c18079467c64c327c940fbe` |
+| `af124_gates_a.txt`／`af124_gates_b.txt` | 整链接两遍（`GATES_RC=1`，`cmp -s` 逐字节相同） | 各 12279 B／`d0e4feb31c749aaf31221a99e1a4e854` |
+| `af128_gates_c.txt`（＋`af128_gates_c_rc.txt` 记 RC） | 代码面提交、三份 docs 记账改完后的第三遍：**与遍 a／b 逐字节相同** | 12279 B／`d0e4feb31c749aaf31221a99e1a4e854` |
+
+### 九、未落与归属（⛔ 不写「ARCH-10 已收口」）
+
+1. **ARCH-10 的并发腿仍空**：真并发腿要落在 `af_auth.py`／`subjects()` 那类在途文件，归 **#79 窗**；本批不硬凑一条永远绿的假并发腿（判例：与「测不出收益的闸」等价的是「永远不红的测试」）。⇒ `docs/audit/AutoForge审计报告.html` **仍留原地**（#99）。
+2. 生命周期**门**（`check_process_model.py`）判的是形状与在册，运行期证据由本批这 5 格承担；两者互不替代。
+3. D 格（POSIX 真 `fork()`＋继承锁 fd）本机必然 skip ⇒ 它的真值只在远端 Linux 作业里存在，**推送后按 `python scripts/gh_ci_status.py` 取数补记**，⛔ 不在这里替远端宣称读数。
+4. 本批没动 `tally`／`baseline`，没动 `gates.sh`，没执行任何 docker 命令，NAS 在役容器零重建。
+
+### 十、提交与推送的自证
+
+- 代码面一枚 `90ee358`：`git show --stat HEAD` 现读 ⇒ **4 份／321 增／21 删**（`src/autoforge/af_service.py` 49 行变更、`tests/unit/test_watch_lifecycle_runtime.py` 272 行新增、`tests/unit/test_watch_lifecycle_r6_audit.py` 9 行、`docs/进程模型清单.md` 12 行）。批前 HEAD `4faca60`。
+- 记账面一枚（本行由它携带，故它自身的 sha 不在下面）：两份 docs＋对账文档。
+- 并发在途文件在暂存前后都**未被本批带走**：`git status --porcelain` 现读仍列 `src/autoforge/af_api.py`／`src/autoforge/af_auth.py`／`docker/docker-compose.api.yml`／`ui-user-mimo/src/stores/main.ts`／`ui-user-mimo/src/styles/main.css`／`ui-user-mimo/src/views/AuthCodesView.vue`／`docs/ADM联动执行计划-AF.md`／`docs/audit/参考/FFL-200题测试提示词.md` 为未暂存态；仓根那三枚未跟踪产物（`docker-compose.api.yml.tmp`／`issued_tokens_clean.json`／`docker/docker-compose.api-test.yml`）与三份 HTML 报告一字未动。
+- 推送只在 owner 明确点头后单独执行（只 `git push origin master:main`），推后 `git ls-remote origin refs/heads/main` 自证等于本地 HEAD；本轮目标文本点名要 GitHub 交付，故按批次惯例推送后把远端终值补进 §九 第 3 项与 §十九 行末。
