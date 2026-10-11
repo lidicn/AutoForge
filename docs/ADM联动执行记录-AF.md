@@ -10823,3 +10823,26 @@ GATES_RC=1     12279 B     md5 61b3e66c1d4b1c1eac7351dfef1025c6      ← 遍 b�
 - `gates.sh` 遍 d（两枚提交都落完之后跑）：`GATES_RC=1`、12279 B／md5 `6765cf78b7417adb93025b385a4547cb`，与遍 c **`diff` 空**⇒ 记账面（两份 docs 共 129 行新增）不在任何门的射程内，这条是实测不是推导。红源仍两族：AST 门 `af_api.py:984`／`:1005`（在途面）＋ owner 三枚按设计红。
 - ⛔ 本批未执行任何 docker 命令，NAS 在役容器零重建；`.gates-tally.txt`／`.gates-baseline.txt` 一个数字未动。
 - **远端那一格**：推送后 GitHub Actions 对 `c905601` 的结论此刻仍是 `in_progress`／尚未取到终值（取数用 `python scripts/gh_ci_status.py`）。§一 那四条 pytest 假期望红与 §七 那三处 `gates.sh` 红应当同时消掉，留下 owner 三枚按设计红＋AST 两枚在途红；**终值待补在本节末行之后**，⛔ 不在这里预告读数。
+
+### 十之二、远端终值（补上节那格空格，取数时刻 2026-10-11T07:59Z 现读）
+
+`python scripts/gh_ci_status.py` ⇒ run 160（`c905601`）与 run 161（`3336ae2`，当前 HEAD）**都已 `completed/failure`**，六枚作业里四枚 `success`（`ui-typecheck-build`／`ui-user-mimo-judgments`／`adm-linkage-contracts`／`layering-gates`），红的只有 `pytest` 与 `quality-gates` 两枚，且两枚红的**内容**与改前的族不再是同一批：
+
+| 那一格 | 改前 run 159（`4b1ecc7`） | 改后 run 160／161 | 命令原文 |
+|---|---|---|---|
+| pytest 汇总 | `5 failed, 4198 passed, 51 skipped` | **`1 failed, 4209 passed, 51 skipped`**（两 run 同值） | `python scripts/gh_ci_status.py log 114406501590 "failed,"` ／ `log 114419625012`、`log 114419864927` |
+| 剩下的那条 FAILED | —（四条假期望混杂在内） | `tests/unit/test_owner_subject_gate.py::test_real_repo_gets_green_when_the_two_faces_are_landed`，理由是 `B：DELETE /api/user/agents/{agent_id}`（`:1175`）未绑主体 ⇒ **owner 三枚按设计红**，归 #79 窗 | `log 114419625012 "FAILED"`（匹配 1 行） |
+| `assert 89 == 91` 那一族 | 在档 | **匹配 0 行** | `log 114419625012 "assert 89"` |
+| 三门结论行 | 判红（自动段各漂 2／4／4 行） | **`✓ 进程模型门禁干净`／`✓ 可观测性门禁干净`／`✓ 信任边界门禁干净`，三行结尾都带 `入库面（git 索引；CI 上索引即 HEAD，两边同源）`** | `log 114419624822 "入库面"`（匹配 5 行，含卫生门） |
+| 卫生门（ARCH-08） | 在档 | `✓ 仓库根没有一次性脚本…`，读数 `入库面 788 个文件／根目录 .py 0 个／scripts/oneshot/ 5 个／存量登记 0 条（上限 0）／迁移记录 4 行` | 同上 |
+| `quality-gates` 的红源 | 上述三门＋owner | 两族：① owner 三枚（`:1170`／`:1175`／`:1180`）② AST 门 `新增/未获批 2 条（error 0 / warn 2）` ⇒ `fake-ok-const src/autoforge/af_api.py:980` 与 `:1001`（`#113` 名下） | `log 114419624822 "红："`（3 行）／`"新增/未获批"`、`"WARN"` |
+
+三格要点：
+
+1. **本批的目标达成且是被远端达成的**：本地入库面读数 == CI 读数 == HEAD 读数，三份清单的门在 CI 上从红转绿，四条假期望腿一次消干净（`5 failed → 1 failed`），⛔ 没有靠抬 `.gates-tally.txt`／写 `.gates-baseline.txt` 豁免换来任何一格。
+2. **留下的两族都有归属**：owner 三枚按设计红（裁定 20261011《八问》§3 Q1 丙，归 #79 登录线窗）；AST 两枚 `fake-ok-const` 归 #113。⇒ 远端**不是"整条线绿"**，本批收的是「面」这一格，不宣称 CI 转绿。
+3. **同一枚门在两面读出两个行号，正是本批的活教材**：本地工作树（登录线在途）读 AST 门得 `af_api.py:984`／`:1005`，CI 的 HEAD 面读得 `:980`／`:1001`——同一份缺陷、差 4 行，因为在途 hunk 插了 4 行。这正是 §一 那族「本地绿 CI 红／本地红 CI 绿」的成因形状；门的取数面换成入库面后，**清单侧**这类漂移没了，而 AST 门跑在 `homesdk.gates`（库侧，不在本批射程）仍在读工作树，所以它还留着两枚行号会随登录线提交漂。这一格归 #113，不在本批修。
+
+- 落盘存证（`E:\tmp`，不进仓；md5 由 `md5sum` 现量）：`af118_ci_160_qualitygates.txt`（2884 B／`5573a3babc3ede2f1a6b8dd9d8414c76`）／`af118_ci_160_pytest.txt`（680 B／`3912391e1ef47c0c5a9dca63b9f62ff1`）／`af118_ci_161_pytest.txt`（680 B／`335b30fd1103c18d6378300c70c30a45`）。两份 pytest 存证**体积同而 md5 不同**：去掉日志时间戳前缀后 `diff` 只剩一处——耗时 `190.88s` vs `166.23s`，判定行（`1 failed, 4209 passed, 51 skipped` 与那条 `FAILED`）逐字相同。
+- ⚠️ 补记的第三枚 `3336ae2` 自身也跑了一轮 CI（run 161），终值与 run 160 **逐条同**（`1 failed, 4209 passed`／AST 2 条 warn）⇒ 记账面两份 docs 确实不在任何门的射程内，远端独立复现了遍 c／遍 d 的本地结论。
+- 本地遍 e（补完本小节**前 22 行**之后现跑；本行自身写在遍 e 之后，同属记账面、未再复跑）：`GATES_RC=1`、12279 B／md5 `6765cf78b7417adb93025b385a4547cb`，与遍 c／遍 d **`diff` 空**（RC=0）⇒ 这一批 docs 改动同样不在射程，第三次于同一 md5 上复现"记账面不进门"。
