@@ -9994,15 +9994,15 @@ M1 摘掉 sink 传参、M2 撤销脱敏、M3 吞掉写失败、M4 去掉裁剪�
 
 ### 二、三条腿的形状
 
-- `reap_watch_child(store_root, readonly, where="")`（`af_cli.py:1505`）：`readonly` 或已收过 ⇒ 返回 `None`；
+- `reap_watch_child(store_root, readonly, where="")`（`af_cli.py:1510`）：`readonly` 或已收过 ⇒ 返回 `None`；
   盘上没有 `watch.pid` ⇒ 返回 `None` 且一个文件都不碰（手工 `forge watch` 起的 watcher 本来就没有 PID 文件，
   `stop_watch` 自己也拒绝对它动刀）；否则调 `af_service.stop_watch(store_root=…)`，成功打一行到 stdout、
   没干净把 `stop_watch` 那句 `reason`／`error` 原样打到 stderr（serve 的 stderr 就是容器日志）。裁定那三问的答案
   写进它的 docstring：谁来收＝拿到单写者锁的那个 serve 进程；停多久＝复用既有 ≈4.4 秒退避表，不另立第二套预算；
   停不完怎么答＝`exit_unconfirmed` 保留 sidecar／PID、不删锁、不升 SIGKILL，那句话原样报出。
-- 腿一 `finally`（`:1497`）：`bridge.stop()` 之后直调，`where="finally"`。
+- 腿一 `finally`（`:1502`）：`bridge.stop()` 之后直调，`where="finally"`。
 - 腿二 `atexit`（`:1488`）：`atexit.register(reap_watch_child, store_root, readonly)`——裁定 Q7.2 点名的就是这条腿。
-- 腿三 幂等（`:1502`）：`_SERVE_REAP_DONE = threading.Event()`，两条腿都可能走到，真收只做一次（走两遍＝退出白等
+- 腿三 幂等（`:1507`）：`_SERVE_REAP_DONE = threading.Event()`，两条腿都可能走到，真收只做一次（走两遍＝退出白等
   一倍预算）。用 Event 不用集合，免得给有界缓存门添新键。
 
 ### 三、现读对撞：我上一段刚写进注释里的那句是错的，本批订正并登记缺口
@@ -10109,4 +10109,146 @@ M1 摘掉 sink 传参、M2 撤销脱敏、M3 吞掉写失败、M4 去掉裁剪�
   `origin/master:main` ⇒ `b11fba0..f181533`，`git push` RC=0；`git ls-remote origin refs/heads/main` 自证
   `f181533cadc690e9e4ecdccd5da4a95d7586c0de`）。本小节那三格远端读数由紧随其后的记账提交补进本文件，
   所以本文件里出现的 `f181533` 是**上一枚提交**的哈希，不是本提交自己的——这一格按 §二之一百一十六 同一写法承认。
+
+## §二之一百一十八 · 裁定 20261011 §3 Q8.1 落地：ERROR／EXCEPTION／CRITICAL 三档进 owner 收件箱，射程只有 `autoforge` 这一族（2026-10-11）
+
+### 一、裁定要的那一半，和落成的形状
+
+裁定 §3 Q8.1 要的是「三档留痕要有一条能到 owner 眼前的线」，不是「把日志全搬进收件箱」。落成四件：
+
+- 新模块 `src/autoforge/af_alert.py`（357 行）：`OwnerAlertHandler`（`:195`）＋ `install_owner_alert`（`:326`）
+  ＋ `active_owner_alert`（`:352`，给判据与测试读"到底挂没挂上"）；
+- 接线 `af_cli.py:1491/:1493`（`from .af_alert import install_owner_alert` 与那一句调用），排在
+  `uvicorn.run`（`:1495`）**之前**；
+- 抑制表进有界缓存注册表第 4 项（`af_bounded_caches.py`）；
+- 可观测性清单 §三 补六行登记 ＋ 新的 §八 记录射程那格。
+
+投递走既有脸：`bridge.publish_inbox("notify", fields={"title","body"})`，不新造 MQTT 主题、不碰契约表。
+
+### 二、四条承重形状（每一条都被至少一条判据钉住）
+
+1. **级别门**＝`record.levelno >= logging.ERROR`（`_should_alert`，`:277`）。裁定写"三档"，`logger.exception()`
+   的真身是 ERROR(40)＋`exc_info`，CRITICAL(50) 在它上面 ⇒ 一个 `>=` 覆盖三档；判据钉的是 AST 里那枚
+   `GtE` 对 `logging.ERROR`，并且**反向**断言不存在 `==` 比较——写成 `== logging.ERROR` 就漏掉 EXCEPTION 档。
+   副本树腿 P1（`>=` 改 `==`）红在 `test_should_alert_gate_is_levelno_ge_error`。
+2. **名字射程**＝只有 `autoforge` 这一族。判据腿刻意把 handler 挂在 **root** 再 emit `httpx`／`uvicorn.error`／
+   `autoforge.pump`：先前我把它挂在子 logger 上，那种写法即使把名字门整段删掉也照样绿＝空判据（本批自纠，
+   由副本树腿 P2 反证：删名字门 ⇒ `test_other_logger_family_is_excluded` 红）。
+3. **永不抛**＝`emit` 外面一层 `except Exception`（`:223`），且 `handleError` 被压成静默计数（标准库默认会把
+   traceback 打到 stderr，那等于让告警线自己制造停机噪声）。判据腿是 AST：`emit` 体内必须有一枚
+   `Try`，其 handler 捕 `Exception` 或 `BaseException`。副本树腿 P4 只捕 `ValueError` ⇒ 红。
+4. **重入闩**＝`threading.local()`（`:73`）。投递路径里任何一枚 ERROR 都会顺着 logger 回到同一个 handler，
+   `emit → publish → 日志 → emit` 是同一次调用里的自我复制；判据是一条回调里再打 ERROR 的测试，断言只投一次。
+   另外 dedupe **先记账再投递**：投递每次都抛的故障若"成功才记"，就会每次都真投一次。
+
+去重键＝`级别＋logger 名＋首段短句`，`ALERT_TTL_S = 900.0`／`ALERT_MAX = 256`（`:60/:61`）。
+
+### 三、这一批唯一的设计错误是**门**替我抓出来的：具名码藏进 `%s` 就等于没有码
+
+第一版把五枚失败码的留痕收进一枚 helper `_report(code, detail)`，写成 `logger.warning("%s %s", code, detail)`。
+`check_observability.py` 取具名码只认 `logger.<级别>(...)` 的**首个位置常量参数**——码进了参数就对它不可见，
+后果不是"少一行登记"而是同时踩两格：默认拒绝登记被绕过，且无码 WARNING 站点数涨到 84、破 §四 的 83 上限。
+现读红之后改成把码写进首参字面量（`:223/:236/:255/:263/:269/:342`），门才认。副本树腿 **G1** 就是把这个
+形状钉住：还原成 `%s` 传码 ⇒ `RC=1` 且读到"无码站点现读 84"。
+
+这条要沉淀的教训：本仓那族"把门要读的东西搬进参数/常量里"的坑（散文哨兵、名单手抄、字典配置）第一次以
+**码**的形态复现。**helper 化留痕在这套门禁下不是免费的**。
+
+### 四、`uvicorn.*` 的两种挂法都被现读否掉 ⇒ 补问 Q8.6，不自决
+
+三枚探针（现读 uvicorn 0.53.0）：
+
+- `LOGGING_CONFIG["loggers"]` 键＝`['uvicorn', 'uvicorn.access', 'uvicorn.error']`，且
+  `loggers.uvicorn.propagate is False` ⇒ 挂到 `autoforge` 上的 handler 收不到 uvicorn 自己的 ERROR；
+- 把它挂到 **root** 也盖不住：同一条 root handler 实测收到 `httpx` 的 ERROR、**收不到** `uvicorn.error`
+  的 ERROR（后者自己 `propagate=False`）；
+- `dictConfig(LOGGING_CONFIG)` 会把先前挂上去的 handler 清掉（`1 → 0`）⇒ "装在 `run()` 之前"这个顺序
+  本身就是一扇门，已由 AST 腿 `test_serve_installs_the_alert_line_before_uvicorn_run`（`max(installs) < min(runs)`）钉住。
+
+所以今天不覆盖的面是 **uvicorn 自身的 ERROR／CRITICAL**（ASGI 未捕获异常、`Application startup failed` 那一族）。
+要不要扩、往哪扩会改变"告警线该看见谁的失败"这个语义 ⇒ ⛔ 不自决，三选项甲（`af_api` lifespan 里挂，
+碰并发在途文件）／乙（`serve` 显式传 `log_config`，等于接手 uvicorn 的日志配置）／丙（不扩，只 `autoforge` 族）
+连三枚读数一起递成补问 **Q8.6**，正文与读数落 `docs/可观测性清单.md` §八。
+
+另一格诚实账：告警线**自己的**留痕只能写 WARNING／INFO。若失败留痕写 ERROR，它会触发自己 ⇒ 一个
+`OWNER_ALERT_NO_CHANNEL` 变成两条 `OWNER_ALERT_NO_CHANNEL`。副本树腿 P6（重入闩永不触发）证明即使将来
+有人把它写成 ERROR，闩也会拦住循环。
+
+### 五、抑制表进注册表，而不是再挂一枚就地豁免
+
+`OwnerAlertHandler.deduped` 的键空间由消息形态决定而**不封闭**（一条新消息形态就是一个新键），常驻服务里
+必须自己回收 ⇒ 注册为 `BOUNDED_CACHES` 第 4 项（`cap=ALERT_MAX`／`ttl=ALERT_TTL_S`／`trim=_trim_alert_dedupe`，
+测试 id 腿 `test_dedupe_is_capped_and_expires_without_reads` 只纯写不读，证明回收不依赖读数）。
+同时**删掉**我第一版在源码里挂的那枚 `# bounded-cache: exempt(...)` 就地标记（17 → 16）：同一个容器两份口径
+＝「注册表被删掉时门却照样绿」的暗门，注册表是唯一真源。
+
+### 六、自证：16 条单测 ＋ 副本树 14 腿变异
+
+`pytest tests/unit/test_owner_alert.py -q` ⇒ **16 passed**。其中一条是**真源对撞**而不是自抄常数：
+`test_payload_passes_library_validation` 用 `homesdk.presence.INBOX_MAX_TITLE/BODY`（80／500）限长，
+`sorted(fields)` 钉成 `["body","title"]`，再把截好的载荷喂 `af_mqtt_bridge.inbox_publish(..., dry_run=True)`
+过一遍库侧校验（拒收会带 `code`）。副本树腿 **P5** 把 `_clip` 的省略号预算少留 1 字 ⇒ 红在这条：
+"截断后的字符串"恰好比上限多一枚省略号，真投递会被拒成 `ADM_ERR_PAYLOAD_INVALID`。
+
+副本树（`E:/NAS/tmp/q81mut`，`src/autoforge/**` ＋ 两份门脚本 ＋ §三 那行 ＋ 本测试文件）驱动
+`E:/NAS/tmp/q81_mutation_driver.py`：**I0** import 落点探针（本机有一条 `__editable__.autoforge` 指向工作树，
+不验这条的副本树自证是空的）＋ **P0–P7** 八条判据腿 ＋ **G0–G4** 五条门腿（含 **G4 负控**：只把 §四 上限
+抬高不该红）⇒ **14 腿，失败 0 腿**。每腿先断言注入真命中原文、再断言红带的是预期那枚字母前缀；
+P4 首跑给出的是 `SyntaxError`（注入串截在注释中间），按 §二之九十九 MX2 的口径那一条读数不算数，
+整行替换后才是预期的窄捕获红。
+
+### 七、门读数（全部为本批改完之后现读）
+
+- 可观测性门 `RC=0`：留痕 **155 站点**逐行对撞一致；具名码 **28 枚／30 站点**全部在册（本批 ＋5 枚／＋6 站点，
+  `OWNER_ALERT_PUBLISH_FAILED` 一码两站，走既有白名单口径）；信封 `trace_id` 6 枚；HTTP request-id **0**（Q8.2
+  未动，属 #79 窗）；无码存量 **125 未动** ⇒ §四 棘轮一格没碰。
+- 有界缓存门 `RC=0`：注册表 **3 → 4 项**双腿齐全且测试 id 被收集；增长容器 130、基线 113；
+  就地豁免标记 **17 → 16**；死写容器 0。
+- 进程模型门 `RC=0`：生命周期站点 5 未动；同步原语 **34 → 35**（新站是 `af_alert.py:205` 的 `threading.Lock`）；
+  模块级共享名 9 未动（重入闩是 `threading.local`，没有 `global` 改写，所以不进那一档）。
+- 三张清单的自动段全部由 `--write` 重生成，非手敲；写完按字节量 CR＝0。
+
+### 八、未落项归属
+
+- **Q8.6**（uvicorn 射程）已递补问，⛔ 未裁不动 `log_config`／lifespan 面；
+- **Q8.2**（HTTP request id 与日志关联）卡在 `af_api.py` 归并发登录线，属 **#79** 窗；
+- 收件箱真投递的端到端验收要一台真 broker ⇒ 归 **#79**／部署窗，本批只有 `dry_run` 那一腿的库侧校验；
+- 本批**没碰** `af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`／`docs/audit/参考/FFL-200题测试提示词.md`，
+  `docs/ADM联动执行计划-AF.md` 保持未暂存，仓根四份未跟踪产物未动；
+- 任务位：**#123** 本批；**#122** 仍是上一批那格 SIGTERM。
+
+### 九、`gates.sh` 四遍逐字节对撞（全部文档改完之后跑）
+
+- `GATES_PYTHON=/c/Users/lidicn/AppData/Local/Programs/Python/Python313/python.exe bash gates.sh` **四遍**
+  （存证 `E:/NAS/tmp/gates_q81_run{1,2,3,4}.txt`）：run1／2／3 整份**逐字节相同** ⇒ 各 10434 B／md5
+  `34cd4987ff7a9249646fd43a4f38f0f1`，`diff run1 run2` 与 `diff run1 run3` 全空（两个 `diff_rc=0`）。
+  run4 是**本节与 §十 那两处订正落盘之后**补跑的：整份 10445 B，`diff run1 run4` 只有一处移动＝第 92 行那一枚
+  驱动自己写的 `GATES_RC=1` 标签（11 字节，正是 10445 与 10434 的差额）；剥掉那一行后
+  `cmp <(head -91 run4) run1` ⇒ **`CMP_RC=0`、本体仍是 10434 B／md5 `34cd4987…`** ⇒ 四遍读的是同一张门禁，
+  本节的记账文字没有动摇任何门。`GATES_RC=1`。
+- 四遍同一张红：`扫描完成：AutoForge  新增/未获批 2 条（error 0 / warn 2），基线内存量 95 条，过期基线条目 0 条`、
+  `计数：except-pass-broad=19 | fake-ok-const=78`、`全量违规 97 条 / 登记上限 97 条`。唯一红源仍是
+  `af_api.py:984`／`:1005` 两枚 `fake-ok-const`（登录线在途文件，非本批射程），棘轮与基线一字未动。
+- **时点要说实**：run1／2／3 跑在本文本节与 §十 那两格记账**落盘之前**（当时我按"两遍"记的读数没错，但那句
+  「第二遍起飞前本批所有记账均已落盘」是**假陈述**，写它的时候 §九／§十 还没写完）。所以 run3、run4 是**补跑的**，
+  run4 才真跑在全部七份仓内文件定稿之后；上面那条 cmp 就是这一格的对账。
+- 三张清单的绿行逐字（各取一遍）：`✓ 可观测性门禁干净（现读留痕 155 站点逐行对撞一致；具名码 28 枚／30 站点
+  全部在册且认领可读；关联 id 面 信封 6 枚／HTTP 0 枚 与 §五 账面对撞一致；访问日志掩码锚点在位）`；
+  `[有界缓存] 注册表 4 项双腿齐全且测试 id 被收集；…扫到增长容器 130 个，其中基线冻结 113 个、就地豁免标记 16 处；
+  死写容器 0 个`；`✓ 进程模型门禁干净（现读生命周期 5 枚全部在册且认领可读；同步原语 35 枚、模块级共享名 9 枚
+  逐行对撞一致…）`。
+- 行尾：本批七份文件里 `af_cli.py` 的 CR 是**该文件自身的 CRLF 形状**（HEAD blob 现读 1560 枚 CR、工作树 1565，
+  差额＝本批新增那 5 行按同形状写入），其余六份 CR＝0；两份新建文件（`af_alert.py`／`test_owner_alert.py`）按
+  仓内新文件既有口径走 LF（同 `tests/unit/test_serve_exit_reap.py`、`scripts/check_ci_interpreter.py` 的 CR＝0）。
+
+### 十、提交与远端读数（本提交之后补记）
+
+- 暂存面只 `git add --` 本批八份文件（`src/autoforge/af_alert.py`（新）／`src/autoforge/af_cli.py`／
+  `src/autoforge/af_bounded_caches.py`／`tests/unit/test_owner_alert.py`（新）／`docs/可观测性清单.md`／
+  `docs/进程模型清单.md`／本文件／`docs/architecture/AF完整架构与运行时说明.md`）；并发登录线的
+  `af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`／`docs/ADM联动执行计划-AF.md`／
+  `docs/audit/参考/FFL-200题测试提示词.md` 全部保持左列空白。⛔ 全程没有用 `git add -A`。
+- 仓外落盘两件（不进本仓提交）：补问 **Q8.6** 追加进 `关键决策部/inbox/20261011-AF-第六轮与第二期审计攒批待裁十问-集中裁决申请.md`
+  §五之五；执行回填（**第六批**，现读原裁定书 `## 执行回填` 区已有五枚标题）追加进原裁定书 `## 执行回填` 区。
+- commit／push／`ls-remote` 三格读数由紧随其后的记账提交补进本节，写法与 §二之一百一十七 第八格一致。
 

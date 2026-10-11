@@ -1486,6 +1486,11 @@ def serve(
     # `finally`／`atexit` 两条腿都不跑。补一枚只翻旗子的处理器能把它接回 `finally`，代价是退出状态
     # 143→0、compose `restart:` 读到的语义跟着变 ⇒ ⛔ 不自决，那格记在 `docs/进程模型清单.md` §六 问 4。
     atexit.register(reap_watch_child, store_root, readonly)
+    # 裁定 20261011 §3 Q8.1 的最小告警线：三档（ERROR／EXCEPTION／CRITICAL）进 owner 收件箱。
+    # 射程、"没桥就不装"与去重口径都在 `af_alert`；这里只负责在 `uvicorn.run` 之前把它挂上。
+    from .af_alert import install_owner_alert
+
+    install_owner_alert(bridge)
     try:
         uvicorn.run(app_, host=host, port=port, log_level="info")
     finally:

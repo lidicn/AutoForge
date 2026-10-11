@@ -85,6 +85,16 @@ BOUNDED_CACHES: list[dict[str, str]] = [
         "trim": "_prune_blocked",
         "test": "tests/unit/test_dcd_20261006_pairing_bootstrap.py::test_blocked_map_is_pruned_without_any_read",
     },
+    {
+        # 裁定 20261011 §3 Q8.1 的最小告警线：同型告警的抑制表。键空间由「级别＋logger 名＋首段短句」
+        # 决定而**不封闭**（一条新消息形态就是一个新键），常驻服务里必须由投递路径自己回收。
+        "module": "af_alert",
+        "attr": "OwnerAlertHandler.deduped",
+        "cap": "ALERT_MAX",
+        "ttl": "ALERT_TTL_S",
+        "trim": "_trim_alert_dedupe",
+        "test": "tests/unit/test_owner_alert.py::test_dedupe_is_capped_and_expires_without_reads",
+    },
 ]
 
 FIXED_KEY_CACHES: list[dict[str, str]] = [
