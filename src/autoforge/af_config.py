@@ -2,7 +2,7 @@
 
 设计来源：调研 §2.9（connection_revision 代数）。
 
-- 凭据存 `{root}/credentials.json`（gitignore + `0600`），**绝不**进版本库、绝不回明文；
+- 凭据存 `{root}/credentials.json`（gitignore + 落盘限权：POSIX 走 0600，Windows 断 NTFS 继承），**绝不**进版本库、绝不回明文；
 - `connection_revision` 全局代数：改凭据 → `bump_revision` → 各连接层 client 比对代数
   变化即丢弃缓存重建，免重启进程（对齐「多个 Gateway 共享单例」的自愈语义）；
 - `describe()` 只回**掩码 + 长度**（连末 4 位都不露），防 WebUI 截图 / 投屏泄露。
@@ -24,6 +24,7 @@ from typing import Any, Mapping
 _logger = logging.getLogger(__name__)
 
 from .af_env import env_number
+from .af_atomic import restrict_file_acl
 from .af_secrets import load_secret
 
 __all__ = ["Config", "get_config"]
@@ -124,7 +125,13 @@ class Config:
             try:
                 os.chmod(tmp_path, 0o600)
             except OSError:
-                pass  # Windows 无 0600 语义
+                pass  # Windows 无 0600 语义（F-10 实测：chmod 前后 NTFS ACL 一字不变）
+            #: 限权在 Windows 上只能由 ACL 完成，所以紧跟着 chmod 那一手补一刀（同在 tmp 上、
+            #: rename 之前 ⇒ 明文凭据从没以"目录继承给全员可读"的形状存在过）。尽力而为：这一手
+            #: 不改变写入结果，只把没收成的那一档留在日志里。
+            acl_state, acl_note = restrict_file_acl(tmp_path)
+            if acl_state not in ("not_windows", "restricted"):
+                _logger.warning("凭据文件限权未生效（%s）：%s", acl_state, acl_note)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(json.dumps(data, ensure_ascii=False, indent=2))
                 f.flush()

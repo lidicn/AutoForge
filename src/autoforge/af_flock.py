@@ -185,8 +185,8 @@ class FileLock:
     def _stamp(self) -> None:
         """写持有者信息到 sidecar（best effort；失败不影响锁语义）。"""
         try:
-            # mkstemp 建的临时文件天生是 0o600，`os.replace` 之后 sidecar 继承这个位
-            # （ADM B-14 的"锁信息文件限权"因此不靠显式 chmod）。
+            # POSIX：mkstemp 建的临时文件天生是 0o600，`os.replace` 之后 sidecar 继承这个位
+            # （ADM B-14 的"锁信息文件限权"因此不靠显式 chmod）。Windows 上这句不成立（F-10 实测）。
             atomic_write_text(
                 self._info_path,
                 json.dumps(

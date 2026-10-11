@@ -263,6 +263,33 @@ forge sim examples/ir/case01_day_light.json
 
 ---
 
+## 4.2 明文凭据文件的可见范围：Windows 上 chmod 不算限权
+
+安全第三轮审计 F-10 说"`0o600` 在 Windows 上是空的"。本机 2026-10-11 用 `icacls` 现读复核，这句话
+是实测而不是推测，读数如下（⛔ 不是从文档抄的口径）：
+
+- **开发机 store 目录的继承 ACE**（`icacls .forge`）里挂着 `BUILTIN\Users:(I)(RX)` 与
+  `NT AUTHORITY\Authenticated Users:(I)(M)`；
+- **凭据文件本身**（`icacls .forge\credentials.json`）读回同一条继承授权 ⇒ 本机**任何**已认证用户
+  对明文 HA 令牌**可读可改**；
+- **chmod 那一手改变不了它**：`tempfile.mkstemp` 出来的文件 `st_mode` 读回 `0o666`，
+  `os.chmod(..., 0o600)` 之后 `st_mode` **仍是** `0o666`，前后两次 `icacls` 输出**逐字节相同**。
+
+⇒ 结论：Windows 上限权只能由 **NTFS ACL** 完成，`os.chmod` 只动只读位。落盘路径上
+（`af_config._atomic_write`）在 rename **之前**紧跟着 chmod 那一手补一刀
+`af_atomic.restrict_file_acl()`：断继承、只给回当前用户＋`SYSTEM`／`Administrators` 两档保留主体。
+尽力而为、绝不因此拒写一次凭据热重载，没收成的那一档进 WARNING 留痕。
+
+- **Linux／NAS 部署侧不受这一条约束**：那边 `mkstemp` 天生 `0600`，`chmod` 就是真限权，助手在
+  POSIX 上一律 no-op 且不碰盘。
+- 判据与逐档返回码（`not_windows`／`no_identity`／`restricted`／`still_inherited`／`refused`／
+  `failed`）在 `tests/unit/test_credential_file_acl_f10.py`；那一节不许改写成通用安全提醒，
+  它一旦被删掉或写成"建议限制文件权限"，E 族判据即红。
+- 本批只收紧**新写入**的那一份；开发机上已落盘的旧 `credentials.json` 仍挂着上面那条继承 ACE，
+  下一次凭据更新才会被收紧（残余登记在执行记录）。
+
+---
+
 ## 5. 文档索引
 
 | 文档 | 内容 |

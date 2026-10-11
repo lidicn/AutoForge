@@ -181,7 +181,7 @@ class PersistStore:
         # `path.name + ".tmp"` 固定名 + 裸 `write_text`：租约到期后两个进程都会驱动同一条
         # 实例（`claims()` 明确允许），两边写同一个 tmp、交错内容被最后一次 replace 装上，
         # 而读侧对校验和失败的记录是**跳过** ⇒ 这条活着的实例记录静默消失，不报错也不告警。
-        # mkstemp 建的临时文件本身就是 0600，也就没有"先 0644 落盘再补 chmod"那个可读窗口。
+        # POSIX：mkstemp 建的临时文件本身就是 0600，没有"先 0644 落盘再补 chmod"那个可读窗口（Windows 上 chmod 不改 NTFS ACL——F-10）
         atomic_write_text(path, json.dumps(record, ensure_ascii=False, indent=2))
         return path
 

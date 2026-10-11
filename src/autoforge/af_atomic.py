@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -80,3 +81,64 @@ def atomic_write_text(path: Path | str, text: str) -> None:
                 os.unlink(tmp_path)
         except OSError:
             pass
+
+
+#: 收紧时**显式保留**的授权主体（除当前用户之外）。留 SYSTEM／Administrators 是给服务与运维留路，
+#: 断掉的只是"从目录继承来的那一片可读可改"。
+ACL_KEEP_PRINCIPALS = (r"NT AUTHORITY\SYSTEM", r"BUILTIN\Administrators")
+
+#: `restrict_file_acl` 的全部返回档。调用方只认这几枚，读到名单外的值一律按"没收紧"处理。
+ACL_STATES = ("not_windows", "no_identity", "restricted", "still_inherited", "refused", "failed")
+
+
+def _current_principal() -> str:
+    domain = (os.environ.get("USERDOMAIN") or "").strip()
+    user = (os.environ.get("USERNAME") or "").strip()
+    if not user:
+        return ""
+    return f"{domain}\\{user}" if domain and domain != user else user
+
+
+def restrict_file_acl(path: Path | str, *, runner=subprocess.run, platform_name: str | None = None) -> tuple[str, str]:
+    r"""把一枚刚落盘的明文凭据文件收紧到"当前用户＋SYSTEM＋Administrators"，其余继承断开。
+
+    为什么 `os.chmod(0o600)` 不够（安全第三轮审计 F-10，本机 2026-10-11 现读）：Windows 上 chmod
+    只动只读位，**NTFS ACL 一字不变**——实测 `mkstemp` 出来的文件 `st_mode` 读回 `0o666`，`chmod`
+    前后 `icacls` 输出逐字节相同。而 store 目录 `.forge/` 的继承 ACE 现读是
+    `BUILTIN\Users:(I)(RX)` 加 `NT AUTHORITY\Authenticated Users:(I)(M)` ⇒ 落在里面的
+    `credentials.json` 对本机任何已认证用户**可读可改**。限权只能由 ACL 完成，不是由 chmod 完成。
+
+    口径三条（AF 不替部署方决定谁能读，也不许这一手把服务写挂）：
+    - 只断**继承**，显式授权一律给回当前用户＋`ACL_KEEP_PRINCIPALS` 两档；
+    - **尽力而为，绝不影响写入结果**：`icacls` 缺席、身份读不出、rc≠0、回读仍带继承——全部收成
+      `ACL_STATES` 里的一档交调用方留痕，⛔ 不抛穿、不拒写（拒写会让一次凭据热重载整档失败）；
+    - **POSIX 一律 no-op**：那边 `mkstemp` 天生 0600，`chmod` 就是真限权，无需第二个机制。
+
+    `runner`／`platform_name` 两处接缝是为了"Windows 那五档在 Linux CI 上也能逐档判红"——
+    桩子不许改口径，只补一个本地拿不到的入口。
+    """
+    target = Path(path)
+    if (platform_name or os.name) != "nt":
+        return "not_windows", "POSIX 上 0o600 就是真限权，本助手不碰盘"
+    who = _current_principal()
+    if not who:
+        return "no_identity", "USERDOMAIN／USERNAME 都读不出：不猜该给谁留授权"
+    argv = ["icacls", str(target), "/inheritance:r", "/grant:r", f"{who}:F"]
+    for principal in ACL_KEEP_PRINCIPALS:
+        argv = argv + ["/grant:r", f"{principal}:F"]
+    try:
+        done = runner(argv, capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "failed", f"icacls 没起来（{type(exc).__name__}）"
+    if getattr(done, "returncode", 1) != 0:
+        return "refused", f"icacls rc={getattr(done, 'returncode', None)}：{(done.stderr or '').strip()[:200]}"
+    try:
+        back = runner(["icacls", str(target)], capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "failed", f"收紧发出去了，回读没起来（{type(exc).__name__}）"
+    out = (getattr(back, "stdout", "") or "").strip()
+    if getattr(back, "returncode", 1) != 0:
+        return "failed", f"回读 rc={getattr(back, 'returncode', None)}"
+    if "(I)" in out:
+        return "still_inherited", f"回读仍见继承 ACE：{out[:200]}"
+    return "restricted", f"{who} 与两档保留主体之外没有别的授权"
