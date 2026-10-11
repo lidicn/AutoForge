@@ -27,6 +27,8 @@ const router = createRouter({
     { path: '/insights', name: 'insights', component: () => import('@/views/InsightsView.vue') },
     // ── v2 M3 结构化 Ask 原生控件 + clarify 流程 ──
     { path: '/asks', name: 'asks', component: () => import('@/views/AsksView.vue') },
+    // ── v1.10.0 系统自更新（宿主侧 sidecar 模式）──
+    { path: '/system-update', name: 'system-update', component: () => import('@/views/SystemUpdateView.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('@/views/NotFoundView.vue') },
   ],
 })

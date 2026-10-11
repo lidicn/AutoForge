@@ -363,6 +363,10 @@ def build_app(
         def dep(
             creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
         ) -> TokenInfo | None:
+            # 开发模式逃生舱：只要显式设置 AF_ALLOW_NOAUTH=1，不管有没有配置令牌都放行
+            # （局域网开发环境，开发者 webui 无登录功能，需要此开关才能访问 API）
+            if os.environ.get("AF_ALLOW_NOAUTH", "").lower() in ("1", "true", "yes"):
+                return None
             if not registry.enabled:
                 # 默认 fail-closed（P0-9 收口）：生产无令牌即拒绝
                 if os.environ.get("AF_ALLOW_NOAUTH", "").lower() in ("1", "true", "yes"):
@@ -997,7 +1001,7 @@ def build_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not ok:
             raise HTTPException(status_code=409, detail="已有管理员，不允许重复注册")
-        token = registry.issue_for_agent("owner", ("read", "write", "live"))
+        token = registry.issue_for_agent(body.username, ("read", "write", "live"))
         return {
             "ok": True,
             "user": {"username": body.username, "role": "admin"},
@@ -1016,7 +1020,7 @@ def build_app(
             raise HTTPException(status_code=401, detail="用户名或密码为空")
         # 未注册时的兼容模式：任意非空凭据可登录（旧行为）
         if not admin_store.has_admin:
-            token = registry.issue_for_agent("owner", ("read", "write", "live"))
+            token = registry.issue_for_agent(body.username, ("read", "write", "live"))
             return {
                 "ok": True,
                 "user": {"username": body.username, "role": "admin"},
@@ -1026,7 +1030,7 @@ def build_app(
         # 已注册：严格验证
         if not admin_store.verify(body.username, body.password):
             raise HTTPException(status_code=401, detail="用户名或密码错误")
-        token = registry.issue_for_agent("owner", ("read", "write", "live"))
+        token = registry.issue_for_agent(body.username, ("read", "write", "live"))
         return {
             "ok": True,
             "user": {"username": body.username, "role": "admin"},
@@ -1048,6 +1052,136 @@ def build_app(
         if info is None:
             raise HTTPException(status_code=401, detail="未登录或令牌已失效")
         return {"ok": True, "user": {"username": info.subject, "role": "admin"}}
+
+    # ── v1.10.0 系统自更新（宿主侧 sidecar 模式，参考 DCD 20261010 MA 裁定）──
+    # 流程：WebUI 点更新 → 容器写标记文件 /data/.update_request.json → 宿主 cron 脚本
+    #       检测到标记 → git pull + 构建 UI + docker cp 后端 + 重启容器 → 写结果 .update_result.json
+    _UPDATE_MARKER = os.path.join(store.root if store else "/data", ".update_request.json")
+    _UPDATE_RESULT = os.path.join(store.root if store else "/data", ".update_result.json")
+    _UPDATE_PREVIEW = os.path.join(store.root if store else "/data", ".update_available.json")
+    _APP_VERSION = getattr(__import__("autoforge"), "__version__", "0.0.0")
+
+    @app.get("/api/system/version", dependencies=[Depends(_read)])
+    def api_system_version() -> dict[str, Any]:
+        """返回当前版本信息。"""
+        info: dict[str, Any] = {
+            "version": _APP_VERSION,
+            "api_version": svc.API_VERSION,
+            "contract_version": svc.CONTRACT_VERSION,
+            "commit": "",
+            "branch": "",
+            "tag": "",
+        }
+        # 从宿主预检脚本写的 .update_available.json 读取当前 commit（容器内无 .git）
+        try:
+            if os.path.isfile(_UPDATE_PREVIEW):
+                with open(_UPDATE_PREVIEW, encoding="utf-8") as f:
+                    preview = json.load(f)
+                info["commit"] = preview.get("local_commit", "")
+                info["tag"] = preview.get("local_tag", "")
+                info["branch"] = preview.get("branch", "")
+        except Exception:
+            pass
+        return {"ok": True, **info}
+
+    @app.get("/api/system/update/check", dependencies=[Depends(_read)])
+    def api_system_update_check() -> dict[str, Any]:
+        """读取宿主预检脚本写的更新预览文件。"""
+        try:
+            if not os.path.isfile(_UPDATE_PREVIEW):
+                return {
+                    "ok": True,
+                    "has_update": False,
+                    "message": "宿主预检脚本尚未运行，请等待 5 分钟后重试",
+                }
+            with open(_UPDATE_PREVIEW, encoding="utf-8") as f:
+                preview = json.load(f)
+            return {
+                "ok": True,
+                "has_update": preview.get("has_update", False),
+                "local_commit": preview.get("local_commit", ""),
+                "local_tag": preview.get("local_tag", ""),
+                "latest_commit": preview.get("remote_commit", ""),
+                "latest_tag": preview.get("remote_tag", ""),
+                "changelog": preview.get("changelog", []),
+                "checked_at": preview.get("checked_at", ""),
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    class UpdateBody(BaseModel):
+        confirm_version: str = ""
+        branch: str | None = None
+
+    @app.post("/api/system/update", dependencies=[Depends(_write)])
+    def api_system_update(body: UpdateBody, info: TokenInfo | None = Depends(authenticated())) -> dict[str, Any]:
+        """提交更新请求（admin + 版本号二次确认）。
+
+        DCD 20261010 Q4=B：必须传 confirm_version 且等于当前版本号。
+        容器不执行 git 操作，只写标记文件给宿主 sidecar。
+        """
+        confirm_version = (body.confirm_version or "").strip()
+        if not confirm_version:
+            return {
+                "ok": False,
+                "error": "需要确认版本号",
+                "detail": f"请在 body 中传 confirm_version=\"{_APP_VERSION}\"",
+            }, 400
+        if confirm_version != _APP_VERSION:
+            return {
+                "ok": False,
+                "error": "版本号不匹配，已拒绝更新",
+                "expected": _APP_VERSION,
+                "received": confirm_version,
+            }, 400
+
+        # 检查是否已有进行中的更新请求
+        if os.path.isfile(_UPDATE_MARKER):
+            return {
+                "ok": False,
+                "error": "已有更新请求进行中，请等待宿主脚本执行完成",
+            }, 409
+
+        branch = (body.branch or "main").strip()
+        marker = {
+            "ref": branch,
+            "requested_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "requested_by": info.subject if info else "admin",
+            "version": _APP_VERSION,
+        }
+        tmp_path = _UPDATE_MARKER + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(marker, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, _UPDATE_MARKER)
+
+        # 清除旧结果
+        if os.path.isfile(_UPDATE_RESULT):
+            os.remove(_UPDATE_RESULT)
+
+        return {
+            "ok": True,
+            "message": "更新请求已提交，宿主脚本将在约1分钟内执行 git pull + 构建 + 重启",
+            "marker": _UPDATE_MARKER,
+            "expected_delay_sec": 60,
+        }
+
+    @app.get("/api/system/update/status", dependencies=[Depends(_read)])
+    def api_system_update_status() -> dict[str, Any]:
+        """查看更新进度。"""
+        pending = os.path.isfile(_UPDATE_MARKER)
+        result = None
+        if os.path.isfile(_UPDATE_RESULT):
+            try:
+                with open(_UPDATE_RESULT, encoding="utf-8") as f:
+                    result = json.load(f)
+            except Exception:
+                result = None
+        return {
+            "ok": True,
+            "pending": pending,
+            "result": result,
+            "current_version": _APP_VERSION,
+        }
 
     # ── HTTP MCP（streamable JSON-RPC，供 opencode 等远程 MCP 客户端）──
     @app.post("/mcp", dependencies=[Depends(_write)])
@@ -1163,17 +1297,21 @@ def build_app(
 
     # ── v1.9.0 用户 WebUI：agent 管理（单 owner 下即已配对主体）──
     @app.get("/api/user/agents", dependencies=[Depends(_read)])
-    def api_agents_list() -> dict[str, Any]:
+    def api_agents_list(token_info: TokenInfo | None = Depends(authenticated())) -> dict[str, Any]:
+        current_subject = token_info.subject if token_info else None
         agents = [
             {"id": s["subject"], "name": s["subject"], "scopes": s["scopes"]}
             for s in registry.subjects()
             if s["subject"] not in ("shared", "unknown", "owner")
+            and s["subject"] != current_subject  # 排除当前登录用户，避免用户自己出现在 agent 列表里
         ]
         return {"ok": True, "agents": agents}
 
     @app.delete("/api/user/agents/{agent_id}", dependencies=[Depends(_write)])
-    def api_agent_delete(agent_id: str) -> dict[str, Any]:
-        n = registry.revoke_by_subject(agent_id)
+    def api_agent_delete(agent_id: str, creds: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> dict[str, Any]:
+        # 删除 agent 时排除当前登录用户的 token，避免把自己踢下线
+        current_token = creds.credentials if creds else None
+        n = registry.revoke_by_subject(agent_id, except_token=current_token)
         return {"ok": True, "revoked_tokens": n, "agent": agent_id}
 
     @app.patch("/api/user/agents/{agent_id}", dependencies=[Depends(_write)])

@@ -159,4 +159,11 @@ export const api = {
   // 成功时后端回**整个会话快照**（`_session_view`），不是 ack
   sessionAnswer: (sid: string, payload: { ask_id?: string | null; room?: string | null; text?: string; answer?: Record<string, unknown> }) =>
     request<SessionViewResponse>('POST', `/sessions/${encodeURIComponent(sid)}/answer`, payload),
+
+  // ── v1.10.0 系统自更新（宿主侧 sidecar 模式）──
+  systemVersion: () => request<Record<string, unknown>>('GET', '/system/version'),
+  systemUpdateCheck: () => request<Record<string, unknown>>('GET', '/system/update/check'),
+  systemUpdate: (confirm_version: string, branch?: string) =>
+    request<Record<string, unknown>>('POST', '/system/update', { confirm_version, branch }),
+  systemUpdateStatus: () => request<Record<string, unknown>>('GET', '/system/update/status'),
 }

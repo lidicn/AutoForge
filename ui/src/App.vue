@@ -31,6 +31,7 @@ const menuOptions: MenuOption[] = [
   { label: () => h(RouterLink, { to: '/insights' }, { default: () => 'MA 洞察' }), key: '/insights' },
   { label: () => h(RouterLink, { to: '/live' }, { default: () => '真机下发' }), key: '/live' },
   { label: () => h(RouterLink, { to: '/governance' }, { default: () => '治理 / 设置' }), key: '/governance' },
+  { label: () => h(RouterLink, { to: '/system-update' }, { default: () => '系统升级' }), key: '/system-update' },
   { label: () => h(RouterLink, { to: '/faults' }, { default: () => '故障注入图鉴' }), key: '/faults' },
   { label: () => h(RouterLink, { to: '/metrics' }, { default: () => '经验闭环' }), key: '/metrics' },
 ]

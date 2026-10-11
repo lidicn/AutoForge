@@ -68,4 +68,10 @@ export const facade = {
     api.askAnswer(payload),
   sessionAnswer: (sid: string, payload: { ask_id?: string | null; room?: string | null; text?: string; answer?: Record<string, unknown> }) =>
     api.sessionAnswer(sid, payload),
+
+  // ── v1.10.0 系统自更新（宿主侧 sidecar 模式）──
+  systemVersion: () => api.systemVersion(),
+  systemUpdateCheck: () => api.systemUpdateCheck(),
+  systemUpdate: (confirm_version: string, branch?: string) => api.systemUpdate(confirm_version, branch),
+  systemUpdateStatus: () => api.systemUpdateStatus(),
 }
