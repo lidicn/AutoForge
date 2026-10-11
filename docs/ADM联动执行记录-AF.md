@@ -10868,7 +10868,7 @@ GATES_RC=1     12279 B     md5 61b3e66c1d4b1c1eac7351dfef1025c6      ← 遍 b�
 - 判「锁空／不空」只用 `svc._lock_is_free()` 的**内核真值**，⛔ 不信盘上文本、不信「发过信号就算数」。
 - **每腿带前置自证**：子进程起好后必须先读出 `svc._lock_is_free(lock) is False`（真的有人持着），否则这条腿测的是空气——这一句就是本批的「注入未生效就判 FAIL」护栏，它挡住的是「锁根本没被持住 ⇒ 停完之后『锁空了』由恒真冒充」。
 - **唯一被打桩的是信号投递那一步**：⛔ 不拿一个可能被复用过的真 PID 去做 `os.kill` 实验——Windows 上 `os.kill(pid, 15)` 等价 `TerminateProcess`，命中复用后的无关进程就是不可撤销的误杀（BUG-06 禁的正是这件事）。锁的状态全程真值。
-- 五格分工：A 真持有者被收掉后内核确认锁空、且**锁文件同一枚 inode 未动**；B 下一枚真 watcher 在同一 inode 上拿到锁（⇒ 释放来自进程死亡，不来自删文件）；C 盘上 PID 早已不在而锁仍被另一个活进程持着（打桩 `ProcessLookupError`）；E 平台层抛的非子类 `OSError`；**D 连信号都不打桩**：POSIX 真 `fork()`，直子进程 `os._exit(0)` 退场、锁 fd 由孙进程继承 ⇒ 「PID 没了、锁还被人持着」是内核事实而非模拟。D 只在 `os.name == "posix"` 跑，本机 Windows 如实 skip、CI 在 Linux 真跑。
+- 分工（⚠️ 本行原写「五格分工」，其中 D 一格已由 §十一 按远端真值拆成 D1／D2，现读为 **6 格**）：A 真持有者被收掉后内核确认锁空、且**锁文件同一枚 inode 未动**；B 下一枚真 watcher 在同一 inode 上拿到锁（⇒ 释放来自进程死亡，不来自删文件）；C 盘上 PID 早已不在而锁仍被另一个活进程持着（打桩 `ProcessLookupError`）；E 平台层抛的非子类 `OSError`；**D1／D2 连信号都不打桩**：POSIX 真 `fork()`，锁 fd 由孙进程继承——D1 让直子进程 `os._exit(0)` 自己退场（`fork-exit`）⇒ 「PID 没了、锁还被人持着」是内核事实而非模拟，D2 让直子进程活着等真 SIGTERM（`fork-hold`）⇒ 「信号送到了、目标被打死了、锁还被人持着」。两条都只在 `os.name == "posix"` 跑，本机 Windows 如实 skip、真值只在 CI 的 Linux 上存在（这正是 §十一 那次订正的成因）。
 - 退避表 `svc._WATCH_EXIT_WAIT_S` 用 `monkeypatch` 缩成 `(0.05,)*4`，⛔ 不改判定形状（真值仍来自 `_lock_is_free`）；不缩的话 C／E 两格各要真等 4.9 秒。
 
 ### 三、扫出的两格与修法（都收在 `stop_watch`，判据就是这两条腿）
@@ -10895,7 +10895,7 @@ AssertionError: 锁还被人持着，却报了成功清场：{'ok': True, 'stopp
 
 - `docs/进程模型清单.md` §三：`os.kill` 那行的登记改写（退场证据口径＋三档 `signal`），并**修掉一行错抄**——登记里把退出等待的表名写成 `_WATCH_PROBE_DELAYS_S`（那是启动探测表 11.9 秒），现读改用表是 `_WATCH_EXIT_WAIT_S`（4.9 秒）；认领字段指本节。三枚锚点按现读重钉 `:2605/:2683/:2717` → `:2618/:2704/:2738`，`check_process_model.py --write` 重生成的自动段 diff **恰为这三行**（⚠️ 先 `git add` 产品代码与判据、再 `--write`、再跑门：门读**代码**取入库面、读**清单文档**取磁盘面，未暂存的改动在门那一侧不可见——这是 §二之一百二十三 换面后留下的口径不对称，本批实测踩到一次并如实登记）。
 - `docs/architecture/AF完整架构与运行时说明.md` §四「watch 生命周期的五条规矩」升成**六条**（新第 6 条＝退场证据只有内核那把锁），该区九枚行号锚点按现读重钉（含 `:2713-2721`→`:2737-2745`、`:2745-2800`→`:2758-2787` 两枚**本批之前就已漂**的锚点）；§十八 第 34 条①由「并发／生命周期腿仍缺」订正成「生命周期腿已由本节补上／并发腿仍缺」；§十八 第 35 条末行订正为「追认件**已递未裁**」（先前写「尚未投递」是把计划名当成了实投名，现读 inbox 后订正：`E:\NAS\关键决策部\inbox\20261011-AF-门禁取数面口径-决策申请.md`，`decisions/` 现读无对应裁定书）；新增 §十八 第 36 条。
-- `docs/audit/第六轮架构审计ARCH08_11核实对账_20261011.md`：ARCH-10 表第四行按现读改写为「运行期腿已补（5 格，真子进程持锁）」并把 §二 归档判定里「未收」半边收窄成只剩**并发**腿 ⇒ 报告仍留原地。
+- `docs/audit/第六轮架构审计ARCH08_11核实对账_20261011.md`：ARCH-10 表第四行按现读改写为「运行期腿已补（5 格，真子进程持锁）」并把 §二 归档判定里「未收」半边收窄成只剩**并发**腿 ⇒ 报告仍留原地。⚠️ 该行已由 §十一 再订正为 **6 格**（D 一格拆成 D1／D2，并写明两条 POSIX 腿的真值只在远端 Linux 存在）。
 - ⛔ 无新增 `check_*.py`（本批落的是测试腿与产品代码口径，不是门），故 `gates.sh` 一字未动，`check_gates_coverage` 射程不变。
 
 ### 六、读数（每格带命令原文）
@@ -10963,8 +10963,8 @@ E   AssertionError: assert '86736488' in {'********'}
 ### 九、未落与归属（⛔ 不写「ARCH-10 已收口」）
 
 1. **ARCH-10 的并发腿仍空**：真并发腿要落在 `af_auth.py`／`subjects()` 那类在途文件，归 **#79 窗**；本批不硬凑一条永远绿的假并发腿（判例：与「测不出收益的闸」等价的是「永远不红的测试」）。⇒ `docs/audit/AutoForge审计报告.html` **仍留原地**（#99）。
-2. 生命周期**门**（`check_process_model.py`）判的是形状与在册，运行期证据由本批这 5 格承担；两者互不替代。
-3. D 格（POSIX 真 `fork()`＋继承锁 fd）本机必然 skip ⇒ 它的真值只在远端 Linux 作业里存在，**推送后按 `python scripts/gh_ci_status.py` 取数补记**，⛔ 不在这里替远端宣称读数。
+2. 生命周期**门**（`check_process_model.py`）判的是形状与在册，运行期证据由本批这 6 格承担；两者互不替代。
+3. D 格（POSIX 真 `fork()`＋继承锁 fd）本机必然 skip ⇒ 它的真值只在远端 Linux 作业里存在。**该格已由 run 164 取回，并当场抓出本批自己的一条假期望**（原判据 `signal=delivered`，真读数 `already_gone`）⇒ 处置与两格拆分见 **§十一**，⛔ 那里同样不替远端宣称未取的读数。
 4. 本批没动 `tally`／`baseline`，没动 `gates.sh`，没执行任何 docker 命令，NAS 在役容器零重建。
 
 ### 十、提交与推送的自证
@@ -10973,3 +10973,46 @@ E   AssertionError: assert '86736488' in {'********'}
 - 记账面一枚（本行由它携带，故它自身的 sha 不在下面）：两份 docs＋对账文档。
 - 并发在途文件在暂存前后都**未被本批带走**：`git status --porcelain` 现读仍列 `src/autoforge/af_api.py`／`src/autoforge/af_auth.py`／`docker/docker-compose.api.yml`／`ui-user-mimo/src/stores/main.ts`／`ui-user-mimo/src/styles/main.css`／`ui-user-mimo/src/views/AuthCodesView.vue`／`docs/ADM联动执行计划-AF.md`／`docs/audit/参考/FFL-200题测试提示词.md` 为未暂存态；仓根那三枚未跟踪产物（`docker-compose.api.yml.tmp`／`issued_tokens_clean.json`／`docker/docker-compose.api-test.yml`）与三份 HTML 报告一字未动。
 - 推送只在 owner 明确点头后单独执行（只 `git push origin master:main`），推后 `git ls-remote origin refs/heads/main` 自证等于本地 HEAD；本轮目标文本点名要 GitHub 交付，故按批次惯例推送后把远端终值补进 §九 第 3 项与 §十九 行末。
+
+### 十一、补记 · 远端 run 164 的真值抓出**本批自己的一条假期望**：D 段拆成两格（代码面 `db5c880`）
+
+§九 第 3 项把话说在前头：D 格的真值只在远端 Linux 存在。远端拿回来的第一件事是**它红了一格，而红的是我写的期望**。
+
+**远端读数**（取数时刻 2026-10-11T09:56Z 现读，命令 `python scripts/gh_ci_status.py jobs 38129623635`）：run 164（`90f478c`）`completed/failure`，六枚作业里 `layering-gates`／`ui-user-mimo-judgments`／`adm-linkage-contracts`／`ui-typecheck-build` 四枚绿，`pytest` 与 `quality-gates` 两枚红。pytest 汇总 **`2 failed, 4213 passed, 51 skipped, 1 warning in 128.72s`**（存证 `E:\tmp\af128_ci_164_pytest_summary.txt`，135 B／`f6e7076e7e31368b354176d7897d729d`；FAILED 两行 `af128_ci_164_pytest_failed.txt`，1055 B／`8dd6d91fad1e0cdebd159cf9ff4e15f3`；整份日志 `af128_ci_164_pytest_full.log`，1089 行／120837 B／`babea2f47f4aeceb754e01b2db7d5de8`）。两条红逐条定性：
+
+| 那条 FAILED | 远端读数 | 定性 |
+|---|---|---|
+| `test_owner_subject_gate.py::test_real_repo_gets_green_when_the_two_faces_are_landed` | `B：DELETE /api/user/agents/{agent_id}`（`:1175`）未绑主体 ⇒ `assert 1 == 0` | **按设计红**，与 §二之一百二十三 同一格、一字未变，归 #79 窗 |
+| `test_watch_lifecycle_runtime.py::test_a_sigterm_that_leaves_the_lock_held_by_an_inheriting_child_is_not_a_clean_stop` | **`assert 'already_gone' == 'delivered'`**（`tests/unit/test_watch_lifecycle_runtime.py:266`） | **本批的假期望**，本机 skip 因此看不见 ⇒ 本节余文 |
+
+**那一格的真值是什么**：D 段原来让直子进程 `os._exit(0)` **自己**退场，所以 `watch.pid` 里那个 PID 在 `stop_watch` 动手之前就早就不在了 ⇒ `os.kill` 只能走 `ProcessLookupError` 分支，读出来**必然**是 `already_gone`。我在腿里那句注释「信号真的发出去了」是写错的（`direct.wait() == 0` 恰恰证明它没被谁杀，是自己退的），断言跟着错。⛔ 产品侧没有新缺陷：同一条腿另外四枚断言在远端全通过——`_lock_is_free(lock) is False`（孙进程确实继承了锁 fd，直子进程已死之后仍然不空）、`ok is False`、`exit == exit_unconfirmed`、sidecar／PID 全保留。⇒ §九 第 3 项要取的「D 格真值」拿到了，而且比预想的更值钱：它同时钉死了「继承 fd 的进程持锁」这一格在 Linux 上是**实测**而不是推断。
+
+**处置：拆成两格，各钉一档信号状态，两条都不打桩**
+
+- **D1**（原形状，断言按远端读数订正）`test_d1_a_lock_inherited_by_a_grandchild_outliving_the_pid_file_process_is_not_a_clean_stop`：直子进程先退（`fork-exit`）⇒ `identity=verified`／`signal=already_gone`／`ok=False`／`exit_unconfirmed`／诊断件一律保留。这一条的**每一枚断言都是 run 164 的原样读数**，不是新猜的。
+- **D2**（新增形状）`test_d2_a_delivered_sigterm_that_leaves_the_lock_held_by_an_inheriting_grandchild_is_not_a_clean_stop`：直子进程活着等真 SIGTERM（`fork-hold`）⇒ `signal=delivered`、目标被信号打死（`direct.wait() < 0`，POSIX 默认处置＝终止），而锁**仍不空**（孙进程握着继承来的 fd）。与 C 的分工写进 docstring：C 用打桩证「发不动不算证据」（本机不能拿可能被复用的真 PID 做 `os.kill` 实验），D2 一个桩都不打，证「**发成功也不算证据**」——这一档此前在运行期没有任何真进程腿钉过。
+
+**为什么 D2 的期望是"合成"而不是"再猜一次"**（三条零件各有独立真值，⚠️ 仍不等于本机证据）：
+
+1. `delivered` 这一档由 **A 格**在真持锁进程上钉住（本机＋远端都跑，`res["identity"] == "verified"`／`res["signal"] == "delivered"` 都是现读通过的）；`_verified_pid` 只认 sidecar 的 `owner`（`{hostname}-{pid}-{uuid8}`，`af_service.py:2502-2511`），而 `fork-hold` 的 `watch.pid` 由直子进程自己写 ⇒ 核验过的正是那枚活着的 PID；
+2. 「直子进程死了、孙进程还持着锁 ⇒ `_lock_is_free` 为假」由 **run 164 的 D1 前置断言**实测（那一枚在远端通过）；
+3. 清理动作只由 `exit_state` 决定（`af_service.py:2648` 那一枚三元表达式，与 `signal_state` 无耦合）⇒ D2 的「诊断件一律保留」与 D1 走的是同一支代码。
+
+⇒ 落码前另做一件本机唯一能做的事：`ast.parse` 验 `_CHILD` 的 fork 分支语法（那两条腿本机必然 skip，语法是本机对它们能自证的全部）。读数：`CHILD_AST_PARSE=OK`、子脚本 35 行、`mode ==` 分支现读出 `fork-exit`／`hold`／`second`（`fork-hold` 走 `mode in (...)` 那一支，所以不在这三份名单里）。
+
+**本地读数（改后）**：`python -m pytest tests/unit/test_watch_lifecycle_runtime.py tests/unit/test_watch_lifecycle_r6_audit.py -q` ⇒ **`30 passed, 2 skipped in 11.11s`**（skip 的两条正是 D1／D2；⚠️ 不引改前同命令的数——那一版没在两个文件上单独跑过，本批引用的改前读数是 §六 那三文件的 `38 passed, 1 skipped`），两份文件 CR=0（`tr -dc '\r' | wc -c` 逐份量：`0`／`0`）。
+
+**门禁**：`git add` 本批那一份判据文件后 `GATES_PYTHON=python bash gates.sh` 跑两遍 ⇒ 遍 e／遍 f **逐字节相同**（12279 B／md5 `d0e4feb31c749aaf31221a99e1a4e854`，`GATES_RC=1`），且与本批 §七 的遍 a／b／c **同一枚 md5**、`diff` 空 ⇒ 这次改的是测试文件，链上没有任何门的射程读到它；红源仍两族（AST 门 `af_api.py:984`／`:1005` 在途＋owner 三枚按设计红）。
+
+⚠️ 但遍 e／f 跑在 18:09／18:11，**早于本节那批 docs 改动落盘**（对账文档 18:18、执行记录 18:25、架构说明 18:29 现量 mtime）——拿它们冒充「记账面改完之后再对撞」就是把推导写成实测。⇒ 补跑两遍：遍 g／遍 h 现读 18:34／18:36（那时本节的补记正文与架构说明的 §十九 行均已在盘上），两份 **12279 B／md5 `d0e4feb31c749aaf31221a99e1a4e854`／`GATES_RC=1`**，`cmp -s` 两两空输出（`af128_gates_g.txt`／`af128_gates_h.txt`，＋各自 `..._rc.txt` 记 RC），且与遍 a（`af124_gates_a.txt`，同 md5）逐字节相同 ⇒ 从遍 a（三份 docs 一字未改时）到遍 g／h（补记正文在盘上时）整条链**逐字节未变**，「记账面不在任何门的射程内」这一格由那两遍实测成立，而不是从遍 e／f 推的。
+
+**纪律一条（写在这里，不写在别处）**：带 `skipif` 的腿在**本机等于零证据**。以后落这种腿，期望值必须逐枚指出它由「哪条已跑绿的腿＋哪一段代码」合成，并在记账里标「待远端」；本轮 §九 第 3 项就是这么写的，但腿里那句注释仍然是猜的——猜错的地方由 CI 抓出来，代价是一枚永久红的 run。
+
+**提交与推送自证**：代码面一枚 `db5c880`（`git show --stat HEAD` 现读 ⇒ **1 份／74 增／21 删**，只含 `tests/unit/test_watch_lifecycle_runtime.py`），批前 HEAD `90f478c`；`git push origin master:main` ⇒ `90f478c..db5c880  master -> main`，`PUSH_RC=0`，`git ls-remote origin refs/heads/main` == 本机 `git rev-parse HEAD`。⛔ 记账面（本文件＋架构说明＋对账文档）由下一枚携带；并发在途文件（`af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`／两份计划与参考文档）与仓根三枚未跟踪产物一字未动；`.gates-tally.txt`／`.gates-baseline.txt` 一个数字未动；未执行任何 docker 命令。
+
+**远端终值（run 165，`db5c880`，取数时刻 2026-10-11T10:24Z 现读）**：`python scripts/gh_ci_status.py jobs 38131074204` ⇒ 六枚作业里 `pytest` 与 `quality-gates` 红、四枚绿；pytest 汇总 **`1 failed, 4215 passed, 51 skipped, 1 warning in 211.86s`**（存证 `af128_ci_165_pytest_summary.txt`，135 B／`12b6dea42d8618b8569cf4c49ed022fc`；FAILED 一行 `af128_ci_165_pytest_failed.txt`，545 B／`63286f32418ddc4722da953b6666f7d7`）。唯一那条 FAILED 仍是 `test_owner_subject_gate.py::test_real_repo_gets_green_when_the_two_faces_are_landed`（B：DELETE `/api/user/agents/{agent_id}`，`:1175` 未绑主体，按设计红归 #79 窗）⇒ **回到 §二之一百二十三 的那条基线，本批没有给自己留下新的红**。
+
+- **D1／D2 都在 Linux 上真跑并绿**。取不到"腿名"的直接读数（pytest 跑 `-q`，通过的用例名不进日志；`log 114445353169 "items"` ⇒ 匹配 0 行，存证 `af128_ci_165_pytest_items.txt`／`1a634dc7e503e58c3649c36cf4df62f1`），所以这里用两行判定行做**算术对撞**：run 164 `2 failed + 4213 passed + 51 skipped` ⇒ 合计 4266；run 165 `1 failed + 4215 passed + 51 skipped` ⇒ 合计 4267。⛔ skipped 一枚没多（51 对 51）⇒ 新增的 D2 **不是被 skip**，而是执行且通过；failed −1 且 passed +2 ⇒ 原 D1 由红转绿、D2 新增即绿。本批提交恰好只多一枚测试函数（该文件现读 `^def test_` 共 6 枚），两侧总数差 1 与此吻合。
+- **quality-gates** `completed/failure`，红源两族**一字未变**：owner 三枚按设计红（`:1170`／`:1175`／`:1180`，存证 `af128_ci_165_qg_red.txt`，1124 B／`85d435f8e072d8733c29892be7f55d02`）＋ AST 门 `WARN fake-ok-const src/autoforge/af_api.py:980`／`:1001`（`af128_ci_165_qg_warn.txt`，435 B／`5dd8f1a0e2e2f88171974982e6f6711e`）。⚠️ 那两枚在远端读的是 HEAD 面行号，本地在途面读 `:984`／`:1005`，差的 4 行正是登录线的 hunk ⇒ 归 #113（库侧 `homesdk.gates` 仍读工作树），不属本批。
+- ⇒ D2 那条"由已证零件合成"的期望在远端成立：`signal=delivered`、直子进程被 SIGTERM 打死、而协调锁仍由继承了 fd 的孙进程持着 ⇒ `ok=False`／`exit_unconfirmed`／sidecar 与 PID 一律保留。**ARCH-10 的三档信号状态从此各有一条真进程腿**：`delivered`→A＋D2、`already_gone`→C＋D1、`not_delivered(异常名)`→E。
+- §九 第 3 项那格空格至此填掉。ARCH-10 仍**不写"收口"**：并发腿归 #79 窗，`AutoForge审计报告.html` 仍留原地（#99）。
