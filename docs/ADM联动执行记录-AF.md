@@ -10813,3 +10813,13 @@ GATES_RC=1     12279 B     md5 61b3e66c1d4b1c1eac7351dfef1025c6      ← 遍 b�
 | `af118_gates_a.txt`／`af118_gates_b.txt` | 整链接两遍（`GATES_RC=1`，12279 B，`cmp -s` 相同） | `61b3e66c1d4b1c1eac7351dfef1025c6` |
 | `af118_gates_c.txt` | 代码面提交后的第三遍（12279 B，与 a 只差卫生门那一枚 786→788） | `6765cf78b7417adb93025b385a4547cb` |
 | `af118_head/` | `git archive HEAD` 的纯副本树（无 `.git` ⇒ 磁盘面），`af_api.py` 先 `cmp` 过与 `git show HEAD:` 同字节 | — |
+
+### 十、提交与推送的自证（本行由**第三枚**携带，故第三枚自身的 sha 不在下面）
+
+- 代码面一枚 `12eab20`：`git show --stat HEAD` 现读 ⇒ **11 份／620 增／66 删**（`scripts/af_face.py` 262 行新增、`tests/unit/test_gate_face.py` 159 行新增、四枚门 `+57/+23/+60/+93`、三份清单 `4/8/8` 行、两枚真仓腿 `8/4` 行）。
+- 记账面一枚 `c905601`：**2 份／129 增／0 删**（本文件＋架构说明）。⚠️ 上一批踩过的"份数写错"这一格当场复核：本段写的是 `git show --stat` 的真读数，不是计划数。
+- 批前 HEAD `4b1ecc7`。`git push origin master:main` ⇒ `4b1ecc7..c905601  master -> main`，`PUSH_RC=0`；`git ls-remote origin refs/heads/main` ⇒ `c905601320fd73af53d73f741f6838c08f8e6909` == 本机 `git rev-parse HEAD`。
+- 并发在途文件在暂存前后都**未被本批带走**：`git status --porcelain`（提交后现读）仍列 `src/autoforge/af_api.py`／`src/autoforge/af_auth.py`／`docker/docker-compose.api.yml`／`ui-user-mimo/*` 三份／`docs/audit/参考/FFL-200题测试提示词.md`／`docs/ADM联动执行计划-AF.md`，全部为 ` M` 未暂存态；仓根那三枚未跟踪产物（`docker-compose.api.yml.tmp`／`issued_tokens_clean.json`／`docker/docker-compose.api-test.yml`）一字未动。
+- `gates.sh` 遍 d（两枚提交都落完之后跑）：`GATES_RC=1`、12279 B／md5 `6765cf78b7417adb93025b385a4547cb`，与遍 c **`diff` 空**⇒ 记账面（两份 docs 共 129 行新增）不在任何门的射程内，这条是实测不是推导。红源仍两族：AST 门 `af_api.py:984`／`:1005`（在途面）＋ owner 三枚按设计红。
+- ⛔ 本批未执行任何 docker 命令，NAS 在役容器零重建；`.gates-tally.txt`／`.gates-baseline.txt` 一个数字未动。
+- **远端那一格**：推送后 GitHub Actions 对 `c905601` 的结论此刻仍是 `in_progress`／尚未取到终值（取数用 `python scripts/gh_ci_status.py`）。§一 那四条 pytest 假期望红与 §七 那三处 `gates.sh` 红应当同时消掉，留下 owner 三枚按设计红＋AST 两枚在途红；**终值待补在本节末行之后**，⛔ 不在这里预告读数。
