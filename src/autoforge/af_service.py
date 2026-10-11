@@ -2561,6 +2561,16 @@ def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[
     - **等目标真的退场再收尾**：发完信号后轮询协调锁是否已空闲（内核真值），仍被持着就报
       `exit_unconfirmed` 并把文件留着，让下一个 `start_watch` 还能读出持有者。
       刻意**不**升级成 SIGKILL：身份已核验，但对方可能正在写持久化，强杀会把在途写入丢在半截。
+    - **退场证据只有那把锁，三档信号状态都不算**（第七轮审计补格，运行期腿见
+      `tests/unit/test_watch_lifecycle_runtime.py`）：`os.kill` 抛 `ProcessLookupError` 只证明
+      "盘上那个数字已经不是 watcher"，而锁仍可能被另一个活进程持着（PID 复用、或持锁 fd 被
+      子进程继承）。旧写法在该分支直接写 `exited` 并删掉 sidecar／PID——对外报 `ok=true`，
+      同时把下一个 watcher 撞锁时唯一读得懂的现场清光。现在三档（`delivered`／`already_gone`／
+      `not_delivered(异常名)`）一律走同一圈轮询，并把档名回传在 `signal` 那一格。
+    - **平台层异常不许抛穿**：`os.kill` 在 Windows 上对失效句柄抛的不一定是 `ProcessLookupError`
+      或 `PermissionError`，而 `start_watch` 那条同形状链早收成一串 `OSError`。抛穿的后果是
+      HTTP 面读成 500、serve 退出路径读成"收尾链炸了"，盘上状态却一点没变——现在如实记成
+      `not_delivered(...)` 后继续问内核。
     - **清理失败必须看得见**：旧实现那句 `except OSError: pass` 让"停成功且清干净"与
       "停成功但什么都没清"对外表现逐字相同。现在 `cleanup` 那一格具名报出。
 
@@ -2600,11 +2610,15 @@ def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[
                         "lock_file_kept": True, "errors": []},
         }
 
-    already_gone = False
+    #: 信号投递的三种结果分开记。`delivered` 只说明"发出去了"，`already_gone`／`not_delivered(…)`
+    #: 说明"没发出去"——**三种都不含"对方退了场"**，那句话只能由下面那圈内核锁轮询来说。
+    signal_state = "delivered"
+    signal_note = f"已向 PID {pid} 发 SIGTERM"
     try:
         os.kill(pid, 15)  # SIGTERM
     except ProcessLookupError:
-        already_gone = True
+        signal_state = "already_gone"
+        signal_note = f"PID {pid} 早已不在：信号发不动，也就没有任何「收好了」的证据"
     except PermissionError as exc:
         return {
             "ok": False,
@@ -2616,16 +2630,21 @@ def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[
             "cleanup": {"sidecar_removed": False, "pid_file_removed": False,
                         "lock_file_kept": True, "errors": []},
         }
+    except OSError as exc:
+        # Windows 对失效句柄抛的不是上面两枚子类（`start_watch` 那条同形状链早就收成一串
+        # `OSError`）。让它抛出去＝HTTP 面读成 500、退出路径读成"收尾链炸了"，而盘上状态一点没变。
+        signal_state = f"not_delivered({type(exc).__name__})"
+        signal_note = f"对 PID {pid} 发信号失败（{type(exc).__name__}）"
 
-    exit_state = "exited" if already_gone else "unconfirmed"
-    if not already_gone:
-        for wait_s in _WATCH_EXIT_WAIT_S:
-            time.sleep(wait_s)
-            if _lock_is_free(lock):
-                exit_state = "exited"
-                break
-        else:
-            exit_state = "exit_unconfirmed"
+    # 退场证据只有内核那把锁——**包括"PID 早就不在了"这一格**。锁可以被别的活进程持着（PID 复用、
+    # 或者持 fd 的其实是孙进程），那时按"PID 没了"就清诊断件，会让对外报 `ok=true`、把下一个
+    # watcher 撞锁要用的现场一起删掉。空退避表落 `exit_unconfirmed`，与"预算花完"是同一条路径。
+    exit_state = "exit_unconfirmed"
+    for wait_s in _WATCH_EXIT_WAIT_S:
+        time.sleep(wait_s)
+        if _lock_is_free(lock):
+            exit_state = "exited"
+            break
     cleanup = _cleanup_watch_files(info=info, pid_file=pid_file) if exit_state == "exited" else {
         "sidecar_removed": False,
         "pid_file_removed": False,
@@ -2638,14 +2657,16 @@ def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[
         "graph": holder.get("graph", ""),
         "pid": pid,
         "identity": identity,
+        "signal": signal_state,
         "exit": exit_state,
         "cleanup": cleanup,
     }
     if exit_state == "exit_unconfirmed":
         result["reason"] = "exit_unconfirmed"
         result["error"] = (
-            f"已向 PID {pid} 发 SIGTERM，但协调锁在 {_WATCH_EXIT_WAIT_TOTAL_S:.1f} 秒预算内仍被持着"
-            "——watcher 还在收尾（或信号被平台吞了）。诊断件一律保留，**没有**再动锁文件。"
+            f"{signal_note}，而协调锁在 {_WATCH_EXIT_WAIT_TOTAL_S:.1f} 秒预算内仍被别的进程持着"
+            "——持锁者不是刚核验过的那枚 PID 能解释的（对方还在收尾／信号被平台吞了／锁 fd 被子进程继承）。"
+            "诊断件一律保留，**没有**再动锁文件，也**没有**再对任何 PID 动刀。"
         )
     return result
 

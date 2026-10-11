@@ -231,11 +231,18 @@ def test_permission_error_on_kill_is_named_not_treated_as_stopped(root, monkeypa
     assert paths["info"].exists() and paths["pid"].exists(), res
 
 
-def test_process_lookup_error_means_already_gone_so_cleanup_is_safe(root, monkeypatch):
+def test_already_gone_pid_still_needs_the_kernel_to_confirm_the_lock_is_free(root, monkeypatch):
+    """`ProcessLookupError` 只说明"盘上那个数字不是 watcher 了"，清诊断件的许可来自**内核那把锁已空**。
+
+    这一格的本仓现场是"合成树"：`watch.lock` 在盘上但没有真持有者 ⇒ `_lock_is_free` 读真 ⇒ 可以清。
+    "PID 不在而锁还被别的活进程持着"那一格在 `test_watch_lifecycle_runtime.py::test_a_pid_that_is_already_gone_still_has_to_free_the_lock_before_it_counts`
+    （真子进程持锁，修前形状会把现场清光并对外报 `ok=true`）。
+    """
     _seed_store(root)
     monkeypatch.setattr(svc.os, "kill", _KillSpy(raise_=ProcessLookupError(3, "没有该进程")))
     res = svc.stop_watch(store_root=str(root))
     assert res["ok"] is True and res["exit"] == "exited", res
+    assert res["signal"] == "already_gone", res
     assert not (root / "watch.pid").exists() and not (root / "watch.lock.info").exists(), res
 
 
