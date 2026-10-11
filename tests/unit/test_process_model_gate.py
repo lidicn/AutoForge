@@ -241,11 +241,11 @@ def test_real_repo_primitive_counts_pinned():
     prims = cpm.scan_primitives(trees, REPO)
     inproc = [r for r in prims if r["prim"] in cpm.INPROC_PRIMS]
     cross = [r for r in prims if r["prim"] in cpm.CROSSPROC_PRIMS]
-    assert (len(inproc), len({r["path"] for r in inproc})) == (18, 11)
+    assert (len(inproc), len({r["path"] for r in inproc})) == (19, 12)
     assert (len(cross), len({r["path"] for r in cross})) == (16, 6)
     assert sum(1 for r in cross if r["path"].endswith("af_service.py")) == 3
     doc = (REPO / DOC_REL).read_text(encoding="utf-8")
-    assert "进程内 18 站点／11 个文件 · 跨进程 16 站点／6 个文件" in doc
+    assert "进程内 19 站点／12 个文件 · 跨进程 16 站点／6 个文件" in doc
 
 
 def test_real_repo_shared_names_tick_trio():

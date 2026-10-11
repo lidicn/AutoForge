@@ -60,9 +60,9 @@ def test_real_repo_site_readings_are_pinned(real):
     from collections import Counter
 
     lv = Counter(s["level"] for s in real["sites"])
-    assert len(real["sites"]) == 149
-    assert len({s["path"] for s in real["sites"]}) == 29
-    assert dict(lv) == {"debug": 19, "info": 7, "warning": 92, "error": 20, "exception": 11}
+    assert len(real["sites"]) == 155
+    assert len({s["path"] for s in real["sites"]}) == 30
+    assert dict(lv) == {"debug": 19, "info": 8, "warning": 97, "error": 20, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -72,13 +72,16 @@ def test_real_repo_named_code_readings_are_pinned(real):
     from collections import Counter
 
     coded = real["coded"]
-    assert len(coded) == 24
-    assert len({s["code"] for s in coded}) == 23
-    # 24 站／23 枚＝本仓第一例"一码两站"：`DEPLOY_AUDIT_PERSIST_FAILED` 同时出自
-    # 「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」两条腿——同一句承诺（台账没落稳），
-    # 两处各在 §三 认领一行。钉成白名单，免得下一个人把这条例外读成"码可以随便复用"。
+    assert len(coded) == 30
+    assert len({s["code"] for s in coded}) == 28
+    # 30 站／28 枚＝仓内两例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
+    # ① `DEPLOY_AUDIT_PERSIST_FAILED` 同时出自「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」
+    #    两条腿——同一句承诺（台账没落稳）；
+    # ② `OWNER_ALERT_PUBLISH_FAILED` 出自「投递抛出」与「投递返回未被接受（code=…）」两条腿——
+    #    同一句承诺（这条告警没送到收件箱），裁定 20261011 §3 Q8.1。
+    # 免得下一个人把这两条例外读成"码可以随便复用"。
     dup = {code for code, n in Counter(s["code"] for s in coded).items() if n > 1}
-    assert dup == {"DEPLOY_AUDIT_PERSIST_FAILED"}, f"重码名单漂了：{dup}"
+    assert dup == {"DEPLOY_AUDIT_PERSIST_FAILED", "OWNER_ALERT_PUBLISH_FAILED"}, f"重码名单漂了：{dup}"
     nc = Counter(s["level"] for s in real["sites"] if not s["code"])
     assert sum(nc.values()) == 125
     assert nc["warning"] == 83 and nc["exception"] == 11 and nc["info"] == 7
@@ -122,7 +125,7 @@ def test_real_repo_every_named_code_is_registered(real):
     findings, info = gate.check(REPO)
     b = [f for f in findings if f.startswith("B：")]
     assert not b, "\n".join(b)
-    assert info["codes"] == 23 and info["coded"] == 24
+    assert info["codes"] == 28 and info["coded"] == 30
 
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):

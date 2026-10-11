@@ -647,7 +647,14 @@ def test_real_repo_measurements_are_pinned():
       `tests/unit/test_linkage_feed.py::test_unreadable_ring_is_bounded`。同样不给 TTL——
       "盘上有一条读不出来"不该自行愈合。
 
-    工作树里若躺着未提交的 WIP 模块，扫到数会比 129 更大而基线仍是 113——那种红的意思是
+    注册表 3 → 4、扫到 129 → 130（裁定 20261011 §3 Q8.1 的最小告警线）：`af_alert.py` 里
+    `OwnerAlertHandler.deduped`（同型告警去重表）是唯一被封顶的新容器——`ALERT_MAX=256` 给硬上限、
+    `ALERT_TTL_S=900` 给 TTL、`_trim_alert_dedupe()` 在**投递路径上**修剪（这条线没有读侧，
+    只在写侧回收），封顶＋到期腿是
+    `tests/unit/test_owner_alert.py::test_dedupe_is_capped_and_expires_without_reads`。
+    ⛔ 同一枚键**不许**再挂就地豁免注释：注册表＋源码内标记＝两份口径，将来注册表被删时门却照样绿。
+
+    工作树里若躺着未提交的 WIP 模块，扫到数会比 130 更大而基线仍是 113——那种红的意思是
     "新容器没登记"，不是这行数字错了，登记处置归那一批自己，不许靠挪动这里的数字把它抹平。
 
     基线 114 → 113（裁定 20261011 §3 Q3 乙）：`af_auth.py::TokenRegistry._revoked` 从基线移出，改进
@@ -659,8 +666,8 @@ def test_real_repo_measurements_are_pinned():
     bounded, fixed, errs = gate.read_registry(src)
     containers, _lines, scan_errs = gate.scan(src)
     assert errs == [] and scan_errs == []
-    assert len(bounded) == 3 and len(fixed) == 3
-    assert len(containers) == 129 and len(gate.BASELINE) == 113
+    assert len(bounded) == 4 and len(fixed) == 3
+    assert len(containers) == 130 and len(gate.BASELINE) == 113
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"
