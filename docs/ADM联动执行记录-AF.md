@@ -11016,3 +11016,85 @@ E   AssertionError: assert '86736488' in {'********'}
 - **quality-gates** `completed/failure`，红源两族**一字未变**：owner 三枚按设计红（`:1170`／`:1175`／`:1180`，存证 `af128_ci_165_qg_red.txt`，1124 B／`85d435f8e072d8733c29892be7f55d02`）＋ AST 门 `WARN fake-ok-const src/autoforge/af_api.py:980`／`:1001`（`af128_ci_165_qg_warn.txt`，435 B／`5dd8f1a0e2e2f88171974982e6f6711e`）。⚠️ 那两枚在远端读的是 HEAD 面行号，本地在途面读 `:984`／`:1005`，差的 4 行正是登录线的 hunk ⇒ 归 #113（库侧 `homesdk.gates` 仍读工作树），不属本批。
 - ⇒ D2 那条"由已证零件合成"的期望在远端成立：`signal=delivered`、直子进程被 SIGTERM 打死、而协调锁仍由继承了 fd 的孙进程持着 ⇒ `ok=False`／`exit_unconfirmed`／sidecar 与 PID 一律保留。**ARCH-10 的三档信号状态从此各有一条真进程腿**：`delivered`→A＋D2、`already_gone`→C＋D1、`not_delivered(异常名)`→E。
 - §九 第 3 项那格空格至此填掉。ARCH-10 仍**不写"收口"**：并发腿归 #79 窗，`AutoForge审计报告.html` 仍留原地（#99）。
+
+## §二之一百二十五 · 收 #109 名下 F-10 的 Windows ACL／文案那一半：`os.chmod(0o600)` 在 NTFS 上被实测证明不是限权，凭据落盘补一刀断继承 ACL（本机真跑 icacls，⛔ 不再是"不声称跑过"）（2026-10-12）
+
+**这一格原来是什幺形状**：§二之一百零五 落了两格防线（`.gitignore` 明文令牌面＋`af_secrets` 射程订正），并在"不自决清单"里写明 **F-10 的 Windows ACL／文案那一半本批不做**，原话是「本批不声称跑过 `icacls`」。⇒ 本批的第一件事就是把那一句变成实测。
+
+### 一、现读复测对撞表（每条都是本机 `icacls` / `python` 原样输出，取数时刻 2026-10-12T02:2x 本地）
+
+| 报告的／上一批的说话 | 现读复测（命令原文） | 定性 |
+|---|---|---|
+| F-10：`0o600` 在 Windows 无严格语义，凭据文件的可见范围没被限住 | `icacls .forge` ⇒ 继承 ACE 里挂着 `BUILTIN\Users:(I)(RX)` 与 `NT AUTHORITY\Authenticated Users:(I)(M)`；`icacls .forge\credentials.json` ⇒ 实际 ACL 同样有 `Authenticated Users:(I)(M)`＋`Users:(I)(RX)` | **成立**，本机任何已认证用户对该明文令牌**可读可改**；本批落码 |
+| 「权限在 tmp 上先设 0o600（窗口期最小化）」这条 P1-22 纪律在 Windows 上也算做了事 | `tempfile.mkstemp` 的 `st_mode` 读回 `0o666`；`os.chmod(..., 0o600)` 之后 `st_mode` **仍是** `0o666`，前后两次 `icacls` 输出**逐字节相同**（`ACL_IDENTICAL= True`） | **不成立**（那一半是空的）：chmod 只动只读位，NTFS ACL 一字不变 ⇒ 限权必须由 ACL 完成 |
+| 上一批：「本批不声称跑过 `icacls`」 | 本批真跑：`restrict_file_acl` 走**默认 `runner=subprocess.run`**（不打桩）对 `E:\tmp\f10_probe\probe_cred.json` 往返 ⇒ `STATE=restricted`；收紧前四枚全 `(I)`，收紧后只剩 `BUILTIN\Administrators:(F)`／`NT AUTHORITY\SYSTEM:(F)`／`DESKTOP-J17LDCU\lidicn:(F)`，⛔ 无 `(I)` | 那一格填掉，且**升级为本机真机证据**（另有一条 `F` 腿常驻判据） |
+| 设计文档 §「凭据文件权限：0600 在 Windows 无严格语义…文档注明 NAS/Linux 部署侧生效」 | 现读 `docs/architecture/设计_v1.4.0_治理面.md:206` 那一行原样在场 | 不改历史设计文档（它是当时的口径记录）；**现行口径的唯一真源改在 README §4.2**，那里给的是实测读数而不是"尽力而为" |
+
+### 二、落码（五份，全部本批自己名下；并发在途四族一字未动）
+
+- `src/autoforge/af_atomic.py`：新增 `ACL_KEEP_PRINCIPALS`（`:88`）／`ACL_STATES` 六档目录（`:91`）／`_current_principal`（`:94`）／**`restrict_file_acl`（`:102`）**；`:24` 新增 `import subprocess`。口径三条：只断**继承**、显式授权一律给回当前用户＋两档保留主体；**尽力而为绝不影响写入结果**（`icacls` 缺席／身份读不出／rc≠0／回读仍带继承 ⇒ 全部收成一档交调用方留痕，⛔ 不抛穿、不拒写——拒写会让一次凭据热重载整档失败）；POSIX 一律 no-op 且不碰盘。`runner`／`platform_name` 两处接缝只为"Windows 那五档在 Linux CI 上也能逐档判红"，桩子不许改口径。
+- `src/autoforge/af_config.py`：`_atomic_write`（`:116`）在 chmod 那一手之后**紧跟着**叫助手（`:132`）并读返回值（`:133`），非 `not_windows`／`restricted` 一律 WARNING。⛔ 不改成"收紧失败就不写"。
+- 文案半边三份：`af_flock.py:188` 那句"mkstemp 天生 0o600，`os.replace` 之后 sidecar 继承这个位"前加 `POSIX：`限定并补一句 Windows 不成立；`af_persist.py:184` 同一形状；`af_config.py:5` 包头的"（gitignore + `0600`）"改成"落盘限权：POSIX 走 0600，Windows 断 NTFS 继承"。
+- `README.md` 新增 **§4.2**（`:266` 起）：写明实测 ACE、`0o666` 那条 chmod 无效证据、Linux 侧不受约束、以及"本批只收紧新写入的那一份"。这一节**不许改写成通用安全提醒**——E1 腿按五枚读数锚点判红。
+
+### 三、判据腿（新文件 `tests/unit/test_credential_file_acl_f10.py`，20 枚：19 绿＋1 skip）
+
+| 族 | 钉什么 | 读数 |
+|---|---|---|
+| A（2） | 平台口径：POSIX no-op 且不起进程／Windows 发固定 argv（`/inheritance:r`＋逐档 `/grant:r`，回读必须是第二次 `icacls` 而不是拿发出那条当结果） | A1 本机 skip（`os.name != nt`），其期望由 **B6 的接缝**在本机真跑补齐（`rec.calls == []`＋`state == "not_windows"`），⛔ 不留"只有远端才知"的空格 |
+| B（6） | 六档返回各可判且一律不抛穿：`refused`（rc≠0）／`failed`（`FileNotFoundError`）／`still_inherited`（回读仍带 `(I)`）／`no_identity`（USERDOMAIN／USERNAME 都读不出 ⇒ **一条命令都不发**）／名单外返回档不存在／两平台四种组合不抛穿 | 全绿 |
+| C（5） | 接线在册＋反空集：真仓 `af_config._atomic_write` 既 chmod、又叫助手、还**在 Load 语境**读返回值；把修前形状（只 chmod 吞异常）种回去必红；把返回值整枚丢掉必红；把返回值赋给变量却再不提到必红（C2b） | 全绿 |
+| D（4） | 未接线站点**只减不增**棘轮。**射程取代码面**：AST 里真有 `os.chmod(..., 0o600)` 调用点的文件；现读站点名单 = `['af_auth.py', 'af_config.py']`，未接线那枚 `af_auth.py`（`TokenRegistry` 明文令牌注册表）在册并注「归 #79 窗」。D0 是新增的**反例腿**：docstring 里出现 `os.chmod(..., 0o600)` 字样**不算站点**（否则 `af_atomic.py`——修 F-10 的那份代码自己——会被读成一枚欠债），真调用点必须算 | 全绿；改前形状先红过一次：`assert 1 == 0`（`unwired` 多出 `af_atomic.py`），按代码面重做后转绿 |
+| E（2） | 文案与实测对撞：README §4.2 缺节即红、缺任一枚现读锚点（`icacls`／`Authenticated Users`／`Users:(I)(RX)`／`0o666`／`credentials.json`）即红；新 `subprocess` 站点仍固定 argv、不经 shell | 全绿（e1 在写 README 之前先红：`assert 1 == 2`，"缺 §4.2 那一节"） |
+| F（1） | 真机往返，⛔ 不打桩：临时目录里让真 `icacls` 走一遍，回读必须无 `(I)` 且三档保留主体都在 | **Windows 上绿**（本机即证）；Linux CI 恒 skip，这一枚**不当远端证据引** |
+
+分段回归：`python -m pytest tests/unit/test_credential_file_acl_f10.py -q` ⇒ **`19 passed, 1 skipped in 3.74s`**；邻面七文件（`test_atomic_write_gate`／`test_atomic_write_sites_fixes`／`test_credentials_face_no_plaintext`／`test_dcd_20261004_atomic_write_nine_sites`／`test_secrets_precedence_scope`／`test_v1_4_credentials`）⇒ **`78 passed, 3 skipped, 1 warning in 16.36s`**，本批没在既有面上留红。
+
+### 四、变异自证（本机内存内注入，⛔ 不动工作树：并发会话此刻正占着 `af_api.py` 那一族）
+
+拿 `af_config.py` 现读原文做三份注入，每条先断"注入确实改了原文"再取判定读数（防"注入未生效被读成门全绿"那第六形态）：
+
+| 腿 | 注入 | `wired` 读数 | 期望 |
+|---|---|---|---|
+| M0 | 什么都不改 | `True` | 现状必须绿 ⇒ 判据没有无关依赖 |
+| M1 | 助手调用换成字面量元组 | `False` | ✅ 被扫出 |
+| M2 | 拆掉 `os.chmod` | `False` | ✅ 被扫出 |
+| M3 | `if acl_state not in (...)` 换成 `if False:` | **`True`** | ❌ 扫不出 ⇒ 由此改出两件事：① 判定从"按名字命中"改成 **Load 语境**（原来只赋值也算读，那一档会假绿）；② 新增 C2b 常驻这一档。⚠️ 死分支本身仍**不在这枚判定的射程内**（AST 层判不出可达性），逐字写进 `_shape_is_wired` docstring 并登记为残余，⛔ 不假称全覆盖 |
+
+### 五、门禁多遍逐字节对撞
+
+`git add` 本批那份判据文件后 `GATES_PYTHON=python bash gates.sh` 跑两遍 ⇒ 遍 a／遍 b **逐字节相同**（12279 B／md5 `1b567b7b2f7908121c53158ddfebf2fb`，`GATES_RC=1`）。与本批之前的上一份存证 `E:\tmp\af128_gates_h.txt`（12279 B／`d0e4feb31c749aaf31221a99e1a4e854`）对撞：**字节数相同、md5 不同、`diff` 恰两行**，且两行都是绿结论行里的计数，都归"本批多了一枚测试文件进了被扫树"：
+
+| 那两行 | 归属 |
+|---|---|
+| `undefined-name 门禁干净（扫描 232 个文件）` → `233` | 本批新判据文件；与 §二之一百二十二「785→786／786→788」同一形状，非缺陷 |
+| `死写容器 0 个（…4168 个名字被读到过）` → `4178` | 同上，新文件里的 10 枚名字。⚠️ 这一串不是判据，判据是"死写容器 **0** 个"，那一格一字未变 |
+
+链上让 `RC=1` 的红源**一条没变、也没新增**：AST 门两枚 `fake-ok-const`（`af_api.py:984`／`:1005`，登录线在途，那枚门仍读磁盘面，归 #113）＋ owner 三枚按设计红（`:1170`／`:1175`／`:1180`，归 #79 窗）。**计数棘轮一位未抬**：`.gates-tally.txt`／`.gates-baseline.txt` 一个数字未动（增长容器仍 131、基线冻结仍 113、就地豁免仍 17）。
+
+### 六、残余（点名归属，⛔ 不写"收口"）
+
+1. **`af_auth.py:91` 那枚未接线站点**：同一形状（`mkstemp`＋`chmod 0o600`）写在明文令牌注册表上。该文件躺着并发会话未提交改动 ⇒ 归 **#79 窗**，本批按归属纪律只把它**登记进 D 族名单**而不改代码。
+2. **已落盘的旧凭据文件不被追溯收紧**：助手只在写入时跑。开发机上那一份 `.forge\credentials.json` 此刻仍挂着 `Authenticated Users:(I)(M)`，要等下一次凭据更新。⇒ 一次性批量收紧属"改在役机器上的凭据文件 ACL"，⛔ 本批不擅自做（NAS 侧 `0600` 真实生效、不受这一条约束）。
+3. **死分支形状不在 `C` 族射程内**（见第四节 M3），已在判据 docstring 逐字声明。
+4. **`atomic_write_text` 的通用路径不收紧 ACL**（`af_flock` sidecar／`af_persist` 记录走的是这一条）：那些文件不是明文凭据，按设计不叫助手——本批只把它们那句 Windows 不成立的**文案**改正，没有新增机制。
+5. F 腿在 Linux CI 恒 skip ⇒ 真机往返只有本机这一份证据；远端那一格由 CI 的 B6 接缝承担。
+
+### 七、提交与推送自证
+
+批前 HEAD **现读为 `0055e61`**（⚠️ 本行原来写 `00679bd` 是**过期读数**：本机两条时间线之间，并发会话落了四枚提交 `c63fe4e`／`117f4dd`／`86bd023`／`0055e61` 并已推上 `origin/main`；`git rev-list --count 00679bd..HEAD` 现读 = **5**（含本批）——按"报告与自己的读数都当过期数据"的口径就地订正，不保留错值）。代码面一枚 `5b06f80`（`git show --stat HEAD` 现读 ⇒ **6 份／482 增／5 删**：`README.md` 27、`af_atomic.py` 62、`af_config.py` 11、`af_flock.py` 4、`af_persist.py` 2、新判据文件 381）；记账面一枚（本文件＋架构说明两份）由紧随其后的提交携带，⛔ 那一枚的 sha 与推送读数写不进本行（"记账落后于事实一枚"的固有形状，沿 §二之一百二十二 的记法）。
+
+**遍 c 那一格必须写成"不可归因于本批"，而不是"逐字节相同"**：本批的**遍 a／遍 b 逐字节相同**（12279 B／`1b567b7b2f7908121c53158ddfebf2fb`）取数于 11:17／11:19；两份 docs 改完后的遍 c 取数于 23:43，输出体 **23854 B／`b7f41bca54ebdffa90dbb8ab2119b376`，`diff` 129 行**。逐段定性（⛔ 没有一行归本批，本批改动面只有六份文件、其中四份是散文与判据）：
+
+| 那一行的变化 | 归属（现读证据） |
+|---|---|
+| AST 门多出 `api_system_version`／`api_system_update_check`／`api_system_update`／`api_system_update_status` 共 6 枚 `fake-ok-const` ＋ 一枚 `except-pass-broad` ＋ 一枚 **`ERROR swallow-and-claim-ok af_api.py:1091`**（同函数内既咽下异常又 `ok=True`＝谎报成功）；`新增/未获批 2 → 8 条` | 登录线／WebUI 升级线在途的 `af_api.py`（该文件在四族禁碰名单里，归 **#79 窗**）。`git log --oneline 00679bd..HEAD` 现读四枚并发提交里 `117f4dd feat: WebUI 一键升级…` 正是这一族的落点 |
+| `全量违规 97 / 上限 97` → **`100 > 97` 棘轮红**；`STALE 基线条目 …af_runtime_plugins.py#except-pass-broad#install_api` | 同上一行（棘轮总数是**那一族**推高的）。⛔ 本批一个账本数字都没动，也不替它上调上限 |
+| owner 三枚红的行号 `:1170/:1175/:1180` → `:1310/:1316/:1323`、真源 `:259` → `:262` | 同一枚文件被并发提交插了行；判据本身一字未变，仍按设计红归 #79 |
+| UI↔路由门 `94 处／90 条` → `98 处／94 条`；计划表口径门 `服务端路由 90 → 94`；原子写门 `状态落盘 52 → 54 处`；卫生门 `入库面 789 → 805 个文件` | 四枚并发提交带来的新端点与新文件（`git ls-files \| wc -l` 现读 **805**）。这些总数里除卫生门那枚外多数不是判据；判据对撞的是"文档 ✅ 与认领读数一致"，两侧同源同批更新 ⇒ 结论行仍 `✓` |
+| 结论行末段 `AST 门禁红` → **`信任边界门禁红（exit=1）`** 五条判据全文 | 新红族，源在 `docs/信任边界清单.md` 的自动段与现读路由表漂移（那两份文件本批一字未动）；归 #79 窗／登录线，与本批无交集 |
+
+⇒ 本批的"逐字节对撞"证据是**遍 a ↔ 遍 b**（同一时刻、同一棵树、`diff` 空）＋与上一批存证的**恰两行计数差**（已在第五节逐行解释）。遍 c 与 a 的 129 行差**全部落在并发面**，按 §二之一百二十三 的归属纪律如实登记，⛔ 不写成"本批改了门禁"，也不拿它冒充"记账面不在门射程"（那一格由上一批的遍 g／h 实测过，本批不重复主张）。⛔ 并发在途文件（`af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`）与仓根四枚未跟踪产物（三枚 HTML 报告／`issued_tokens_clean.json`，另加 `docker-compose.api.yml.tmp`／`docker/docker-compose.api-test.yml`）一字未动；`docs/ADM联动执行计划-AF.md` 不入批。⛔ 本批未执行任何 docker 命令，NAS 在役容器零重建。
+
+- 行尾自证（两面对撞）：`README.md` 工作树 `CR=337`、`git show HEAD:README.md` 面 `CR=310`，本批净增 27 行 ⇒ 每一行都跟着该文件本来的 CRLF，无混排；`af_config.py` 两面 `233`／`226` 同一算法吻合；新判据文件 `CR=0`（与 `tests/unit` 其余文件同为 LF 面，⛔ 不是"整份重排"那种假绿，`git diff --numstat` 读 `27/0`、`9/2`、`2/2`、`1/1` 而非全文件重写）。
+- 存证（`E:\tmp`，不进仓）：`f10_gates_a.txt`／`f10_gates_b.txt`（各 12279 B，同一枚 md5）。
