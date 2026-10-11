@@ -10295,3 +10295,196 @@ P4 首跑给出的是 `SyntaxError`（注入串截在注释中间），按 §二
   ⇒ §九 那句"四遍逐字节相同"的口径要按这个时点读：**它盖的是提交前的工作树**；提交之后以 run5／6 为准。
 - 本格由**紧随其后的记账提交**落码（三份测试文件＋本文件＋架构说明），⛔ 代码面一行没改。
 
+## §二之一百一十九 · 裁定 20261011《八问》窗内五问落地：Q2 乙／Q5 乙／Q6 F-17 乙／Q7 甲／Q1 丙（含一枚**今天就该红**的新门）（2026-10-11）
+
+依据裁定书：`E:\NAS\关键决策部\decisions\20261011-AF稳定性第三轮残余八问-裁定.md`（下引小节写作 §3 Qx／§4／§5）。
+本份只落**窗内五问**，四条要动 `af_api.py`／要 owner 给天数的按 §七 归窗，⛔ 没有为了凑齐八问去碰在途文件。
+
+### 一、Q2 乙：`Scheduler` 真的有了延迟回调，`make_later` 不再恒 `None`
+
+裁定原话「补 `Scheduler.later`（走 `loop.call_later`）；`make_later` 不再恒 `None`」。落码形状与字面差两处，
+写在 §六 偏差 1／2 显式请追认，这里先记现读：
+
+- `src/autoforge/af_scheduler.py:163` `def call_later(self, seconds, callback)`；:178 把
+  `(clock.monotonic() + max(0.0, seconds), callback)` 排进 `self._delayed`。
+- `src/autoforge/af_scheduler.py:180` `_run_delayed()` 由 `tick()` 排空：先到点的一批先摘出来再置回未到期项
+  （:185／:189），所以**重排的回调不会在同一轮 tick 里连跑两遍**（那条腿在 test 文件里点名判过）。
+- `af_runtime_ext.py:40` 的探针名列表是 `("call_later","schedule","add_timer","later")`，第一顺位就是
+  `call_later`；`af_conflict_runtime.py:421` 那句 `self.scheduler.call_later(0.0, _retry)` **本来就在调这个名字**，
+  修前它靠 :425 的同步兜底才没炸。⇒ 名字取 `call_later` 不是随手起的，是仓内既存的唯一真实调用点。
+- 现跑验收（裁定 §4.3 命令原文）：
+  `grep -nE "def (call_later|schedule|add_timer|later)" src/autoforge/af_scheduler.py` ⇒ **RC=0**、
+  `163:    def call_later(self, seconds: float, callback: Callable[[], Any]) -> None:`（修前这一条是 RC=1、零命中）。
+
+### 二、Q2 乙的判据半边：三条未审开关「默认＝关」，而且这条判据**会红**
+
+裁定要的是「新增判据：三条开关默认值＝关，且**会红**（防止长期无人验收）」。落法：
+`tests/unit/test_stability_r3_20261011_batch2.py:173` `test_unreviewed_runtime_faces_are_off_by_default`
+拿的是**运行期真值**（`Runtime` 构造完读 `conf_grading`／`shadow`／`canary` 三枚开关），不是读环境变量字符串；
+同文件 :184 `test_the_same_face_reacts_when_a_switch_is_flipped` 是负控的反面——翻一枚开关，那一格必须**变成"已开"**，
+证明 :173 那条腿真在观察那枚开关而不是恒真。两条合起来才叫"会红"：只留 :173 的话，把它删空也能恒过。
+
+### 三、Q5 乙：`group` 在 AF-Spec 入口显式拒绝并给具名诊断
+
+- `src/autoforge/af_spec.py:63` `E_GROUP_UNSUPPORTED`（:50 进 `__all__`）、:227 那条出口。
+- ⛔ 没有把 `_NODE_KINDS` 并进 `NODE_KINDS`（裁定 §3 Q5 明写「不引入 `NODE_KINDS` 作为单一真源——那是功能面，另立项」）。
+  这一格由 `test_node_kind_drift_is_declared_at_the_entry` 钉住两面：`"group" in NODE_KINDS` 且
+  `"group" not in af_spec._NODE_KINDS`；哪天真在文本层开了 group，这条腿先红、逼那次改动连同拒绝分支一起撤。
+- 现跑读数（输入是三行 AF-Spec 文本、第三行是 `group g1` 那一条）：
+
+```
+code = E_GROUP_UNSUPPORTED
+message = 第 3 行：AF-Spec 文本层不支持 group 节点（IR 层支持），请改用 IR JSON 提交 group
+fix = {'text_layer_node_kinds': ['on','if','do','ask','wait','set','pass'],
+       'ir_layer_node_kinds': ['on','if','do','ask','wait','set','pass','group'], 'use': 'ir_json'}
+```
+
+⇒ 裁定 §4.5 要的那格（「收到含 group 的文本必须报具名诊断，⛔ 不返回静默成功」）是**当场真跑出来的**，不是测试里的断言。
+`fix` 里带两份名单，是为了让下一个读日志的人不用再来问一遍"那到底怎么写"。
+
+### 四、Q6（F-17 乙）：缺 `suggested_ir` 不再造兜底模板，改判 NEEDS_REVIEW
+
+- `src/autoforge/af_proposal.py:55` `NEEDS_REVIEW = "needs_review"`、:62 `ProposalNeedsReview(ProposalError)`、
+  :195 `build_ir` 缺 IR 即抛（**单出口**：要么返回 dict 要么抛，不再返回半成品）。
+- :320 捕获顺序注释是承重的那一行：`ProposalNeedsReview` 是 `ProposalError` 的子类，把它排在通用分支**之前**，
+  否则缺 IR 会被读成"部署试过没成"而落成 FAILED——那正是审计 F-17 抱怨的那个假象。
+- :323 置 NEEDS_REVIEW、:327 写 `kind="proposal_needs_review"` 进台账；:414 `reject` 接受
+  `(PENDING, FAILED, NEEDS_REVIEW)` 三态（⛔ NEEDS_REVIEW 不是死档，人要能一键拒掉）。
+- 已存的依赖那枚兜底模板的路径**同批改掉了**（裁定 §3 Q6「已存的依赖该模板的路径要一起改」）：
+  `test_the_fallback_skeleton_is_physically_gone` 判的是旧骨架字面量从模块里物理消失，不是"存在但没用到"。
+- `approve` 侧加了前置：缺 IR 的提案在**改状态之前**就被拒（`test_approve_of_an_ir_less_proposal_does_not_pretend_approved`），
+  免得出现「状态是 APPROVED、IR 是空」这种下游更难看的形状。
+
+### 五、Q1 丙：两条主体判据独立成档 ＋ 一枚**今天就是红的**门
+
+裁定 §3 Q1 丙「立两条判据——① owner 主体单一真源；② `/api/user/agents/*` 必带主体校验。⛔ 不动 `af_api.py` 一行码；
+门在补齐前持续红是**预期**，不是回归」，§4.2「判据文件独立成档；负控——故意去掉主体校验，腿必须红」。
+
+产物两份，`scripts/check_owner_subject.py`（纯标准库 AST）＋ `tests/unit/test_owner_subject_gate.py`（13 条腿）。
+真仓现跑（命令原文 `…Python313\python.exe scripts/check_owner_subject.py .`）⇒ **RC=1，三枚红**：
+
+```
+读数：主体字面量判定 1 处／`/api/user/agents` 端点 3 枚（带路径参数 2 枚）／单一真源定义行 :259
+红：A：src/autoforge/af_api.py:1175 用字面量名单判定主体 …
+红：B：DELETE `/api/user/agents/{agent_id}`（`api_agent_delete`，:1181）没把调用方身份递进来 …
+红：B：PATCH `/api/user/agents/{agent_id}`（`api_agent_rename`，:1188）没把调用方身份递进来 …
+```
+
+三处红点与裁定 §六 I 逐条对上，⛔ 与 F-01／F-02 不同源（那一族是签发侧，这一族是路径主体校验缺席），
+所以这一格在 HEAD 上今天就成立、不是登录线改坏的回归。
+
+判据只认 AST 面（`Call` 节点里的 `Depends(authenticated())`、比较运算里出现的字符串字面量集合），
+不认注释——本仓已经踩过两次"散文踩名字哨兵"，`af_api.py:256` 那句「沿用同一口径」的注释正好是反例：
+注释这么写、名单却又抄了一遍，文字面判据读不出这一格。
+
+`gates.sh` 接入走**纯加法**：`cache_rc` 之后开一块跑门、把 `subject_rc` 存下来，结论段放在**链尾**
+（`echo '结论：门禁干净…'` 之前）。放在链尾是有意的：本门今天必红，若把它的**结论段**塞在中间，那一段会盖掉
+后面还没报的门。⚠️ 反向的那一事实在同一份输出里读得出来，如实记：链尾那一大排结论是**第一个红即 `exit`** 的形状，
+而 `ast_rc`（登录线在途两枚 `af_api.py:984`／`:1005` `fake-ok-const`）在链上排在 `subject_rc` 之前
+（`gates.sh:547` 对 `:572`）⇒ **本批 `gates.sh` 的输出结束在「结论：AST 门禁红（exit=1）」，本门的结论段今天不会被打印**。
+这不改变判定，也不该被读成"本门没跑"：三枚红点是以**逐行输出**的形式出现的（`run1.txt` 第 82–85 行），
+标题行「══ owner 主体单一真源 ＋ /api/user/agents/* 主体校验门禁（裁定 20261011 §3 Q1 丙）══」在第 81 行。
+⇒ 「链尾」只保证**本门不吞掉别人的结论**，不保证别人的结论不吞掉本门——这一条既有链的形状不是本批引入的。
+文案里明写「**这一格的红是预期**…归属在**并发登录线**（#79 窗）…⛔ 不是就地给 `af_api.py`
+加 `# owner-subject: exempt(...)`」——豁免标记的语法在，是为了让**登录线自己**在补齐时有第二条路可走，
+不是给 AF 侧留的旁门。`check_gates_coverage.py` RC=0（新脚本必须被 gates 面引用，不然装配覆盖门会红；
+为了躲那一格而故意不起名反而是给门钻空子），覆盖门自报现读「盘上 `check_*.py` **26** 个、`gates.sh` 覆盖 **25** 个、
+工作流覆盖 1 个、独立作业豁免 1 格」⇒ 本批新门**不需要任何豁免**。
+
+文档面：`docs/信任边界清单.md` 新增 `## 六、主体校验面`（四列表：判据／现读／状态／归属），
+`check_trust_boundary.py` RC=0。
+
+### 六、偏差登记（六处，逐条显式请追认，⛔ 没有"按意图落、按字面沉默"）
+
+1. **名字**：裁定写 `Scheduler.later`，落的是 `Scheduler.call_later`。理由见 §一 第三条（仓内既存调用点＋探针第一顺位）；
+   裁定 §4.3 验收命令本身四个名字都认，所以这一格不与验收冲突。撤销＝加一枚 `later = call_later` 别名即可，改动面一处。
+2. **机制**：裁定写「走 `loop.call_later`」，落的是 tick 排空的单调 deadline 队列。现读运行模型：`Scheduler` 由后台线程
+   按 tick 驱动（`af_live.py:419`），进程内**没有 asyncio loop**；真要走 `loop.call_later` 就得先造一枚 loop，那是把
+   时钟从"一处 tick"扩成"两处"，正撞在裁定自己 §3 Q1 甲 关心的并发面上。语义两格对齐（同栈内不跑、到点才跑），各有腿。
+3. **`_delayed` 走就地豁免而不是进 `BOUNDED_CACHES`**：`af_scheduler.py:85` 那行 `# bounded-cache: exempt(…)`。
+   注册表要 `cap`／`ttl`／`trim` 三条腿逐个核对，本队列**有意没有 TTL**——到点前把它抹掉等于让一次重试悄悄消失，
+   给一条不存在的腿盖章就是假账。超限走「满了即抛」（:174，`SCHED_DELAYED_QUEUE_FULL`）由调用方退回同步重试，
+   ⛔ 不静默淘汰已排项。
+4. **红数只在 `gates.sh`、不进 pytest**：真仓腿只核射程（端点数／定义行在不在），刻意不钉"今天有三条红"。
+   钉了会变成**反向激励**——登录线补齐之后 pytest 反而红。另有一条"补齐后转绿"的腿跑在 `tmp_path` 的副本树上
+   （把真仓文本就地补两格），⛔ 工作树一行不动。
+5. **Q7 甲的落点没入库**：`docker/docker-compose.api-test.yml` 是并发登录线的**未跟踪在途文件**
+   （`git ls-files --error-unmatch docker/docker-compose.api-test.yml` ⇒ RC=1）。本批只在本地工作树把它补齐成
+   `build:` 段（:7-9 `context: ..`／`dockerfile: docker/Dockerfile.test`，:10 `image: autoforge-api-test:local`），
+   ⛔ 没有 `git add`（在途文件不归我提）。⇒ 裁定 §4.6 后半格（「`git status` 显示 NAS 在役容器未重建」）
+   成立的方式是：**本批一条 docker 命令都没执行**，没有 build、没有 `up -d --force-recreate`、没碰 NAS 工作副本。
+   入库半边归 #79 窗。
+6. **`image:` 从复用 `:latest` 改成本地 tag**：本地构若仍写 `:latest`，构出来的层会立刻盖住在役那份镜像，
+   那是把"本地构"读成"重建在役镜像"——与裁定 §3 Q7 的 ⛔ 两条正相反。
+
+### 七、未落项归属（六条按裁定自己开窗，本批一行码没替它写）
+
+| 问 | 状态 | 卡在谁 |
+|---|---|---|
+| Q1 甲（F-01／F-02 退回登录线作者自修） | 已按裁定挂名，AF 侧只在 `docs/audit/` 与门禁台账挂名 | 登录线作者；AF ⛔ 不动 `af_api.py` |
+| Q3 甲（`api_asks_pending` 区分两种"读不出"） | **未落** | 改 `af_api.py` ⇒ #79 窗；裁定还要求与 DB 契约测试**同批**，跨仓那一半没谈完就落码等于再欠一张口头账 |
+| Q4 甲（时间窗裁剪） | **未启动** | 等 owner 给 N／M 天数；裁定 §5 明写这一格**不可逆**，前置是先在测试区跑一次并留删除清单 |
+| Q8 F-20（归档名 vs `uuid4().hex[:16]` 永不相等） | **未落** | 改 `af_api.py` ⇒ #79 窗 |
+| Q8 F-19（`POST /api/user/pair/request`） | **退回**（裁定 §3 Q8「属新增端点 ⇒ 走 ARCH-05 登记＋理由，单独立项，不在本轮」） | 单独立项 |
+| Q6 F-18（`.gitignore:34-38` 那个归属不明的在途产物） | 只做**归属认定**，⛔ 不动 `.gitignore`、⛔ 不删该文件 | 并发登录线 |
+
+### 八、现读对撞与计数棘轮（本批把四份既有判据的期望值对齐到现读）
+
+新增一枚留痕（`SCHED_DELAYED_CALLBACK_FAILED`）与一条增长容器（`_delayed`）会把既有"真仓读数钉"抬一格，
+这是 §二之一百一十八 那条判例（`gates.sh` 一条 pytest 都不跑 ⇒ 门绿 ≠ 判据绿）**第二次要防的形状**，
+所以本批收尾把四份文件一起跑了：
+
+- `tests/unit/test_observability_gate.py`：站点 `155 → **156**`、级别分布 `error 20 → **21**`、
+  带码站点 `30 → **31**`、具名码枚数 `28 → **29**`、`info["codes"]/info["coded"]` 同步。
+  ⚠️ **无码存量 125 与它的三档分布（warning 83／exception 11／info 7）一字未动** ⇒ `docs/可观测性清单.md` §四
+  那六行上限没抬、棘轮没放宽。⇒ 这是**把腿对齐现读**，不是放宽门。
+- `tests/unit/test_bounded_caches_gate.py:676`：扫到增长容器 `130 → **131**`（`_delayed` 那一条），
+  `BASELINE` 仍 **113**（只减不增的那半格没动）。
+- 门自身现读：`…Python313\python.exe scripts/check_observability.py .` ⇒ RC=0、
+  `✓ 可观测性门禁干净（现读留痕 156 站点逐行对撞一致；具名码 29 枚／31 站点全部在册且认领可读；关联 id 面 信封 6 枚／HTTP 0 枚 与 §五 账面对撞一致；访问日志掩码锚点在位）`。
+- `docs/可观测性清单.md` §三：新行落 `af_scheduler.py:194`（⚠️ 门记的是 **`logger.error(...)` 那枚 `Call` 的行号**，
+  消息字面量漂在 :195——上一格把行号钉成 :195 时门直接判红，这一格按现读改回 :194）；
+  同时把既有的 `SCHED_PENDING_AUTO_GONE` 行号 `:136 → :142`（本批在它上面插了 `call_later` 那几行，行号跟着漂是**登记该有的行为**，
+  §三 开头那句话写的就是这件事）。
+
+### 九、合跑读数
+
+命令原文：
+`…Python313\python.exe -m pytest tests/unit/test_observability_gate.py tests/unit/test_bounded_caches_gate.py tests/unit/test_owner_subject_gate.py tests/unit/test_stability_r3_20261011_batch2.py tests/unit/test_af_proposal.py tests/unit/test_af_spec.py tests/unit/test_trust_boundary_gate.py -q`
+⇒ **RC=0，203 passed in 125.40s**（存证 `…/tasks/b18zngt68.output`）。
+七份里含两份**旧**判据（`test_af_proposal.py`／`test_af_spec.py`），因为它们与本批改的是同两个模块——按 §二之一百一十八
+那条升级后的口径，不能只跑新增那份。
+
+### 十、本批提交面（只提自己的文件，⛔ 全程没有 `git add -A`）
+
+进索引：`src/autoforge/af_scheduler.py`／`af_spec.py`／`af_proposal.py`、`scripts/check_owner_subject.py`（新）、
+`tests/unit/test_owner_subject_gate.py`（新）／`test_stability_r3_20261011_batch2.py`（新）／
+`test_observability_gate.py`／`test_bounded_caches_gate.py`、`gates.sh`、`docs/可观测性清单.md`、
+`docs/信任边界清单.md`、本文件、`docs/architecture/AF完整架构与运行时说明.md`。
+左列保持空白（并发登录线在途）：`src/autoforge/af_api.py`／`af_auth.py`、`docker/*`（含本批本地补的
+`docker-compose.api-test.yml`，见 §六 偏差 5）、`ui-user-mimo/*`、`docs/audit/参考/FFL-200题测试提示词.md`、
+`docs/ADM联动执行计划-AF.md`；仓根未跟踪产物（`docker-compose.api.yml.tmp`／`issued_tokens_clean.json`）⛔ 不删不提。
+- commit／push／`ls-remote` 三格读数由紧随其后的记账提交补进本节，写法与 §二之一百一十七 第八格一致。
+
+### 十一、门禁面逐字节对撞（本批门**照旧红**，而红源不是本批）
+
+命令原文：`GATES_PYTHON=…Python313\python.exe bash gates.sh > E:/NAS/tmp/gates_r3batch2_runN.txt 2>&1`（N=1／2／3，同一份工作树，
+跑在三份判据期望值与两份 docs 记账全部落盘**之后**、代码面已定稿之时）。
+
+- **三遍逐字节相同**：各 **11680 B／md5 `46ca8fb5b0697fe4a7fd4bf426522e27`**；`diff run1 run2` 与 `diff run2 run3` 均空，
+  两个 `DIFF_RC=0`。`GATES_RC=1` 三遍一致。
+- 较上一批的 10434 B **增 1246 B**，增量可逐行归属：新门那块＝标题行（第 81 行）＋读数行（:82）＋三枚红（:83–85）。
+  ⛔ 没有任何一块既有门的输出被本批改掉。
+- **今天唯一的红源仍不是本批**：链尾结论落在「`结论：AST 门禁红（exit=1）`」（`gates.sh:547`），即并发登录线在途那两枚
+  `af_api.py:984`／`:1005` `fake-ok-const`（#113／#118 名下）。本门那三枚红**在逐行输出里看得见**，只是它的**结论段**
+  （`:572`）在链上更靠后、够不到——见 §五 那条订正。
+- 其余各门本批全绿且自报现读：可观测性门 `RC=0`（156 站点／29 枚 31 站）、有界缓存门 `RC=0`（扫到 131／基线 113／注册表 4）、
+  信任边界门 `RC=0`（§六 那一节是新增面，`check_trust_boundary.py` 认得）、装配覆盖门 `RC=0`
+  （`check_*.py` 26 个／`gates.sh` 覆盖 25／工作流 1／豁免 1 格）。
+- ⚠️ 顺序如实：上面那三遍跑在**本文件 §一–§十一 与架构说明 §十八 第 31 条＋§十九 那一行**之前。docs 记账不进任何一枚门的
+  射程（`check_trust_boundary.py` 读的是 `docs/信任边界清单.md`，那份已定稿；`check_plan_ui_claims.py` 读 `docs/plan/`），
+  但"不进射程"是**推导**不是实测 ⇒ 记账落盘后另跑一遍复验，读数补进本格。
+- **复验读数（记账落盘之后那一遍）**：命令同上（`run4.txt`）⇒ **RC=1、11680 B／md5 `46ca8fb5b0697fe4a7fd4bf426522e27`**，
+  `diff run1 run4` 空、`DIFF14_RC=0`。⇒ 上面那句"推导"当场被实测顶掉了：**四遍同一份本体**，本批的记账面没有推动任何一格门读数，
+  代码面从 run1 到 run4 一行没再动过。
+
