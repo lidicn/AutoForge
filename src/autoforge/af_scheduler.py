@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,11 @@ PARALLEL = "parallel"
 #: `Scheduler.rejections` 的条数上限。这份是拒绝清单的内存镜像（每次拒绝都同时落审计），
 #: 常驻服务里若只增不减就是稳定性审计 BUG-01 那一族的无界增长。
 REJECTIONS_MAX = 200
+
+#: `Scheduler._delayed` 的长度上限（裁定 20261011 §3 Q2 乙的延迟回调队列）。
+#: 满了不静默淘汰：排队满 ⇒ 抛，调用方（`af_conflict_runtime._on_pending_ready`）本来就带
+#: `except` 兜底——它会留 `schedule` 降级痕并退回同步重试，比"重试悄悄消失"诚实。
+DELAYED_MAX = 256
 
 
 @dataclass(frozen=True)
@@ -77,6 +82,7 @@ class Scheduler:
         self._debounce: dict[tuple[str, str], float] = {}
         self._time_fired: set[tuple[str, str, str]] = set()
         self.rejections: list[str] = []
+        self._delayed: list[tuple[float, Callable[[], Any]]] = []  # bounded-cache: exempt(调度器的延迟回调队列，不是缓存：每次 tick 由 `_run_delayed()` 按 deadline 排空，读点就在同方法；上限 `DELAYED_MAX` 走"满了即抛"、由调用方退回同步重试，不静默淘汰待重试项。没有 TTL 腿——到点前把它抹掉等于让一次重试悄悄消失，所以不进 BOUNDED_CACHES 给一条不存在的腿盖章)
 
     # ─────────────────────────────────────────────────────────────────
     # 事件入口
@@ -149,7 +155,45 @@ class Scheduler:
 
         # 4) 排队队列出队
         fired += self._drain_queues()
+
+        # 5) 到点的延迟回调（裁定 20261011 §3 Q2 乙：`call_later` 的落地腿）
+        self._run_delayed()
         return fired
+
+    def call_later(self, seconds: float, callback: Callable[[], Any]) -> None:
+        """把 `callback` 排到 `now + seconds` 之后的那一次 `tick()` 上执行。
+
+        这枚接口早就有人调：`af_conflict_runtime.py:421` 的 `scheduler.call_later(0.0, _retry)`，
+        而 `af_runtime_ext.make_later` 按 `("call_later","schedule","add_timer","later")` 四个名字探测
+        ——过去四个全不落，于是 `make_later` 恒返 `None`、冲突等待的 `_retry` 在事件栈里同步重入
+        （稳定性第三轮 F-07／F-08）。这里刻意**不**用 `asyncio` 的 `loop.call_later`：本仓的 tick 由
+        守护线程驱动（`af_live.py`），线程里没有 running loop，用真环就是把"量不出"写成契约。
+        """
+        if not callable(callback):
+            raise TypeError("call_later 的 callback 必须可调用")
+        if len(self._delayed) >= DELAYED_MAX:
+            raise RuntimeError(
+                f"SCHED_DELAYED_QUEUE_FULL 延迟回调队列已达上限 {DELAYED_MAX}，拒绝再排（不静默淘汰已排项）"
+            )
+        self._delayed.append((self.clock.monotonic() + max(0.0, float(seconds)), callback))
+
+    def _run_delayed(self) -> None:
+        """执行到点的延迟回调；单个回调抛穿只留痕，不拖垮本次 tick 与其余回调。"""
+        if not self._delayed:
+            return
+        now = self.clock.monotonic()
+        due = [item for item in self._delayed if item[0] <= now]
+        if not due:
+            return
+        # 先摘再跑：回调里重新 `call_later` 不会在同一轮被再次执行（那正是 F-07 的重入形状）。
+        self._delayed = [item for item in self._delayed if item[0] > now]
+        for _, callback in due:
+            try:
+                callback()
+            except Exception as exc:  # noqa: BLE001 —— 一条回调的失败不该停掉整次 tick
+                logger.error(
+                    "SCHED_DELAYED_CALLBACK_FAILED 延迟回调抛穿（本次 tick 其余任务继续）：%s", exc
+                )
 
     def trigger(self, automation_id: str, event: BusEvent | None = None) -> Instance | None:
         """手动触发（测试 / 外部调用）：跳过触发匹配，直接走 mode 与配额。"""

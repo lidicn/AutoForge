@@ -30,7 +30,7 @@ from autoforge.af_feedback import (
 
 __all__ = [
     "ProposalKind", "ProposalStatus", "Proposal", "DeployPlan",
-    "StaticGuardPolicy", "ProposalError", "ProposalManager", "build_ir",
+    "StaticGuardPolicy", "ProposalError", "ProposalNeedsReview", "ProposalManager", "build_ir",
 ]
 
 
@@ -50,10 +50,17 @@ class ProposalStatus(str, Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     FAILED = "failed"
+    #: 裁定 20261011 §3 Q6 F-17 乙：提案没有 `suggested_ir` 时落这一档。
+    #: 它不是失败（不是"试过没成"），而是"AF 无从部署、等人或 MA 补 IR"。
+    NEEDS_REVIEW = "needs_review"
 
 
 class ProposalError(RuntimeError):
     """提案编译/部署失败。"""
+
+
+class ProposalNeedsReview(ProposalError):
+    """缺 `suggested_ir` ⇒ 不部署、不代为生成 IR（区别于真正的部署失败）。"""
 
 
 @dataclass
@@ -175,25 +182,19 @@ def _ir_writes_devices(ir: Mapping[str, Any]) -> bool:
 
 
 def build_ir(proposal: Proposal) -> dict[str, Any]:
-    """生成 IR 文档：优先用 suggested_ir，否则生成「只 ask 不写设备」的安全骨架。"""
+    """取提案的 IR：只认 `suggested_ir`，⛔ AF 不代为生成（裁定 20261011 §3 Q6 F-17 乙）。
+
+    这里原本有一份"只 ask 不写设备"的兜底骨架。它三处不合 schema（键名 `version` 而非
+    `ir_version`、`trigger` 挂在 automation 上而非 `on` 节点内、`nodes` 是 dict 而 schema 要
+    array），于是无 `suggested_ir` 的提案**必然**部署失败——而"必然失败"正在替 owner 挡着
+    「一份没审过的 IR 被自动部署到家里」。把它修对就等于亲手开通自动生成，所以整段删掉：
+    缺 IR ⇒ 抛 `ProposalNeedsReview`，由 `_auto_deploy` 置 NEEDS_REVIEW，等 MA 补 IR 或人工另投。
+    """
     if proposal.suggested_ir:
         return dict(proposal.suggested_ir)
-    aid = f"auto_{proposal.proposal_id.replace('-', '_')}"
-    return {
-        "version": 1,
-        "automations": [{
-            "id": aid,
-            "name": proposal.natural_language[:40] or aid,
-            "confidence": None,
-            "trigger": {"kind": "manual"},
-            "nodes": {
-                "ask": {
-                    "id": "ask", "kind": "ask",
-                    "prompt": proposal.natural_language,
-                },
-            },
-        }],
-    }
+    raise ProposalNeedsReview(
+        f"提案 {proposal.proposal_id} 没有 suggested_ir，AF 不代为生成 IR"
+    )
 
 
 def _plan_status(band: Band) -> ProposalStatus:
@@ -316,6 +317,17 @@ class ProposalManager:
             if self.deployer is None:
                 raise ProposalError("未配置 deployer，无法自动部署")
             automation_id = str(self.deployer(plan))
+        except ProposalNeedsReview as exc:            # noqa: BLE001 —— 顺序要紧：它是 ProposalError 的子类
+            # 缺 IR 不是"部署试过没成"，而是"AF 无从部署"。置 NEEDS_REVIEW 而不是 FAILED，
+            # 是为了让下一轮读队列的人看得出这一格在等谁（裁定 20261011 §3 Q6 F-17 乙）。
+            proposal.status = ProposalStatus.NEEDS_REVIEW
+            proposal.reason = f"{type(exc).__name__}: {exc}"
+            proposal.decided_at = now
+            audit_write(
+                self.audit, at=now, kind="proposal_needs_review",
+                proposal_id=proposal.proposal_id, reason=proposal.reason,
+            )
+            return
         except Exception as exc:                      # noqa: BLE001 —— 部署失败要落状态
             proposal.status = ProposalStatus.FAILED
             proposal.reason = f"{type(exc).__name__}: {exc}"
@@ -354,6 +366,12 @@ class ProposalManager:
         proposal = self._require(proposal_id)
         if proposal.status not in (ProposalStatus.PENDING, ProposalStatus.FAILED):
             raise ProposalError(f"提案 {proposal_id} 已终态（{proposal.status.value}），不能批准")
+        # 先把"部署不了"说在改状态之前：过去这里 status 已经写成 APPROVED，随后 `plan_for`
+        # 才因为缺 IR 抛穿，队列里就躺着一份"已批准却没部署"的提案（假绿）。
+        if proposal.kind is not ProposalKind.ASK and proposal.suggested_ir is None:
+            raise ProposalError(
+                f"提案 {proposal_id} 缺 suggested_ir，AF 不代为生成 IR ⇒ 不能批准部署"
+            )
         now = clock_now(self.clock)
         proposal.status = ProposalStatus.APPROVED
         proposal.decision = "approved"
@@ -392,7 +410,9 @@ class ProposalManager:
     def reject(self, proposal_id: str, *, by: str = "human", reason: str | None = None) -> Proposal:
         """拒绝提案：人工拒绝/拒绝询问 → 负样本压低 conf（IR §10）。"""
         proposal = self._require(proposal_id)
-        if proposal.status not in (ProposalStatus.PENDING, ProposalStatus.FAILED):
+        if proposal.status not in (
+            ProposalStatus.PENDING, ProposalStatus.FAILED, ProposalStatus.NEEDS_REVIEW,
+        ):
             raise ProposalError(f"提案 {proposal_id} 已终态（{proposal.status.value}），不能拒绝")
         now = clock_now(self.clock)
         proposal.status = ProposalStatus.REJECTED

@@ -654,7 +654,13 @@ def test_real_repo_measurements_are_pinned():
     `tests/unit/test_owner_alert.py::test_dedupe_is_capped_and_expires_without_reads`。
     ⛔ 同一枚键**不许**再挂就地豁免注释：注册表＋源码内标记＝两份口径，将来注册表被删时门却照样绿。
 
-    工作树里若躺着未提交的 WIP 模块，扫到数会比 130 更大而基线仍是 113——那种红的意思是
+    扫到 130 → 131（裁定 20261011 §3 Q2 乙的落地腿）：`af_scheduler.py::Scheduler._delayed`
+    是延迟回调队列。它不是缓存——每次 `tick()` 由 `_run_delayed()` 按 deadline 排空，读点就在同一方法；
+    封顶腿是 `DELAYED_MAX`，满了**抛**而不是静默淘汰，调用方（`af_conflict_runtime.py` 那条重试线）
+    退回同步重试。不给 TTL：到点前把它抹掉等于让一次重试悄悄消失，那正是 BUG-01 那一族的反面。
+    封顶不丢单腿是 `tests/unit/test_stability_r3_20261011_batch2.py::test_delayed_queue_cap_raises_without_dropping_queued_work`。
+
+    工作树里若躺着未提交的 WIP 模块，扫到数会比 131 更大而基线仍是 113——那种红的意思是
     "新容器没登记"，不是这行数字错了，登记处置归那一批自己，不许靠挪动这里的数字把它抹平。
 
     基线 114 → 113（裁定 20261011 §3 Q3 乙）：`af_auth.py::TokenRegistry._revoked` 从基线移出，改进
@@ -667,7 +673,7 @@ def test_real_repo_measurements_are_pinned():
     containers, _lines, scan_errs = gate.scan(src)
     assert errs == [] and scan_errs == []
     assert len(bounded) == 4 and len(fixed) == 3
-    assert len(containers) == 130 and len(gate.BASELINE) == 113
+    assert len(containers) == 131 and len(gate.BASELINE) == 113
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"

@@ -321,6 +321,18 @@ echo "══ 有界缓存注册表门禁（TTL 与硬上限成对、回收要有
 cache_rc=$?
 
 echo
+echo "══ owner 主体单一真源 ＋ /api/user/agents/* 主体校验门禁（裁定 20261011 §3 Q1 丙）════"
+# 这一道门**今天就是红的**，而且是设计目的：它盯的两格归属在并发登录线（#79 窗），本批
+# ⛔ 不动 \`af_api.py\` 一行码——「判据先立、门逼两侧补齐」零冲突（裁定 §2 对 Q1 的原话）。
+# 判据 A：owner 面的名单只许 \`_OWNER_SUBJECTS\` 一枚真源；判定侧再抄一份字面量＝第二真源，
+#         签发侧改主体名时判定侧不会跟着红（审计 F-02 撞的正是这个形状）。
+# 判据 B：\`/api/user/agents/{agent_id}\` 那两枚必须把「调用方主体 ↔ 路径主体」绑一次；
+#         今天只挂 scope:write 而无主体校验（审计 §六 I，HEAD 上就成立，与 F-02 不同源）。
+# 补齐之后本门自绿；负控腿在 tests/unit/test_owner_subject_gate.py（故意去掉校验必须红）。
+"$PYTHON" "$REPO/scripts/check_owner_subject.py" "$REPO"
+subject_rc=$?
+
+echo
 echo "══ IR 运行时扩展键白名单硬门（写进节点的运行时键必须在白名单里）════"
 # 裁定 20261005-AF-ir_non_reversible是否升schema 判 B（明确豁免 + schema 白名单注释），并自己写明
 # "B 能成立的前提"是这条断言：白名单只是注释、约束力弱于 A，所以代码侧键集合
@@ -551,6 +563,14 @@ fi
 if [ $smoke_rc -ne 0 ]; then
   echo "结论：冒烟红（exit=$smoke_rc）。先在容器里复跑一次再定性——见 README 第三节。"
   exit $smoke_rc
+fi
+if [ $subject_rc -eq 2 ]; then
+  echo "结论：owner 主体门禁读不出射程（exit=$subject_rc）。三种形状：① \`src/autoforge/af_api.py\` 不在盘上或解析不了；② 那文件里找不到 \`_OWNER_SUBJECTS = …\` 那一行——owner 面的定义被挪走或改名，判据 A 失去对照物；③ 数不出任何 \`/api/user/agents*\` 端点——那面整块搬走，本门已盯不住任何东西。三种都不许报『干净』。"
+  exit $subject_rc
+fi
+if [ $subject_rc -ne 0 ]; then
+  echo "结论：owner 主体门禁红（exit=$subject_rc）。**这一格的红是预期**（裁定 20261011《八问》§3 Q1 丙原话：「门在补齐前持续红是预期，不是回归」）：判据 A 管的是 owner 面名单只许 \`_OWNER_SUBJECTS\` 一枚真源（判定侧抄第二份字面量＝签发侧改主体名时判定侧不跟着红，审计 F-02 的形状）；判据 B 管的是 \`/api/user/agents/{agent_id}\` 那两枚必须把「调用方主体 ↔ 路径主体」绑一次（今天只挂 scope:write，一枚 write 令牌可撤销／改名任何主体的 agent，审计 §六 I 在 HEAD 上就成立）。两格的归属都在**并发登录线**（#79 窗）⇒ 本批 ⛔ 不动 \`af_api.py\` 一行码，AF 侧不替它补。谁把这行抹掉：登录线把那两面按判据写法落地即自绿；撤销本门的条件是裁定 §5 那一条——删该腿并把 ARCH-05 登记表改回『待裁』，⛔ 不是就地给 \`af_api.py\` 加豁免标记。"
+  exit $subject_rc
 fi
 echo '结论：门禁干净。注意 import 通过不等于服务能起，验收仍要 compose ps + HTTP。'
 exit 0

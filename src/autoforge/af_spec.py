@@ -47,6 +47,7 @@ from .af_ir import IR_VERSION, Graph, load_graph
 __all__ = [
     "SpecError",
     "E_UNKNOWN_PRIMITIVE",
+    "E_GROUP_UNSUPPORTED",
     "E_UNKNOWN_FIELD",
     "compile_spec",
     "render_spec",
@@ -58,6 +59,8 @@ _NODE_KINDS = ("on", "if", "do", "ask", "wait", "set", "pass")
 # ── 封闭词表（v2 M2：未知原语 / 未知字段编译前即拒，并回灌可机读 fix）──
 E_UNKNOWN_PRIMITIVE = "E_UNKNOWN_PRIMITIVE"
 E_UNKNOWN_FIELD = "E_UNKNOWN_FIELD"
+#: 裁定 20261011 §3 Q5 乙：`group` 掉进「未知关键字」那一档读起来像拼写错误，改报具名诊断。
+E_GROUP_UNSUPPORTED = "E_GROUP_UNSUPPORTED"
 
 _OPTION_KEYWORDS = (
     "name",
@@ -211,6 +214,23 @@ def compile_spec(text: str) -> Graph:
 
         if current is None:
             raise SpecError(f"第 {lineno} 行：{keyword!r} 出现在任何 automation 之前")
+
+        # 裁定 20261011 §3 Q5 乙：`group` 是 IR/schema 层的第 8 种节点（`af_ir.NODE_KINDS`），
+        # AF-Spec 文本层没有它的语法。过去这一行落到 `_parse_option` 末尾的「未知关键字」，
+        # 报的是 `E_UNKNOWN_PRIMITIVE`＋一份近邻建议——把「这层根本没有这个原语」说成了「你打错了」。
+        # ⛔ 不静默丢弃；⛔ 不把 `_NODE_KINDS` 并进 `NODE_KINDS`（那要 `compile_spec` 接得住 group
+        # 语义、`render_spec` 吐得出来，属功能面，另立项）。
+        if keyword == "group":
+            raise SpecError(
+                f"第 {lineno} 行：AF-Spec 文本层不支持 group 节点（IR 层支持），"
+                "请改用 IR JSON 提交 group",
+                code=E_GROUP_UNSUPPORTED,
+                fix={
+                    "text_layer_node_kinds": list(_NODE_KINDS),
+                    "ir_layer_node_kinds": ["on", "if", "do", "ask", "wait", "set", "pass", "group"],
+                    "use": "ir_json",
+                },
+            )
 
         if keyword in _NODE_KINDS:
             current["nodes"].append(_parse_node(keyword, tokens, lineno))

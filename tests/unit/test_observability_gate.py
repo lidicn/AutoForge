@@ -56,25 +56,34 @@ def real():
 
 
 def test_real_repo_site_readings_are_pinned(real):
-    """现读站点数／文件数／级别分布六档全点。数字漂了要么连同清单一起改，要么这一腿先响。"""
+    """现读站点数／文件数／级别分布六档全点。数字漂了要么连同清单一起改，要么这一腿先响。
+
+    155 → 156、error 20 → 21（裁定 20261011《八问》§3 Q2 乙）：`Scheduler._run_delayed` 新增一枚
+    带码留痕 `SCHED_DELAYED_CALLBACK_FAILED`。文件数不动（`af_scheduler.py` 本来就在射程里），
+    无码存量不动（这一枚带码，不吃 §四 的格子）。
+    """
     from collections import Counter
 
     lv = Counter(s["level"] for s in real["sites"])
-    assert len(real["sites"]) == 155
+    assert len(real["sites"]) == 156
     assert len({s["path"] for s in real["sites"]}) == 30
-    assert dict(lv) == {"debug": 19, "info": 8, "warning": 97, "error": 20, "exception": 11}
+    assert dict(lv) == {"debug": 19, "info": 8, "warning": 97, "error": 21, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
 
 def test_real_repo_named_code_readings_are_pinned(real):
-    """具名码枚数／站点数与无码存量——§四 那六行上限就是照无码那组数钉的。"""
+    """具名码枚数／站点数与无码存量——§四 那六行上限就是照无码那组数钉的。
+
+    带码站点 30 → 31、具名码 28 → 29（裁定 20261011《八问》§3 Q2 乙新增 `SCHED_DELAYED_CALLBACK_FAILED`）。
+    无码存量 125 与它的三档分布不动——§四 的上限是照无码那一组钉的，新站带码 ⇒ 不吃那一格。
+    """
     from collections import Counter
 
     coded = real["coded"]
-    assert len(coded) == 30
-    assert len({s["code"] for s in coded}) == 28
-    # 30 站／28 枚＝仓内两例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
+    assert len(coded) == 31
+    assert len({s["code"] for s in coded}) == 29
+    # 31 站／29 枚＝仓内两例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
     # ① `DEPLOY_AUDIT_PERSIST_FAILED` 同时出自「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」
     #    两条腿——同一句承诺（台账没落稳）；
     # ② `OWNER_ALERT_PUBLISH_FAILED` 出自「投递抛出」与「投递返回未被接受（code=…）」两条腿——
@@ -125,7 +134,7 @@ def test_real_repo_every_named_code_is_registered(real):
     findings, info = gate.check(REPO)
     b = [f for f in findings if f.startswith("B：")]
     assert not b, "\n".join(b)
-    assert info["codes"] == 28 and info["coded"] == 30
+    assert info["codes"] == 29 and info["coded"] == 31
 
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
