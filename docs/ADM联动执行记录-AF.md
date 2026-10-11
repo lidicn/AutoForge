@@ -9873,3 +9873,89 @@ docstring 里第一次出现的那个名字**，赋值行根本没动 ⇒ 门读
 `GATES_RC=1`、输出 **10407 B**，与 §四 那两份 10406 B 的本体 `diff` **只差末行那一枚换行符**（那两份是
 `sed '$d'` 削掉末行标签后的产物，末尾不带换行），其余 90 行逐字相同；AST 面同读「新增/未获批 2 条（error 0 / warn 2）、
 `except-pass-broad=19 | fake-ok-const=78`、全量 97／上限 97」⇒ **本件的 §六 追加没有移动任何一枚读数**。
+
+---
+
+## §二之一百一十六 · 裁定 20261011 §3 Q13 丙落地：部署仪式台账第一次离开内存（`deploy_audit.jsonl`），读者告示只落到文档与真源常量那一层（2026-10-11）
+
+**依据**：`decisions/20261011-AF第六轮与第二期审计攒批十三问-裁定.md` §3 Q13 ＝「AuditLog 持久化 → **丙（只对部署仪式族落盘）**」，
+并把**乙（写进文档承认易失）**明确并入丙。上一件（§二之一百零七）结案时追出的那一格就是这个 Q13。
+
+### 一、现读复测（报告与裁定那句话各自对撞一遍）
+
+- `AuditLog` **这一族类**改前零文件 I/O 成立：`git show HEAD:src/autoforge/af_audit.py` 里 `AuditLog` 只有 `deque` 与
+  `add/of_type/__iter__/__len__/clear`。⚠️ 但**别说成"整个模块没有一次写盘"**——现读该模块 `:164-166` 的 `record_conflict`
+  一直在往 `write_conflicts.jsonl` 追加（那一族本来就落盘，裁定 20261011 §3 Q13 要的正是让 `DEPLOY_AUDIT` 也进这一家族）。
+  所以报告"审计只在内存"这半边**对 `AuditLog` 成立、对整模块不成立**，这个区分要带走。
+- 落点选**跟本次部署的 store 根走**（`{store_root}/deploy_audit.jsonl`），不新开环境变量、不新开全局路径：与 `write_conflicts.jsonl`
+  同一家族，同一个挂载目录、同一条 `.gitignore`（`.forge/`），所以**不需要新开一类"要轮转／要清理"的对象**——这一条是 Q13 丙与
+  §二之一百一十五 那道"持久化单调集"门的接缝，两处都数过。
+- 生产调用面确实递得到根：`af_mcp.py:387-392`（`_t_apply`）与 `af_test.py:189` 传的是带 `root` 的 `GraphStore`；
+  测试侧 `store=object()` 是既定形状，所以"取不到根"这一档在 pytest 里会稳定出现，在 serve 里出现才是问题（§三 那行的介入判据按此写）。
+
+### 二、落码（三枚改动面）
+
+1. `src/autoforge/af_audit.py`：`AuditLog.add(event, *, sink=None)` 多了 sink 这一腿；新增 `deploy_audit_sink`／`_persistable`／
+   `_trim_deploy_ledger`／`_persist_deploy`／`record_deploy` 与常量 `DEPLOY_AUDIT_FILE`／`DEPLOY_AUDIT_MAX_LINES=2000`／
+   `DEPLOY_AUDIT_KEEP_LINES=1000`／`PERSIST_REDACT_KEYS=frozenset({"code"})`／`REDACTED`／`AUDIT_SCOPE_NOTE`。
+   追加用 `open("a")` 单行（<4KB，无锁并发不撕裂，与 `record_conflict` 同形）；只有超上限那一次才整档重写，且走 `atomic_write_text`。
+   **首演码不落盘**：进盘那份把 `code` 换成 `[redacted]`，内存那份原样保留——`issue_premiere` 的返回值靠它把码交给运维。
+2. `src/autoforge/af_apply.py`：四站点（`:61` 签发、`:117` 试演暂停、`:139` 消费、`:213` 进入试演期）全部改走 `record_deploy`，
+   不再直接 `DEPLOY_AUDIT.add(...)`。**这里如实归位一次**：`d464f6b` 那版把四处写成 `AuditLog.add(event)`（类方法当实例方法调，
+   运行即 `TypeError`），那枚崩已由 **`0dd57b2`（2026-10-02）**修掉，本批**没有**修那枚崩，只是把绑定单例的调用收敛到一个能落盘的入口。
+3. `docs/可观测性清单.md`：§一 加第 6 条（读者告示，措辞按 20261010 §六 Q3 纪律，**不写成"按设计"**）；§三 补三行具名码认领；
+   §六 第 1 条按现读订正（原判据那句"`af_audit.py` 全模块 0 枚 logger 站点"已过期，现读 3 枚）；§七 加问 6，登记两处偏差。
+
+### 三、判据与读数
+
+- 新判据文件 `tests/unit/test_deploy_audit_persistence.py` **15 条腿**：落点随 store 根（`Path` 与 `str` 两种写法同值）／
+  读不出根一律 `None`（含 `root=12` 这种错形状）／文件名与上限钉字面量 ＋ `PERSIST_REDACT_KEYS` **反空集**（名单空掉＝凭据原样进盘，
+  这一格塌了没人发现）／落一行可读 JSONL 且中文不许变 `\uXXXX`／内存那份仍在／码不进盘／没根必须响／写失败必须响且不许把部署打崩／
+  盘上读不回来时裁剪跳过并响同一枚码／裁到最近那段／没到上限只追加（整档重写会让并发写者读到半截）／AST 腿按调用点计数
+  （`DEPLOY_AUDIT.add` 归零＋`record_deploy` 恰好 4）／`add()` 不递 sink 时其余三族一个字都不写／告示常量内容含"本进程"与文件名／
+  常量必须导出。
+- **可观测性门第一次数到 `af_audit.py`**：站点 146 → **149**、文件 28 → **29**、WARNING 89 → **92**、具名码 21 枚／21 站 →
+  **23 枚／24 站**，无码存量 **125 未动**（⇒ §四 棘轮没碰）。新增的两枚码 `DEPLOY_AUDIT_PERSIST_FAILED`（两站）与
+  `DEPLOY_AUDIT_NOT_PERSISTED` 全部 `level=warning`／介入＝需人介入／依据指得到函数与裁定小节。
+  `tests/unit/test_observability_gate.py` 三处真仓读数随之重钉（149／29／92 与 24／23）。
+- **"一码两站"是本仓第一例**，所以那条原判据"一枚码只出现在一站"改成**白名单**：只允许 `DEPLOY_AUDIT_PERSIST_FAILED` 重码，
+  其余重码照样红。钉成白名单而不是删规则，否则下一个人会把这条例外读成"码可以随便复用"。
+- 跑批：`check_observability.py` `RC=0`；`test_deploy_audit_persistence.py` 15 passed；与 `test_af_premiere.py`／
+  `test_af_ir_group_apply.py`／`test_process_model_gate.py` 合跑 **82 passed**；`test_observability_gate.py` **55 passed**；
+  `check_bounded_caches`／`check_imports`／`check_atomic_write_sites`／`check_process_model` 各 `RC=0`。
+- `gates.sh` 连跑两遍**逐字节相同**：各 10412 B、md5 `c4d5465b9ebe54810411dac848893a0e`（含末行 `RC=1` 标签），`diff` 空。
+  唯一红源仍是登录线在途那两枚 `af_api.py:984`／`:1005` `fake-ok-const`；AST 面读数与 §二之一百一十五 登记的**完全相同**
+  （新增/未获批 2 条、error 0／warn 2，`except-pass-broad=19 | fake-ok-const=78`，全量 97／上限 97）⇒ 本批没移动任何一枚棘轮。
+
+### 四、变异自证（副本树 `E:/NAS/tmp/af-mut-r13/tree`，工作树全程未动）
+
+`git archive HEAD` 出一份干净树再把本批五个改动面盖上去。先探针自证 import 真身落在副本树里
+（`E:\NAS\tmp\af-mut-r13\tree\src\autoforge\af_audit.py`），因为本机 Python313 有一条 `__editable__.autoforge-0.1.0.pth`
+指向**工作树**，不验这一条的副本树自证是空的。**M0 什么都不改 ⇒ 15 passed**；六条变异 **全部 KILLED**、每条还原后按字节对撞一致：
+M1 摘掉 sink 传参、M2 撤销脱敏、M3 吞掉写失败、M4 去掉裁剪、M5 没根时静默、M6 四站点改回直接 `DEPLOY_AUDIT.add`。
+护栏照旧：替换后字节与原字节相同（＝注入没生效）一律记 `DRIVER-FAIL`，不算杀成就绪。
+
+### 五、未落半边（登记，不自认）
+
+**读者告示的"机器脸"那半边本批没落**，落码量为零。现读实测：往 `af_service.py` 插 4 行（三处 `audit_scope` 键 ＋ 一处 import）
+⇒ `check_process_model.py` `RC=0 → 1`、`test_process_model_gate.py::test_real_repo_gate_green` 与 `::test_real_doc_register_covers_every_site`
+两腿红（清单里 `:2605`／`:2683`／`:2717` 三枚锚点漂、`:2687`／`:2721` 两格没登记），另要重钉约 50 处 `af_service.py:NNNN`
+与约 20 处 `af_runtime.py:NNNN` 的散文锚点，其中一部分落在**已归档的审计报告**里——重钉等于改掉一份历史读数。
+叠加并发登录线正在改这一族文件（#79 窗），已 `git checkout --` 回退 `af_service.py`／`af_runtime.py`／`af_cli.py` 三处改动。
+今天这条只剩两个真源：`docs/可观测性清单.md` §一 第 6 条 ＋ `af_audit.AUDIT_SCOPE_NOTE`（导出，判据两条钉住内容与导出）。
+- **这一格在副本树里复测过一次，并顺带撞到 #118 那族缺陷的新证据**：`E:/NAS/tmp/af-mut-r13/tree`（`git archive HEAD`）里
+  `check_process_model.py` **基线就是 `RC=1`**——文档登记 `af_auth.py:1069` 而 HEAD 现读 `:1064`。也就是说那份清单是在
+  **并发登录线的在途工作树**上生成的，HEAD 单看对不齐（正是 #118「真仓腿的读数取自并发在途工作树」的又一枚实证，已归口不另开判据）。
+  所以这里只能比**增量**：在同一副本树往 `af_service.py` 头上插 4 行 ⇒ A 判据「自动段 12 行漂移」，其中
+  `os.kill :2605→:2609`、`os.kill :2683→:2687`、`subprocess.Popen :2717→:2721` 连同 `FileLock :239/:1854/:2546` 各漂 4 行——
+  与本会话早前在工作树上真打那次补丁的读数**逐枚同名同向**（工作树上那一次是 `RC=0→1` 加两腿红）。⇒ 结论不变：这半边不是"顺手加四行"。
+裁定原文那句落点写的是 **`/api/state` 的 `audit` 段**，现读该路由**在仓内不存在**（86 条路由里带 `state`／`status` 的只有
+`/api/entities/{entity_id}/state` 与 `/api/live/status`，二者都不承载 `audit`）。两处都进回执的偏差登记，**不自决**。
+
+### 六、归口
+
+- 裁定 `20261011` §3 Q13：**丙的落盘半边已落地并自证**；**乙的机器脸半边未落**，连同 `af_apply` 那份"易失"文案要不要覆盖其余三族、
+  以及 `/api/state` 这一格落点更正，一并在 `decisions/20261011-AF第六轮与第二期审计攒批十三问-裁定.md` 末尾「执行回填（第四批）」递追认。
+- 任务 #120 收这一件；#79（登录线窗内）新增一格「Q13 的 HTTP／`stats()` 脸告示挂载」。
+- `docs/audit/AutoForge审计报告.html` §ARCH-07 那格的口径更新在 `docs/可观测性清单.md` §六／§七，不在本报告里改写。
+

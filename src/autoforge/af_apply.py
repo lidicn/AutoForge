@@ -58,13 +58,14 @@ def issue_premiere(ref: str, store: Any = None, ttl_s: int = 300) -> dict[str, A
     """
     store_diff_sha = _store_diff_sha(ref)
     code = af_premiere.issue(store_diff_sha, ttl_s=ttl_s)
-    af_audit.DEPLOY_AUDIT.add(
+    af_audit.record_deploy(
         af_audit.AuditEvent(
             af_audit.PREMIERE_ISSUED,
             at=datetime.now(timezone.utc),
             message=f"premiere code issued for diff {store_diff_sha[:12]}",
             data={"store_diff_sha256": store_diff_sha, "code": code},
-        )
+        ),
+        store,
     )
     return {"ok": True, "code": code, "store_diff_sha256": store_diff_sha}
 
@@ -113,13 +114,14 @@ def apply(
     # 无 trial 记录 → 不拦截（向后兼容，保证既有测试/调用链不破）
     store_diff_sha = _store_diff_sha(ref)
     if af_premiere.is_paused(store_diff_sha):
-        af_audit.DEPLOY_AUDIT.add(
+        af_audit.record_deploy(
             af_audit.AuditEvent(
                 af_audit.PREMIERE_CONSUMED,
                 at=datetime.now(timezone.utc),
                 message=f"apply blocked: trial paused for diff {store_diff_sha[:12]}",
                 data={"store_diff_sha256": store_diff_sha, "reason": "trial_paused"},
-            )
+            ),
+            store,
         )
         return {
             "ok": False,
@@ -134,7 +136,7 @@ def apply(
     # dry_run 不开闸门：一次性码消费掉就没了，"先看看"不该有代价。
     if premiere_code is not None and not dry_run:
         res = af_premiere.consume(premiere_code, store_diff_sha)
-        af_audit.DEPLOY_AUDIT.add(
+        af_audit.record_deploy(
             af_audit.AuditEvent(
                 af_audit.PREMIERE_CONSUMED,
                 at=datetime.now(timezone.utc),
@@ -144,7 +146,8 @@ def apply(
                     else f"premiere consume rejected: {res['reason']}"
                 ),
                 data={"store_diff_sha256": store_diff_sha, "reason": res["reason"], "ok": bool(res)},
-            )
+            ),
+            store,
         )
         if not res:
             return {
@@ -207,13 +210,14 @@ def apply(
     if save_result.get("ok"):
         trial = af_premiere.enter_trial(store_diff_sha, hours=24)
         result["trial"] = trial
-        af_audit.DEPLOY_AUDIT.add(
+        af_audit.record_deploy(
             af_audit.AuditEvent(
                 af_audit.PREMIERE_TRIAL_STARTED,
                 at=datetime.now(timezone.utc),
                 message=f"trial period started for diff {store_diff_sha[:12]}",
                 data={"store_diff_sha256": store_diff_sha},
-            )
+            ),
+            store,
         )
 
     return result
