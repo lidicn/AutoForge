@@ -10609,3 +10609,75 @@ fix = {'text_layer_node_kinds': ['on','if','do','ask','wait','set','pass'],
   `git push origin master:main` ⇒ `affb5a3..1b1ecb2  master -> main`（`PUSH_RC=0`）；`git ls-remote origin refs/heads/main` ⇒ `1b1ecb2b78ac45a3be38bc7e4f6cbe5ef52a9a6c` == `git rev-parse HEAD`。
 - **裁定书回执校验**：`validate-receipt.ps1 -Path decisions\20261011-AF发布面与镜像可追溯-裁定.md` ⇒ 六项全 ✓、三道硬门通过（命中 2 份 `decisions\` 文件）。
 
+## §二之一百二十二 · 收 ARCH-08 残余（第六轮架构审计最后一条能自决的格子）：仓库卫生门 `check_oneshot_layout.py` 五判据＋七种射程塌，`scripts/oneshot/` 约定落仓，4 份存量脚本**真搬**而非棘轮进表（偏差登记）（2026-10-11）
+
+### 一、复测对撞表（逐条现读，报告与上一批的登记都当过期数据）
+
+| 上一批／报告的话（§二之一百零六 ＋ `docs/audit/第六轮架构审计ARCH08_11核实对账_20261011.md` §一） | 现读 | 定性与本批处置 |
+|---|---|---|
+| 「缺的不是卫生，是『一次性脚本该放哪』的**约定**」 | 搬前 `git ls-files` 根目录入库 `.py` 读到 4 枚：`analyze_failures.py`／`clear_pending.py`／`export_ir.py`／`fix_ir.py`（`KICKOFF.md` 是 md，不在脚本门的射程） | **成立**，本批把约定变成机械面：`docs/仓库卫生清单.md`＋门＋判据腿 |
+| 「根目录 `_*.py` 已被 `.gitignore` 挡住」 | `.gitignore` 现读：`_*.py` 第 **91** 行、`_*.sh`／`_*.conf` **92–93**、`!**/__init__.py` **98** 全在场 | **成立·已有防线，但那只是磁盘面**。洞在**入库面**：`git add -f _x.py` 能穿过 ignore 把一次性件永久入库，磁盘防线对它一个字都不响 ⇒ 本门判**索引**不判磁盘（§二之四十四 的同一条教训：磁盘看不见"盘上有、索引里没有"，反过来也看不见"被 `-f` 塞进来的"） |
+| 「存量 4 份按『只减不增』棘轮进表」 | 4 份现读**都没有调用方**（`grep -rn` 除自身文件名外 0 命中），全是一次性导出／修数脚本 | **成立，但我改了收法**：不是"进名单冻结"，是**真搬进 `scripts/oneshot/` ＋ `LEGACY_CAP = 0`**（名单留空）。偏差见 §五 |
+| 「报告那 4 个未跟踪文件（`.tmp`／`api-test.yml`／`issued_tokens_clean.json`）」 | 一个没删、一个没动 | **非缺陷·他人领地**：并发登录线在途产物，不归本批清 |
+
+### 二、本批落码面（六件，全部仓内可核）
+
+- `docs/仓库卫生清单.md`（新）——登记面。§一 口径四条；§二 存量登记表（**上限 0**，唯一一行 `| 无 | — | — | — |`）；§三 `.gitignore` 锚点表；§四 迁移记录 4 行；AUTO 段由门 `--write` 重生成、判据 A 逐行对撞。
+- `scripts/check_oneshot_layout.py`（新）——纯标准库＋git CLI，判据 **A**（自动段逐行对撞）／**B①**（根目录入库 `.py` 未登记）／**B②**（单下划线前缀入库脚本）／**C**（条目数＞上限、过期登记、占位词或格数不足、「无」与真条目并存）／**D**（`.gitignore` 两枚锚点整行比对）／**E**（`scripts/oneshot/README.md` 在库＋迁移行双向可伪证：新路径必须真在库、原根名必须已不在库）。
+- `scripts/oneshot/README.md`（新）——约定正文（什么时候放这里、⛔ 不要单下划线前缀、加完跑 `--write`）。
+- `scripts/oneshot/{analyze_failures,clear_pending,export_ir,fix_ir}.py`——`git mv` 自仓根，内容逐字节未变（`git diff -M` 读成 R100）。
+- `tests/unit/test_oneshot_layout_gate.py`（新）——27 条腿。
+- `gates.sh`——纯加法两段（跑门＋两档结论块）。
+
+### 三、门在真仓的现读读数
+
+`python scripts/check_oneshot_layout.py .` ⇒ **RC=0**，读数行原文：
+`读数：入库面 785 个文件／根目录 \`.py\` 0 个／单下划线脚本 0 枚／\`scripts/oneshot/\` 5 个／存量登记 0 条（上限 0）／迁移记录 4 行`
+⇒ `✓ 仓库根没有一次性脚本，一次性件在 \`scripts/oneshot/\`，登记面与入库面逐行对上`。
+
+### 四、单测腿
+
+`python -m pytest tests/unit/test_oneshot_layout_gate.py -q` ⇒ **27 passed in 2.52s**。两族齐：真仓读数腿（射程没塌：根 `.py` 空集、oneshot≥5、迁移 4 行、入库 `.py`>100）＋合成树腿（逐判据各杀一次＋反空集腿＋`--write` 往返＋"补一行不会让 B 变绿、红换到 C"那一格）。
+
+### 五、偏差登记（⛔ 不沉默，请追认）
+
+1. **把"棘轮进表"改成"真搬＋上限 0"**。Args 原话是"存量 4 份进『只减不增』棘轮名单"，我实作为**上限 `LEGACY_CAP = 0`、名单留空、4 份真搬**。理由：这 4 份没有任何调用方，"登记即永久合法"会让那张表变成第二份豁免面；上限归零后**任何**新增根 `.py` 都当场红，比"4 条名额慢慢减"强。代价也写实：清单 §二 今天没有真条目可对撞，判据 C 的"过期登记"那一格在真仓是**空射程**，只有合成树腿与变异腿 IC1 证明它活着。
+2. **门对节标题用 `startswith`**（宽松是有意的：`## 二、存量登记（副题…）` 仍算在册）。X5 第一版把标题"改名"成 `## 二、存量登记改名了` 却因前缀仍在而退 0——这不是门的缺陷，是**注入没真断射程**；已把 X5 换成断前缀的改名（`## 二、根目录遗留名单`）并实测退 2。口径写清：**哪天那节的标题被改成不带"存量登记"四字，门退 2**，不会静默全绿。
+3. **本门只判形状不判内容**：搬过去的 4 份脚本一个字没改（R100），它们内部对不对不在本批射程。
+
+### 六、变异自证（副本树，18 腿 ⇒ **FAIL=0**）
+
+基树 = `git checkout-index -a`（索引面，含本批 staged 新文件；跑前重新 `git add` 过，避免拿旧索引当基树）。
+- 正控：**M0=0**（什么都不改）、**MZ99=0**（同义改写）。
+- 注入 ⇒ 1：**IA1／IA2**（A 自动段漂移）、**IB1**（根目录新增入库 `.py`）、**IB2**（`git add -f _smuggled.py` 穿 ignore）、**IC1**（登记条目 1＞上限 0）、**IC2**（登记了却三格全占位词 ⇒ 红只从 C 的占位词那格给，且实测 **B 不再响**）、**ID1／ID2**（`.gitignore` 两枚锚点各抹一次）、**IE1**（约定 README 出库）、**IE2**（迁移行说搬走了、实物却没了）。
+- 射程塌 ⇒ 2：**X1** 清单不在盘上／**X2** AUTO 标记被改写／**X3** `.gitignore` 不在／**X4** AUTO 段被清空（消息含"空段"）／**X5** 登记节改名断前缀／**X6** 索引读得出却一个文件都没有。
+- **守卫改为无条件跑**（第一版只在 RC 相符时跑，把"注入没落地"藏在了 MISMATCH 后面）。驱动自身踩的四格全在驱动侧、门的判定一条没错，如实记：① 这台机器的 `git add` 不认 `-q`（129 ⇒ 每腿索引为空 ⇒ 首轮 **FAIL=13 全退 2**）；② 守卫串引号拼接末尾少一个 `"` ⇒ eval 语法错被读成"注入未生效"；③ `set -o pipefail` 下 `门 | grep -q` 的管道状态取**门**的退出码 ⇒ "消息里确有那句话"永远判假；④ 上面第 1 条偏差里的 X5 注入形状。
+存证：`E:\tmp\af_oneshot_legs.txt`（表）／`E:\tmp\oneshot_mutation_driver.sh`（驱动，仓内不留未跟踪件）。
+
+### 七、`gates.sh` 接入与两遍逐字节对撞
+
+- `bash -n gates.sh` ⇒ **RC=0**；CR 三面皆 **0**（工作树／`git show :gates.sh`／`git show HEAD:gates.sh`，`tr -dc '\r' | wc -c` 量）。
+- 卫生门的**结论块排在 owner 主体门之前**（`gates.sh:582` vs `:590`）——主体门按裁定今天就红，排在它后面本门就永远没有说话的机会。
+- 两遍跑（记账前）：a／b 均 **RC=1、12092 B、md5 `e93631303df44db09970b7fd9f3434ac`**，`diff` 输出为空。
+- **读数漂移逐行解释**：§二之一百二十一 记的 11680 B／`46ca8fb5…` 与今天不同代（中间落了 §一百十八／§一百十九／§一百二十一 三批）。拿存证里可比的那份 `E:\tmp\gates_q3_c.txt`（10407 B）逐行 diff：13 处单行变更＋1 段新增，其中 12 处归那三批（`src/` 多了 `af_alert.py` ⇒ 各门扫描计数 102→103、undefined-name 224→230、状态落盘 51→52；进程模型生命周期 4→5 枚、同步原语 34→35；可观测性留痕 146→156、具名码 21→29；有界缓存注册表 3→4 项、容器 129→131；覆盖门 `check_*.py` 25→27、echo 文案 83→89 行——这两处由 §一百十九 与本批各加一枚门各占一半）；**归本批的只有卫生门那 3 行＋空行 = 399 B**（`sed -n '87,90p' | wc -c` 现读）。
+- 今天让链退 1 的仍是 **AST 门**：`fake-ok-const` `af_api.py:984`／`:1005`（登录线在途），新增/未获批 2、存量 95 被基线吸收、全量 97／上限 97——本批**没碰账本、没写豁免、没抬上限**。owner 主体门三条红（A `:1175`／B `:1181`／B `:1188`）按裁定 §3 Q1 丙是**预期红**，且因链在 AST 门就 exit，本批不改变它今天不影响 RC 这一事实。
+
+### 八、分段回归（整树单进程会在 3–4.5 分钟处断成 RC=127，按既定口径分段）
+
+`tests/unit` **2 failed, 3447 passed, 43 skipped**（281.18s）／`tests/contract` **57 passed**／`tests/f14` **104 passed**／`tests/acceptance` **38 passed, 10 skipped**／根级（`--ignore` 四段＋`-m "not vhass"`）**553 passed ＋ 65 subtests**。
+加总 3492＋57＋104＋48＋553 = **4254**，与 `pytest tests --collect-only` 的 **4254**（4244 选中＋10 deselected）相等 ⇒ 实际执行 4244 条，那 10 枚 vhass 腿在根级段被 `-m` 挡掉（`pytest tests/unit -m vhass --collect-only` ⇒ **collected 0，3492 deselected**，所以 unit 段没混进真机仿真腿）。
+两条失败的归属用了两树对撞，不靠猜：`git archive HEAD` 导纯 HEAD 副本树、只跑这两条 ⇒ **2 passed in 2.42s** ⇒ 红来自**并发登录线在途的工作树改动**（`af_api.py`／`af_auth.py`，#79 领地），本批 `src/` 一个字节没动。这一格与 #118 同族（真仓腿的期望值取自在途工作树），登记不关闭 #118。
+
+### 九、不自决清单
+
+本批**纯仓内机械面，无新递件**。仍挂着的相邻格子（都不归本批）：Q5–Q7（WebUI 自更新取代 scp，已递待裁）；ARCH-09 的 `UI_USER_PREFIX` 单一真源化（要同时动 UI 构建面与 compose ⇒ #79／#76 窗后）；ARCH-10 的并发／生命周期运行期腿；Q1 甲三件套（镜像 `GIT_SHA`＋`/api/health` build＋compose `autoforge-api:<sha7>`）⇒ L8 那格今天仍读不出。
+
+### 十、存证（`E:\tmp`，不进仓）
+
+`af_oneshot_legs.txt` md5 `2a9badf0f421897079c0dab9f0b6f4a1`／`gates_arch08_a.txt`＝`gates_arch08_b.txt` md5 `e93631303df44db09970b7fd9f3434ac`／`oneshot_mutation_driver.sh` md5 `cd0c9a675becdff0e90084716da45c51`／`af_oneshot_base`·`af_oneshot_legs`（18 份副本树，跑完可弃）／`af_head_auth`（纯 HEAD 对撞树）。
+
+### 十一、归档判定（只动一句话，不夸口）
+
+ARCH-08 从本批起算**已收口**（判据在场且 18 腿变异自证过）。但 `AutoForge审计报告.html` **仍不移入 `docs/audit/归档`**：ARCH-10 的并发／生命周期运行期腿未收 ⇒ 对账文档 §二 那句维持，残余从两条减为一条。⛔ 不写"第六轮架构审计全部闭环"。
+
+

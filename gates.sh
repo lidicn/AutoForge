@@ -333,6 +333,19 @@ echo "══ owner 主体单一真源 ＋ /api/user/agents/* 主体校验门禁�
 subject_rc=$?
 
 echo
+echo "══ 仓库卫生门（根目录不放一次性脚本／scripts/oneshot 约定／存量只减不增）══════"
+# 第六轮审计 §ARCH-08 复测：`analyze_failures.py`／`clear_pending.py`／`export_ir.py`／`fix_ir.py`
+# 四份**已入库**的一次性脚本与 `README.md`、`pyproject.toml` 平级，报告缺的不是卫生而是"该放哪"的约定。
+# 本批把四份搬进 `scripts/oneshot/`（`git diff -M` 记为 rename，⛔ 一字节内容都没改），再把约定立成门：
+# A 自动段逐行对撞入库面；B 根目录新增入库 `.py` 与单下划线脚本默认拒绝；C 存量棘轮只减不增
+# （上限 0 ⇒ 那张登记表⛔不是豁免通道）；D `.gitignore` 两枚锚点（`_*.py` 与 `!**/__init__.py`，
+# 后者失守就回到 §二之四十四 那一格——包标记被吃掉、CI 门比本机门弱）；E 迁移记录逐行自证。
+# 判据读 git 索引而不是磁盘：盘上一枚 `_tmp.py` 本被 ignore 挡着，真漏的是 `git add -f`
+# 与"已经入库的根脚本"这两族，口径与 §二之四十四 的 `check_pkg_markers.py` 同一族。
+"$PYTHON" "$REPO/scripts/check_oneshot_layout.py" "$REPO"
+hygiene_rc=$?
+
+echo
 echo "══ IR 运行时扩展键白名单硬门（写进节点的运行时键必须在白名单里）════"
 # 裁定 20261005-AF-ir_non_reversible是否升schema 判 B（明确豁免 + schema 白名单注释），并自己写明
 # "B 能成立的前提"是这条断言：白名单只是注释、约束力弱于 A，所以代码侧键集合
@@ -563,6 +576,16 @@ fi
 if [ $smoke_rc -ne 0 ]; then
   echo "结论：冒烟红（exit=$smoke_rc）。先在容器里复跑一次再定性——见 README 第三节。"
   exit $smoke_rc
+fi
+# 仓库卫生门的结论排在 owner 主体门**之前**：链尾是「第一个红即 exit」的形状，而主体门今天按设计就红
+# （裁定 20261011《八问》§3 Q1 丙），排在它后面等于本门的红永远读不到。
+if [ $hygiene_rc -eq 2 ]; then
+  echo "结论：仓库卫生门读不出射程（exit=$hygiene_rc）。七种形状：① \`docs/仓库卫生清单.md\` 不在盘上；② 读不出 git 索引——本门判的是**入库面**，没有索引就没有口径，⛔ 不许改用磁盘读数冒充结论（那是 §二之四十四 实测过的另一半）；③ \`.gitignore\` 不在盘上，判据 D 的两枚锚点无从核对；④ 自动段那对标记被改写或被清空；⑤ 存量登记节／迁移记录节整块挪走或改名；⑥ 节在而表里数不出一行（表头之外）——空集给的干净；⑦ 索引读得出却一个入库 \`.py\` 都没有（路径口径断了）。七种都不许报『干净』。"
+  exit $hygiene_rc
+fi
+if [ $hygiene_rc -ne 0 ]; then
+  echo "结论：仓库卫生门红（exit=$hygiene_rc）。五条判据各有各的修法：A＝跑 \`python scripts/check_oneshot_layout.py --write\` 重生成 \`docs/仓库卫生清单.md\` 的自动段（先确认那处差异是真搬家，不是有人手改登记面）；B①＝仓库根新增了一份入库 \`.py\`——放进 \`scripts/oneshot/\`，⛔ 在存量登记表里补一行不会让它变绿（上限是 \`LEGACY_CAP = 0\`，要抬上限先申请裁定）；B②＝入库面出现单下划线前缀的 \`.py\`／\`.sh\`／\`.conf\`，那是 \`git add -f\` 穿过 ignore 的形状，改名或从库里撤走；C＝删掉过期登记那一行，或把那格空着的身份／理由／处置写成真的（占位词不算认领）；D＝\`_*.py\` 与 \`!**/__init__.py\` 缺哪枚补哪枚，后者失守会让包标记又被吃掉一次；E＝迁移记录与实物对不上，要么真搬过去、要么改掉那一行。"
+  exit $hygiene_rc
 fi
 if [ $subject_rc -eq 2 ]; then
   echo "结论：owner 主体门禁读不出射程（exit=$subject_rc）。三种形状：① \`src/autoforge/af_api.py\` 不在盘上或解析不了；② 那文件里找不到 \`_OWNER_SUBJECTS = …\` 那一行——owner 面的定义被挪走或改名，判据 A 失去对照物；③ 数不出任何 \`/api/user/agents*\` 端点——那面整块搬走，本门已盯不住任何东西。三种都不许报『干净』。"
