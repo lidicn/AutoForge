@@ -64,8 +64,12 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from af_face import Face, FaceError, Snapshot  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 DOC_REL = "docs/进程模型清单.md"
+SRC_REL = "src"
 PKG_REL = "src/autoforge"
 CLI_REL = "src/autoforge/af_cli.py"
 AUTO_BEGIN = "<!-- AUTO-BEGIN 由 scripts/check_process_model.py --write 生成，勿手改 -->"
@@ -115,20 +119,28 @@ CEIL_RE = re.compile(r"^- (?P<kind>[\w.]+) = (?P<ceiling>\d+)$")
 
 
 def _rel(root: Path, p: Path) -> str:
-    try:
-        return p.relative_to(root).as_posix()
-    except ValueError:
-        return p.as_posix()
+    """快照内路径 → 仓内相对路径。换了取数面而读数字符串不变，自动段的锚点形状因此不动。"""
+    return _snap(root).rel(p)
+
+
+_SNAPS: dict[Path, "Snapshot"] = {}
+
+
+def _snap(root: Path) -> Snapshot:
+    """本门唯一的取数入口：`src/` 的**入库面**快照；读不出 git 索引时退回磁盘面并如实标注。
+
+    为什么是快照而不是逐份 `git show`：本机实测逐份读 103 份要 11.50s，一次 `git checkout-index`
+    只要 0.35s——取数面能不能改掉，卡的就是这个差量。按 root 缓存，临时目录随进程退出释放。
+    """
+    key = Path(root).resolve()
+    if key not in _SNAPS:
+        _SNAPS[key] = Face.open(key).snapshot(SRC_REL)
+    return _SNAPS[key]
 
 
 def py_files(root: Path) -> list[Path]:
-    d = root / PKG_REL
-    if not d.is_dir():
-        return []
-    return sorted(
-        p for p in d.glob("*.py")
-        if p.is_file() and "__pycache__" not in p.parts
-    )
+    """射程名单与内容同源：都取出库面（在途未 `git add` 的改动不在射程内，见 `scripts/af_face.py`）。"""
+    return _snap(root).files(PKG_REL, (".py",), recursive=False)
 
 
 def parse_all(files: list[Path]) -> tuple[dict[Path, ast.Module], list[str]]:
@@ -378,7 +390,7 @@ def parse_ceilings(doc: str) -> tuple[dict[str, int], list[str]]:
 
 
 def serve_teardown_shape(trees: dict[Path, ast.Module], root: Path) -> list[str]:
-    p = root / CLI_REL
+    p = _snap(root).base / CLI_REL
     tree = trees.get(p)
     if tree is None:
         return [f"D：`{CLI_REL}` 不在解析范围内——serve 收尾形状无从判"]
@@ -404,7 +416,7 @@ def serve_teardown_shape(trees: dict[Path, ast.Module], root: Path) -> list[str]
 
 
 def watch_sigterm_shape(trees: dict[Path, ast.Module], root: Path) -> list[str]:
-    p = root / CLI_REL
+    p = _snap(root).base / CLI_REL
     tree = trees.get(p)
     if tree is None:
         return [f"E：`{CLI_REL}` 不在解析范围内——SIGTERM 收尾形状无从判"]
@@ -451,7 +463,7 @@ def serve_exit_hook_shape(trees: dict[Path, ast.Module], root: Path) -> list[str
     `stop_watch(`、并有 `readonly` 短路。两条都按 **AST 节点**判，不按文本包含判：函数 docstring 里
     本来就写着「readonly」「停多久」这些词，按文本查会假绿。
     """
-    p = root / CLI_REL
+    p = _snap(root).base / CLI_REL
     tree = trees.get(p)
     if tree is None:
         return [f"F：`{CLI_REL}` 不在解析范围内——serve 退出兜底形状无从判"]
@@ -594,9 +606,14 @@ def check(root: Path) -> tuple[list[str], dict]:
 
 
 def anchor_ok(root: Path) -> str | None:
-    if not (root / PKG_REL).is_dir():
-        return f"`{PKG_REL}/` 目录不在盘上——本门的射程对象整个消失"
-    cli = root / CLI_REL
+    try:
+        snap = _snap(root)
+    except FaceError as exc:
+        return f"取数面整个读不出：{exc}"
+    base = snap.base
+    if not (base / PKG_REL).is_dir():
+        return f"`{PKG_REL}/` 在取数面上不存在——本门的射程对象整个消失（{snap.label}）"
+    cli = base / CLI_REL
     if not cli.is_file():
         return f"`{CLI_REL}` 不在盘上——D／F 两条 serve 收尾形状判据没有对象"
     doc_p = root / DOC_REL
@@ -636,7 +653,11 @@ def write_doc(root: Path) -> int:
     if AUTO_BEGIN not in doc or AUTO_END not in doc:
         print(f"✗ `{DOC_REL}` 缺自动段标记，拒绝改写")
         return 2
-    files = py_files(root)
+    try:
+        files = py_files(root)
+    except FaceError as exc:
+        print(f"✗ 取数面读不出，拒绝用残缺结果改写：{exc}")
+        return 2
     trees, errs = parse_all(files)
     if errs:
         print(f"✗ 有文件解析不了，拒绝用残缺结果改写：{errs[0]}")
@@ -685,7 +706,8 @@ def main(argv: list[str]) -> int:
     print(
         f"✓ 进程模型门禁干净（现读生命周期 {info['sites']} 枚全部在册且认领可读；"
         f"同步原语 {info['prims']} 枚、模块级共享名 {info['shared']} 枚逐行对撞一致；"
-        "serve 收尾／watch SIGTERM／serve 退出兜底三条形状锚点都在）"
+        "serve 收尾／watch SIGTERM／serve 退出兜底三条形状锚点都在；"
+        f"{_snap(root).label}）"
     )
     return 0
 

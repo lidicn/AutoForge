@@ -71,6 +71,27 @@ BUILTIN_PATHS = ("/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc")
 
 APP_LEVEL_DEP = "_rate_limit_dep"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from af_face import Face, FaceError, Snapshot  # noqa: E402
+
+_SRC_REL = "src"
+_SNAPS: dict[Path, "Snapshot"] = {}
+
+
+def _snap(root: Path) -> Snapshot:
+    """本门唯一的取数入口：`src/` 的**入库面**快照；读不出 git 索引时退回磁盘面并如实标注。
+
+    信任边界门判的是**运行期路由表**（`build_app()`），所以它比另两枚 AST 门多一步：
+    要把索引面的 `src/` 真导出成一份临时树再 `import`。⚠️ 本机有一条
+    `__editable__.autoforge-0.1.0.pth` 指向**工作树**，导入面会优先走 editable 的 meta_path finder，
+    因此这里同时做三件事：临时摘掉 editable finder、清 `sys.modules` 里已有的 `autoforge.*`、
+    导入后**探针自证** `__file__` 落在快照里——落不进去就报射程塌，⛔ 不用工作树的读数冒充入库面。
+    """
+    key = Path(root).resolve()
+    if key not in _SNAPS:
+        _SNAPS[key] = Face.open(key).snapshot(_SRC_REL)
+    return _SNAPS[key]
+
 REGISTER_RE = re.compile(
     r"^- `(?P<method>[A-Z]+) (?P<path>/[^`]*)`\s*·\s*处理器：(?P<call>[A-Za-z_][A-Za-z0-9_]*)\s*·\s*"
     r"依据：(?P<anchor>\S+)\s*·\s*理由：(?P<reason>.+?)\s*$"
@@ -112,22 +133,65 @@ def _tier(labels: tuple[str, ...]) -> str:
     return "anon"
 
 
+def _af_api_from_face(root: Path):
+    """在**入库面快照**里导入 `autoforge.af_api` 并 `build_app()`，返回 `(app, 快照根)`；塌了就抛 FaceError。
+
+    为什么要三件套（摘 meta_path 的 editable finder ／ 清 `sys.modules` 的 `autoforge.*` ／ 导入后探针自证）：
+    本机 Python313 装了一条指向**工作树**的 `__editable__.autoforge-0.1.0.pth`，它会抢在 `sys.path` 之前
+    把 `import autoforge` 带回在途代码；而 pytest 的 conftest 早已把工作树那份模块放进 `sys.modules`，
+    不清就是拿到缓存的在途面。探针失败一律按射程塌处理——读到在途代码却标注成入库面，是比红更坏的结果。
+    """
+    snap = _snap(root)
+    src = (snap.base / _SRC_REL).resolve()
+    saved_path = sys.path[:]
+    saved_meta = list(sys.meta_path)
+    purge = {k: v for k, v in sys.modules.items() if k == "autoforge" or k.startswith("autoforge.")}
+    for name in purge:
+        del sys.modules[name]
+    sys.meta_path[:] = [f for f in saved_meta if "editable" not in type(f).__module__.lower()]
+    sys.path.insert(0, str(src))
+    try:
+        import importlib  # noqa: PLC0415
+
+        af_api = importlib.import_module("autoforge.af_api")
+        loaded = {k: v for k, v in sys.modules.items() if k == "autoforge" or k.startswith("autoforge.")}
+        stray = sorted(
+            f"{k}←{Path(getattr(v, '__file__', '') or '?').as_posix()}"
+            for k, v in loaded.items()
+            if not Path(getattr(v, "__file__", "") or "").resolve().is_relative_to(src)
+        )
+        if stray:
+            raise FaceError(
+                f"探针失败：入库面快照是 {src}，却有 {len(stray)} 个 `autoforge.*` 模块从别处加载："
+                + "、".join(stray[:3]) + "（editable 安装面把导入抢回了工作树，此刻读到的是在途代码）"
+            )
+        from fastapi.routing import APIRoute  # noqa: PLC0415,F401  # 第三方，不受 editable 影响，先在这里验一次
+
+        tmp = tempfile.mkdtemp(prefix="af-trust-boundary-")
+        try:
+            app = af_api.build_app(store_root=tmp)
+        except Exception as exc:
+            raise FaceError(f"`build_app()` 构造失败：{type(exc).__name__}: {exc}") from exc
+        return app, src
+    except ImportError as exc:
+        raise FaceError(f"从入库面快照导入失败：{type(exc).__name__}: {exc}") from exc
+    finally:
+        for name in [k for k in sys.modules if k == "autoforge" or k.startswith("autoforge.")]:
+            del sys.modules[name]
+        sys.modules.update(purge)
+        sys.path[:] = saved_path
+        sys.meta_path[:] = saved_meta
+
+
 def derive_rows(root: Path) -> tuple[list[dict], list[str]]:
     """返回 (逐条端点读数, 射程问题)。有问题时 rows 不参与判定。"""
-    sys.path.insert(0, str(root / "src"))
     try:
-        from autoforge import af_api  # noqa: PLC0415
-    except Exception as exc:  # pragma: no cover - 射程档
-        return [], [f"`autoforge.af_api` 导入失败：{type(exc).__name__}: {exc}"]
-    try:
+        app, _src = _af_api_from_face(root)
         from fastapi.routing import APIRoute  # noqa: PLC0415
-    except Exception as exc:  # pragma: no cover
+    except FaceError as exc:
+        return [], [str(exc)]
+    except Exception as exc:  # pragma: no cover - 射程档
         return [], [f"`fastapi.routing` 导入失败：{type(exc).__name__}: {exc}"]
-    tmp = tempfile.mkdtemp(prefix="af-trust-boundary-")
-    try:
-        app = af_api.build_app(store_root=tmp)
-    except Exception as exc:  # pragma: no cover
-        return [], [f"`build_app()` 构造失败：{type(exc).__name__}: {exc}"]
     rows: list[dict] = []
     unknown: list[str] = []
     for r in app.routes:
@@ -229,13 +293,13 @@ def parse_installers(doc: str) -> tuple[list[dict], list[str]]:
 
 
 def _src_py(root: Path):
-    for p in sorted((root / "src").rglob("*.py")):
+    for p in _snap(root).files(_SRC_REL, (".py",)):
         yield p, p.read_text(encoding="utf-8", errors="replace")
 
 
 def installer_files(root: Path) -> list[str]:
     return [
-        p.relative_to(root).as_posix()
+        _snap(root).rel(p)
         for p, text in _src_py(root)
         if p.name != "af_api.py" and ROUTE_MECHANISM.search(text)
     ]
@@ -467,7 +531,8 @@ def main(argv: list[str]) -> int:
     print(
         f"✓ 信任边界门禁干净（现读 {info['rows']} 条路由：第一方端点逐条对撞清单一致；"
         f"{info['ungated']} 条非鉴权档端点全部在册且处理器/依据/理由都核得过、无过期登记；"
-        f"{len(info['found_installers'])} 个挂端点的机制全部登记为未挂载并现读复核过没有调用者）"
+        f"{len(info['found_installers'])} 个挂端点的机制全部登记为未挂载并现读复核过没有调用者；"
+        f"{_snap(root).label}）"
     )
     return 0
 

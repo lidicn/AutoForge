@@ -307,8 +307,8 @@ def test_real_exit_hook_wired_to_the_reaping_hand():
     必须指名 `reap_watch_child`、那枚函数必须经 `stop_watch` 复用身份核验链。少一段就是另一枚缺陷。
     """
     trees = load_trees(REPO)
-    p = REPO / cpm.CLI_REL
-    text = p.read_text(encoding="utf-8")
+    p = cpm._snap(REPO).base / cpm.CLI_REL
+    text = cpm._snap(REPO).text(p)
     hooks = [n for n in ast.walk(trees[p])
              if isinstance(n, ast.Call) and cpm._callee(n) == "atexit.register"]
     assert len(hooks) == 1

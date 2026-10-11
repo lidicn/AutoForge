@@ -24,6 +24,23 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 API_REL = "src/autoforge/af_api.py"
+SRC_REL = "src"
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from af_face import Face, FaceError  # noqa: E402
+
+_SNAPS = {}
+
+
+def _snap(repo: Path):
+    """取数面＝**入库面**：`af_api.py` 常年躺在并发登录线的在途改动里，
+    门在本地读到的必须是「会被提交的那一份」，否则本地绿／CI 红（#118 那一族）。
+    读不出 git 时退回磁盘面，并在结论行如实标注。
+    """
+    key = Path(repo).resolve()
+    if key not in _SNAPS:
+        _SNAPS[key] = Face.open(key).snapshot(SRC_REL)
+    return _SNAPS[key]
 SUBJECT_SYMBOL = "_OWNER_SUBJECTS"
 AGENTS_PREFIX = "/api/user/agents"
 EXEMPT_MARKER = "# owner-subject: exempt("
@@ -192,7 +209,11 @@ def _exemptions(src: Path) -> dict[str, str]:
 
 def check(repo: Path) -> tuple[list[str], list[str], dict[str, object]]:
     """返回 `(红, 射程塌, 读数)`。"""
-    api = repo / API_REL
+    try:
+        snap = _snap(repo)
+        api = snap.base / API_REL
+    except FaceError as exc:
+        return [], [f"取数面读不出：{exc}"], {}
     if not api.is_file():
         return [], [f"{API_REL} 读不到：本门的射程前提已经不成立（文件挪走/改名），报『干净』没有依据"], {}
     try:

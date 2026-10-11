@@ -149,14 +149,18 @@ def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
 
 
 def test_real_repo_http_face_readings_are_pinned(real):
-    """`af_api.py` 的失败出口形状：0 枚留痕／5 枚 `ok: False`／1 个异常处理器／91 枚 Depends。"""
+    """`af_api.py` 的失败出口形状：0 枚留痕／5 枚 `ok: False`／1 个异常处理器／89 枚 Depends。
+
+    ⚠️ 89 是**入库面**读数（#118 那批改的取数面）。在途工作树曾读到 91——那条腿在本地绿、CI 红，
+    红的就是这一格的期望值取自并发在途面。
+    """
     http = real["http"]
     assert http["logger_sites"] == 0, "af_api 一旦开始记日志，§五 那行的状态要改成「已还」"
     assert len(http["ok_false"]) == 5
     assert http["ok_true"] == 28
     assert len(http["handlers"]) == 1, "两条装饰器挂同一函数，处理器数按函数计"
     assert len(http["middleware"]) == 1
-    assert http["depends"] == 91
+    assert http["depends"] == 89
 
 
 def test_real_repo_debt_rows_match_fresh_readings():

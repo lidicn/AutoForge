@@ -56,8 +56,12 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from af_face import Face, FaceError, Snapshot  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 DOC_REL = "docs/可观测性清单.md"
+SRC_REL = "src"
 PKG_REL = "src/autoforge"
 CLI_REL = "src/autoforge/af_cli.py"
 API_REL = "src/autoforge/af_api.py"
@@ -112,20 +116,28 @@ DEBT_RE = re.compile(
 
 
 def _rel(root: Path, p: Path) -> str:
-    try:
-        return p.relative_to(root).as_posix()
-    except ValueError:
-        return p.as_posix()
+    """快照内路径 → 仓内相对路径。换了取数面而读数字符串不变，自动段的锚点形状因此不动。"""
+    return _snap(root).rel(p)
+
+
+_SNAPS: dict[Path, "Snapshot"] = {}
+
+
+def _snap(root: Path) -> Snapshot:
+    """本门唯一的取数入口：`src/` 的**入库面**快照；读不出 git 索引时退回磁盘面并如实标注。
+
+    一次 `git checkout-index` 换掉逐份 `git show`（本机实测 103 份：0.35s vs 11.50s）。
+    按 root 缓存，临时目录随进程退出释放，不在仓里留件。
+    """
+    key = Path(root).resolve()
+    if key not in _SNAPS:
+        _SNAPS[key] = Face.open(key).snapshot(SRC_REL)
+    return _SNAPS[key]
 
 
 def py_files(root: Path) -> list[Path]:
-    d = root / PKG_REL
-    if not d.is_dir():
-        return []
-    return sorted(
-        p for p in d.rglob("*.py")
-        if p.is_file() and "__pycache__" not in p.parts
-    )
+    """射程名单与内容同源：都取出库面（在途未 `git add` 的改动不在射程内，见 `scripts/af_face.py`）。"""
+    return _snap(root).files(PKG_REL, (".py",))
 
 
 def parse_all(files: list[Path]) -> tuple[dict[Path, ast.Module], list[str]]:
@@ -265,7 +277,7 @@ def scan_request_ids(trees: dict[Path, ast.Module], root: Path) -> list[dict]:
 
 def scan_http_face(trees: dict[Path, ast.Module], root: Path) -> dict:
     """`af_api.py` 的失败出口形状：logger 站点／`ok:` 字面量／异常处理器／中间件／依赖注入引用数。"""
-    p = root / API_REL
+    p = _snap(root).base / API_REL
     tree = trees.get(p)
     if tree is None:
         return {}
@@ -518,7 +530,7 @@ def parse_debt(doc: str) -> tuple[dict[str, dict], list[str]]:
 
 
 def access_log_shape(trees: dict[Path, ast.Module], root: Path) -> list[str]:
-    p = root / CLI_REL
+    p = _snap(root).base / CLI_REL
     tree = trees.get(p)
     if tree is None:
         return [f"D：`{CLI_REL}` 不在解析范围内——访问日志掩码锚点无从判"]
@@ -721,10 +733,15 @@ def check(root: Path) -> tuple[list[str], dict]:
 
 
 def anchor_ok(root: Path) -> str | None:
-    if not (root / PKG_REL).is_dir():
-        return f"`{PKG_REL}/` 目录不在盘上——本门的射程对象整个消失"
+    try:
+        snap = _snap(root)
+    except FaceError as exc:
+        return f"取数面整个读不出：{exc}"
+    base = snap.base
+    if not (base / PKG_REL).is_dir():
+        return f"`{PKG_REL}/` 在取数面上不存在——本门的射程对象整个消失（{snap.label}）"
     for rel, why in ((CLI_REL, "D 条访问日志掩码锚点没有对象"), (API_REL, "E 条 HTTP 面欠账没有对象")):
-        if not (root / rel).is_file():
+        if not (base / rel).is_file():
             return f"`{rel}` 不在盘上——{why}"
     doc_p = root / DOC_REL
     if not doc_p.is_file():
@@ -777,7 +794,11 @@ def write_doc(root: Path) -> int:
     if AUTO_BEGIN not in doc or AUTO_END not in doc:
         print(f"✗ `{DOC_REL}` 缺自动段标记，拒绝改写")
         return 2
-    files = py_files(root)
+    try:
+        files = py_files(root)
+    except FaceError as exc:
+        print(f"✗ 取数面读不出，拒绝用残缺结果改写：{exc}")
+        return 2
     trees, errs = parse_all(files)
     if errs:
         print(f"✗ 有文件解析不了，拒绝用残缺结果改写：{errs[0]}")
@@ -827,7 +848,7 @@ def main(argv: list[str]) -> int:
     print(
         f"✓ 可观测性门禁干净（现读留痕 {info['sites']} 站点逐行对撞一致；具名码 {info['codes']} 枚／"
         f"{info['coded']} 站点全部在册且认领可读；关联 id 面 信封 {info['env']} 枚／HTTP {info['req']} 枚"
-        " 与 §五 账面对撞一致；访问日志掩码锚点在位）"
+        f" 与 §五 账面对撞一致；访问日志掩码锚点在位；{_snap(root).label}）"
     )
     return 0
 
