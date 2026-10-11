@@ -185,6 +185,22 @@ class PremiereStore:
     def peek(self, code: str) -> Optional[PremiereCode]:
         return self._by_code.get(code)
 
+    def stats(self) -> dict[str, float | int]:
+        """只读读数：已发码数 / 码空间上限 / 占用率。
+
+        DCD 裁定 20261011-AF过期授权码与触发历史保留策略 §3：只加一枚只读读数，
+        不动判重语义、不删任何码。读数把「空间何时会紧」从推测变成可读的数。
+
+        ⛔ 本方法不得改变任何状态（连续读两次，_by_code 与落盘文件逐字节不变）。
+        """
+        with self._lock:
+            count = len(self._by_code)
+        return {
+            "issued_count": count,
+            "code_space": _CODE_SPACE,
+            "usage_ratio": count / _CODE_SPACE,
+        }
+
     # ---- JSON 落盘（走 `af_atomic.atomic_write_text`：随机 tmp + fsync）----
 
     def save(self, path: Optional[str] = None) -> None:

@@ -27,6 +27,9 @@ sim = [
 api = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
+    # AF8（第二期第五轮）：af_api.py 顶层裸 import pydantic，此前靠 fastapi 传递依赖
+    # 侥幸可用；fastapi-slim 或未来版本不再传递时会直接 ImportError。显式声明。
+    "pydantic>=2.0",
 ]
 # v1.6.0 P0：HA websocket 注册表（entity/device/area/config_entry 四注册表）
 # 只 `device_id` / `platform` / `integration` / 精确 area 需要它；未安装时

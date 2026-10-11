@@ -103,8 +103,8 @@ h1, h2, h3 { line-height: 1.3; }
 .icon-btn.danger:hover { color: var(--bad); border-color: rgba(220, 38, 38, 0.5); }
 
 .cells {
-  display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px;
-  width: 100%; max-width: 320px;
+  display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px;
+  width: 100%; max-width: 420px;
 }
 .cell {
   display: flex; align-items: center; justify-content: center;

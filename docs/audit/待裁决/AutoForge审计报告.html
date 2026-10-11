@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoForge 只读审计报告 · bug 与架构缺陷</title>
+<meta name="description" content="对 E:\NAS\AutoForge（GitHub lidicn/AutoForge）的只读审计报告：先钉死审计基线（HEAD 91c1ba2，含 10 个未提交改动文件，相对 origin/main 领先 15 笔），再给出按严重程度排序的 15 条稳定性与功能性 bug 清单（2 严重 / 4 高 / 5 中 / 4 低，每条含位置、触发条件、后果与修复建议），以及 11 项架构缺陷与缺失、已核实为误报的线索清单、凭据泄漏扫描结论（只报位置不报值）、本轮未覆盖范围与建议处置顺序。全程只读，未运行项目、未复现测试读数。">
+<style>
+:root{
+  --bg:#0f1216; --panel:#161b22; --panel-2:#1c2230; --line:#2a3240;
+  --fg:#e6edf3; --fg-dim:#9aa7b4; --fg-mute:#6e7d8c;
+  --crit:#ff5d5d; --high:#ff9f43; --med:#ffd84d; --low:#57b6ff; --ok:#3fb950;
+  --accent:#7aa2f7; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  line-height:1.72; font-size:15px;
+}
+.wrap{max-width:1080px;margin:0 auto;padding:40px 22px 90px}
+header.top{border-bottom:1px solid var(--line);padding-bottom:26px;margin-bottom:34px}
+h1{font-size:29px;line-height:1.3;margin:0 0 10px}
+h1 .sub{display:block;font-size:14px;font-weight:400;color:var(--fg-dim);margin-top:8px}
+h2{font-size:21px;margin:52px 0 16px;padding-left:12px;border-left:4px solid var(--accent)}
+h3{font-size:16.5px;margin:30px 0 10px;color:#cbd6e2}
+h4{font-size:14.5px;margin:20px 0 8px;color:var(--fg-dim);letter-spacing:.3px}
+p{margin:10px 0}
+code{font-family:var(--mono);font-size:12.8px;background:#0b0e12;border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:#c8d3de}
+pre{background:#0b0e12;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow:auto;font-family:var(--mono);font-size:12.4px;line-height:1.62;color:#c8d3de;margin:12px 0}
+pre code{background:none;border:0;padding:0}
+a{color:var(--accent)}
+.meta{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0 0}
+.chip{background:var(--panel-2);border:1px solid var(--line);border-radius:999px;padding:4px 13px;font-size:12.5px;color:var(--fg-dim)}
+.chip b{color:var(--fg);font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:13px;margin:18px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:15px 16px}
+.card .k{font-size:11.5px;color:var(--fg-mute);letter-spacing:.6px;text-transform:uppercase}
+.card .v{font-size:21px;font-weight:650;margin-top:6px;word-break:break-all}
+.card .n{font-size:12px;color:var(--fg-dim);margin-top:4px}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.4px}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:var(--panel-2);color:#cbd6e2;font-weight:600;font-size:12.6px}
+tbody tr:nth-child(even){background:#12161d}
+td code{font-size:12.2px}
+.sev{display:inline-block;border-radius:5px;padding:2px 9px;font-size:12px;font-weight:700;white-space:nowrap;color:#08090b}
+.s-crit{background:var(--crit)} .s-high{background:var(--high)}
+.s-med{background:var(--med)} .s-low{background:var(--low)}
+.finding{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--fg-mute);border-radius:9px;padding:16px 18px;margin:18px 0}
+.finding.crit{border-left-color:var(--crit)} .finding.high{border-left-color:var(--high)}
+.finding.med{border-left-color:var(--med)} .finding.low{border-left-color:var(--low)}
+.finding h3{margin:0 0 6px;font-size:16px}
+.finding .id{font-family:var(--mono);font-size:12.5px;color:var(--fg-mute);margin-right:8px}
+.lbl{font-size:12.4px;color:var(--fg-mute);letter-spacing:.4px;text-transform:uppercase;margin-top:12px;font-weight:600}
+.loc{font-family:var(--mono);font-size:12.6px;color:#8fd3ff;word-break:break-all}
+.note{background:#14202b;border:1px solid #24455f;border-radius:8px;padding:13px 16px;margin:16px 0;font-size:13.6px}
+.warn{background:#2a1d13;border:1px solid #5c3a1c;border-radius:8px;padding:13px 16px;margin:16px 0;font-size:13.6px}
+.good{background:#12241a;border:1px solid #24523a;border-radius:8px;padding:13px 16px;margin:16px 0;font-size:13.6px}
+ul,ol{margin:10px 0;padding-left:24px}
+li{margin:5px 0}
+.toc{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 20px;margin:24px 0}
+.toc ol{margin:8px 0;padding-left:22px}
+.toc a{text-decoration:none}
+.toc a:hover{text-decoration:underline}
+.small{font-size:12.6px;color:var(--fg-dim)}
+hr{border:0;border-top:1px solid var(--line);margin:36px 0}
+svg{max-width:100%;height:auto;display:block;margin:8px 0}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.6px;color:var(--fg-dim);margin-top:6px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px}
+footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--line);color:var(--fg-mute);font-size:12.6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+<h1>AutoForge 只读审计报告
+<span class="sub">稳定性 / 功能性 bug 与架构缺陷 · 本地 <code>E:\NAS\AutoForge</code>（含未提交改动）· 审计日期 2026-10-10</span>
+</h1>
+<div class="meta">
+<span class="chip">HEAD <b>91c1ba2</b></span>
+<span class="chip">分支 <b>master</b></span>
+<span class="chip">工作区 <b>脏（10 改 / 4 未跟踪）</b></span>
+<span class="chip">相对 origin/main <b>领先 15 · 落后 0</b></span>
+<span class="chip">源码 <b>102 个 py / 45,607 行</b></span>
+<span class="chip">发现 <b>2 严重 · 4 高 · 5 中 · 4 低</b></span>
+</div>
+</header>
+
+<div class="note">
+<b>审计纪律</b>：全程只读。未运行项目、未安装依赖、未执行构建或测试、未在项目目录或磁盘写入任何文件。所有结论均来自设备上实际执行的只读命令（<code>git</code> / <code>Get-Content</code> / <code>Select-String</code> / <code>git grep</code>）。
+本报告对凭据类内容<b>只给文件与行号、类型、后果与处置建议</b>，不引用任何值（含片段与掩码）。代码引用只给位置与必要片段，不整段贴源码。
+</div>
+
+<div class="toc">
+<b>目录</b>
+<ol>
+<li><a href="#s1">基线与项目速览</a></li>
+<li><a href="#s2">稳定性与功能性 bug 清单</a></li>
+<li><a href="#s3">架构缺陷与缺失清单</a></li>
+<li><a href="#s4">已核实为误报或不成立的线索</a></li>
+<li><a href="#s5">本轮未覆盖的范围与建议后续方向</a></li>
+</ol>
+</div>
+
+<h2 id="s1">1 · 基线与项目速览</h2>
+
+<h3>1.1 git 实际输出（原样转抄，未加工）</h3>
+
+<h4>git rev-parse HEAD / --abbrev-ref HEAD</h4>
+<pre><code>91c1ba2f777feb9ba8e85f6c023551838db7d293
+master</code></pre>
+
+<h4>git status --porcelain（工作区脏）</h4>
+<pre><code> M docker/docker-compose.api.yml
+ M "docs/ADM自动化执行计划-AF.md"
+ M "docs/audit/参考/FFL-200幂等测试提示词.md"
+ M src/autoforge/af_api.py
+ M src/autoforge/af_auth.py
+ M src/autoforge/af_fidelity.py
+ M tests/f14/test_nl_build.py
+ M ui-user-mimo/src/stores/main.ts
+ M ui-user-mimo/src/styles/main.css
+ M ui-user-mimo/src/views/AuthCodesView.vue
+?? docker-compose.api.yml.tmp
+?? docker/docker-compose.api-test.yml
+?? issued_tokens.json.tmp
+?? issued_tokens_clean.json</code></pre>
+
+<h4>git status -sb</h4>
+<pre><code>## master...origin/main [ahead 15]</code></pre>
+
+<h4>git remote -v</h4>
+<pre><code>nas     ssh://lidicn@192.168.2.200/vol1/1000/git/autoforge.git (fetch)
+nas     ssh://lidicn@192.168.2.200/vol1/1000/git/autoforge.git (push)
+origin  git@github.com:lidicn/AutoForge.git (fetch)
+origin  git@github.com:lidicn/AutoForge.git (push)</code></pre>
+
+<h4>git log -n 5（近期活跃度）</h4>
+<pre><code>91c1ba2 | 2026-10-10 14:37:59 +0800 | lidicn | docs(记账 §二之九十一 + 架构文档): 裁定 20261010 §一 的库侧半边落账……
+50ca89b | 2026-10-10 13:34:01 +0800 | lidicn | docs(记账 §二之九十 + 两份架构文档): 收 §十八 B.4……
+d8f2234 | 2026-10-10 12:36:33 +0800 | lidicn | feat(审计§十八 B.4): 试演档的守卫失明不再静默……
+fa71f86 | 2026-10-10 11:56:16 +0800 | lidicn | docs(B.10): 发布失败单码那格的 DCD 申请正式递交……
+73e8778 | 2026-10-10 11:44:07 +0800 | lidicn | docs(记账 §之二八十九): B.14 收口批次的读数与两处就地更正……</code></pre>
+
+<h4>提交跨度与量</h4>
+<pre><code>git log --max-parents=0  →  0b3c624 | 2026-09-17 07:31:35 +0800 | chore: 首次提交 — AutoForge v0.2.0 → v1.6.0
+git rev-list --count HEAD  →  326
+按月份：2026-09 = 113 笔　2026-10 = 213 笔
+git tag  →  pre-g2-dod（仅此一个）
+git branch -a  →  master（*）、wip/merge-v2.1-wip-20260927、remotes/nas/*、remotes/origin/main</code></pre>
+
+<div class="warn">
+<b>审的是哪个状态 —— 必须说清</b>
+<ul>
+<li>审计对象是<b>本地工作区（含未提交改动）</b>，即 HEAD <code>91c1ba2</code> 加上上面 10 个已改文件与 4 个未跟踪文件。</li>
+<li>本地 <code>master</code> 比 <code>origin/main</code> <b>领先 15 笔</b>（<code>git rev-list --left-right --count origin/main...master</code> = <code>0  15</code>），意味着 GitHub 上的公开仓库<b>落后于</b>本地这份。</li>
+<li>下文 <b>BUG-02 只存在于未提交改动里</b>——它在 HEAD 上不存在，是工作区新引入的行为变化。其余发现对 HEAD 与工作区都成立。这条差异直接决定该问题的处置紧迫度，请勿忽略。</li>
+<li>另有第二个远端 <code>nas</code>（内网 Git 服务），说明存在「双远端」推送拓扑，本报告不评价其一致性。</li>
+</ul>
+</div>
+
+<h3>1.2 技术栈、入口与启动方式</h3>
+<div class="grid">
+<div class="card"><div class="k">语言</div><div class="v">Python ≥3.11</div><div class="n">requires-python = "&gt;=3.11"</div></div>
+<div class="card"><div class="k">CLI 入口</div><div class="v">forge</div><div class="n">autoforge.af_cli:app（Typer）</div></div>
+<div class="card"><div class="k">HTTP 服务</div><div class="v">FastAPI</div><div class="n">forge serve → af_api.build_app</div></div>
+<div class="card"><div class="k">包名</div><div class="v">autoforge</div><div class="n">模块前缀 af_*</div></div>
+<div class="card"><div class="k">内核依赖</div><div class="v">2 个</div><div class="n">jsonschema、typer</div></div>
+<div class="card"><div class="k">前端</div><div class="v">Vue + Vite</div><div class="n">ui/ · ui-user/ · ui-user-mimo/</div></div>
+</div>
+
+<p><b>它是什么</b>：以 Agent 为中心的智能家居自动化平台。Agent 写 JSON IR（Graph 作为唯一真相），机器侧用静态扫描 + vhass 仿真 + canary 灰度验证，自然语言由 IR <b>确定性渲染</b>，人只看一句话。CLI 子命令族：<code>build / sim / run / watch / conf / diff / store / spec / serve / auth / mcp / pending / credentials / experience / telemetry / entities</code>。</p>
+
+<p><b>启动链路</b>：<code>forge</code>（<code>pyproject.toml [project.scripts]</code>）→ <code>af_cli:app</code> → 各子命令；服务面 <code>forge serve</code> → <code>af_api.build_app()</code>（FastAPI，默认绑 <code>0.0.0.0</code>，只读端点公开、写/live 端点 require scope）；MCP 面 <code>forge mcp</code>（stdio，21 个工具）。</p>
+
+<h3>1.3 目录结构与代码规模</h3>
+<p>规模按<b>实际读取的行数</b>统计（含空行，用 <code>Get-Content | .Count</code>；此前用 <code>Measure-Object -Line</code> 得到的数偏小，因为该 cmdlet 不计空行，本表已改正）：</p>
+
+<table>
+<thead><tr><th>区域</th><th>文件数</th><th>行数</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>src/autoforge/</code></td><td>102 个 <code>.py</code></td><td><b>45,607</b></td><td>含子包 <code>af_ir/</code>、<code>af_adapters/</code>、<code>af_vhass/</code>、<code>af_closedloop/</code></td></tr>
+<tr><td><code>tests/</code></td><td>210 个 <code>.py</code></td><td><b>44,929</b></td><td>unit 155 / acceptance 14 / contract 5 / f14 3（按目录计 py 文件）</td></tr>
+<tr><td><code>docs/</code></td><td>205 个文件</td><td>—</td><td>architecture / audit / design / handoff / plan / reference / roadmap / ui-verify / 交接班</td></tr>
+<tr><td><code>ui/</code> · <code>ui-user/</code> · <code>ui-user-mimo/</code></td><td>54 / 41 / 42</td><td>—</td><td>三套前端（已排除 <code>node_modules</code>、<code>dist</code>）</td></tr>
+<tr><td><code>scripts/</code></td><td>33</td><td>—</td><td>19 个 <code>check_*.py</code> 质量门禁脚本</td></tr>
+<tr><td><code>examples/</code></td><td>31</td><td>—</td><td>样例 IR</td></tr>
+<tr><td><code>docker/</code></td><td>6</td><td>—</td><td>Dockerfile.api / Dockerfile.test / compose + 1 个私有 wheel</td></tr>
+<tr><td><code>.github/</code></td><td>1</td><td>—</td><td>仅 <code>workflows/ci.yml</code></td></tr>
+</tbody>
+</table>
+
+<p class="small"><b>本次跳过了什么</b>：<code>.git/</code>（对象库）、<code>.venv/</code> 与 <code>.venv314/</code>（两份虚拟环境）、<code>node_modules/</code>、<code>dist/</code>、<code>__pycache__/</code>、<code>.pytest_cache/</code>、<code>.grimp_cache/</code>、<code>.import_linter_cache/</code>、<code>.qoder/</code>、<code>.codebuddy/</code>、<code>.ptmp/</code>、<code>.forge/</code> 运行态目录（只列了文件名，未读内容）。跳过理由是它们属缓存 / 构建产物 / 运行数据，不是源码。</p>
+
+<h4>src 中最大的 12 个模块（行数）</h4>
+<table>
+<thead><tr><th>模块</th><th>行数</th><th>职责（按文件头自述）</th></tr></thead>
+<tbody>
+<tr><td><code>af_orchestrator.py</code></td><td>2,310</td><td>意图编排 / 复合编排会话</td></tr>
+<tr><td><code>af_service.py</code></td><td>2,632</td><td>服务层纯逻辑（REST 与 MCP 同源）</td></tr>
+<tr><td><code>af_evo.py</code></td><td>1,335</td><td>演化</td></tr>
+<tr><td><code>af_cli.py</code></td><td>1,278</td><td>forge CLI</td></tr>
+<tr><td><code>af_nl_parse.py</code></td><td>1,259</td><td>自然语言解析</td></tr>
+<tr><td><code>af_scanner.py</code></td><td>1,243</td><td>静态扫描（安全闸）+ live 预检</td></tr>
+<tr><td><code>af_api.py</code></td><td>1,242</td><td>FastAPI 路由层</td></tr>
+<tr><td><code>af_catalog.py</code></td><td>1,162</td><td>实体目录与解析</td></tr>
+<tr><td><code>af_store.py</code></td><td>1,052</td><td>G6 版本化存储 + diff</td></tr>
+<tr><td><code>af_auth.py</code></td><td>1,013</td><td>令牌 / 鉴权 / 配对码 / 限速</td></tr>
+<tr><td><code>af_mcp.py</code></td><td>1,001</td><td>MCP server（stdio）</td></tr>
+<tr><td><code>af_executor.py</code></td><td>956</td><td>节点执行器 / 审批门 / canary</td></tr>
+</tbody>
+</table>
+
+<h3>1.4 依赖清单与体量</h3>
+<pre><code>[project]
+dependencies        = jsonschema>=4.20, typer>=0.12          # 内核只 2 个，宣称「内核零依赖承诺」
+optional-dependencies:
+  sim   = pytest-homeassistant-custom-component              # 未钉版本
+  api   = fastapi>=0.110, uvicorn>=0.29
+  ha    = websockets>=12.0                                   # 未装则四注册表优雅降级
+  dev   = pytest>=8.0, pytest-asyncio>=0.23,
+          pytest-homeassistant-custom-component,             # 未钉版本
+          fastapi, uvicorn, httpx>=0.27, websockets,
+          grimp>=2.1, import-linter>=1.10, paho-mqtt>=1.6,&lt;2.1
+  mqtt  = paho-mqtt>=1.6,&lt;2.1                                # 唯一钉了上界的依赖
+  homesdk = homesdk>=0.3.2                                   # 私有 wheel，未上 PyPI</code></pre>
+<p><code>dev</code> 里 12 项中 <b>10 项无版本上界</b>，只有 <code>paho-mqtt</code> 被刻意钉死（代码注释说明这是 DCD 裁定 20261004 §二 Q2=B 的结果）。依赖总量本身很轻（内核 2 个），体量集中在自研代码与测试。</p>
+
+<h3>1.5 文档与工程门禁（这个项目的显著特征）</h3>
+<ul>
+<li>有完整文档体系：<code>README.md</code>（393 行）、<code>KICKOFF.md</code>（冷启动唯一入口，含 13 条冻结决策）、<code>docs/</code> 下 205 个文件，分 architecture / audit / design / handoff / plan / reference / roadmap / ui-verify / 交接班 九类。</li>
+<li>有 <code>AGENTS</code> 式的流程纪律：<code>gates.sh</code> + <code>.gates.toml</code>（自称「门禁基线唯一定义」）+ <code>.gates-baseline.txt</code> + <code>.atomic-write-baseline.txt</code> + 19 个 <code>scripts/check_*.py</code> 门禁脚本 + import-linter 契约。</li>
+<li><b>这个项目已经历过至少六到十八轮自审</b>：代码注释里密集出现「审计 §十八 B.4」「第六轮审计 §三」「BUG-05 / BUG-10 / P0-9 / P1-18 / P1-19 / P1-22 / R19-01」等编号。</li>
+</ul>
+<div class="note">
+这既是优点也是本次审计的方法论约束：<b>项目自己记过的问题不再重复计分</b>。本报告只收「自审记录之外、或自审口径与实际状态自相矛盾」的条目；已被自己记录并如实冻结的欠债，放到第 3 节当作架构事实评述，而不是当成新 bug。
+</div>
+
+<h3>1.6 提交历史跨度与近期活跃度</h3>
+<div class="grid">
+<div class="card"><div class="k">首次提交</div><div class="v">2026-09-17</div><div class="n">0b3c624</div></div>
+<div class="card"><div class="k">最近提交</div><div class="v">2026-10-10</div><div class="n">91c1ba2（当日 14:37 +0800）</div></div>
+<div class="card"><div class="k">跨度</div><div class="v">约 3.4 周</div><div class="n">326 笔提交</div></div>
+<div class="card"><div class="k">10 月节奏</div><div class="v">213 笔</div><div class="n">约 21 笔/天</div></div>
+</div>
+<p>单作者（<code>lidicn</code>）高密度开发，提交信息极长且带「记账 / 裁定 / DCD」等流程术语，说明存在一套自建的需求—裁定—验收闭环。<b>版本号是这套流程里最薄弱的一环</b>（见第 3 节 ARCH-02）。</p>
+
+<h2 id="s2">2 · 稳定性与功能性 bug 清单</h2>
+
+<p>按严重程度排序。每条给：严重程度、位置（<code>file:line</code>）、触发条件、具体后果、修复建议。<b>判定口径</b>：只有能在源码里指出确定的控制流、且后果可复现或必然发生的，才标为「确定」；需要运行时实测才能定案的，单独标 <b>「疑似」</b> 并写清要验什么。</p>
+
+<h3>严重程度分布</h3>
+<svg viewBox="0 0 640 150" role="img" aria-label="bug 严重程度分布图">
+  <rect x="0" y="0" width="640" height="150" fill="none"/>
+  <g font-family="sans-serif" font-size="13" fill="#e6edf3">
+    <text x="0" y="18">严重</text><rect x="80" y="6" width="60" height="16" fill="#ff5d5d"/><text x="150" y="18" fill="#9aa7b4">2 条</text>
+    <text x="0" y="46">高</text><rect x="80" y="34" width="120" height="16" fill="#ff9f43"/><text x="210" y="46" fill="#9aa7b4">4 条</text>
+    <text x="0" y="74">中</text><rect x="80" y="62" width="150" height="16" fill="#ffd84d"/><text x="240" y="74" fill="#9aa7b4">5 条</text>
+    <text x="0" y="102">低</text><rect x="80" y="90" width="120" height="16" fill="#57b6ff"/><text x="210" y="102" fill="#9aa7b4">4 条</text>
+    <text x="0" y="132" fill="#6e7d8c">条形长度 ∝ 条目数（基准 1 条 = 30px）</text>
+  </g>
+</svg>
+
+<!-- ══════════════════ 严重 ══════════════════ -->
+<h3>严重（2 条）</h3>
+
+<div class="finding crit">
+<h3><span class="id">BUG-01</span><span class="sev s-crit">严重</span> 未注册管理员时，匿名请求可用任意用户名口令换取全权限令牌</h3>
+<div class="loc">src/autoforge/af_api.py:1019-1029（工作区与 HEAD 均存在）　配套：af_api.py:981-984、af_api.py:986-1009、af_auth.py:1053-1155</div>
+
+<div class="lbl">触发条件</div>
+<p>部署满足两个前提：① <code>AUTOFORGE_TOKENS</code> 已配置（<code>TokenRegistry.enabled == True</code>，即生产态、写/live 面处于 fail-closed）；② 管理员用户尚未注册（<code>{store_root}/.auth/admin.json</code> 不存在，或存在但解析失败）。此时对 <code>POST /api/auth/login</code> 发送<b>任意</b>非空 username + 非空 password 即可。</p>
+
+<div class="lbl">证据</div>
+<pre><code>// af_api.py:1019-1029（当前工作区，与 HEAD 同逻辑）
+if not (body.username and body.password):
+    raise HTTPException(status_code=401, detail="用户名或密码为空")
+# 未注册时的兼容模式：任意非空凭据可登录（旧行为）
+if not admin_store.has_admin:
+    token = registry.issue_for_agent(body.username, ("read", "write", "live"))   # ← 直接签发
+    return {"ok": True, "user": {"username": body.username, "role": "admin"},
+            "token": token, "warning": "尚未设置管理员账号，建议立即注册"}</code></pre>
+<p>该端点<b>没有挂任何 <code>dependencies=[Depends(...)]</code></b>，是匿名面。签发出的令牌是注册表内的真实令牌，<code>requires("write")</code> / <code>requires("live")</code> 会正常放行：</p>
+<pre><code>// af_auth.py:261-263 —— enabled 只由已配置令牌决定
+return bool(self._tokens)
+// af_api.py:355-402 —— requires() 只校验 scope，不看 subject 是否经过口令验证</code></pre>
+
+<div class="lbl">后果</div>
+<ul>
+<li><b>未认证的写 + live 提权</b>：攻击者拿到 <code>("read","write","live")</code> 三域令牌，可调 <code>/api/live/run</code>（真机下发到 Home Assistant）、<code>/api/store/import</code>、<code>/api/graphs/enable</code>、<code>/api/credentials/*</code>、<code>/mcp</code> 的写工具等。整个 <code>requires()</code> 的 fail-closed 设计被这一条旁路绕开。</li>
+<li><b>绕过 <code>AUTOFORGE_TOKENS</code> 的命名治理</b>：令牌被签发到攻击者自选的 subject 名下，进入 <code>issued_tokens.json</code> 与 <code>registry.subjects()</code> 列表，事后审计看到的是一个「正常登录过」的主体。</li>
+<li><b>二次触发路径更隐蔽</b>：<code>has_admin</code> 是 <code>bool(self._username and self._salt and self._hash)</code>（<code>af_auth.py:1101-1104</code>），而 <code>_load</code> 在文件损坏时静默退化为「无用户」。也就是说，<b>一旦 <code>admin.json</code> 因任何原因损坏/被清空，这条旁路会重新打开</b>，而运维在日志里看不到任何异常。</li>
+<li>README §4.1 把「公开读面」的边界建立在「只在可信 LAN」这一网络前提上；但这条旁路给的是 <b>写与 live</b>，不是读面，网络前提在这里不构成可接受的风险转移。</li>
+</ul>
+
+<div class="lbl">修复建议</div>
+<ol>
+<li><b>删掉 login 的兼容分支</b>：<code>not admin_store.has_admin</code> 时应直接 409/403，并提示先去 <code>/api/auth/register</code>，不要签发任何令牌。</li>
+<li>若必须保留「老用户升级不被锁在外面」的过渡语义，改为<b>一次性引导凭据</b>：服务启动时生成 bootstrap secret 打到 stdout/日志一次，只有携带它才走兼容分支，且该分支在首次成功注册后永久自我关闭。</li>
+<li>把 <code>has_admin</code> 的「读不出来」与「确实没有」分开：新增 <code>admin_store.poisoned</code> 标志，损坏时对 register 与 login <b>双向 fail-closed</b>（当前口径只防了重复注册，没防登录）。</li>
+<li>给 <code>/api/auth/register</code> 与 <code>/api/auth/login</code> 单独挂一个低配 <code>RateLimiter</code>（可复用 <code>af_api.py:303-308</code> 的 <code>bootstrap_*_limiter</code> 形状），当前这两条只受全局 1000/min 的 <code>_rate_limit_dep</code> 约束，口令爆破几乎无成本。</li>
+</ol>
+<div class="note"><b>与已有自审记录的关系</b>：HEAD 上已有的 P0-9 把 <code>requires()</code> 收成了 fail-closed，代码注释也明确写了「生产无令牌即拒绝」。BUG-01 指出的是<b>另一条不经过 <code>requires()</code> 的入口</b>，因此不属于「已修的 P0-9」，也不在 <code>.gates-baseline.txt</code> 的 86 条里。</div>
+</div>
+
+<div class="finding crit">
+<h3><span class="id">BUG-02</span><span class="sev s-crit">严重</span> 未提交改动把 <code>AF_ALLOW_NOAUTH</code> 从「仅无令牌时生效」放大成「永远生效」</h3>
+<div class="loc">src/autoforge/af_api.py:363-373（<b>仅存在于工作区未提交改动</b>，HEAD 上不是这样）</div>
+
+<div class="lbl">触发条件</div>
+<p>环境中存在 <code>AF_ALLOW_NOAUTH=1</code>（或其 <code>true</code>/<code>yes</code> 变体），<b>且已配置生产令牌</b>。此时所有挂 <code>requires("read"/"write"/"live")</code> 的端点全部放行。</p>
+
+<div class="lbl">证据（工作区 diff，逐行）</div>
+<pre><code>@@ -363,6 +363,10 @@ def build_app(
+         def dep(
+             creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+         ) -> TokenInfo | None:
++            # 开发模式逃生舱：只要显式设置 AF_ALLOW_NOAUTH=1，不管有没有配置令牌都放行
++            # （局域网开发环境，开发者 webui 无登录功能，需要此开关才能访问 API）
++            if os.environ.get("AF_ALLOW_NOAUTH", "").lower() in ("1", "true", "yes"):
++                return None
+             if not registry.enabled:
+                 # 默认 fail-closed（P0-9 收口）：生产无令牌即拒绝
+                 if os.environ.get("AF_ALLOW_NOAUTH", "").lower() in ("1", "true", "yes"):
+                     return None  # 本地开发/原型逃生舱</code></pre>
+<p>新增的这 3 行位于 <code>if not registry.enabled:</code> <b>之前</b>，而原来那条（保留在下方）位于其<b>内部</b>。HEAD 的语义是「逃生舱只在没配令牌时可用」；工作区的新语义变成「逃生舱无条件可用，配了令牌也照放」。</p>
+
+<div class="lbl">后果</div>
+<ul>
+<li>逃生舱的保护边界被取消。原设计中「配了 <code>AUTOFORGE_TOKENS</code> 就必须带令牌」这条判据失效——只要环境里残留一个 <code>AF_ALLOW_NOAUTH=1</code>（compose 文件、systemd unit、Shell 里 export 过一次、父进程继承），写面与 live 面就<b>对全网段敞开</b>。</li>
+<li>这属于安全默认值的静默退化：<code>.gates.toml</code> 与 README 都把「写面/live 面 fail-closed、本地放行只有 <code>AF_ALLOW_NOAUTH=1</code> 一个逃生舱」写成承诺，改动后这句承诺里的隐含前提（仅当未配置令牌）不再成立，而文档没有同步。</li>
+<li>该行新增内容<b>与 HEAD 上已有的那段形成重复判断</b>，读代码的人容易以为两处等价，从而低估新加那行的作用范围。</li>
+</ul>
+
+<div class="lbl">修复建议</div>
+<ol>
+<li>把这 3 行挪回 <code>if not registry.enabled:</code> 内部，或删掉（下方那份仍然在）。保持逃生舱只对「无令牌部署」生效。</li>
+<li>若确实需要「局域网开发但已配令牌」的场景，改用独立开关名（如 <code>AF_DEV_OPEN=1</code>）并在启动时打一条 <b>WARNING 级</b>日志，避免与既有语义混淆。</li>
+<li>把「逃生舱只在该分支生效」写成一条门禁断言（<code>scripts/</code> 已有 19 个同型脚本，加一个 grep 级检查即可），防止下次再被挪位。</li>
+</ol>
+<div class="note"><b>为什么标「严重」而不是「高」</b>：它与 BUG-01 是同一类后果（写/live 面被无条件打开），区别只在于 BUG-01 走 login 旁路、BUG-02 走环境变量旁路。两者独立成立，任一存在即足以穿透鉴权设计。</div>
+</div>
+
+<!-- ══════════════════ 高 ══════════════════ -->
+<h3>高（4 条）</h3>
+
+<div class="finding high">
+<h3><span class="id">BUG-03</span><span class="sev s-high">高</span> <code>TokenRegistry.subjects()</code> 无锁遍历令牌表，与签发/清理并发时抛 <code>RuntimeError</code></h3>
+<div class="loc">src/autoforge/af_auth.py:307-312（无锁）；对照加锁侧 af_auth.py:278-296、316-364</div>
+
+<div class="lbl">触发条件</div>
+<p>两个请求在 FastAPI 线程池里并发：一个走 <code>/api/auth/subjects</code>、<code>/api/user/agents</code> 或 <code>/api/user/pair/{code}/confirm</code>（都调 <code>registry.subjects()</code>），另一个走 <code>/api/auth/login</code> / <code>/api/auth/register</code> / 配对兑换（都调 <code>issue_for_agent</code>）或触发 <code>_purge_expired_locked</code> / <code>_evict_oldest_locked</code>。也就是<b>用户端 WebUI 打开 agent 列表的同时有人登录</b>即可。</p>
+
+<div class="lbl">证据</div>
+<pre><code>// af_auth.py:307-312 —— 没有任何 with self._lock
+def subjects(self) -> list[dict[str, Any]]:
+    seen: dict[str, set[str]] = {}
+    for info in self._tokens.values():        # ← 遍历字典视图
+        seen.setdefault(info.subject, set()).update(info.scopes)
+    return [{"subject": s, "scopes": sorted(sc)} for s, sc in sorted(seen.items())]
+
+// af_auth.py:316+ —— 同一字典在锁内被插入
+def issue_for_agent(...):
+    with self._lock:
+        self._tokens[token] = info             # ← 并发插入
+// af_auth.py:342-364 —— _purge_expired_locked / _evict_oldest_locked 在锁内 pop</code></pre>
+<p><code>authenticate()</code>（:278）与 <code>revoke_by_subject()</code>（工作区版本）都规规矩矩加了 <code>self._lock</code>，唯独 <code>subjects()</code> 漏了——是遗漏，不是设计取舍。</p>
+
+<div class="lbl">后果</div>
+<p>CPython 在遍历期间检测到字典尺寸变化会抛 <code>RuntimeError: dictionary changed size during iteration</code>。该异常未被捕获，会穿过路由层变成 HTTP 500；<code>/api/user/agents</code> 是用户端 WebUI 的主列表接口，<code>/api/user/pair/{code}/confirm</code> 是配对流程的收尾步骤——<b>表现为「偶发 500、刷新一次就好」</b>，是最难被日志复盘的那类故障。令牌量越大（<code>MAX_ISSUED</code> 上限内）插入越频繁，命中概率越高。</p>
+
+<div class="lbl">修复建议</div>
+<ol>
+<li>在 <code>subjects()</code> 内加 <code>with self._lock:</code>，与 <code>authenticate()</code> 同口径。</li>
+<li>或者在锁内先 <code>list(self._tokens.values())</code> 做快照，锁外再聚合（减少持锁时间；本函数的聚合是纯计算，无 I/O）。</li>
+<li>建议同时审一遍同文件其余直接访问共享容器的读路径：<code>enabled</code>（:263，<code>bool()</code> 尺寸检查，安全）、<code>_load_issued_file</code>（:394，构造期，安全）。</li>
+</ol>
+</div>
+
+<div class="finding high">
+<h3><span class="id">BUG-04</span><span class="sev s-high">高</span> <code>stop_watch</code> 删除锁文件，破坏跨进程互斥不变量</h3>
+<div class="loc">src/autoforge/af_service.py:2490-2499（<code>lock.unlink()</code> 在 :2495）；锁语义见 af_flock.py:67-160</div>
+
+<div class="lbl">触发条件</div>
+<p>调用 <code>POST /api/watch/stop</code>（或 CLI 同路径）时，<code>{store_root}/watch.lock</code> 正被另一个 watcher 进程通过 <code>FileLock</code> 持有。</p>
+
+<div class="lbl">证据</div>
+<pre><code>// af_service.py:2490-2499
+# 清 sidecar
+try:
+    if info.exists():      info.unlink()
+    if lock.exists():      lock.unlink()          # ← 删掉别人正在持有的锁文件
+    if pid_file.exists():  pid_file.unlink()
+except OSError:
+    pass                                          # ← Windows 上 PermissionError 被静默吞掉</code></pre>
+<pre><code>// af_flock.py:1-9 —— 该模块自己声明的边界
+FileLock：advisory 文件锁，POSIX 用 fcntl.flock，Windows 用 msvcrt.locking；
+进程崩溃 / 退出时内核自动释放（无陈旧锁问题），锁文件内容记录最后持有者信息供诊断。
+设计边界：锁是建议性的（advisory）——所有写方都经本模块拿锁才能互斥；绕过者不受保护。</code></pre>
+
+<div class="lbl">后果</div>
+<ul>
+<li><b>POSIX/Linux 部署（docker 面）上会真的删掉</b>：<code>unlink</code> 对 flock 持有的文件是允许的。此后新 watcher 在<b>同一个路径上创建一个全新 inode</b> 并加锁成功，而旧 watcher 仍持有旧 inode 的锁——<b>两个 watcher 同时运行、互不排斥</b>，正是 <code>WatchCoordinator</code>（af_live.py:115-127）声称要防住的局面。更糟的是没有任何日志或计数会记录这次失效。</li>
+<li><b>Windows（本机就是）上静默无效</b>：被锁定的文件删除会抛 <code>PermissionError</code>，被 <code>except OSError: pass</code> 吞掉，<code>stop_watch</code> 仍然返回 <code>{"ok": killed}</code>。于是「清理成功」与「什么都没清」对外表现完全一致——属于项目自己在别处反复强调要消灭的「假绿」形状。</li>
+<li><code>watch.lock.info</code> 与 <code>watch.pid</code> 被删而锁未被释放时，诊断信息（下一个持有者的 <code>coord_lock_held_by_other</code> 判定依据）也随之丢失。</li>
+</ul>
+
+<div class="lbl">修复建议</div>
+<ol>
+<li><b>不要 <code>unlink</code> 锁文件</b>。锁的正确释放方式是关闭持有它的文件描述符（<code>FileLock.release()</code>），删文件从来不是释放锁的手段。</li>
+<li>如果目的是「让状态目录看起来干净」，改为清空文件内容或把状态挪到 <code>{store_root}/run/</code> 下的普通文件，与锁文件分离。</li>
+<li>把 <code>except OSError: pass</code> 换成具名降级：清理失败时返回 <code>{"ok": ..., "cleanup": {"lock_removed": false, "reason": ...}}</code>，让调用方能区分「停成功且清干净」与「停成功但 cleanup 失败」。</li>
+<li>在 <code>tests/unit/</code> 加一条「持锁时调 stop，锁仍在且仍互斥」的用例。</li>
+</ol>
+</div>
+
+<div class="finding high">
+<h3><span class="id">BUG-05</span><span class="sev s-high">高</span> <code>start_watch</code> 同步阻塞最长 15 秒，并用「子进程还活着」冒充启动成功</h3>
+<div class="loc">src/autoforge/af_service.py:2503-2632（<code>for _ in range(15): time.sleep(1)</code> 在 :2579-2580）；调用方 af_api.py:952-959</div>
+
+<div class="lbl">触发条件</div>
+<p>任何一次 <code>POST /api/watch/start</code>，或 <code>svc.start_watch(...)</code> 的任何调用。当子进程迟迟写不出 sidecar（例如 <code>forge</code> 不在 PATH、HA 地址不可达、persist 目录权限不足）时，循环会跑满 15 轮。</p>
+
+<div class="lbl">证据</div>
+<pre><code>// af_service.py:2579-2587
+for _ in range(15):
+    time.sleep(1)                      # ← 同步阻塞，最长 15 秒
+    exited = proc.poll() is not None
+    try:
+        data = json.loads(info.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = None
+    if data is not None and data.get("graph") == mine:
+        return {"ok": True, ...}</code></pre>
+<pre><code>// af_api.py:952-959 —— 端点本身是同步 def，会被放进 Starlette 线程池
+@app.post("/api/watch/start", dependencies=[Depends(_write)])
+def api_watch_start(body: dict[str, Any]) -> dict[str, Any]:
+    ir = body.get("ir")
+    if not ir: return {"ok": False, "error": "缺少 ir 字段"}
+    dry_live = body.get("dry_live", True)     # ← 请求体可控
+    return svc.start_watch(ir=ir, store_root=..., dry_live=dry_live)</code></pre>
+
+<div class="lbl">后果</div>
+<ul>
+<li><b>线程池占用</b>：Starlette 默认线程池 40 个 worker。40 个并发 <code>/api/watch/start</code> 就能把整个同步端点位面（含所有其他 <code>def</code> 端点）饿死 15 秒；这是一个<b>匿名可放大</b>的资源耗用面（该端点需要 write 令牌，但只要 BUG-01/BUG-02 任一成立，就是匿名的）。</li>
+<li><b>成功语义偏弱</b>：15 轮后如果 <code>proc.poll() is None</code> 且没有别人的 sidecar，返回 <code>not_registered</code>——代码注释自己写了「子进程仍在跑，但 15 秒内没写出自己的 sidecar——<b>不能证明它在监听</b>」。也就是说返回值只有 <code>ok=True</code> 那一格是可信的，其余都是「不知道」。这本身是对的方向，但 15 秒的代价换来的是「不知道」，收益比不划算。</li>
+<li><b>同步 <code>time.sleep</code> 混在服务层</b>：项目在 <code>af_service.py:2580</code> 与 <code>af_live.py:317</code> 两处用阻塞 sleep，前者在 HTTP 请求路径上。</li>
+</ul>
+
+<div class="lbl">修复建议</div>
+<ol>
+<li>把等待改成<b>有退避的轮询 + 总预算</b>（例如 0.1s → 0.2s → 0.4s … 上限 2s，总预算 5s），而不是 15 次固定 1 秒。绝大多数成功启动在数百毫秒内就会写出 sidecar，固定 1 秒的粒度既慢又浪费。</li>
+<li>更彻底的做法：端点改为「提交启动 + 立即返回 job id」，由前端轮询 <code>GET /api/watch/list</code> 判断结果，HTTP 请求路径上不留任何 sleep。</li>
+<li>把「sidecar 属于本次 IR」的判据（<code>data.get("graph") == mine</code>）保留——这条修得对，是 P1-19 的成果，不要回退。</li>
+</ol>
+</div>
+
+<div class="finding high">
+<h3><span class="id">BUG-06</span><span class="sev s-high">高</span> 用 PID 文件杀进程存在 PID 复用误杀，且 SIGTERM 无优雅收尾</h3>
+<div class="loc">src/autoforge/af_service.py:2476-2489（<code>os.kill(pid, 15)</code> 在 :2484）与 :2516-2522（<code>os.kill(int(pid_str), 15)</code> 在 :2520）</div>
+
+<div class="lbl">触发条件</div>
+<p>watcher 进程已退出（崩溃、被手动杀掉、或租约到期被别处接管）而 <code>{store_root}/watch.pid</code> 仍留有旧 PID；随后该 PID 被 Windows 或 Linux 重新分配给一个无关进程；此时调用 <code>stop_watch</code> 或再次 <code>start_watch</code>。</p>
+
+<div class="lbl">证据</div>
+<pre><code>// af_service.py:2478-2489 —— 只按数字动刀，不校验这个 PID 现在是不是我们要杀的那个
+if pid_file.exists():
+    pid_str = pid_file.read_text(encoding="utf-8").strip()
+    if pid_str:
+        pid = int(pid_str)
+        try:
+            os.kill(pid, 15)  # SIGTERM
+            killed = True
+        except (ProcessLookupError, PermissionError):
+            pass</code></pre>
+<p>代码注释把这处标为「P1-19 修复：用 PID 文件精确终止（不用 /proc 模式匹配，避免误伤无关进程）」。<b>用 PID 文件替代模式匹配消除了「按名字误杀一族进程」，但引入了「按 PID 误杀单个无关进程」</b>——后者概率低，但后果是杀掉一个完全无关的进程，且不可撤销。</p>
+
+<div class="lbl">后果</div>
+<ul>
+<li><b>误杀</b>：PID 复用后，<code>os.kill(pid, 15)</code> 会把信号投给任意无关进程。Linux 上 SIGTERM 还能被对方忽略；<b>Windows 上 <code>os.kill</code> 对非自身进程等价于 <code>TerminateProcess</code></b>，是不可被目标忽略的强杀。</li>
+<li><b>无优雅收尾</b>：<code>src/</code> 全树 <code>atexit</code> 与 <code>signal.signal</code> 命中数为 <b>0</b>（已用 grep 核实），全仓唯一新建线程是 <code>af_live.py:478</code> 的 daemon tick 线程。因此被 SIGTERM 终止的 watcher 不会执行任何清理：不释放 <code>FileLock</code>（靠内核兜底）、不 flush 在途的持久化写入、不对 MQTT 发 <code>offline</code> retained 消息。对「实例跨进程崩溃恢复」这个卖点来说，这是<b>把正常关闭也走成了崩溃路径</b>。</li>
+<li><code>stop_watch</code> 在 <code>killed=True</code> 的同一函数里就把 <code>watch.pid</code> 删了，而信号是异步投递的、目标进程可能尚未退出；紧接着的 <code>start_watch</code> 会在旧进程还在写的同时启动新进程——恰好是 <code>WatchCoordinator</code> 要防的场景。</li>
+</ul>
+
+<div class="lbl">修复建议</div>
+<ol>
+<li>给 PID 文件加上<b>身份校验</b>：写入时一并记录 <code>owner_id()</code>（<code>af_flock.owner_id()</code> 已生成 <code>{hostname}-{pid}-{uuid8}</code>）与启动时刻；杀之前用 <code>psutil</code> 或用平台原生方式核对目标进程的启动时间/命令行，不匹配就拒杀并报错。</li>
+<li>更稳妥：<b>用「锁 + LWT 式握手」替代杀进程</b>——watcher 在轮询 <code>watch.lock.info</code> 里出现 <code>stop_requested</code> 标记时自行优雅退出。这样既无 PID 复用风险，也让「优雅收尾」这条建议自动落地。</li>
+<li>补 <code>atexit</code> / <code>signal.SIGTERM</code> 处理器，让 watcher 在收到 SIGTERM 时走与 <code>stop</code> 同一条收尾路径（释放锁 → flush 持久化 → 发 MQTT offline）。</li>
+<li>停止后<b>等待</b>目标 PID 真正消失（或超时后升级为强杀并如实回报）再返回，不要立刻删 PID 文件。</li>
+</ol>
+</div>
+
+<!-- ══════════════════ 中 ══════════════════ -->
+<h3>中（5 条）</h3>
+
+<div class="finding med">
+<h3><span class="id">BUG-07</span><span class="sev s-med">中</span> MQTT 客户端只连不停：<code>loop_start()</code> 有、<code>loop_stop()</code>/<code>disconnect()</code> 全仓为零</h3>
+<div class="loc">src/autoforge/af_mqtt_bridge.py:175-177（连接）与 :741-744（<code>stop</code>）</div>
+
+<div class="lbl">证据</div>
+<pre><code>// af_mqtt_bridge.py:175-177 —— 建连时起了 paho 自己的网络线程
+client.connect(host, port, keepalive)
+if hasattr(client, "loop_start"):
+    client.loop_start()
+
+// af_mqtt_bridge.py:741-744 —— 所谓「优雅下线」只做两件事
+def stop(self) -> None:
+    """优雅下线：显式发 retained `offline`（LWT 只覆盖异常断连）。"""
+    self.advertise(offline=True)
+    self.started = False</code></pre>
+<p>对 <code>src/</code> 全树 grep <code>loop_start|loop_stop|disconnect\(|is_connected|reconnect</code>，<code>loop_start</code> 只出现一次（:177），<code>loop_stop</code> 与 <code>disconnect(</code> <b>一次都没有</b>。</p>
+
+<div class="lbl">触发条件</div>
+<p>任何会重复 <code>start()</code>/<code>stop()</code> 的场景：<code>serve</code> 重启、测试用例里反复装配 Runtime、联动环因异常被上层重建。</p>
+
+<div class="lbl">后果</div>
+<ul>
+<li>每次「重连」都新建一个 paho 客户端并起一条网络线程 + 一个 TCP 套接字，旧的不回收 → <b>线程与文件描述符单调增长</b>。在长期常驻的 NAS 部署形态下，这是典型的一周后才显形的慢泄漏。</li>
+<li><code>start()</code>（:724-739）也没有幂等保护：重复调用会重复 <code>advertise</code>、重复 <code>subscribe</code>，对端会把一条自动化看到多次上线。</li>
+<li><code>stop()</code> 之后 <code>started=False</code>，但 paho 的 <code>on_message</code> 回调仍然挂着 → 停止后仍会消费消息并写计数，与「已下线」的状态自述不符。</li>
+</ul>
+
+<div class="lbl">修复建议</div>
+<ol>
+<li><code>stop()</code> 里补 <code>self.client.unsubscribe(...)</code>（或至少 <code>self.client.on_message = None</code>）+ <code>self.client.loop_stop()</code> + <code>self.client.disconnect()</code>，并把 <code>self.client = None</code>。</li>
+<li><code>start()</code> 开头加 <code>if self.started: return</code>（或显式报错），使之成为幂等操作。</li>
+<li>给 <code>AfMqttBridge</code> 加 <code>__enter__</code>/<code>__exit__</code>，让「谁建谁收」在代码形状上成立。</li>
+</ol>
+</div>
+
+<div class="finding med">
+<h3><span class="id">BUG-08</span><span class="sev s-med">中</span> HTTP 侧「常驻真机监听」档必然失败——作者已在注释里承认这条通道今天不存在</h3>
+<div class="loc">src/autoforge/af_api.py:952-959 + src/autoforge/af_service.py:2542-2543、:2570-2577</div>
+
+<div class="lbl">证据</div>
+<pre><code>// af_service.py:2570-2577（原文照录）
+# 档位如实命名，且**从本函数自己拼给 CLI 的旗子里读回来**（不另立第二套说法）。
+# `forge watch` 没有 `--live` 这个旗子：它的真机档是"不带 `--dry-live`"，
+# 而缺 `--confirm` 时 CLI 直接拒启动（af_cli.py:565-566）。
+# 本层从不传 `--confirm`/`--live-allow` ⇒ `dry_live=False` 这一档只会得到子进程退出；
+# HTTP/用户界面到真机那条**常驻**通道因此今天不存在，是否开它归 DCD 裁（20261009-AF 申请）。
+tier = "dry_live" if "--dry-live" in cmd else "live_unconfirmed"</code></pre>
+
+<div class="lbl">触发条件</div>
+<p><code>POST /api/watch/start</code> 带 <code>{"dry_live": false}</code>。端点在 <code>af_api.py:958</code> 直接接受请求体里的 <code>dry_live</code>，不做任何限制。</p>
+
+<div class="lbl">后果</div>
+<ul>
+<li>调用方会得到 <code>{"ok": false, "reason": "child_exited", ...}</code>，但错误文本是「watch 子进程启动后立即退出（exit_code=…），请检查 watch.log」——<b>把「这一档在设计上就不可能成立」报成了「子进程坏了」</b>。运维会去查 watch.log，而那里不会有任何提示性问题。</li>
+<li>能力声明与实现不一致：README §1.1 把「真机常驻监听（<code>forge watch</code>，订阅 HA SSE 事件流）」列为已交付（✅），而代码自述「HTTP/用户界面到真机那条常驻通道因此今天不存在」。<b>CLI 侧确实存在，HTTP/UI 侧不存在</b>——这个差别没写进 README。</li>
+<li>「一次性真机下发」<code>POST /api/live/run</code> 是另一条已存在的通道（要 <code>confirm</code> + <code>live_allow</code>），本条的射程只到常驻面，不要混为一谈。</li>
+</ul>
+
+<div class="lbl">修复建议</div>
+<ol>
+<li>在端点层显式拒绝：<code>if not dry_live: raise HTTPException(501, ...)</code>，把「未实现」与「启动失败」在状态码上分开。</li>
+<li>README 的里程碑表加一列区分「CLI 面 / HTTP 面 / UI 面」，或把这一格从 ✅ 改为 🟡。</li>
+<li>若决定开放，必须同批落地 <code>--confirm</code>/<code>--live-allow</code> 的传递，而不是让服务层绕过它自己设计的二次确认闸门。</li>
+</ol>
+</div>
+
+<div class="finding med">
+<h3><span class="id">BUG-09</span><span class="sev s-med">中</span> 配对 SSE 生成器在事件循环里做同步文件 I/O（每客户端每秒一轮）</h3>
+<div class="loc">src/autoforge/af_api.py:1087-1106（<code>await asyncio.sleep(1.0)</code> 在 :1106）</div>
+
+<div class="lbl">证据</div>
+<pre><code>async def _pair_event_gen(request: Request):
+    while True:
+        if await request.is_disconnected(): break
+        try:
+            for pc in pair_store.pending_events():      # ← 同步：读并解析 JSON 文件
+                payload = json.dumps({...})
+                yield f"event: pair-request\ndata: {payload}\n\n"
+                pair_store.mark_pushed(pc.code)          # ← 同步：原子写文件
+        except Exception:  # noqa: BLE001 - SSE 不应因单次异常中断
+            pass
+        await asyncio.sleep(1.0)</code></pre>
+<p><code>PairCodeStore.pending_events</code>/<code>mark_pushed</code>（af_auth.py:641-664）都是同步文件操作，且内部走 <code>threading.Lock</code> + <code>atomic_write_text</code>（含 <code>os.fsync</code>）。</p>
+
+<div class="lbl">后果</div>
+<ul>
+<li>每个连接的 SSE 客户端<b>每秒都会在事件循环线程上</b>执行一次「读 JSON + 可能的原子写 + fsync」。<code>fsync</code> 在慢盘（本机 E: 卷、NAS 卷）上可达数十毫秒，直接表现为<b>整站请求延迟尖刺</b>，且随打开的用户端页面数线性叠加。</li>
+<li>把事件循环当 IO 线程用，是 uvicorn 部署下最常见的整站卡顿来源，排查时又因「只在配对页面开着时出现」而极难复现。</li>
+<li>该异常吞没点已被 <code>.gates-baseline.txt</code> 登记为 <code>af_api.py#except-pass-broad#build_app._pair_event_gen</code>——即项目自己也知道这里宽泛吞异常，但没把它和「同步 IO 占循环」这两件事联系起来。</li>
+</ul>
+
+<div class="lbl">修复建议</div>
+<ol>
+<li>把 <code>pair_store.pending_events()</code> / <code>mark_pushed()</code> 包进 <code>await asyncio.to_thread(...)</code>，把阻塞移出事件循环。</li>
+<li>或者：让配对码落盘改为「内存态 + 追加日志」，只有创建/消费这类低频动作才碰磁盘，轮询路径全内存。</li>
+<li>把固定 <code>sleep(1.0)</code> 换成可被事件唤醒的 <code>asyncio.Event</code>，兼顾延迟与空转开销。</li>
+</ol>
+</div>
+
+<div class="finding med">
+<h3><span class="id">BUG-10</span><span class="sev s-med">中</span> 实例持久化租约用墙钟比较，跨进程时钟偏移可致同一实例被双驱动</h3>
+<div class="loc">src/autoforge/af_persist.py:156-157、:171-186（<code>lease_until_wall</code>）、:188-200（<code>claims</code>）</div>
+
+<div class="lbl">证据</div>
+<pre><code>DEFAULT_LEASE_S = 60.0                       # :157
+record["lease_until_wall"] = _iso(clock.now() + timedelta(seconds=self.lease_s))   # :176
+
+def claims(self, record, clock) -> bool:     # :188-200
+    owner = str(record.get("owner", ""))
+    if not owner or owner == self.owner: return True
+    lease = _parse_iso(record.get("lease_until_wall"))
+    if lease is None: return True            # ← 解析不出来 = 可以接管
+    return clock.now() >= lease              # ← 纯墙钟比较</code></pre>
+
+<div class="lbl">触发条件</div>
+<p>两个进程在不同机器/不同容器上操作同一份 <code>--persist-dir</code>（项目形态里 <code>homesdk</code> 与 AF 跨机器部署、NAS 与开发机并存，README §4.1 正说明了「DB 跨机器调 AF」）。两机时钟相差超过一个租约周期（60s）即触发。</p>
+
+<div class="lbl">后果</div>
+<ul>
+<li><b>快的那台永远认为租约已过期</b>，于是在原持有者仍存活时接管同一条实例记录 → 两个进程同时驱动同一实例，各自写同一份 <code>{instance_id}.json</code>。原子写保证了文件不会写坏，但<b>状态机会分叉</b>，下游看到的自动化行为取决于谁最后一次落盘。</li>
+<li>反向也成立：慢的那台会长时间认为租约有效，即使持有者早已崩溃，恢复被无谓推迟。</li>
+<li><code>lease is None → return True</code> 是一条 fail-open：租约字段缺失/格式反常时直接放行接管。</li>
+<li>另有 <b>疑似</b>：<code>claims</code> 用的 <code>clock</code> 是 <code>TimeSource</code>，而项目有「仿真时间旅行」这套 TimeSource 实现。若同一个 persist 目录被 <code>forge run --persist-dir</code>（真实时钟）与 <code>forge sim</code>（可被推进的仿真时钟）先后触碰，租约比较就在两个时间基准之间进行。这条我<b>没有实测</b>，需要运行时确认（见第 5 节）。</li>
+</ul>
+
+<div class="lbl">修复建议</div>
+<ol>
+<li>改用<b>心跳续租</b>：接管方看「对端心跳是否在 N 秒内前进过」，而不是「对端时钟是否超过某绝对值」。</li>
+<li>若必须保留墙钟，则把判据改为 <code>now &gt;= lease + 容差</code>，容差取两机允许的最大时钟偏移，并在启动时把本机时钟偏移写进记录供诊断。</li>
+<li><code>lease is None</code> 改为 fail-closed（拒接管并要求人工裁决），与项目在鉴权侧一贯的 fail-closed 口径对齐。</li>
+</ol>
+</div>
+
+<div class="finding med">
+<h3><span class="id">BUG-11</span><span class="sev s-med">中</span> tick 看门狗的「自愈」分支与「人工停止」存在竞态，可能把停机覆盖成重启（疑似）</h3>
+<div class="loc">src/autoforge/af_live.py:83-109（模块级全局 <code>_tick_exit_reason</code> / <code>_ticker_thread</code>，声明于 :94）</div>
+
+<div class="lbl">证据</div>
+<pre><code>def tick_watchdog_pass(*, restart=None) -> str:
+    global _tick_exit_reason
+    th = _ticker_thread
+    if th is None: return "running"
+    if th.is_alive(): return "alive"
+    if _tick_exit_reason == TICK_EXIT_SAFE_HALT: return "held_safe_halt"
+    if _tick_exit_reason == TICK_EXIT_STOP:      return "stopped"
+    # 唯一自愈分支：意外终止
+    if restart is not None:
+        _tick_exit_reason = TICK_EXIT_RUNNING     # ← 先改状态
+        restart()                                 # ← 再重启
+        return "restarted"
+    return "unrecovered"</code></pre>
+
+<div class="lbl">触发条件</div>
+<p>ticker 线程刚刚结束、但「结束原因」尚未被写入的时刻，看门狗先读到旧值；或人工 stop 与看门狗巡检在两个线程上交错。</p>
+
+<div class="lbl">后果</div>
+<ul>
+<li>读 <code>_tick_exit_reason</code> 与读 <code>_ticker_thread</code> 之间没有同步（无锁、无内存屏障约定），两者的组合可能不一致：线程已死但退出原因还是 <code>RUNNING</code> → 走进自愈分支 → <b>把一次人工停机重启回来</b>。项目在 <code>:84-93</code> 的 docstring 里明确把「人工 stop 不重启」列为安全红线，说明这正是它要防的事，而当前实现只靠「先写原因、后清线程」的时序约定，没有强制。</li>
+<li>这个模块用模块级全局（<code>af_live.py:94/436/437/448</code>）承载跨线程状态，而项目自己在 <code>af_pending.py:40-42</code> 与 <code>af_telemetry.py:48</code> 都记录了「实例级锁失效导致竞态」的教训——同一类形状在这里仍以全局变量的形式存在。</li>
+<li>这条标<b>「疑似」</b>：我没有运行时复现，竞态窗口很窄。但判定依据是代码里确实缺少同步，而不是猜。</li>
+</ul>
+
+<div class="lbl">修复建议</div>
+<ol>
+<li>把「线程句柄 + 退出原因」收进一个对象，用单把 <code>threading.Lock</code> 保护读写，或直接用 <code>threading.Event</code> 表达 <code>stop_requested</code> / <code>safe_halt</code>。</li>
+<li>自愈分支前加一次「停止意图」复核，确认不是人工停机再重启。</li>
+<li>把这条写进测试：模拟「设置 STOP 后线程结束」，断言看门狗返回 <code>stopped</code> 而非 <code>restarted</code>。</li>
+</ol>
+</div>
+
+<!-- ══════════════════ 低 ══════════════════ -->
+<h3>低（4 条）</h3>
+
+<div class="finding low">
+<h3><span class="id">BUG-12</span><span class="sev s-low">低</span> CLI 导出路径使用非原子写入</h3>
+<div class="loc">src/autoforge/af_cli.py:930、:1042、:1152（<code>Path(out).write_text(...)</code>）</div>
+<div class="lbl">后果</div>
+<p>三处都是<b>用户指定的导出文件</b>（<code>--out</code>），不是仓内状态。中断或磁盘满时会留下半截文件；同名上一次导出被直接覆盖且无备份。项目在 <code>.atomic-write-baseline.txt</code> 里已把 9 个「有 <code>os.replace</code> 却不走助手」的站点全部收口为 0 条，说明原子写纪律在<b>状态目录</b>侧确实做到了；导出侧不在该门禁射程内（门禁只找 <code>os.replace</code>，裸 <code>write_text</code> 不产生它）。</p>
+<div class="lbl">修复建议</div>
+<p>导出也改走 <code>af_atomic.atomic_write_text</code>；或在门禁里补一条「<code>src/</code> 内出现裸 <code>write_text(</code> 需就地豁免理由」的规则，把导出侧与状态侧纳入同一口径。</p>
+</div>
+
+<div class="finding low">
+<h3><span class="id">BUG-13</span><span class="sev s-low">低</span> SSE 去重表不是真 LRU，容量上限下会提前丢弃仍活跃的事件 ID</h3>
+<div class="loc">src/autoforge/af_live.py:284-303</div>
+<pre><code>if len(_seen_ids) > 4096:
+    # LRU: 清掉最早的一半
+    for k in list(_seen_ids.keys())[:2048]:
+        del _seen_ids[k]</code></pre>
+<p>注释自称 LRU，实际按<b>插入顺序</b>删除前一半（Python dict 保序，但不会因访问而重排）。在事件密度高、重连频繁的场景下，被删掉的那一半里可能包含刚刚见过、最容易在重连窗口内重复出现的 ID，去重效果弱于真实 LRU。影响是重复事件被再次投递（总线有去重/节流兜底，故后果有限）。</p>
+<div class="lbl">修复建议</div>
+<p>换成 <code>collections.OrderedDict</code> + <code>move_to_end</code>，或用有界 LRU 实现；若要保留现在的近似实现，把注释里的「LRU」改成「FIFO 半量淘汰」，避免下一位读者按 LRU 语义推理。</p>
+</div>
+
+<div class="finding low">
+<h3><span class="id">BUG-14</span><span class="sev s-low">低</span> <code>start_watch</code> 打开的日志句柄未显式关闭</h3>
+<div class="loc">src/autoforge/af_service.py:2549-2556</div>
+<pre><code>logf = (root / "watch.log").open("ab")
+proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT,
+                        start_new_session=True, env=child_env)</code></pre>
+<p><code>logf</code> 在函数返回后依赖 CPython 引用计数回收来关闭，没有 <code>with</code> 也没有 <code>finally: logf.close()</code>。在非引用计数实现下会一直挂着；在 CPython 下虽然会及时回收，但「子进程继承的句柄在父进程侧何时关闭」在 Windows 上会阻止日志文件被轮转或删除。异常路径（<code>Popen</code> 抛错）同样没有 <code>close</code>。</p>
+<div class="lbl">修复建议</div>
+<p>用 <code>with (root / "watch.log").open("ab") as logf:</code> 包住 <code>Popen</code> 调用——<code>Popen</code> 会把 fd 复制给子进程，父进程侧随后关闭是安全的。</p>
+</div>
+
+<div class="finding low">
+<h3><span class="id">BUG-15</span><span class="sev s-low">低</span> 逃生舱判断在同一依赖里重复两次（其中一处已成死代码）；原子写助手另有一份重复实现</h3>
+<div class="loc">src/autoforge/af_api.py:366-373；src/autoforge/af_auth.py:78 对照 src/autoforge/af_atomic.py:27</div>
+<pre><code>// af_api.py:366-373（工作区版）—— 同一条件连写两遍
+if os.environ.get("AF_ALLOW_NOAUTH", "").lower() in ("1","true","yes"):
+    return None                      # ← 新增（BUG-02 的根源）
+if not registry.enabled:
+    if os.environ.get("AF_ALLOW_NOAUTH", "").lower() in ("1","true","yes"):
+        return None                  # ← 到这里永远为假，已成死代码</code></pre>
+<p>另：<code>af_auth.py:78</code> 定义了一份私有的 <code>_atomic_write_text</code>（<code>:78-112</code>），与 <code>af_atomic.atomic_write_text</code>（<code>:27-55</code>）实现几乎相同——同样是 mkstemp + fsync + <code>os.replace</code> + 目录 fsync，额外多了一步在 tmp 上先 <code>chmod 0o600</code>（<code>:116-118</code>）。<code>af_atomic.py</code> 的模块 docstring 专门解释了「为什么单独成模块、不要各自抄一份」，而 <code>af_auth</code> 里仍留着第二份。两份当前行为一致，但任何一侧的修复（例如目录 fsync 的平台分支）都不会自动到达另一侧。</p>
+<div class="lbl">修复建议</div>
+<p>① 按 BUG-02 的建议去掉重复判断（或只保留内部那一份）；② <code>af_auth</code> 的私有助手删掉，改用 <code>af_atomic.atomic_write_text</code>，把「tmp 上先设权限」下沉到 <code>af_atomic</code>（加可选 <code>mode</code> 参数），保持单一实现。</p>
+</div>
+
+<h2 id="s3">3 · 架构缺陷与缺失清单</h2>
+
+<p>先给结论：<b>这个项目的架构分层是清楚的，问题不在「乱」，而在「自建的纪律体系与代码实际状态之间已经出现裂缝」</b>——评审体系产生了大量通过记录，但其中一部分是把缺陷「登记后冻结」，而不是修复。下面按影响面排序。</p>
+
+<h3>ARCH-01 · 自建门禁体系冻结了 86 条已承认的缺陷，且门禁口径与自身基线自相矛盾</h3>
+<p><b>现状（有据）</b>：<code>.gates-baseline.txt</code> 由 <code>python -m homesdk.gates AutoForge --update-baseline</code> 生成，文件头写明口径是<b>「只准减少，不准新增」</b>。实测该文件当前有 <b>86 条</b>生效条目：</p>
+
+<svg viewBox="0 0 620 128" role="img" aria-label="门禁基线条目分布">
+  <g font-family="sans-serif" font-size="13" fill="#e6edf3">
+    <text x="0" y="20">fake-ok-const</text><rect x="150" y="8" width="396" height="16" fill="#ff9f43"/><text x="556" y="20" fill="#9aa7b4">66</text>
+    <text x="0" y="48">except-pass-broad</text><rect x="150" y="36" width="102" height="16" fill="#57b6ff"/><text x="262" y="48" fill="#9aa7b4">17</text>
+    <text x="0" y="86" fill="#6e7d8c">按文件分布（前 5）：af_service.py 25 · af_api.py 22 · af_catalog.py 9 ·</text>
+    <text x="0" y="104" fill="#6e7d8c">af_conflict_runtime.py 4 · af_apply.py 2（基准：1 条 = 6px）</text>
+  </g>
+</svg>
+
+<table>
+<thead><tr><th>规则</th><th>条数</th><th>含义</th><th>集中在</th></tr></thead>
+<tbody>
+<tr><td><code>fake-ok-const</code></td><td>66</td><td>写入/返回路径上出现字面量 <code>ok=True</code>，而不是由操作结果推导</td><td><code>af_api.py</code> 22、<code>af_service.py</code> 25</td></tr>
+<tr><td><code>except-pass-broad</code></td><td>17</td><td>宽泛吞异常（<code>except Exception: pass</code>）且无留痕</td><td><code>af_service.py</code>、<code>af_orchestrator.py</code>、<code>af_version.py</code> 等</td></tr>
+</tbody>
+</table>
+
+<div class="warn">
+<b>自相矛盾的那一条（可直接核对）</b>：<code>.gates.toml</code> 的 <code>critical_globs</code> 段开头写着——
+<pre><code># ── 关键模块：这里的 `except Exception: pass` 是硬错误，不许进基线 ──────────
+critical_globs = [
+    "src/autoforge/af_executor.py", ...
+    "src/autoforge/af_service.py",     # 会话与仿真编排（`_SESSIONS` 家族）
+    "src/autoforge/af_mqtt_bridge.py", # 跨仓说话的一张嘴：吞异常就等于对端静默失联
+]</code></pre>
+而 <code>.gates-baseline.txt</code> 里就有一条：
+<pre><code>src/autoforge/af_service.py#except-pass-broad#health</code></pre>
+即：<b>被门禁配置明确声明为「不许进基线」的关键模块，在基线里有一条同规则条目。</b>这不是我的推断，是两个仓库内文件的直接对账结果。要么基线是在该规则加严之前生成的且此后未重跑校验，要么校验本身对 critical_globs 不生效。
+</div>
+
+<p><b>缺什么</b>：缺「基线条目与门禁口径的一致性校验」。当前 <code>check_gates_coverage.py</code> 只钉「工作流引用的门必须在 gates.sh 里」，没有钉「基线里的条目不得违反 <code>critical_globs</code> 的硬约束」。</p>
+<p><b>会导致什么</b>：① 关键模块的静默失败长期合法存在（<code>af_mqtt_bridge</code> 那类「跨仓说话」的模块吞异常，表现就是<b>对端静默失联</b>，而门禁不会拦）；② 任何人下次想加严规则时，会先看到基线里「已经有先例」，加严阻力被人为抬高；③ 86 条这个数字会给人「已经治理好了」的印象，而它实际是<b>欠债台账</b>。</p>
+<p><b>建议</b>：给门禁加一条自检——遍历基线条目，凡命中 <code>critical_globs</code> 的直接判红并列出；同时对 <code>fake-ok-const</code> 与 <code>except-pass-broad</code> 分别设上限阈值，让「只准减少」从口号变成 CI 断言。</p>
+
+<h3>ARCH-02 · 版本与发布：产品号停在 0.1.0，实际演进到 v2.4，且无 tag / 无 CHANGELOG / 无发布流程</h3>
+<table>
+<thead><tr><th>位置</th><th>值</th></tr></thead>
+<tbody>
+<tr><td><code>pyproject.toml</code> <code>[project] version</code></td><td><code>0.1.0</code></td></tr>
+<tr><td><code>src/autoforge/__init__.py:7</code> <code>__version__</code></td><td><code>0.1.0</code></td></tr>
+<tr><td><code>src/autoforge/af_service.py:127</code> <code>API_VERSION</code></td><td><code>0.1.0</code>（对外 <code>/api/*</code> 与 MCP <code>SERVER_VERSION</code> 都用它）</td></tr>
+<tr><td><code>README.md</code> §1.1</td><td>「当前版本：<b>v2.4</b>」</td></tr>
+<tr><td>代码注释中引用过的版本</td><td>v0.8.0 / v0.9.0 / v1.4.0 / v1.6.0 / v1.7.1 / v1.9.0 / v1.10.0 / v2.0.1 …</td></tr>
+<tr><td><code>git tag</code></td><td>仅 <code>pre-g2-dod</code> 一个</td></tr>
+<tr><td><code>IR_VERSION</code></td><td>在两处各写一遍：<code>af_orchestrator.py:38</code> 与 <code>af_ir/models.py:58</code>（都是 <code>0.2.1</code>）</td></tr>
+</tbody>
+</table>
+<p><b>缺什么</b>：缺版本单一真源、缺 CHANGELOG、缺从 tag 到镜像的发布流水线、缺自动更新与回滚路径（<code>scripts/rollback.sh</code> 存在，但属人工脚本而非发布流程的一环）。<code>.github/workflows/ci.yml</code> 只有 test / contracts / gates / architecture 四个作业，<b>没有 release / publish / 镜像构建作业</b>。</p>
+<p><b>会导致什么</b>：① 对外（MCP 客户端、WebUI、homesdk 联动方）拿到的 <code>version</code> 永远是 <code>0.1.0</code>，无法据此做兼容判断——而项目自己在 <code>af_mqtt_bridge.py:132</code> 就有 <code>PRESENCE_CAPS_VERSION = "2.6"</code> 这类跨仓能力协商常量，说明<b>「对端要按版本判断能力」</b>这个需求是真实存在的；② 出问题时无法回答「线上跑的是哪一版」——因为镜像没有可追溯的版本标签；③ <code>IR_VERSION</code> 抄两份，将来改一处忘一处就是一次静默的格式漂移。</p>
+<p><b>建议</b>：把版本收敛到 <code>af_service.API_VERSION</code> 一处、其余从它导入；给 <code>IR_VERSION</code> 同样处理；打 tag 并与镜像 tag 对齐；补一个极简 CHANGELOG（哪怕是从 <code>README</code> 的里程碑表生成）。</p>
+
+<h3>ARCH-03 · CI 交付链路：解释器版本与自述环境要求不一致，「真 vhass 仿真」在 CI 上不可能按本机口径跑</h3>
+<p><b>现状</b>：<code>.github/workflows/ci.yml</code> 的四个作业<b>全部</b>使用 <code>python-version: "3.11"</code>（:16、:35、:56、:88 附近各一处）。而 <code>README.md</code> 的快速开始明写：</p>
+<pre><code># 1) 建虚拟环境（⚠️ 需要 Python 3.14+：pytest-homeassistant 要求 python_requires>=3.14）
+&amp; "&lt;python3.14&gt;" -m venv .venv314</code></pre>
+<p>同时 <code>pyproject.toml</code> 的 <code>dev</code> extra <b>包含</b> <code>pytest-homeassistant-custom-component</code> 且<b>未钉版本</b>；CI 的安装步骤是 <code>pip install -e ".[dev]"</code>。测试配置又用 <code>addopts = "-p no:homeassistant"</code> 默认禁用该插件，<code>vhass</code> 标记的用例在非 POSIX / 插件缺席时 skip。</p>
+<p><b>由此推出（标明置信度）</b>：</p>
+<ul>
+<li><b>确定</b>：CI 上跑的是与本机不同的解释器（3.11 vs 3.14），且 <code>vhass</code> 这一族用例在 CI 上走的是 skip 分支。README 里那句「回归基线 1300 passed / 51 skipped / 7 subtests passed（本机 Windows 全绿）」是<b>本机读数</b>，不能代表 CI。</li>
+<li><b>确定</b>：CI 里那道被反复强调的「逻辑闸」——<code>forge sim</code> 的 vhass 仿真——在 CI 上没有真仿真可用，只跑内置 <code>FakeHA</code>。</li>
+<li><b>疑似（需在 runner 上核对）</b>：由于依赖未钉版本且被要求的解释器版本低于包声明的最低版本，<code>pip</code> 会回溯到该包某个较老的发布以适配 3.11；而本机 <code>.venv314</code> 装的是较新版本。若成立，则<b>CI 与本机跑的仿真依赖不是同一个版本</b>——这正是项目自己在 <code>pyproject.toml</code> 注释里点名的「同一条用例两种机器两种脸色」形状（它对 <code>paho-mqtt</code> 做了上界钉死来消除该形状，但对仿真依赖没有）。</li>
+</ul>
+<p><b>缺什么</b>：缺「CI 解释器与项目自述最低环境一致」的校验；缺仿真依赖的版本上界/锁定；缺把 vhass 用例设为<b>必跑</b>的独立作业（当前它们可能永远是绿的 skip）。</p>
+<p><b>会导致什么</b>：仿真面（项目最核心的差异化能力）实际上<b>没有持续集成保护</b>。一旦 <code>af_vhass/</code> 或 <code>FakeHA</code> 与真 HA 语义漂移，CI 不会红；而项目自己在 <code>docs/HA_SEMANTIC_DIFF.md</code> 里维护着「8 处有意偏离」，说明语义对齐是被严肃对待的目标——目标与保障手段之间有落差。</p>
+
+<h3>ARCH-04 · 交付面依赖仓库内随附的私有 wheel，且没有私有源策略</h3>
+<p><b>现状</b>：<code>docker/homesdk/homesdk-0.3.2-py3-none-any.whl</code> 被直接提交进仓库。<code>pyproject.toml</code> 注释说明它是私有包、未上 PyPI，安装方式是在 CI 与部署时 <code>pip install docker/homesdk/*.whl</code>。更关键的是 <code>af_executor / af_runtime</code> <b>硬依赖</b> <code>homesdk.consent</code>（其作用之一是 G4 canary 的同意/否决闸门）。</p>
+<p><b>缺什么</b>：缺私有包索引（或 vendor 目录的校验和清单）、缺该 wheel 的来源与可再生性说明、缺「本地开发怎么装、装不上怎么报错」的统一入口。</p>
+<p><b>会导致什么</b>：<code>.gitignore</code> 里为它开了一条白名单（<code>!docker/homesdk/*.whl</code>），说明它曾差点被忽略规则挡掉——这种「靠白名单保住交付物」的形状很脆弱。更实质的问题是：一个<b>承载安全闸门语义</b>的包以二进制形式固化在仓库里，没有源码可比对、没有构建流程可复现，审计者（包括你自己将来）无法确认「闸门逻辑」是否与预期一致。此外 wheel 是 <code>py3-none-any</code>，安装时不受 Python 版本约束，但它的运行时行为并未在 3.11/3.14 两侧都验证过。</p>
+<p><b>建议</b>：至少补一份 <code>docker/homesdk/README.md</code> 记录版本、来源仓库、构建命令与 SHA256；最好改为私有 devpi/制品库 + 锁文件。</p>
+
+<h3>ARCH-05 · 信任边界：写面/live 面在设计上是 fail-closed，但边界外有两个可绕过的入口，且公开读面的安全性完全外挂在「可信 LAN」这一条网络前提上</h3>
+<p><b>现状</b>：<code>README.md</code> §4.1 把这件事写成了显式前提，态度是诚实的：</p>
+<ul>
+<li><code>--host 0.0.0.0</code> 保留（因为 DB 跨机器调 AF，绑 loopback 会打断联动环）；</li>
+<li>因此 <code>/api/*</code> 的公开读端点（<code>/api/health</code>、<code>/api/metrics</code> 等 <code>scope=None</code> 的门）按裁定维持公开，判据是「只读面不能反过来依赖令牌系统」；</li>
+<li>写/live 面 fail-closed，本地放行只有 <code>AF_ALLOW_NOAUTH=1</code>。</li>
+</ul>
+<p><b>缺陷</b>：这条设计的完整性依赖「没有任何绕过 <code>requires()</code> 的路径」，而实际存在两条（BUG-01 的 login 旁路、BUG-02 的逃生舱放大）。此外 <code>/api/auth/register</code> 是匿名的先到先得（<code>af_api.py:986-1009</code>），在 <code>0.0.0.0</code> 暴露 + 未注册的初始状态下，<b>谁能最先到达这个端口，谁就成为管理员</b>。</p>
+<p><b>缺什么</b>：缺「信任边界清单」这一份可核对的资产——即「哪些端点匿名、哪些要什么 scope、各自的网络前提是什么」的单表。当前这些信息分散在 60 多个路由装饰器里，靠读代码才能还原，因此任何一次改动都可能悄悄改变边界（BUG-02 就是这么发生的：3 行代码就把一条边界抹掉了，而没有任何测试或文档对账失败）。</p>
+<p><b>建议</b>：从 <code>build_app()</code> 的路由表生成一份「端点 × scope × 匿名性」的清单并对打进 CI（形状检查：新端点必须显式声明 scope，默认拒绝），让边界成为可 diff 的产物而不是可读的代码。</p>
+
+<h3>ARCH-06 · 进程模型与并发归属：三套互不相识的同步原语 + 无 supervisor + 无优雅停机</h3>
+<p><b>现状（分类清点）</b>：</p>
+<table>
+<thead><tr><th>原语</th><th>用在哪</th><th>覆盖面</th></tr></thead>
+<tbody>
+<tr><td><code>threading.Lock/RLock</code></td><td>进程内共享状态（<code>af_auth.py</code> 5 处、<code>af_config.py:44</code>、<code>af_pending.py:42</code>、<code>af_service.py:851/1549</code>、<code>af_telemetry.py:48</code> …）</td><td>较广，但已出现漏网点（BUG-03 的 <code>subjects()</code>）</td></tr>
+<tr><td><code>af_flock.FileLock</code></td><td>跨进程互斥（<code>af_store.py</code>、<code>af_catalog.py</code>、<code>af_experience.py</code>、<code>af_live.WatchCoordinator</code>、<code>af_cli.py:1435</code> serve 单写者租约）</td><td>较广，但被 BUG-04 的 <code>unlink</code> 破坏过一次</td></tr>
+<tr><td>模块级全局变量</td><td><code>af_live.py</code>（ticker/退出原因）、<code>af_health.py:847/858</code>、<code>af_version.py:818</code>、<code>af_premiere.py:547</code>、<code>af_test.py:337</code>、<code>af_flock._LOCAL_HELD</code></td><td>散落，无统一归属</td></tr>
+</tbody>
+</table>
+<p><b>缺什么</b>：</p>
+<ul>
+<li><b>缺统一的状态归属模型</b>：哪一份状态归哪个进程、由哪把锁保护，没有成文约定，只能逐个模块推断。项目有 import-linter 契约锁「分层不能反向依赖」，但没有等价物锁「共享可变状态的归属」。</li>
+<li><b>缺 supervisor</b>：<code>serve</code> 是常驻进程，<code>watch</code> 是它拉起的子进程（<code>af_service.start_watch</code> 用 <code>subprocess.Popen</code>），但没有任何进程管理组件负责「子进程挂了要拉起、父进程挂了子进程要收」。子进程用 <code>start_new_session=True</code> 脱离了父进程的会话，父进程死掉后子进程会变成孤儿继续跑。</li>
+<li><b>缺优雅停机</b>：<code>src/</code> 全树 <code>atexit</code> / <code>signal.signal</code> 命中数为 0。所以本报告 BUG-06 提到的问题不是「某处忘了清理」，而是<b>整个运行时没有停机钩子这个概念</b>。对一个把「实例跨进程/崩溃恢复」当卖点的系统来说，正常关闭与崩溃走同一条路径，等于自愿放弃了一半的持久化保证。</li>
+</ul>
+<p><b>会导致什么（「现在能跑但长起来会痛」的部分）</b>：单机单实例时这些都不显形。一旦按 README 描述的跨机形态铺开（DB 在一台、AF 在另一台、WebUI 在第三台），就会同时遇到「租约时钟偏移」（BUG-10）、「孤儿 watcher 与新 watcher 并存」（BUG-04/06）、「谁该负责重启」（无 supervisor）三个问题，而它们互相放大。</p>
+
+<h3>ARCH-07 · 可观测性：有留痕纪律，但没有指标后端、没有追踪、没有分级日志约定</h3>
+<p><b>现状（这是优点，先给信用）</b>：项目对「不能静默」这件事执行得很认真——<code>_keep()</code> 环形诊断缓冲、<code>counts["forbidden_seen"]</code> 计数、<code>af_audit.py</code> 结构化审计、<code>af_metrics.py</code> 指标回灌 MA、<code>af_telemetry.py</code> 遥测。多处 <code>except</code> 都带 <code># noqa: BLE001 + 注释说明为什么吞</code>，属于有意识的降级。</p>
+<p><b>缺什么</b>：</p>
+<ul>
+<li><b>无日志分级约定</b>：全仓 <code>logger.warning</code> 与 <code>logger.info</code> 混用，没有「什么级别代表需要人介入」的统一口径；<code>af_api.py</code> 里大量失败是以 <code>{"ok": False, "error": ...}</code> 返回而非记日志，导致<b>HTTP 500/403 的成因不进日志</b>，只能靠调用方回报。</li>
+<li><b>无请求级追踪</b>：没有 request id / trace id，跨「HTTP → service → store → 子进程」的一条链路无法在日志里串起来。<code>start_watch</code> 那种「最长 15 秒、多次轮询」的路径一旦出问题，只能靠时间戳猜。</li>
+<li><b>指标面只出不给</b>：<code>/api/metrics</code> 是公开端点，但没有配套的采集/告警约定（<code>scripts/metrics_push_cron.sh</code> 存在，属人工 cron）。</li>
+<li>环形缓冲有容量上限但没有 TTL（项目自己在 <code>af_bounded_caches.py</code> 的 docstring 里把这件事列为待裁项：诊断型只写清单「没有诚实的 TTL 可填」）。</li>
+</ul>
+<p><b>会导致什么</b>：故障定位依赖「现场还在」——进程重启后诊断环形缓冲清空，<code>.forge/</code> 下的 sidecar 文件成为唯一线索。这解释了为什么项目里会积累出大量 <code>_check_now.py</code> / <code>_restart_watch.py</code> 之类的一次性排查脚本。</p>
+
+<h3>ARCH-08 · 仓库卫生：运行态产物与一次性脚本与源码同处一层，靠 .gitignore 兜底</h3>
+<p><b>现状</b>：<code>git status</code> 显示 4 个未跟踪文件（<code>docker-compose.api.yml.tmp</code>、<code>docker/docker-compose.api-test.yml</code>、<code>issued_tokens.json.tmp</code>、<code>issued_tokens_clean.json</code>）；工作区根目录还有一批被 <code>_*.py</code> 规则挡住的一次性脚本（<code>_tmp_get_ci.py</code>、<code>_tmp_patch_af_live.py</code>、<code>_tmp_check_mimo.sh</code> 等）。已入库的根目录文件中，<code>analyze_failures.py</code>、<code>clear_pending.py</code>、<code>export_ir.py</code>、<code>fix_ir.py</code> 这类「修一次数据用」的脚本与 <code>KICKOFF.md</code>、<code>pyproject.toml</code> 平级。</p>
+<p><code>.gitignore</code> 已经写得很细（含 <code>.env</code>、<code>credentials.json</code>、<code>revision.json</code>、<code>.forge/</code>、<code>_*.py</code>、<code>tmp/</code>、三套前端的 <code>node_modules</code>/<code>dist</code>），甚至为 <code>__init__.py</code> 开了 <code>!**/__init__.py</code> 的例外并在注释里记录了「<code>_*.py</code> 规则曾吃掉包标记，导致 CI 只分析 86 个模块而本机 96 个」的真实事故。</p>
+<p><b>缺什么</b>：缺「一次性脚本该放哪」的约定。<code>scripts/</code> 里放的是长期门禁（19 个 <code>check_*.py</code>），而临时的东西散在根目录与 <code>.forge/</code> 里。</p>
+<p><b>会导致什么</b>：新人（或三个月后的自己）读根目录时无法区分「入口」与「残留」。更要紧的是，这类脚本常包含对真实环境有副作用的操作（<code>clear_pending.py</code>、<code>fix_ir.py</code> 从名字看就在改数据），把它们放在仓库根并入库，等于把「有副作用的一次性操作」提升成了「项目资产」，而它们没有测试、没有文档、没有归属。建议归入 <code>scripts/oneshot/</code> 并在 <code>.gitignore</code> 里对 <code>scripts/oneshot/</code> 之外的位置拒绝 <code>_*</code>。</p>
+
+<h3>ARCH-09 · 重复常量与「名单手抄」：项目自己命名过这类缺陷，但仍在发生</h3>
+<p><b>现状（可核对）</b>：</p>
+<ul>
+<li><code>IR_VERSION = "0.2.1"</code> 在 <code>af_orchestrator.py:38</code> 与 <code>af_ir/models.py:58</code> 各写一份；</li>
+<li><code>af_auth.py:78</code> 的 <code>_atomic_write_text</code> 与 <code>af_atomic.py:27</code> 的 <code>atomic_write_text</code> 是同一算法的两份实现（BUG-15）；</li>
+<li><code>UI_USER_PREFIX = "mimo"</code>（<code>af_api.py:265</code>）的注释自己写明「三处必须与它同字」，即 <code>ui-user-mimo/vite.config.ts</code> 的 <code>base</code>、compose 的卷挂载点、<code>--ui-user-dir</code> 各有一份，靠 <code>tests/unit/test_ui_user_mount.py</code> 对账——这是<b>用测试替代单一真源</b>；</li>
+<li><code>SERVE_LOCK_NAME</code>（<code>af_flock.py:29</code>）的注释明确说「抄第二份就是本仓那族『名单手抄』接缝的又一个实例」——说明作者已经有这个概念。</li>
+</ul>
+<p><b>缺什么</b>：缺一条机械化的守卫。项目对「名单手抄」有清醒认知，但只在一部分位置落实了单一真源，其余靠注释与测试提醒。</p>
+<p><b>会导致什么</b>：这类缺陷的特点是<b>不报错</b>——两处常量不一致时，系统照常运行，只是行为与你以为的不同（例如 API 上报的 IR 版本与校验用的 IR 版本不同）。这属于典型的「测试替代码兜底」的隐性成本：对账测试本身要维护，且只在有人记得跑它时才有效。</p>
+
+<h3>ARCH-10 · 测试：规模与源码接近 1:1，但门禁面覆盖不到刚才发现的问题</h3>
+<p><b>现状</b>：<code>tests/</code> 210 个 <code>.py</code> / 44,929 行，对照 <code>src/</code> 102 个 <code>.py</code> / 45,607 行；分 <code>unit/</code>(155) 、<code>acceptance/</code>(14)、<code>contract/</code>(5)、<code>f14/</code>(3)。CI 里 <code>test</code>、<code>contracts</code>、<code>gates</code>、<code>architecture</code> 四个作业，还有 import-linter 契约。</p>
+<p><b>缺口（用本报告的发现倒推）</b>：</p>
+<ul>
+<li><b>没有一条测试覆盖「鉴权旁路」</b>：BUG-01（未注册时的 login 兼容分支）与 BUG-02（逃生舱放大）都是 3-10 行代码就能改掉鉴权语义的地方，而测试套件里没有对这两条断言的钉死用例。项目对「fail-closed」有大量测试，但测的都是 <code>requires()</code> 内部，没有测「<code>requires()</code> 之外还有没有别的入口」。</li>
+<li><b>没有并发测试</b>：BUG-03（<code>subjects()</code> 竞态）、BUG-11（看门狗竞态）都属于「单线程测试永远绿」的类型。<code>tests/</code> 里线程相关用例稀少（全仓 <code>Thread(</code> 只出现一次，在 <code>af_live.py:478</code>）。</li>
+<li><b>没有跨进程/跨时钟测试</b>：BUG-10 的租约偏移没有用例。而项目已有 <code>tests/contract/</code> 这一层，放跨进程契约测试是顺理成章的。</li>
+<li><b>没有生命周期测试</b>：<code>stop</code> 之后状态是否真的收干净（BUG-04、BUG-07）没有断言。</li>
+</ul>
+<p><b>会导致什么</b>：测试量大带来的信心是真实的，但<b>信心分布的形状不均匀</b>——纯函数与 IR 语义层（项目最擅长的地方）覆盖极好，进程/并发/生命周期/安全边界层（最容易出事的地方）接近空白。而这类缺陷恰恰是「上线后第 N 天才显形」的类型。</p>
+
+<h3>ARCH-11 · 扩展点：加一个新设备/协议/后端要动几处</h3>
+<p><b>现状</b>：适配器抽象在 <code>af_adapters/</code>（<code>base.py</code> 145 行 + <code>ha.py</code> + <code>http.py</code> + <code>mock.py</code> + <code>inbox.py</code>），接口边界因 import-linter 契约「Service boundary never imported by kernel」而相对干净；<code>af_adapters/base.py</code> 定义了风险域表，并被 <code>.gates.toml</code> 的 <code>critical_globs</code> 点名「与 <code>af_affordance.py</code> 的表矛盾即 P0」。</p>
+<p><b>缺什么（按「加一个 X 要动几处」实测）</b>：这次审计没有做完整的扩散分析，但已经能看到几处耦合点：</p>
+<ul>
+<li>加一个新的<b>出向协议</b>（例如 MQTT 之外再加一个总线）：<code>af_mqtt_bridge.py</code> 的 915 行里混了「协议客户端装配」+「对端能力协商（<code>PRESENCE_CAPS_VERSION</code>）」+「主题白名单与禁订族判定」+「降级播报」+「候选编译」五件事，另有一个 900 行的兄弟文件 <code>af_linkage_feed.py</code>。抽象层级是错位的——<b>把「某个具体 broker 的接线细节」和「跨仓联动的通用语义」放在同一个类里</b>。</li>
+<li>加一个新的<b>风险域/设备能力</b>：要同时改 <code>af_adapters/base.py</code> 与 <code>af_affordance.py</code> 两张表，且两表必须一致（门禁只检查不一致时为 P0，不提供单一真源）。</li>
+<li>加一个新的<b>HTTP 端点</b>：<code>af_api.py</code> 已 1,242 行、60+ 路由、且 <code>build_app()</code> 是一个巨型闭包（<code>requires</code>/<code>authenticated</code>/<code>_readonly_guard</code>/<code>_rate_limit_dep</code>/<code>_client_ip</code> 都定义在函数体内，靠闭包共享 <code>registry</code>/<code>limiter</code>/<code>store</code>）。这是本仓最典型的「上帝函数」：路由注册、依赖装配、鉴权策略、限速策略、异常处理器、SSE 生成器全在同一个函数作用域里。可读性尚可（有分区注释），但<b>无法对其中任何一层单独测试，也无法让两组人同时改它</b>。</li>
+<li>加一个新的<b>CLI 子命令</b>：<code>af_cli.py</code> 1,278 行，Typer 单文件。</li>
+</ul>
+<p><b>建议</b>：① <code>build_app()</code> 按关注点拆成 <code>deps.py</code>（鉴权/限速依赖）与 <code>routes/*.py</code>（APIRouter）；② <code>af_mqtt_bridge.py</code> 把「跨仓联动语义」抽出来，让 broker 细节留在传输层；③ 风险域表合成一份真源。</p>
+
+<h3>架构层面的三个「总账」判断</h3>
+<ol>
+<li><b>分层与依赖方向是本仓最扎实的部分，不要动。</b> <code>af_ir/</code> 作为唯一真相、<code>af_atomic</code>/<code>af_flock</code> 作为零依赖底座、import-linter 锁 L0→L2 反向依赖、grimp 锁全量反向依赖——这套设计解决的是真问题，且门禁确实在跑（<code>.atomic-write-baseline.txt</code> 被清到 0 条就是证据）。</li>
+<li><b>最大的系统性风险不在代码，在「纪律与事实的间距」。</b> 86 条冻结基线 + <code>critical_globs</code> 与基线自相矛盾 + README 里程碑用 ✅ 标注实际不通的方案，这三件事共享同一个根因：<b>记录缺陷的机制强于修复缺陷的机制</b>。第 2 节里的 BUG-01/02 之所以能长期存在，正因为它们不在任何一张清单上——体系的可见范围之外。</li>
+<li><b>第二个系统性风险是「单机思维」。</b> 全局变量、墙钟租约、PID 杀进程、无 supervisor、无优雅停机——每一条在单机上都是可接受的工程取舍，但项目已经在往跨机形态走了（README §4.1 亲口描述 DB 跨机调 AF）。这里需要一次显式的「多进程/多机假设」评审，而不是逐条打补丁。</li>
+</ol>
+
+<h2 id="s4">4 · 已核实为误报或不成立的线索</h2>
+
+<p>审计过程中怀疑过、但经核实<b>不成立或影响不成立</b>的条目，逐条列出以免下次重复怀疑。这部分同样是审计产出——它划定了「哪些地方不用再花时间」。</p>
+
+<table>
+<thead><tr><th>曾怀疑</th><th>核实结论</th><th>依据</th></tr></thead>
+<tbody>
+<tr>
+<td><code>af_registry.py</code> 在已有事件循环的线程里调 <code>asyncio.run</code>，运行时才炸</td>
+<td><b>不成立</b>：代码显式处理了这种情况</td>
+<td><code>af_registry.py:262-289</code> 的 <code>_run_coroutine</code> 先 <code>try: asyncio.get_running_loop()</code>，拿到循环就改走独立线程 + <code>concurrent.futures.Future</code>，拿不到才 <code>asyncio.run</code>。且 <code>asyncio.run</code> 的 <code>RuntimeError</code> 被显式捕获并转成 <code>RegistryUnavailable</code> 上抛。</td>
+</tr>
+<tr>
+<td>全仓有裸 <code>except:</code>，会连 <code>KeyboardInterrupt</code> 一起吞</td>
+<td><b>不成立</b>：<code>except:</code> 命中数为 <b>0</b></td>
+<td>对 <code>src/</code> 全树 grep 裸 <code>except\s*:</code> 无匹配。所有吞异常处都是 <code>except (X, Y)</code> 或带 <code># noqa: BLE001 + 理由</code> 的具名宽泛捕获。</td>
+</tr>
+<tr>
+<td>存在 <code>eval</code>/<code>exec</code> 等代码执行面</td>
+<td><b>不成立</b>：命中数为 0</td>
+<td>全树 grep <code>eval|exec</code> 无匹配。</td>
+</tr>
+<tr>
+<td><code>LiveRunBody.live_allow: list[str] = []</code> 是可变默认参数陷阱（<code>af_api.py:198</code>、<code>af_config.py:25/56</code>、<code>af_tick_supervisor.py:27</code>）</td>
+<td><b>不成立</b>：Pydantic v2 对模型字段的可变默认做逐实例深拷贝，不会跨实例共享</td>
+<td>这 4 处都是 Pydantic 模型字段而非普通函数默认参数。是「shape 看着危险、语义安全」的典型；写在数据类/普通函数里才是 bug。</td>
+</tr>
+<tr>
+<td><code>af_api.py:1104</code> 的 <code>except Exception: pass</code> 会让 SSE 忙等烧 CPU</td>
+<td><b>不成立</b>：异常分支之后仍有 <code>await asyncio.sleep(1.0)</code> 兜在循环尾部</td>
+<td>见 BUG-09 的代码块——真正的问题是同步 I/O 占事件循环，不是忙等。两个怀疑都要看，但只有后者成立。</td>
+</tr>
+<tr>
+<td><code>.atomic-write-baseline.txt</code> 是空的，说明原子写治理没做</td>
+<td><b>反了</b>：空基线说明治理<b>已完成</b></td>
+<td>该文件注释说明：立门时冻结的 9 站已在裁定 20261004 §二 的顺序下全部收口，落点统一走 <code>af_atomic.atomic_write_text</code>（随机 tmp 名 + 写后 fsync + <code>os.replace</code> + 目录 fsync）。空基线是「只准减少」口径的终点状态，属正面证据。</td>
+</tr>
+<tr>
+<td>管理员口令存明文 / 用 Windows 上不可用的 <code>hashlib.scrypt</code></td>
+<td><b>不成立</b>：用 PBKDF2-HMAC</td>
+<td><code>af_auth.py:1107-1116</code>：<code>hashlib.pbkdf2_hmac("sha256", ..., 150_000)</code> + <code>hmac.compare_digest</code> 常量时间比较。代码注释里还专门记录了「不用 <code>hashlib.scrypt</code>，那东西在 Windows 上会 Invalid argument」这一教训——说明是被真实踩过才改的。</td>
+</tr>
+<tr>
+<td>文件权限该收紧的地方没收紧</td>
+<td><b>不成立（但要记住 Windows 限制）</b>：3 处 <code>os.chmod(0o600)</code> 都设了，是「设了但平台无效」而非「漏设」</td>
+<td>全树 <code>os.chmod</code> 恰好 3 处（<code>af_atomic.py:116</code>、<code>af_auth.py:118</code>、<code>af_config.py:141</code>）。<code>af_config.py:141</code> 的注释自己写明「Windows 上 chmod 只改只读位、ACL 不变」，属**已知平台限制**而非新发现。</td>
+</tr>
+<tr>
+<td><code>af_auth._persist_revoked()</code> 会被持锁方调用，可能自死锁</td>
+<td><b>不成立</b>：它自身不获取 <code>self._lock</code></td>
+<td><code>af_auth.py:252-258</code> 函数体只有 <code>if not path: return</code> + 一次 <code>_atomic_write_text</code>。调用方 <code>revoke()</code>（:298）持锁调用它是安全的，<code>threading.Lock</code> 非重入的问题不存在。</td>
+</tr>
+<tr>
+<td><code>af_orchestrator.py:2476</code> / <code>:2503</code> 两个 <code>while True</code> 是死循环</td>
+<td><b>不成立</b>：都有预算退出</td>
+<td><code>_fix_loop</code> 在 <code>attempts &gt;= budget</code> 时 return（<code>:2483</code>），<code>_sim_loop</code> 在 <code>attempts &gt;= self.max_fix_attempts</code> 时 return（<code>:2521</code>）。且 <code>:2472-2473</code> 有注释专门说明「<code>or</code> 会把显式的 0 悄悄换成默认预算 ⇒ 必须按 <code>None</code> 判缺省」——这是个已修过的边界。</td>
+</tr>
+<tr>
+<td><code>af_live.py</code> 的 <code>_seen_ids</code> 去重表会无界增长</td>
+<td><b>不成立</b>：有 4096 上限与淘汰逻辑</td>
+<td><code>af_live.py:300-303</code>。真正的问题只是淘汰策略名不副实（BUG-13，低）。</td>
+</tr>
+<tr>
+<td><code>fcntl</code> 是 POSIX-only，Windows 上会 import 失败</td>
+<td><b>不成立</b>：条件导入且分支都完整</td>
+<td><code>af_flock.py:12-28</code>：<code>if os.name == "nt": import msvcrt ... else: import fcntl</code>，两侧都定义了完整的 <code>lock</code>/<code>release</code> 语义。<code>FileLock</code> 的 docstring 也如实声明了「锁是建议性的（advisory）」这一设计边界。</td>
+</tr>
+<tr>
+<td>环境变量解析会把 <code>"false"</code>/<code>"0"</code> 当成真</td>
+<td><b>不成立</b>：<code>af_env.py</code> 是 fail-safe 解析</td>
+<td>该模块把所有取值形式分为 truthy / falsy / unrecognized 三类，<b>不可识别 → 判为 falsy 并使用安全默认</b>。这是正确方向的设计，值得保持。</td>
+</tr>
+<tr>
+<td><b>凭据泄漏（本报告的第 4 项任务）</b>：仓库或 git 历史里有提交进去的密钥/口令/连接串</td>
+<td><b>未发现</b>——见下方专段</td>
+<td>范围与判据见下。</td>
+</tr>
+</tbody>
+</table>
+
+<h3>凭据泄漏扫描：范围、判据与结论</h3>
+<p><b>扫描范围</b>：① 已跟踪文件全量内容（<code>git grep</code>，含 <code>docs/</code>）；② 全量 git 历史中对 <code>.env</code> / <code>*.pem</code> / <code>*.key</code> / <code>credentials.json</code> 的路径增删记录（<code>git log --all --diff-filter=A</code>）；③ 工作区未跟踪文件与 <code>.gitignore</code> 覆盖情况；④ 前端侧环境变量注入面。</p>
+<p><b>判据（模式）</b>：<code>AKIA[0-9A-Z]{16}</code>（AWS）、<code>ghp_/gho_/ghs_/github_pat_</code>、<code>sk-</code> 类 API key、<code>-----BEGIN … PRIVATE KEY-----</code>、<code>xox[baprs]-</code>（Slack）、<code>eyJ…</code> 形 JWT、<code>root:&lt;pwd&gt;@</code> 形连接串，以及 <code>.env</code> / <code>*.pem</code> / <code>*.key</code> / <code>credentials.json</code> 路径。</p>
+<p><b>结论：未发现被提交入库的凭据。</b> 具体到几条值得记录的观察：</p>
+<ul>
+<li><code>.env</code> <b>从未被任何一次提交纳入</b>（<code>git log --all --diff-filter=A -- .env '**/.env'</code> 无输出），也未被跟踪（<code>git ls-files | grep env</code> 只有 <code>.env.example</code>）。<code>.gitignore</code> 覆盖 <code>.env</code>、<code>credentials.json</code>、<code>revision.json</code>、<code>.forge/</code>。三个配置助手（<code>af_config.py:141</code>、<code>af_auth.py:118</code>、<code>af_atomic.py:116</code>）在落盘前设 <code>0o600</code>。</li>
+<li>三套前端共 4 个 env 文件，逐文件核过<b>键名</b>（未读取任何值）：<code>ui/.env.production</code> 与 <code>ui-user-mimo/.env.production</code> 只声明 <code>VITE_USE_MOCK</code> + <code>VITE_API_BASE</code>；<code>ui-user/.env.production</code> 多一个 <code>VITE_DEV_PANEL_URL</code>；<code>ui-user-mimo/tests/mock.env</code> 是 <code>VITE_USE_MOCK</code> + <code>VITE_MCP_URL</code>（测试用）。<b>没有任何令牌类变量</b>——对 <code>VITE_API_TOKEN</code> / <code>VITE_API_KEY</code> / <code>VITE_TOKEN</code> 在全仓 grep 零命中。这些 <code>VITE_</code> 量由 Vite 构建期静态注入，本身即公开量，且都是地址/开关，不构成泄漏，也不存在「把服务令牌打进前端产物」的问题。</li>
+<li><b>工作区根有一个真实的 <code>.env</code>（已核实其存在与键名，未读取任何值）</b>：位于 <code>E:\NAS\AutoForge\.env</code>，包含 8 个键——<code>AUTOFORGE_HA_URL</code>、<code>AUTOFORGE_HA_TOKEN</code>、<code>AUTOFORGE_LIVE_ENABLED</code>、<code>AUTOFORGE_RATE_LIMIT_PER_MIN</code>、<code>AUTOFORGE_API_TOKEN</code>、<code>AUTOFORGE_INBOX_KEY</code>、<code>BUTLER_TOKEN</code>、<code>MA_METRICS_URL</code>。其中 <code>AUTOFORGE_HA_TOKEN</code>（Home Assistant 长期访问令牌）、<code>AUTOFORGE_API_TOKEN</code>（本服务 API 令牌）、<code>AUTOFORGE_INBOX_KEY</code>（AF↔DB 的 inbox 签名 key）、<code>BUTLER_TOKEN</code>（第三方服务令牌）属凭据类；<code>AUTOFORGE_LIVE_ENABLED</code> 是一条值得注意的开关——它决定真机下发是否放行。<b>处置结论：该文件未被跟踪、未被任何历史提交纳入（<code>git log --all --diff-filter=A -- .env</code> 无输出），<code>.gitignore</code> 第 26 行起覆盖 <code>.env</code>，因此不构成仓库泄漏，无需作废重发、无需清历史。</b>唯一建议是运维侧的：Windows 上 <code>os.chmod(0600)</code> 不改变 ACL，该文件的保护实际来自 NTFS 继承权限，请确认 <code>E:\NAS\AutoForge</code> 不在任何共享/同步/备份的可读范围内；另请确认生产环境的令牌确实是经 docker secrets 注入（<code>af_secrets.py</code> 的读取顺序是 secret 文件优先），而不是靠这份 <code>.env</code>。</li>
+<li>本机存在 <code>E:\NAS\AutoForge\.forge\credentials.json</code> 与 <code>.forge\revision.json</code>（工作区运行态，已确认文件存在，未读内容）。按本项目自己的注释，前者存放 HA 与 API 的令牌与地址，格式为明文 JSON；在 Windows 上前述 <code>os.chmod(0600)</code> 不改变 ACL，因此实际保护同样只有 NTFS 继承权限。<b>这同样是运维提示而非代码缺陷</b>：请确认该目录不在任何共享/备份的可读范围内。</li>
+<li>唯一含凭据形态字面量的文件是 <code>tests/unit/test_af_auth.py</code>（以及若干测试夹具中的假令牌）。这是正常的测试固定值，且文件名即以 <code>test_</code> 开头。</li>
+</ul>
+<div class="note">按纪律要求，本节<b>不引用任何凭据值</b>（含片段与掩码），也不转录任何键名对应的内容。以上仅为「文件/位置 × 类型 × 后果 × 处置」。</div>
+
+<h2 id="s5">5 · 本轮未覆盖的范围与建议后续方向</h2>
+
+<h3>5.1 方法边界：这次审计<b>没有</b>做的事</h3>
+<ul>
+<li><b>没有运行任何东西</b>：未执行 <code>pytest</code>、未安装依赖、未启动 <code>forge serve</code>、未跑 <code>gates.sh</code>、未构建镜像。所以本报告<b>无法确认</b>代码库当前是否处于「全绿」状态，也无法提供任何通过率的实测读数。README 里的「1300 passed / 51 skipped」是项目自己的历史读数，本报告只转述、未复现。</li>
+<li><b>没有修改任何文件</b>：包括没有在项目目录或磁盘创建文件。报告自身写在审计沙箱中。</li>
+<li><b>没有做动态分析</b>：无 profiler、无 fuzz、无内存/句柄增长实测。</li>
+</ul>
+
+<h3>5.2 已发现但需要运行时才能定案的「疑似」</h3>
+<table>
+<thead><tr><th>编号</th><th>待验证的事</th><th>怎么验</th></tr></thead>
+<tbody>
+<tr><td>BUG-11</td><td>看门狗「自愈」分支是否真能把人工停机重启回来</td><td>写一个用例：起 ticker → 设 <code>TICK_EXIT_STOP</code> → 让线程结束 → 断言 <code>tick_watchdog_pass(restart=runner)</code> 返回 <code>stopped</code>。多跑几百轮提高命中率。</td></tr>
+<tr><td>BUG-10</td><td>仿真时钟与真实时钟是否会在同一 persist 目录里混用</td><td>用 <code>TimeSource</code> 的仿真实现生成一次 <code>lease_until_wall</code>，再用真实时钟调 <code>claims()</code>，看接管判定是否与预期相反。</td></tr>
+<tr><td>BUG-10</td><td>租约偏移的实际触发阈值</td><td>两个容器，<code>date -s</code> 制造 61s 偏移，观察是否双驱动同一实例。</td></tr>
+<tr><td>ARCH-03</td><td><code>pip install -e ".[dev]"</code> 在 Python 3.11 上把 <code>pytest-homeassistant-custom-component</code> 解析到哪个版本</td><td>在 CI runner 上跑 <code>pip install -e ".[dev]"</code> 后 <code>pip show pytest-homeassistant-custom-component</code>，与本机 <code>.venv314</code> 的版本对比。若无版本差异，则 ARCH-03 只剩「解释器不一致」这一半。</td></tr>
+<tr><td>BUG-07</td><td>MQTT 客户端的线程/套接字是否真随 start/stop 增长</td><td>循环 100 次 <code>start()</code>/<code>stop()</code> 后读 <code>threading.active_count()</code> 与 <code>/proc/self/fd</code> 计数。</td></tr>
+<tr><td>BUG-03</td><td><code>subjects()</code> 竞态的实际命中率</td><td>多线程循环调 <code>subjects()</code> + <code>issue_for_agent()</code>，看是否出现 <code>RuntimeError</code>。</td></tr>
+</tbody>
+</table>
+
+<h3>5.3 本次<b>未</b>审计的模块与方面（明确列出，避免被当作已审）</h3>
+<ul>
+<li><b>未逐行读的源码</b>：<code>af_evo.py</code>（1,335 行）、<code>af_nl_parse.py</code>（1,259 行）、<code>af_scanner.py</code>（1,243 行）、<code>af_catalog.py</code>（1,162 行）、<code>af_auth.py</code> 的配对码/限速下半段、<code>af_store.py</code> 的版本化与 diff 细节、<code>af_service.py</code> 的会话编排主体。<b>这些是本次覆盖的空白，不排除其中存在与第 2 节同级的问题。</b></li>
+<li><b>未读的子包</b>：<code>af_ir/</code>、<code>af_adapters/</code>、<code>af_vhass/</code>、<code>af_closedloop/</code>——只读了它们的门禁配置与个别文件头。</li>
+<li><b>未审的前端源码</b>：<code>ui/</code>、<code>ui-user/</code>、<code>ui-user-mimo/</code> 共 137 个文件，只看了构建配置（<code>vite.config.ts</code> 的 <code>base</code> 与 <code>assetsDir</code>）与本次改动涉及的 3 个文件。前端侧的安全（令牌存放、XSS、SSE 消费）完全未审。</li>
+<li><b>未审的工程脚本逻辑</b>：<code>scripts/</code> 下 19 个 <code>check_*.py</code> 只看了清单与部分文件头，<b>没有验证每个门禁脚本自身的判据是否正确</b>。ARCH-01 发现的矛盾说明「门禁脚本自身的正确性」是一个真实风险面，值得单独一轮。</li>
+<li><b>未审的部署面</b>：<code>docker/Dockerfile.api</code>、<code>Dockerfile.test</code>、<code>docker-compose.api.yml</code> 只看了清单与 CI 里的安装命令，未审镜像构建、卷挂载、网络暴露、健康检查。</li>
+<li><b>未审的跨仓协议一致性</b>：AF ↔ MA ↔ DB 三条主通道的契约（项目有 <code>tests/contract/</code> 5 个文件专门做这件事），本次只看到 CI 里有一条独立的 <code>contracts</code> 作业，未校验契约内容本身。</li>
+<li><b>未审的 HA 语义对齐</b>：<code>docs/HA_SEMANTIC_DIFF.md</code> 声称的 8 处「有意偏离」是否仍然准确——这是项目可信度的核心主张之一，值得单独验证。</li>
+<li><b>未审的文档与代码一致性</b>：只对账了 README 的版本号、里程碑表、Python 版本要求三处，其余 205 个文档文件未做代码对账。</li>
+<li><b>未做的分析类</b>：依赖 CVE 扫描、许可合规、性能基准、覆盖率实测、二进制产物溯源（<code>docker/homesdk/*.whl</code> 的内部内容未打开）。</li>
+</ul>
+
+<h3>5.4 建议的处置顺序</h3>
+<table>
+<thead><tr><th>优先级</th><th>条目</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td><b>P0（先合这个）</b></td><td>BUG-02（把新增的 3 行挪回原地或删除）；BUG-01（<code>/api/auth/login</code> 的兼容分支改为 fail-closed）；BUG-03（<code>subjects()</code> 加锁）</td><td>前两条是鉴权穿透，且改动量都在 10 行以内；第三条是低成本高收益的并发修法。BUG-02 的改动尚未提交，是最省力的窗口期。</td></tr>
+<tr><td><b>P1</b></td><td>BUG-04（不再 unlink 锁文件）；ARCH-01 的门禁基线自检；ARCH-03 的 CI 解释器对齐</td><td>BUG-04 破坏的是项目自己的核心不变量；后两条属「让纪律体系重新可信」，成本低。</td></tr>
+<tr><td><b>P1</b></td><td>BUG-06 的 PID 身份校验 + 优雅停机钩子（<code>atexit</code>/<code>signal</code>）</td><td>与 BUG-04/07 同族，一起做比分开做便宜。</td></tr>
+<tr><td><b>P2</b></td><td>BUG-05（去掉 HTTP 路径上的 15s 阻塞）；BUG-07（补 <code>loop_stop</code>/<code>disconnect</code>）；BUG-08（端点显式 501 + README 对齐）；BUG-09（<code>to_thread</code>）；BUG-10（心跳续租）</td><td>都是局部改造，可分批。</td></tr>
+<tr><td><b>P2</b></td><td>ARCH-02（版本单一真源 + tag）；ARCH-11（拆 <code>build_app()</code>）</td><td>影响长期可维护性，不紧急。</td></tr>
+<tr><td><b>P3</b></td><td>BUG-12 ~ BUG-15；ARCH-07（追踪）；ARCH-08（目录卫生）；ARCH-09（名单真源）</td><td>低风险，适合在相关模块下次被改动时顺带处理。</td></tr>
+</tbody>
+</table>
+
+<div class="good">
+<b>最后要说清楚的三件事（这份代码库值得的信用）</b>
+<ol>
+<li><b>底座的工程质量是真的。</b> 内核依赖只有 2 个；原子写治理从 9 站清到 0 站；跨平台文件锁的语义与边界写在自己的 docstring 里；<code>af_env.py</code> 的 fail-safe 解析；<code>resource</code> 条件导入；PBKDF2 而非 <code>hashlib.scrypt</code>（明确记录了 Windows 教训）。这些都不是「碰巧对」，是被真实环境教训过之后的正确选择。</li>
+<li><b>诚实是这套代码的显性特征。</b> 大量代码注释在主动承认缺陷（「不能证明它在监听」「这条通道因此今天不存在」「这一档只会得到子进程退出」「断言不是证明」）。这种诚实让本次审计得以在很短时间内定位到真问题——因为作者把陷阱都标出来了。<b>本报告里最重的两条（BUG-01/02）恰好落在这些自述之外，属于「诚实体系」尚未覆盖的角落。</b></li>
+<li><b>问题都可修，没有一条需要重写架构。</b> 第 2 节 15 条里有 12 条的修复量在 20 行以内；第 3 节 11 条里最重的是「纪律与事实的间距」与「单机思维」，两者都可以用增量方式（一次自检脚本、一次显式的多进程假设评审）推进，不需要停下来重构。</li>
+</ol>
+</div>
+
+<footer>
+<p><b>报告生成</b>：2026-10-10（Asia/Shanghai）· <b>审计对象</b>：本地 <code>E:\NAS\AutoForge</code>，HEAD <code>91c1ba2</code> + 10 个未提交改动 · <b>远端</b>：<code>origin</code> = github.com:lidicn/AutoForge.git，<code>nas</code> = 内网 Git</p>
+<p><b>证据基础</b>：全部来自设备上实际执行的只读命令（<code>git</code> 系列、<code>Get-Content</code>、<code>Select-String</code>、<code>git grep</code>、<code>git log --all --diff-filter=A</code>）。代码引用只给位置与必要片段。</p>
+<p><b>诚实声明</b>：本报告未运行项目、未复现 README 中的测试读数，因此「项目当前是否全绿」不在本报告的结论范围内。第 2 节区分「确定」与「疑似」，第 5 节列出全部未覆盖范围与需要运行时验证的 6 项。凡本报告未列出的模块，均属未审，不代表已通过。</p>
+</footer>
+
+</div>
+</body>
+</html>

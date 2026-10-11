@@ -3,7 +3,7 @@ import { defineStore } from 'pinia'
 import type { Agent, AuthCode, Automation, PairRequest, PendingItem, User } from '../types/api.ts'
 import { api } from '../api/index.ts'
 import { USE_MOCK } from '../api/env.ts'
-import { closePairStream, openPairStream, restoreSession } from '../api/http.ts'
+import { closePairStream, onPairRequest, openPairStream, restoreSession } from '../api/http.ts'
 import { activeShortCode, shortRemainMs } from '../logic/authcodes.ts'
 import { groupByAgent, splitByArchived } from '../logic/automations.ts'
 import { deleteKey, readJSON, writeJSON } from '../logic/storage.ts'
@@ -41,6 +41,8 @@ export const useMainStore = defineStore('main', () => {
   function bootstrap (): void {
     darkMode.value = readJSON<boolean>(THEME_KEY, true)
     if (USE_MOCK) user.value = readJSON<User | null>(SESSION_KEY, null)
+    // SSE 配对请求推送：收到后自动设置 pair，触发 AgentsView 弹窗
+    onPairRequest((req) => { pair.value = req })
     booted.value = true
   }
 

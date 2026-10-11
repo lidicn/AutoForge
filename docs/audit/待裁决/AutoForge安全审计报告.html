@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoForge 安全与暴露面审计报告（第三轮）</title>
+<meta name="description" content="对 E:\NAS\AutoForge（HEAD 62a859f，master，工作区脏且审计期间仍在被别处改写）的第三轮安全与暴露面审计：逐条核实前两轮三处已知问题，系统排查鉴权授权、凭据与密钥、路径穿越、工具参数到命令执行、外部输入可信度、提示注入到工具升级、监听地址暴露面、审计与可追溯八项；把 af_api.py 的 87 条 HTTP 路由按 30 read / 39 write / 3 live / 15 无鉴权分档，给出 12 条发现的攻击者视角、触发条件、可达性判定（标出哪些是运行时实测、哪些只是码面证据）、复现入口与部署侧加固清单。">
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1b1f24; --muted:#5b6572; --line:#e2e6ec;
+    --crit:#a3161b; --crit-bg:#fdeceb; --high:#b8560e; --high-bg:#fdf2e6;
+    --med:#8a6a00; --med-bg:#fdf8e3; --low:#2f6d4f; --low-bg:#eaf5ef;
+    --ok:#1f6f4a; --ok-bg:#e9f5ef; --code:#f0f2f5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+       line-height:1.65;font-size:15px}
+  .wrap{max-width:1120px;margin:0 auto;padding:28px 20px 80px}
+  header.top{background:linear-gradient(135deg,#1b2a3a,#2c4257);color:#fff;border-radius:14px;padding:28px 30px}
+  header.top h1{margin:0 0 8px;font-size:27px;letter-spacing:.2px}
+  header.top .sub{color:#c6d4e2;font-size:14px}
+  .badges{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+  .badge{background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.25);
+         border-radius:999px;padding:3px 11px;font-size:12.5px;color:#e8f0f8}
+  h2{font-size:20px;margin:38px 0 12px;padding-bottom:8px;border-bottom:2px solid var(--line)}
+  h3{font-size:16.5px;margin:24px 0 8px}
+  h4{font-size:14.5px;margin:16px 0 6px;color:#2b3540}
+  p{margin:8px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0}
+  .grid{display:grid;gap:12px}
+  .g4{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .stat .n{font-size:26px;font-weight:700;line-height:1.15}
+  .stat .l{font-size:12.5px;color:var(--muted);margin-top:4px}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px;background:var(--card)}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f5;font-weight:600}
+  tr:nth-child(even) td{background:#fafbfc}
+  code,kbd{background:var(--code);border:1px solid #dfe3e9;border-radius:4px;
+        padding:1px 5px;font-family:ui-monospace,Consolas,"Courier New",monospace;font-size:12.5px}
+  pre{background:#1e242c;color:#dfe6ee;border-radius:10px;padding:14px 16px;overflow-x:auto;
+      font-family:ui-monospace,Consolas,"Courier New",monospace;font-size:12.5px;line-height:1.5}
+  pre .c{color:#8fa3b8}
+  .sev{display:inline-block;border-radius:6px;padding:2px 9px;font-size:12px;font-weight:700;white-space:nowrap}
+  .s-crit{background:var(--crit-bg);color:var(--crit);border:1px solid #f3c7c5}
+  .s-high{background:var(--high-bg);color:var(--high);border:1px solid #f0d4b4}
+  .s-med{background:var(--med-bg);color:var(--med);border:1px solid #ece0b0}
+  .s-low{background:var(--low-bg);color:var(--low);border:1px solid #c2e0d0}
+  .s-ok{background:var(--ok-bg);color:var(--ok);border:1px solid #bfe3d0}
+  .finding{border:1px solid var(--line);border-left-width:5px;border-radius:10px;background:var(--card);
+           padding:16px 18px;margin:14px 0}
+  .f-crit{border-left-color:var(--crit)} .f-high{border-left-color:var(--high)}
+  .f-med{border-left-color:var(--med)} .f-low{border-left-color:var(--low)}
+  .finding h3{margin:0 0 6px;font-size:16px}
+  .kv{margin:8px 0 0;font-size:13.5px}
+  .kv div{margin:3px 0}
+  .kv b{color:#2b3540}
+  .note{background:#fffdf3;border:1px solid #ecdfae;border-radius:10px;padding:12px 14px;font-size:13.5px;margin:12px 0}
+  .ok{background:var(--ok-bg);border:1px solid #bfe3d0;border-radius:10px;padding:12px 14px;font-size:13.5px;margin:12px 0}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:5px 0}
+  .muted{color:var(--muted)}
+  .small{font-size:12.8px}
+  .tag{display:inline-block;background:#eef1f5;border:1px solid var(--line);border-radius:5px;
+       padding:1px 7px;font-size:12px;margin:0 4px 4px 0}
+  .svgwrap{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0;overflow-x:auto}
+  footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+  .legend span{display:inline-block;margin-right:14px;font-size:12.5px;color:var(--muted)}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:-1px;margin-right:5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>AutoForge 安全与暴露面审计报告</h1>
+  <div class="sub">第三轮 · 主题：安全与暴露面（谁在什么条件下能拿到什么）｜对象：<code style="background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.3);color:#fff">E:\NAS\AutoForge</code> 工作区</div>
+  <div class="badges">
+    <span class="badge">工作区 HEAD 62a859f（master，领先 origin/main 17 提交）</span>
+    <span class="badge">工作区为脏（12 改动 + 7 未跟踪）</span>
+    <span class="badge">全程只读，未改项目文件</span>
+    <span class="badge">运行时探测仅限 127.0.0.1:8791</span>
+    <span class="badge">审计时点 2026-10-10 16:23–16:52（UTC+8）</span>
+  </div>
+</header>
+
+<div class="grid g4" style="margin-top:18px">
+  <div class="stat"><div class="n" style="color:var(--crit)">2</div><div class="l">严重：未注册即换取全权限令牌 / 免鉴权开关被放大成常开</div></div>
+  <div class="stat"><div class="n" style="color:var(--high)">3</div><div class="l">高危：令牌明文遗留在仓库根 / HTTP 层零审计 / 配对兑换全权限</div></div>
+  <div class="stat"><div class="n">87</div><div class="l">af_api.py 路由合计：15 无鉴权 · 30 read · 39 write · 3 live</div></div>
+  <div class="stat"><div class="n">3+1</div><div class="l">声明了但未接线：tick 自愈 / 秘密优先级链 / 扩展路由安装器</div></div>
+</div>
+
+<div class="note" style="margin-top:16px">
+  <b>一句话结论。</b>这套东西的鉴权内核本身是像样的（常量时间比较、无令牌即 403 的 fail-closed 默认、scope 蕴含只向一个方向、单写者租约、真机下发四重闸），
+  但<b>「谁能不用任何凭据拿到全权限令牌」这条路是通的，而且有好几条</b>：只要 store 里还没有管理员，任何能连上该端口的人都能用
+  <code>POST /api/auth/register</code> 或 <code>POST /api/auth/login</code> 直接换到 read+write+live 令牌；
+  工作区那份未提交改动又把 <code>AF_ALLOW_NOAUTH</code> 从「仅在没配令牌时生效」放大成「永远生效」，
+  一旦宿主环境里存在这个变量，全站 87 条路由的鉴权一起失效。真正的裸奔来自部署形态：compose 把服务绑到 <code>0.0.0.0</code> 并
+  <code>ports: "8787:8787"</code>，而全链路没有 TLS。
+</div>
+
+<h2>一、基线与环境</h2>
+
+<div class="card">
+<h3>1.1 git 原始输出（审计时点现读）</h3>
+<pre><span class="c">$ git rev-parse HEAD</span>
+62a859ffb1721a96d52b70bcecd09e6776a5e4f1
+
+<span class="c">$ git rev-parse --abbrev-ref HEAD</span>
+master
+
+<span class="c">$ git status</span>
+On branch master
+Your branch is ahead of 'origin/main' by 17 commits.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+	modified:   docker/docker-compose.api.yml
+	modified:   "docs/ADM\350\201\224\345\212\250\346\211\247\350\241\214\350\256\241\345\210\222-AF.md"
+	modified:   "docs/audit/\345\217\202\350\200\203/FFL-200\351\242\230\346\265\213\350\257\225\346\217\220\347\244\272\350\257\215.md"
+	modified:   src/autoforge/af_api.py
+	modified:   src/autoforge/af_auth.py
+	modified:   src/autoforge/af_cli.py
+	modified:   src/autoforge/af_mqtt_bridge.py
+	modified:   src/autoforge/af_service.py
+	modified:   tests/unit/test_af_mqtt_bridge.py
+	modified:   ui-user-mimo/src/stores/main.ts
+	modified:   ui-user-mimo/src/styles/main.css
+	modified:   ui-user-mimo/src/views/AuthCodesView.vue
+
+Untracked files:
+	docker-compose.api.yml.tmp
+	docker/docker-compose.api-test.yml
+	"docs/audit/AutoForge\345\256\241\350\256\241\346\212\245\345\221\212.html"
+	"docs/audit/AutoForge\350\277\220\350\241\214\346\227\266\345\256\241\350\256\241\346\212\245\345\221\212.html"
+	issued_tokens.json.tmp
+	issued_tokens_clean.json
+	tests/unit/test_watch_lifecycle_r6_audit.py
+
+no changes added to commit (use "git add" and/or "git commit -a")
+
+<span class="c">$ git remote -v</span>
+nas     ssh://lidicn@192.168.2.200/vol1/1000/git/autoforge.git (fetch)
+nas     ssh://lidicn@192.168.2.200/vol1/1000/git/autoforge.git (push)
+origin  git@github.com:lidicn/AutoForge.git (fetch)
+origin  git@github.com:lidicn/AutoForge.git (push)
+
+<span class="c">$ git rev-list --left-right --count origin/main...HEAD</span>
+0	17
+
+<span class="c">$ git diff --cached --name-status</span>
+<span class="c">（空 —— 暂存区干净，全部改动都在工作区，未暂存）</span></pre>
+
+<div class="kv">
+  <div><b>HEAD 与公开仓库的关系：</b>公开远端为 <code>origin = git@github.com:lidicn/AutoForge.git</code>；本地 <code>master</code> 领先 <code>origin/main</code> 17 个提交，且暂存区为空。
+  也就是说<b>当前 HEAD 的代码尚未推送</b>，但 <code>origin/main</code> 是其祖先 —— 仓库里绝大多数代码已经是公开的。本报告涉及的行号均在工作区（未提交）版本上。</div>
+  <div><b>被审文件版本锚点（git diff 现读的 blob 前缀）：</b><code>af_api.py</code> 工作区 <code>1f517a1</code>（HEAD <code>9e8e199</code>）；
+  <code>af_auth.py</code> 工作区 <code>1756954</code>（HEAD <code>ea1ee7f</code>）。<code>af_api.py</code> 共 1450 行、<code>af_auth.py</code> 共 1155 行。</div>
+  <div><b>改动规模：</b><code>git diff --stat</code> = 10 files changed, 377 insertions(+), 78 deletions(-)（读到的第一次快照；此后工作区继续变动，见 一.5）。</div>
+</div>
+</div>
+
+<div class="card">
+<h3>1.2 Python 与依赖</h3>
+<table>
+<tr><th>项</th><th>现读值</th><th>说明</th></tr>
+<tr><td>PATH 上的 python</td><td><code>3.13.2</code>（<code>C:\Users\lidicn\AppData\Local\Programs\Python\Python313\python.exe</code>）</td><td>系统解释器</td></tr>
+<tr><td>仓库内虚拟环境</td><td><code>.venv</code> → 3.13.2；<code>.venv314</code> → 3.14.3</td><td>两个都在盘上</td></tr>
+<tr><td><code>forge</code> 入口</td><td>仅 <code>.venv314\Scripts\forge.exe</code> 存在；<code>.venv\Scripts\forge.exe</code> 不存在</td><td>本次探测用 <code>.venv314</code></td></tr>
+<tr><td>依赖完整性</td><td>齐全（服务能起）</td><td><code>requires-python = "&gt;=3.11"</code>；<code>fastapi&gt;=0.110</code>、<code>uvicorn&gt;=0.29</code>（pyproject.toml:10/23-24）；本机实测 <code>forge serve</code> 从 <code>.venv314</code> 正常拉起并监听</td></tr>
+<tr><td>内存/磁盘</td><td>空闲 <code>1193 MB</code> / 总 <code>16322 MB</code></td><td>与上一轮「内存紧张」的判断一致，因此本轮不跑全量测试</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>1.3 服务监听方式与反代</h3>
+<table>
+<tr><th>面</th><th>现读事实</th><th>位置</th></tr>
+<tr><td>CLI 默认绑址</td><td><code>--host 127.0.0.1</code>、<code>--port 8787</code>（回环默认）</td><td><code>af_cli.py:1426-1429</code></td></tr>
+<tr><td>实测绑定</td><td>本机起实例后 <code>netstat</code> 只有 <code>TCP 127.0.0.1:8791 LISTENING</code>，无 <code>0.0.0.0</code></td><td>本轮运行时探测</td></tr>
+<tr><td>容器部署绑定</td><td><code>forge serve --host 0.0.0.0 --port 8787 ...</code>，并且 <code>ports: - "8787:8787"</code>（宿主所有网卡）</td><td><code>docker/docker-compose.api.yml:16-17, 23</code></td></tr>
+<tr><td>TLS</td><td>无。<code>uvicorn.run(app_, host=host, port=port, log_level="info")</code> 无证书/密钥参数，全仓无 TLS 配置</td><td><code>af_cli.py:1465</code></td></tr>
+<tr><td>反向代理</td><td>本机无；NAS 侧由 compose 直发布端口。代码有 <code>AUTOFORGE_TRUST_PROXY</code> 开关但<b>默认不信任</b> XFF</td><td><code>af_api.py:316-323</code></td></tr>
+<tr><td>单写者租约</td><td>抢不到 <code>af_flock</code> 锁即降级只读，写端点统一 503</td><td><code>af_cli.py:1450-1458</code>、<code>af_api.py:434-448</code></td></tr>
+<tr><td>文档面</td><td>启动横幅与 docstring 都主动宣告 <code>/docs</code> 与 <code>/openapi.json</code></td><td><code>af_cli.py:1462</code>、<code>af_api.py:44</code></td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>1.4 密钥与配置文件清单（<b>只列路径与键名，不列值</b>）</h3>
+<table>
+<tr><th>路径</th><th>类型</th><th>键名 / 结构</th><th>是否入库</th></tr>
+<tr><td><code>.env</code>（仓库根）</td><td>环境文件</td><td>共 8 个键，其中 <b>4 个令牌类</b>：<code>AUTOFORGE_HA_TOKEN</code>、<code>AUTOFORGE_API_TOKEN</code>、<code>AUTOFORGE_INBOX_KEY</code>、<code>BUTLER_TOKEN</code>；另 4 个非令牌键为 <code>AUTOFORGE_HA_URL</code>、<code>AUTOFORGE_LIVE_ENABLED</code>、<code>AUTOFORGE_RATE_LIMIT_PER_MIN</code>、<code>MA_METRICS_URL</code></td><td><b>未跟踪 + 已被忽略</b>（<code>.gitignore:26</code>）；历史中从未出现（<code>git log --all -- .env</code> 空）</td></tr>
+<tr><td><code>.forge/credentials.json</code></td><td>服务凭据</td><td>键 <code>ha_token</code>（205 字节）</td><td>未跟踪；<code>.forge/</code> 被忽略（<code>.gitignore:34</code>）</td></tr>
+<tr><td><code>.forge/.auth/</code></td><td>令牌注册表</td><td><b>本机不存在</b>（<code>.forge</code> 下无 <code>.auth</code>、无 <code>admin.json</code>）</td><td>未跟踪</td></tr>
+<tr><td><code>.forge/conflict_audit.json</code></td><td>冲突日志</td><td>68804 字节（版本冲突留痕，真实持久化）</td><td>未跟踪</td></tr>
+<tr><td><code>issued_tokens.json.tmp</code></td><td><b>令牌注册表</b></td><td>26 条目，形状同 <code>issued_tokens.json</code>：键=<b>明文令牌</b>，值含 <code>subject / scopes / expires_at</code></td><td><b>未跟踪，且未被忽略</b>（见发现 F-03）</td></tr>
+<tr><td><code>issued_tokens_clean.json</code></td><td><b>令牌注册表</b></td><td>1 条目，同上形状</td><td><b>未跟踪，且未被忽略</b></td></tr>
+<tr><td><code>docker-compose.api.yml.tmp</code></td><td>部署副本</td><td>compose 片段</td><td>未跟踪，未被忽略</td></tr>
+<tr><td><code>docker/docker-compose.api-test.yml</code></td><td>部署副本</td><td>测试用 compose</td><td>未跟踪，未被忽略</td></tr>
+<tr><td><code>docker/.env.example</code></td><td>示例</td><td>仅键名占位</td><td>已跟踪，无真实值</td></tr>
+<tr><td><code>ui*/​.env.production</code>（3 个）</td><td>前端环境</td><td>仅 <code>VITE_USE_MOCK</code> / <code>VITE_API_BASE</code></td><td>已跟踪，<b>不含任何令牌值</b>（已核实）</td></tr>
+</table>
+<p class="small muted">口径说明：本轮只做「哪些文件承载凭据、是否可能进仓」的判定，不对任何令牌值做读取、比对或回显。上表键名与条目数为清单级信息。</p>
+</div>
+
+<div class="card">
+<h3>1.5 上一轮残留的处理结果（开工先做）</h3>
+<table>
+<tr><th>对象</th><th>发现时状态</th><th>处理</th><th>验证</th></tr>
+<tr><td>计划任务 <code>AF_Audit_PytestX</code></td><td>存在，One Time Only，<code>Last Run 2026/10/10 16:15:32</code>，<code>Last Result -1073741510</code>（= <code>0xC000013A</code>，被 Ctrl-C 终止）；动作指向上一轮的 <code>E:\tmp\af_audit\run_pytest_x.cmd</code>。另有一个 <code>AF_Audit_Nightly</code>（S4U 标识）<b>已禁用</b></td><td><code>schtasks /end</code> → <code>schtasks /delete /f</code></td><td>复查询返回 <code>ERROR: The system cannot find the file specified</code>（exit 1）→ 任务已移除。<span class="muted">end+delete 那次调用本身回包超时，因此结论取自随后的独立复查询，而不是该次调用的输出。</span></td></tr>
+<tr><td><code>E:\tmp\af_audit</code></td><td>15 个文件，全部是上一轮审计产物（<code>child.py / hb.cmd / imp.log / probe_*.py / run_pytest*.cmd / pytest_*.log / wmi.txt / lockdemo.dat / collect.log</code> 之类）</td><td><code>Remove-Item -Recurse -Force</code></td><td>复核为已不存在（<code>REMOVED_OK</code>）；<code>E:\tmp</code> 下其余内容未动</td></tr>
+<tr><td>本轮新增</td><td>探测用临时 store <code>E:\tmp\af3rt</code> 与两个日志文件</td><td>测完即删</td><td><code>scratch removed: True</code></td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>1.6 本机无害运行时探测（仅 127.0.0.1，非默认端口）</h3>
+<table>
+<tr><th>项</th><th>记录</th></tr>
+<tr><td>启动命令</td><td><code>.venv314\Scripts\forge.exe serve --host 127.0.0.1 --port 8791 --store-root E:\tmp\af3rt</code>（store 用临时目录，<b>不碰项目内的 <code>.forge</code></b>）；环境中显式置 <code>AUTOFORGE_LIVE_ENABLED=0</code>、<code>AUTOFORGE_MQTT=0</code>，清空 <code>AF_ALLOW_NOAUTH</code> / <code>AUTORFORGE_API_TOKEN</code> / <code>AUTORFORGE_TOKENS</code>；<b>全程未调用任何真机下发路径</b></td></tr>
+<tr><td>进程</td><td>启动器 <code>forge.exe</code> PID <b>27920</b> → uvicorn 工作进程 PID <b>26752</b>（更早一次为 PID 35784，已先停并复核进程已消失）</td></tr>
+<tr><td>监听</td><td><code>TCP 127.0.0.1:8791 LISTENING</code>（仅回环，无外部网卡）</td></tr>
+<tr><td><b>实测结果（关键一条）</b></td><td><code>POST /api/auth/register</code>，请求体 <code>{"username":"probe","password":"probe12345"}</code>，<b>不带任何 Authorization 头</b> → <b>HTTP 200</b>，并返回一个令牌，长度 <b>43</b>＝<code>"af_"</code> + <code>secrets.token_hex(20)</code> 的 40 位十六进制（生成口径见 <code>af_auth.py:324</code>）。这一刻 store 里还没有管理员，所以该请求同时<b>占用了管理员位</b>。</td></tr>
+<tr><td>收尾</td><td><code>Stop-Process</code> 26752 与 27920 → 残留 <code>forge</code> 进程数 <b>0</b>，8791 监听数 <b>0</b>，临时 store 与日志已删</td></tr>
+</table>
+<div class="note">
+  <b>未跑完的部分（如实说明）。</b>原计划还要跑一张逐端点矩阵（无令牌 / 错误令牌 / 正确令牌下的 403-200 对照、<code>/docs</code> 与 <code>/openapi.json</code> 的可达性、以及 <code>AF_ALLOW_NOAUTH</code> 的放大效应实测）。
+  跑到注册那一条之后，托管设备开始无响应（连续两次请求超时，其中一次以 <code>EXECUTION_ERROR / local tool task failed</code> 结束），按止损要求停止探测并转向收尾。
+  因此<b>本报告中标「码面证据」的判定来自源码与 git diff 的直接读取，不是运行时实测</b>；标「运行时实测」的只有上表那几条。逐端点矩阵的复现命令写在 五.1。
+</div>
+<div class="note">
+  <b>审计期间工作区在动。</b>同一个 <code>git status</code> 在三次读取中给出了三组不同的文件集：<b>8 改动 + 5 未跟踪</b> → <b>10 + 6</b> → <b>12 改动 + 7 未跟踪</b>（最后这次多了 <code>src/autoforge/af_cli.py</code>、<code>tests/unit/test_af_mqtt_bridge.py</code>、<code>tests/unit/test_watch_lifecycle_r6_audit.py</code>）。
+  文件 mtime 也显示审计期间有写入：<code>af_service.py 16:37:29</code>、<code>af_mqtt_bridge.py 16:38:20</code>、<code>af_cli.py 16:39:20</code>（本机时间）。进程表里另有 <code>cmd</code>/<code>node</code>/<code>codex-bridge-python</code> 等长期驻留进程。
+  <b>结论：本报告是 2026-10-10 16:37–16:52 之间的工作区快照</b>；行号会漂，引用时请用 一.1 里的 blob 前缀对账。
+</div>
+</div>
+
+<h2>二、攻击面总览：八项逐项结论</h2>
+<p>下表把任务要求的八项逐条给出结论。<b>结论只有三档</b>：安全（查过、有依据、没问题）／有问题（确定可达或结构上成立）／需运行时确认（码面成立但本轮未能实测）。
+「安全」也逐条列出，这样才知道哪些面真的被查过。</p>
+
+<table>
+<tr><th style="width:112px">项</th><th style="width:96px">结论</th><th>要点与依据</th></tr>
+<tr>
+  <td><b>一、鉴权与授权</b></td>
+  <td><span class="sev s-crit">有问题</span></td>
+  <td>87 条路由分四档：<b>15 条完全没有鉴权依赖</b>（其中 4 条只挂单写者租约守卫：<code>build</code> / <code>bind</code> / <code>sim</code> / <code>spec.compile</code>）、30 条 read、39 条 write、3 条 live；外加速查内置的 <code>/docs</code>、<code>/redoc</code>、<code>/openapi.json</code> 共 3 条也无鉴权。
+  <b>无管理员时 <code>/api/auth/register</code>（986-1010）与 <code>/api/auth/login</code> 的兼容分支（1020-1038）都不带任何守卫，直接 <code>issue_for_agent(username, ("read","write","live"))</code></b> ⇒ 零凭据换全权限（运行时实测 register 返回 200）。没有管理员档：任何 write 令牌即可吊销他人令牌、覆写 HA 凭据、删自动化。令牌档位由 <code>scopes</code> 决定，蕴含表只允许 <code>read ← write</code>（<code>af_api.py:248-252</code>），<b>read 无法自我提升</b>。</td>
+</tr>
+<tr>
+  <td><b>二、凭据与密钥</b></td>
+  <td><span class="sev s-high">有问题</span></td>
+  <td>来源：env（<code>AUTOFORGE_API_TOKEN</code> / <code>AUTOFORGE_TOKENS</code> / <code>AUTOFORGE_REVOKED_TOKENS</code>）→ secret 文件目录（默认 <code>/run/secrets</code>）→ 兼容 env；HA/API 凭据另有 <code>{store}/credentials.json</code>。生成用 <code>secrets</code>（令牌 <code>af_</code> + <code>token_hex(20)</code>）；管理员口令 PBKDF2-HMAC-SHA256 100000 轮 + 16 字节盐。
+  落盘权限写的是 <code>os.chmod(tmp, 0o600)</code>，<b>而 Windows 上 chmod 不改 ACL</b>（F-10）。<b>真正的火在仓库根</b>：<code>issued_tokens.json.tmp</code>（26 条）与 <code>issued_tokens_clean.json</code>（1 条）是明文令牌注册表，未被 <code>.gitignore</code> 覆盖（F-03）。令牌不进错误响应（R-57）、不进 <code>/api/auth/subjects</code>、<code>/api/credentials</code> 只回掩码；<code>?token=</code> 会进访问日志，有掩码 filter 兜（F-09）。</td>
+</tr>
+<tr>
+  <td><b>三、路径穿越与任意读写</b></td>
+  <td><span class="sev s-ok">安全</span></td>
+  <td>所有以 name 为参数的端点都经 <code>GraphStore._dir()</code> 白名单化：<code>alnum + - _</code> 之外一律替换为 <code>_</code>，再 strip 首尾 <code>_</code>（<code>af_store.py:227-230</code>）⇒ <code>../</code>、绝对路径、<code>\</code>、盘符 <code>E:</code>、UNC 全部无法存活。<code>/api/store/export|import</code> 走请求体内的 JSON bundle，不接路径。<code>/api/asks/pending</code> 只读固定文件 <code>{root}/pending_asks.json</code>。
+  静态托管另有一道：<code>resolve() + is_relative_to(root)</code>，并显式规避了 <code>startswith</code> 把 <code>/mimo</code> 与 <code>/mimo-secret</code> 当同一棵树的陷阱（<code>af_api.py:1434-1440</code>）。</td>
+</tr>
+<tr>
+  <td><b>四、工具参数到命令执行</b></td>
+  <td><span class="sev s-med">有问题</span></td>
+  <td><b>没有 shell 注入面</b>：全 <code>src</code> 只有一处 <code>subprocess</code>（<code>af_service.py:2550</code>），参数是固定列表、无 <code>shell=True</code>、无字符串拼接，<code>forge</code> 从 PATH 解析，<code>--ha-url</code> 取自环境变量。真正到达「执行」的路径是 IR 动作层（HA service 调用 / MQTT 发布 / inbox 投递 / 走白名单的出站 HTTP），其风险分级与设备 ACL 是第一轮的既有结论，本轮不重复计分。
+  <b>本轮新增的两点：</b>① <code>/api/sim</code>、<code>/api/build</code>、<code>/api/bind</code>、<code>/api/spec/compile</code> 这四条<b>连鉴权都没有</b>（F-04 同族，见总览「一」），其中 <code>/api/sim</code> 是吃 CPU/内存的仿真入口，属于零凭据资源耗尽面；② 面板上的「风险审批」只覆盖待批队列（<code>/api/pending/*</code>，只在服务层注册、MCP 面不注册，<code>af_api.py:501</code>），而 <code>/api/live/run</code> 与 <code>/api/undo</code> 是<b>绕过队列直达真机</b>的另一条通道 —— 它的闸是四重（见「误报排除」），但不经过人工审批队列。</td>
+</tr>
+<tr>
+  <td><b>五、外部输入可信度</b></td>
+  <td><span class="sev s-ok">基本安全</span><br><span class="small muted">（1 条残留）</span></td>
+  <td>HTTP 请求体全部经 Pydantic 模型；IR 过 schema 校验；bundle 导入复算 SHA256 且逐版本校验后才落盘（<code>af_store.py:770-830</code>）；损坏的 JSON 一律 fail-closed 拒写（<code>af_auth.py:520-539</code>、<code>:424-435</code>）。
+  <b>MQTT 是纯出向</b>：AF 明确禁订 <code>butler/inbox/#</code> 与 <code>butler/inbox/*</code>（<code>af_mqtt_bridge.py:103-108</code>），收件箱适配器只做投递、失败如实回 <code>CallResult.fail</code>（<code>af_adapters/inbox.py:110-150</code>）⇒ 外部收件箱流量无法反向驱动它。
+  出站有主机白名单收口（<code>af_adapters/http.py:69-92</code>）。残留：HA 事件与 ask 应答侧只做了 HMAC/结构校验，未见「外部文本 → 工具调用」的直连链（唯一的工具驱动方是 MCP 客户端，那是设计内的）。</td>
+</tr>
+<tr>
+  <td><b>六、提示注入到工具升级</b></td>
+  <td><span class="sev s-low">风险受控</span><br><span class="small muted">（设计性边界）</span></td>
+  <td>全仓只有一处 LLM 调用：<code>af_closedloop/deepfix.py:184</code> 的 <code>self.llm.complete(prompt, system=...)</code>，prompt 由 IR + lint/build 反馈拼成。注入面存在（IR 里的字符串可被第三方写入），但输出被两道闸夹住：<b>只允许输出 JSON 数组形式的修复操作</b>（<code>max_ops</code> 上限）、且操作必须命中固定注册表后再次过 lint/build ⇒ 注入的收益上限是「让修复器做一次白名单内的修复」，<b>不能跳到任意工具调用</b>。
+  真正不可控的注入面在仓库之外：MCP 客户端（读外部内容的那个 agent）拿到令牌后调 AF 工具，AF 侧唯一的防线是 scope 纪律 —— 这也是为什么「write 令牌 = 全站运维权」（F-07）不是纸面问题。</td>
+</tr>
+<tr>
+  <td><b>七、监听地址与暴露面</b></td>
+  <td><span class="sev s-high">有问题</span></td>
+  <td>默认回环（实测只监听 <code>127.0.0.1</code>），但<b>部署形态是 <code>0.0.0.0:8787</code> 且宿主全接口发布</b>（compose:16-17,23），全链路无 TLS，无 IP 白名单，无鉴权之外的第二道网络层限制。CORS 默认是显式 localhost 白名单而非 <code>*</code>（<code>af_api.py:456-467</code>）——干净。调试面 <code>/docs</code>、<code>/redoc</code>、<code>/openapi.json</code> 无鉴权暴露（F-08）。
+  「DB 跨机器调 AF」的链路就是普通 HTTP + Bearer，<b>没有额外鉴权层</b>；<code>AUTORFORGE_TRUST_PROXY</code> 默认关（正确，防伪造 XFF），副作用是限速按代理 IP 归并成单一桶（F-09）。</td>
+</tr>
+<tr>
+  <td><b>八、审计与可追溯</b></td>
+  <td><span class="sev s-high">有问题</span></td>
+  <td><code>AuditLog</code> 是<b>纯内存</b> <code>deque(maxlen=5000)</code>，<code>DEPLOY_AUDIT</code> 同样（<code>af_audit.py:106-118,138</code>）⇒ 重启即失；<code>AuditEvent</code> <b>没有操作者/令牌字段</b>（<code>:80-103</code>）⇒ 答不出「谁干的」；<code>af_api.py</code> 里 <b>零审计调用</b>（<code>git grep audit</code> 无命中）⇒ 导入、覆写凭据、吊销令牌、改名 agent、删自动化、真机下发<b>全都不留痕</b>。
+  唯一的持久留痕是版本冲突 JSONL（<code>record_conflict</code> → <code>.forge/conflict_audit.json</code>）。</td>
+</tr>
+</table>
+
+<div class="svgwrap">
+<div class="legend">
+  <span><i class="sw" style="background:#a3161b"></i>完全无鉴权 15</span>
+  <span><i class="sw" style="background:#2f6d4f"></i>read 30</span>
+  <span><i class="sw" style="background:#b8560e"></i>write 39</span>
+  <span><i class="sw" style="background:#2c4a7c"></i>live 3</span>
+</div>
+<svg viewBox="0 0 860 222" width="860" height="222" role="img" aria-label="87 条路由按权限档分布，以及免鉴权开关被放大后暴露端点的对比">
+  <text x="0" y="16" font-size="13" font-weight="700" fill="#1b1f24">af_api.py 的 87 条路由按权限档分布</text>
+  <rect x="0" y="28" width="144.8" height="34" fill="#a3161b"></rect>
+  <rect x="144.8" y="28" width="289.7" height="34" fill="#2f6d4f"></rect>
+  <rect x="434.5" y="28" width="376.5" height="34" fill="#b8560e"></rect>
+  <rect x="811.0" y="28" width="29.0" height="34" fill="#2c4a7c"></rect>
+  <text x="72" y="50" font-size="12" fill="#ffffff" text-anchor="middle" font-weight="700">15 无鉴权</text>
+  <text x="289" y="50" font-size="12" fill="#ffffff" text-anchor="middle" font-weight="700">30 read</text>
+  <text x="622" y="50" font-size="12" fill="#ffffff" text-anchor="middle" font-weight="700">39 write</text>
+  <text x="825" y="50" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="700">3</text>
+  <text x="0" y="80" font-size="11.5" fill="#5b6572">无鉴权那 15 条含：/api/health、/api/auth/{whoami,has-admin,register,login,logout,me}、/api/mcp/pair-request、</text>
+  <text x="0" y="96" font-size="11.5" fill="#5b6572">/api/mcp/pair/{request,redeem}、以及只有租约守卫的 /api/{build,bind,sim,spec/compile}；外加速查内置 /docs、/redoc、/openapi.json 3 条。</text>
+
+  <line x1="0" y1="112" x2="860" y2="112" stroke="#e2e6ec" stroke-width="1"></line>
+
+  <text x="0" y="132" font-size="13" font-weight="700" fill="#1b1f24">零凭据可达端点数：默认配置 vs 免鉴权开关被放大</text>
+  <text x="0" y="153" font-size="12" fill="#1b1f24">默认：<tspan font-weight="700" fill="#a3161b">18</tspan> 条（15 无鉴权 + 3 内置文档）</text>
+  <rect x="0" y="159" width="60" height="13" fill="#a3161b"></rect>
+  <text x="70" y="170" font-size="11" fill="#5b6572">18 条</text>
+  <text x="0" y="196" font-size="12" fill="#1b1f24">放大后：<tspan font-weight="700" fill="#a3161b">90</tspan> 条（87 路由 + 3 文档）全部零凭据可达，含 39 条写端点与 3 条 live 端点</text>
+  <rect x="0" y="202" width="300" height="13" fill="#a3161b" opacity="0.55"></rect>
+  <text x="310" y="213" font-size="11" fill="#5b6572">90 条（同一比例尺：18 条 = 60px）</text>
+</svg>
+</div>
+<p class="small muted">口径：上排「87 条」为 <code>af_api.py</code> 内用 <code>@app.*</code> 注册的路由数（grep 全量枚举，见 四.1）；
+<code>af_conflict_runtime.py</code> 的 5 条与 <code>af_runtime_plugins.py</code> 的动态路由<b>未计入</b>，因为它们今天没有被 <code>serve</code> 挂载（F-06）。</p>
+
+<h2>三、安全发现清单（按严重度，攻击者视角）</h2>
+
+<div class="finding f-crit">
+<h3>F-01 零凭据换全权限令牌：没有管理员时 register / login 兼容分支直接签发 read+write+live <span class="sev s-crit">严重</span></h3>
+<div class="kv">
+  <div><b>攻击者视角。</b>任何能连上这个端口的人（同网段、或端口被转发到公网、或先经代理/主机上的普通用户），只要 store 里还没有管理员，就可以：</div>
+</div>
+<pre><span class="c"># 不需要任何凭据、不需要任何头</span>
+POST /api/auth/register   {"username":"attacker","password":"anything123"}
+→ 200 {"ok":true, "token":"af_…", ...}     # 同时占用管理员位
+
+<span class="c"># 或者走登录兼容分支（无管理员时，用户名/口令非空即可）</span>
+POST /api/auth/login      {"username":"任意","password":"任意非空"}
+→ 200 {"ok":true, "token":"af_…"}</pre>
+<div class="kv">
+  <div><b>依据（码面证据）。</b><code>af_api.py:986-1010</code> 的 <code>POST /api/auth/register</code> 装饰器上<b>没有任何 <code>dependencies=</code></b>；唯一的门是 <code>admin_store.has_admin()</code>，只在<b>已有</b>管理员时回 409。
+  随后 <code>registry.issue_for_agent(...)</code> 签发令牌 —— <code>issue_for_agent</code> 在不传 <code>scopes</code> 时默认给 <code>("read","write","live")</code>（<code>af_auth.py:317-319</code>）。
+  <code>af_api.py:1012-1038</code> 的 <code>POST /api/auth/login</code> 同样无守卫；无管理员时走兼容分支，注释里写明「此档下全站本来就是公开的」。</div>
+  <div><b>触发条件。</b>目标 store 下没有 <code>.auth/admin.json</code>。<b>本机就满足</b>：<code>.forge</code> 下没有 <code>.auth</code> 目录、没有 <code>admin.json</code>（1.4 表已列）。
+  NAS 部署的 store 是宿主卷 <code>/vol1/1000/docker/autoforge-store:/data</code>，新部署同样是空的。</div>
+  <div><b>可达性判定。</b><span class="sev s-ok">运行时实测</span> 见 1.6：不带 Authorization 的 register 返回 <b>200</b> 并签发令牌（长度 43）。login 兼容分支为码面证据（本轮未跑完）。</div>
+  <div><b>拿到之后能做什么。</b>一个 <code>live</code> 令牌意味着：<code>/api/store/export</code> 全量拉取所有自动化；<code>/api/credentials/update</code> 覆写 HA 长令牌；<code>/api/auth/revoke</code> 吊销其他所有令牌；<code>/api/automations/{name}</code> DELETE 不可逆删归档；<code>/api/live/run</code> 在四重闸都满足时<b>对真实家居设备下发</b>；<code>/api/user/agents/{id}</code> 改名/删除 agent 身份。</div>
+  <div><b>工作区还改了一处语义。</b><code>git diff</code> 显示签发主体由 HEAD 的 <code>"owner"</code> 改成 <code>body.username</code>。HEAD 里主体落在 <code>_OWNER_SUBJECTS = {"owner","shared"}</code>（<code>af_api.py:259</code>）之内，因此能拿到<b>未掩码</b>的授权码清单；改后主体是用户名、落在集合之外 ⇒ 真实主人只能看到掩码清单。<b>这是一处功能回退（授权码页对主人失效），不是权限提升</b>，但与 F-01 同一次改动引入，建议一并回归。</div>
+  <div><b>修复方向。</b>① <code>register</code> 的准入判据改成「首次引导」而不是「没有管理员」，例如要求一个只在部署时存在的一次性引导秘密（<code>AUTOFORGE_BOOTSTRAP_SECRET</code>），或在 CLI 侧提供 <code>forge auth init-admin</code> 只允许本机 TTY 调用；
+  ② 删掉 login 的「无管理员即放行」兼容分支，改为回 401 并在启动日志里给出引导指引；
+  ③ <code>issue_for_agent</code> 不要默认给 <code>live</code>，把默认档降到 <code>("read",)</code>，全权限必须显式申请。</div>
+</div>
+</div>
+
+<div class="finding f-crit">
+<h3>F-02 <code>AF_ALLOW_NOAUTH</code> 被放大成「永远放行」（<b>工作区未提交改动引入</b>） <span class="sev s-crit">严重</span></h3>
+<div class="kv">
+  <div><b>攻击者视角。</b>这个开关本来是个开发期旁路。放大之后，只要宿主环境里存在 <code>AF_ALLOW_NOAUTH=1</code>，<b>全站鉴权一起失效</b>：不用令牌、用错令牌、用过期令牌都能过。攻击者不需要任何凭据，也不需要 F-01 的「没有管理员」前提。</div>
+  <div><b>依据（git 原始输出）。</b><code>git diff -- src/autoforge/af_api.py</code> 的这条 hunk：</div>
+</div>
+<pre><span class="c">$ git diff -- src/autoforge/af_api.py   （节选：造成放大的是这一条 hunk，逐字照抄）</span>
+@@ -363,6 +363,10 @@ def build_app(
+         def dep(
+             creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+         ) -&gt; TokenInfo | None:
++            # 开发模式逃生舱：只要显式设置 AF_ALLOW_NOAUTH=1，不管有没有配置令牌都放行
++            # （局域网开发环境，开发者 webui 无登录功能，需要此开关才能访问 API）
++            if os.environ.get("AF_ALLOW_NOAUTH", "").lower() in ("1", "true", "yes"):
++                return None
+             if not registry.enabled:
+                 # 默认 fail-closed（P0-9 收口）：生产无令牌即拒绝
+                 if os.environ.get("AF_ALLOW_NOAUTH", "").lower() in ("1", "true", "yes"):</pre>
+<div class="kv">
+  <div><b>为什么这是放大而不是等价。</b>HEAD 的语义是「没有配置任何令牌 ⇒ 全站 403，除非显式打开开发旁路」——那一档本来就已经是「没配令牌就等于不设防」的世界，旁路换不来额外暴露面。
+  工作区把判据提到 <code>registry.enabled</code> 检查<b>之前</b>，于是<b>已配置令牌的正常部署</b>也会开门：<code>requires()</code> 覆盖的 <b>72 条端点（39 write + 30 read + 3 live）全部失去鉴权</b>，零凭据可达端点数由 18 条涨到 90 条（见 二 的图）。
+  同一分支还让 <code>authenticated()</code>（<code>af_api.py:406-420</code>）短路，<b>合法但过期的令牌、被吊销的令牌</b>一样放行，而且 <code>info</code> 为 <code>None</code> ⇒ 审计主体变成空。</div>
+  <div><b>触发条件。</b>宿主/容器环境里存在 <code>AF_ALLOW_NOAUTH</code>。注意 <code>docker/docker-compose.api.yml</code> 是把这个变量<b>透传</b>进容器的，所以它是一次 <code>export</code>、一次旧 shell、一次 <code>.env</code> 残留就能成立的条件；本机探测时我显式清空了它。</div>
+  <div><b>可达性判定。</b><span class="sev s-med">码面证据（git diff 已核对，本轮未做运行时对照）</span>。</div>
+  <div><b>修复方向。</b>把这段判断退回 <code>not registry.enabled</code> 分支内部；真要在已配令牌的部署上做旁路，至少要求「同时显式设置 <code>AF_ALLOW_NOAUTH_I_KNOW=1</code>」并在启动横幅里大字告警；更稳的做法是只在 <code>--readonly</code> 降级档生效。</div>
+</div>
+</div>
+
+<div class="finding f-high">
+<h3>F-03 明文令牌注册表躺在仓库根，且未被 <code>.gitignore</code> 覆盖 <span class="sev s-high">高</span></h3>
+<div class="kv">
+  <div><b>这是什么。</b>仓库根有两个未跟踪文件，形状与 <code>.forge/.auth/issued_tokens.json</code> 完全一致 —— 也就是 <code>af_auth.py:417-448</code> 里那份「<b>键 = 明文令牌</b>，值 = <code>{subject, scopes, expires_at}</code>」的注册表：</div>
+</div>
+<table>
+<tr><th>文件</th><th>条目数</th><th>注释</th></tr>
+<tr><td><code>issued_tokens.json.tmp</code></td><td>26</td><td>原子写的中转文件（<code>_atomic_write_text</code> 先写 <code>&lt;name&gt;.json.tmp</code> 再 rename）</td></tr>
+<tr><td><code>issued_tokens_clean.json</code></td><td>1</td><td>人工清理过的版本</td></tr>
+</table>
+<div class="kv">
+  <div><b>攻击者视角。</b>这类文件本身不对外服务 —— 危险在「下一步」。<code>.gitignore</code> 里<b>没有</b> <code>issued_tokens*</code>、也<b>没有</b> <code>*.tmp</code>、<code>*_clean.json</code> 之类的规则（<code>git check-ignore</code> 对这两个文件均无输出），而公开远端是 <code>git@github.com:lidicn/AutoForge.git</code>。
+  一次 <code>git add -A</code> / <code>git add .</code>（这个仓的对账脚本与代理惯用全量暂存）就会把<b>活的 bearer 令牌</b>推到公开仓库，任何克隆者按 <code>subject/scopes</code> 直接当 read/write/live 用。历史一旦推上去，删文件也无法回收 —— 只能吊销。</div>
+  <div><b>旁证。</b>同一批未跟踪且未被忽略的还有 <code>docker-compose.api.yml.tmp</code>、<code>docker/docker-compose.api-test.yml</code>、<code>docs/audit/*.html</code>、<code>tests/unit/test_watch_lifecycle_r6_audit.py</code>。这不是局部疏漏，是「忽略规则只覆盖了 <code>.env</code>/<code>.forge</code>/冒号目录」的形状问题。</div>
+  <div><b>可达性判定。</b><span class="sev s-ok">确定可达（结构上成立）</span>：只等一次全量暂存。当前 HEAD 尚未推送（领先 origin/main 17 提交），所以<b>现在还没泄漏</b> —— 这是修它的最好时机。</div>
+  <div><b>修复方向。</b>① 立刻把 <code>issued_tokens*</code>、<code>*.tmp</code>、<code>*_clean.json</code> 加进 <code>.gitignore</code>；② 删掉这两个残留文件（它们本来就不该在仓库根 —— 出现原因是有人把 store 根指到了仓库根，需要顺带查是谁这么跑的）；③ 对这两个文件里出现过的<b>全部令牌做一次吊销</b>（<code>POST /api/auth/revoke</code> 或直接清 <code>revoked.json</code> 源），因为无法确认它们是否已被复制/备份；④ 加一条 pre-commit 的「机密扫描」门禁。</div>
+</div>
+</div>
+
+<div class="finding f-high">
+<h3>F-04 HTTP 层零审计：任何变更都不留痕，审计日志还只在内存 <span class="sev s-high">高</span></h3>
+<div class="kv">
+  <div><b>事实。</b>
+  <code>git grep -n audit -- src/autoforge/af_api.py</code> → <b>零命中</b>。<code>AuditLog</code> 是内存结构：<code>deque(maxlen=5000)</code>（<code>af_audit.py:106-118</code>），<code>DEPLOY_AUDIT</code> 同样（<code>:138</code>），进程重启即失；<code>AuditEvent</code> 的字段里<b>没有 actor / subject / token</b>（<code>:80-103</code>）。全仓唯一持久化的审计是版本冲突 JSONL：<code>record_conflict</code>（<code>:141-168</code>）→ <code>.forge/conflict_audit.json</code>（本机 68804 字节，确实是真在写）。</div>
+  <div><b>攻击者视角（这件事对攻击者的价值）。</b>用完 write 令牌攻击完之后，系统自己的记录里<b>没有痕迹可查</b>：</div>
+</div>
+<table>
+<tr><th>静默状态变更</th><th>位置</th><th>留痕</th></tr>
+<tr><td>覆写 HA / API 凭据</td><td><code>POST /api/credentials/update</code>（<code>af_api.py:524-530</code>）</td><td>无</td></tr>
+<tr><td>吊销任意令牌</td><td><code>POST /api/auth/revoke</code>（<code>:974</code>）→ 改 <code>revoked.json</code></td><td>无</td></tr>
+<tr><td>改名 / 删除 agent 身份（会重写整份令牌注册表）</td><td><code>:1180-1194</code>、<code>af_auth.py:381-391</code></td><td>无</td></tr>
+<tr><td>整库导入（可覆盖同名归档）</td><td><code>POST /api/store/import</code>（<code>:557-560</code>）</td><td>无（只有返回体里的报告）</td></tr>
+<tr><td>不可逆删除自动化归档</td><td><code>DELETE /api/automations/{name}</code>（<code>:1378-1387</code>）</td><td>无</td></tr>
+<tr><td>真机下发 / 撤销</td><td><code>POST /api/live/run</code>（<code>:819</code>）、<code>POST /api/undo/{id}</code></td><td>服务侧有部署台账，但无 HTTP 层操作者记录</td></tr>
+<tr><td>新增 / 删除授权码</td><td><code>:1139-1167</code></td><td>无</td></tr>
+</table>
+<div class="kv">
+  <div><b>可达性判定。</b><span class="sev s-ok">确定成立</span>（grep 与结构均为现读）。</div>
+  <div><b>修复方向。</b>① 在 <code>af_api.py</code> 的写端点统一挂一个审计依赖（把 <code>TokenInfo.subject</code> 落进去），至少覆盖上表七类；② <code>AuditEvent</code> 加 <code>actor</code> / <code>scopes</code> / <code>request_id</code> 字段；③ 把审计落到 append-only 文件或远端 syslog，别放内存 deque；④ 只读端点不必留痕，但 <code>/api/store/export</code>（整库外带）建议计入。</div>
+</div>
+</div>
+
+<div class="finding f-high">
+<h3>F-05 配对：匿名侧可驱动主人 UI，兑换出的是全权限令牌 <span class="sev s-high">高</span></h3>
+<div class="kv">
+  <div><b>链路。</b>① <code>POST /api/mcp/pair/request</code>（<code>af_api.py:1196-1224</code>）<b>无鉴权</b>，只按 IP 限到 6 次/分；请求体里的 <code>agent_name</code> 等字符串会作为 <code>agent_name_hint</code> 存进 <code>PairCode</code>（<code>af_auth.py:490-497</code>）并经 SSE 推给主人前端 —— 工作区刚把这条推送接上：<code>ui-user-mimo/src/stores/main.ts</code> 新增 <code>onPairRequest((req) =&gt; { pair.value = req })</code>，直接触发 AgentsView 的配对弹窗。
+  ② 主人看到弹窗、点确认 → ③ <code>POST /api/mcp/pair/redeem</code>（<code>:1225-1247</code>，同样无鉴权，10 次/分/IP）→ <code>redeem_pair_code()</code> 调 <code>registry.issue_for_agent(subject)</code>，<b>不传 scopes ⇒ 默认档 <code>("read","write","live")</code></b>（<code>af_auth.py:317-319</code>）。</div>
+  <div><b>攻击者视角。</b>配对是「从零凭据到全权限」的合法入口，而它的第①步是匿名的、且<b>弹窗里给主人看的文本由请求方控制</b>。攻击者可以把 <code>agent_name</code> 写成「AutoForge 系统自检 / 紧急配对请点确认」之类的诱导串，配合 6 次/分的重试把弹窗刷到主人面前（无人值守时尤其有效）。主人一旦点确认，攻击者换来的是一个 live 令牌。这不是理论链条：SSE 推送与弹窗在本轮读到的代码里已经接通。</div>
+  <div><b>码长与限速（这一半其实做得可以）。</b>配对码是 <b>8 位纯数字</b>（<code>af_auth.py:480-487</code>，函数名 <code>_rand6</code> 是过时的，实际 <code>range(8)</code>；docstring 记录了上一轮安全审计 <code>fp-authcode-bruteforce</code> 的结论：原 6 位可 0.5s 穷举，8 位把空间扩 100 倍）⇒ 空间 10^8；配对码 TTL <b>300 秒</b>（<code>create(ttl_s=300)</code>）；兑换限速 10 次/分/IP、超限封该 IP 5 分钟（<code>af_auth.py:545-547</code>）。单 IP 在 300 秒里只有 50 次机会，<b>单机穷举不可行</b> —— 这一条我不列成问题。
+  残留两点：<b>没有全局尝试计数</b>（换 IP 就线性扩次数，多 IP 才需要 10^8 量级，实际仍不易），以及 <code>redeem_pair_code</code> 里 <code>not_ready</code> 只在 <code>registry is None</code> 时给出，而 <code>build_app</code> 永远构造 registry（<code>af_api.py:292-295</code>）⇒ 兑换路径<b>永远处于「可签发」状态</b>。</div>
+  <div><b>可达性判定。</b><span class="sev s-med">码面证据</span>（两条端点无守卫、默认 scope、推送接线均已读到；本轮未实跑配对流程）。</div>
+  <div><b>修复方向。</b>① 配对码兑换出的令牌<b>默认降到 <code>("read",)</code></b>，需要写/真机权限时由主人在弹窗里显式勾选授权范围；② 给未鉴权端点加全局（不只按 IP）的尝试预算；③ 主人 UI 里把 <code>agent_name</code> 当<b>不可信输入</b>做转义与来源标注（明确写「此名称由请求方自填」）；④ 给配对请求加一次性 nonce 并要求主人从本地 UI 主动读取，而不是被推送驱动。</div>
+</div>
+</div>
+
+<div class="finding f-med">
+<h3>F-06 扩展路由安装器不挂任何鉴权依赖（今天未挂载，接线即漏） <span class="sev s-med">中</span></h3>
+<div class="kv">
+  <div><b>事实。</b>两处动态注册都没有 <code>dependencies=</code>：
+  <code>af_runtime_plugins.py:313-330</code> —— <code>_make_endpoint</code> 造出的处理器以 <code>app.add_api_route(path, endpoint, methods=[method])</code> 注册；<code>af_conflict_runtime.py:610-614</code> 的 5 条（<code>GET /api/conflicts</code>、<code>/api/conflicts/summary</code>、<code>/api/conflicts/locks</code>、<code>POST /api/conflicts/{automation_id}/reset</code>、<code>DELETE /api/conflicts/locks/{entity_id}</code>）经 <code>install_api(app, service)</code>（<code>:618-640</code>）挂载，同样是裸 <code>add_api_route</code>。</div>
+  <div><b>为什么现在不算严重。</b><code>git grep</code> 全 <code>src</code> 找不到 <code>install_api</code> 的外部调用点（只有定义处与插件模块内部的 139/337 行），也就是说 <code>forge serve</code> 的默认路径<b>不会挂载这些路由</b> ⇒ 今天不可达。这是一处「接线即漏」的结构风险，不是当前漏洞。</div>
+  <div><b>攻击者视角。</b>一旦有人为了打开冲突仲裁面而调一次 <code>install_api</code>，<code>/api/conflicts*</code> 与插件端点就变成<b>无鉴权端点</b>：其中 <code>POST …/reset</code> 与 <code>DELETE …/locks/{entity_id}</code> 都是写操作（重置仲裁状态、释放实体锁），可以直接被用来制造并发互踩。</div>
+  <div><b>修复方向。</b>在这两个 <code>add_api_route</code> 上加 <code>dependencies=[Depends(_read)]</code>（写操作用 <code>_write</code>），并加一条测试：遍历 <code>app.routes</code>，断言除白名单外的每条路由都带有鉴权依赖 —— 这类「新端点漏挂守卫」只能靠结构性门禁防，靠人记会一直漏（F-04 里那 4 条只有租约守卫的端点就是同一个漏法）。</div>
+</div>
+</div>
+
+<div class="finding f-med">
+<h3>F-07 没有管理员档：任何 write 令牌都能吊销别人、覆写凭据 <span class="sev s-med">中</span></h3>
+<div class="kv">
+  <div><b>事实。</b>权限分档只有 <code>read / write / live</code> 三档（<code>af_api.py:355-404</code> 的 <code>requires()</code>），<b>没有 admin 档</b>。于是下列「运维级」动作都只需要一枚 write：</div>
+</div>
+<table>
+<tr><th>动作</th><th>端点</th><th>一个 write 令牌能做的事</th></tr>
+<tr><td>吊销令牌</td><td><code>POST /api/auth/revoke</code>（<code>af_api.py:974-978</code>）</td><td>把任意令牌拉黑（<code>af_auth.py:298-305</code>）⇒ 使整个部署不可用（DoS）</td></tr>
+<tr><td>批量吊销按主体</td><td><code>DELETE /api/user/agents/{agent_id}</code>（<code>:1180-1185</code>）</td><td>按 subject 一次性吊销名下全部令牌（<code>af_auth.py:365-379</code>）</td></tr>
+<tr><td>改名主体</td><td><code>PATCH /api/user/agents/{agent_id}</code>（<code>:1187-1193</code>）</td><td>重写整份令牌注册表的 subject（审计归因被改）</td></tr>
+<tr><td>覆写凭据</td><td><code>POST /api/credentials/update</code>（<code>:524-530</code>）</td><td>替换 HA 长令牌（<code>af_config.update_credentials</code>）⇒ 服务从此连不上真 HA，或按攻击者指定的凭据工作</td></tr>
+<tr><td>看令牌主体清单</td><td><code>GET /api/auth/subjects</code>（<code>:969-972</code>）</td><td>拿到全部 subject + scopes（不含明文，但足以枚举谁在场）</td></tr>
+</table>
+<div class="kv">
+  <div><b>攻击者视角。</b>这条之所以是中而不是高，是因为它<b>需要先有一枚 write 令牌</b>。但它把前面的发现放大了：F-01/F-02/F-05 任何一条拿到 write 之后，攻击者都能顺手把合法主人的令牌全部吊销、把凭据换成自己的，完成「占位并锁门」。凭据本身读不回来（<code>describe()</code> 只回 <code>****len=N</code>，<code>af_config.py:32-36</code>、<code>:188-193</code>），所以不是直接外泄。</div>
+  <div><b>修复方向。</b>引入 admin 档（只在 CLI/本机 TTY 或独立引导秘密下可达），把 <code>revoke</code>/<code>agents</code> 写操作/<code>credentials/update</code> 提到 admin；<code>/api/credentials</code> 的读与写都留在 admin；并给「吊销自己」加护栏提示。</div>
+</div>
+</div>
+
+<div class="finding f-med">
+<h3>F-08 <code>/docs</code>、<code>/redoc</code>、<code>/openapi.json</code> 无鉴权暴露 <span class="sev s-med">中</span></h3>
+<div class="kv">
+  <div><b>事实。</b><code>build_app</code> 构造 <code>FastAPI(...)</code> 时没有传 <code>docs_url=None / redoc_url=None / openapi_url=None</code>（<code>af_api.py:450-455</code>），因此 FastAPI 的三条内置路由原样生效。代码与启动横幅都主动宣传它：<code>af_cli.py:1462</code> 打印「文档 /docs，store=…」，<code>af_api.py:44</code> 的模块 docstring 写「FastAPI 自带 <code>/docs</code>（Swagger UI）与 <code>/openapi.json</code>，可直接作为前端联调依据」。
+  SPA fallback 只对<b>它自己那条 catch-all</b> 拦 <code>docs</code>/<code>openapi.json</code>（<code>:1412</code>），并不影响内置路由（<code>redoc</code> 连拦都没拦）。</div>
+  <div><b>攻击者视角（这是发现面，不是漏洞本身）。</b>任何能连上端口的人先拿 <code>/openapi.json</code> 拿到<b>完整端点清单 + 每个请求体的字段与类型</b>，再用 <code>/docs</code> 的交互式控制台直接点着调用。
+  对 F-01/F-02 这两条「零凭据换令牌」的发现来说，这等于把利用门槛降到「会点按钮」；对 F-06 这类「未挂载的路由」它也帮不上忙，但对现存的 87 条一清二楚。安全上的定性是<b>信息泄露 + 降低利用门槛</b>，不单独构成接管。</div>
+  <div><b>可达性判定。</b><span class="sev s-med">码面证据</span>（未在本轮探测里实测，因为收尾时设备无响应；复现命令见 五.1）。</div>
+  <div><b>修复方向。</b>生产档（容器）显式关掉三条：<code>FastAPI(docs_url=None, redoc_url=None, openapi_url=None)</code>；本地开发用 <code>AUTOFORGE_ENABLE_DOCS=1</code> 才开；同时把 <code>af_cli.py:1462</code> 的横幅改成条件打印，避免「横幅说有文档、实际已关」的新漂移。</div>
+</div>
+</div>
+
+<div class="finding f-med">
+<h3>F-09 全链路无 TLS；令牌会以 <code>?token=</code> 出现在 URL 上；反代下按 IP 限速退化成单桶 <span class="sev s-med">中</span></h3>
+<div class="kv">
+  <div><b>事实一（无 TLS）。</b><code>uvicorn.run(app_, host=host, port=port, log_level="info")</code> 没有任何证书参数（<code>af_cli.py:1465</code>），全仓无 TLS 配置项。</div>
+  <div><b>事实二（令牌进 URL）。</b>SSE 端点 <code>GET /api/mcp/pair-request</code> 因为 <code>EventSource</code> 发不了自定义头，令牌经 <code>?token=</code> 传递（<code>af_api.py:1108-1136</code>，注释自己写明「代价：会整条落进 uvicorn 访问日志」）。
+  仓内确实挂了一个掩码 filter（<code>af_cli.py:1379-1422</code>，把 <code>token=…</code> 替成 <code>token=***</code>），但<b>它只保护本进程的那条 logger</b>：令牌在到达 uvicorn 之前已经经过浏览器历史、反向代理/网关日志、以及同网段的抓包。注释也如实写了「反代/nginx 那一半属部署侧」。</div>
+  <div><b>事实三（跨机器链路）。</b>README 声称的「DB 跨机器调 AF」在本仓里的实现就是普通 HTTP + <code>Authorization: Bearer</code>（<code>af_mcp.py</code> 的 HTTP MCP 与全套 <code>/api/*</code>），<b>没有第二层鉴权、没有 mTLS、没有请求签名</b>。同时 <code>AUTORFORGE_TRUST_PROXY</code> 默认关闭（<code>af_api.py:316-323</code>——这个默认是对的，防 XFF 伪造），副作用是：如果前面真站了个反代，<code>_client_ip()</code> 看到的是<b>反代自己的地址</b>，于是 <code>limiter.check(f"ip:{...}")</code> 把<b>所有调用方合并进同一个 1000/min 的桶</b> ⇒ 单个滥用者能把这个桶吃干，其他人一起被 429（自伤式 DoS），而按 IP 的归因与封禁同时失效。</div>
+  <div><b>攻击者视角。</b>同网段的任意主机（例如 NAS 上的另一个容器、被入侵的 IoT 设备、访客 Wi-Fi 上的终端）都能被动拿到 bearer 令牌；拿到后按 1.6 的清单做全套动作。<b>这是本报告里「真暴露在网络上会发生什么」最直接的一条</b>。</div>
+  <div><b>修复方向。</b>① 容器部署不要在宿主全接口发布 8787，改 <code>127.0.0.1:8787:8787</code> 并只让反代可达，或至少加宿主防火墙白名单；② 反代终结 TLS，并把 <code>AUTOFORGE_TRUST_PROXY=1</code> 与「只信任该反代的 XFF」配套设置；③ SSE 的令牌别再走 query：改用一次性短票（先 <code>POST</code> 换 ticket，再用 <code>?ticket=</code> 建流，票 30 秒过期、单次有效）；④ 限速加一层「按 subject」兜底（已有 <code>subj:</code> 维度，但无令牌的匿名端点仍只有 IP 维度）。</div>
+</div>
+</div>
+
+<div class="finding f-low">
+<h3>F-10 「看起来设了权限」：POSIX <code>0600</code> 在 Windows 上不改 ACL <span class="sev s-low">低（Windows 侧中）</span></h3>
+<div class="kv">
+  <div><b>事实。</b>凭据落盘统一走 <code>_atomic_write_text</code>：先 <code>os.chmod(tmp_path, 0o600)</code> 再写、再 <code>os.replace</code>（<code>af_auth.py:78-113</code>，chmod 在 91 行）；<code>af_config._atomic_write</code> 同一手法（<code>af_config.py:112-123</code>）。<b>Windows 上 <code>chmod</code> 是 no-op 式的存在</b>：它不改 NTFS ACL，也不读/写 <code>icacls</code>。代码里也标注了「Windows 无 0600 语义」，但没有替代实现。</div>
+  <div><b>实际保护是什么。</b>等于<b>父目录继承下来的 ACL</b>：默认情况下只有 <code>lidicn</code> 与该机管理员可读。<code>.env</code>（4 个令牌类键）、<code>.forge/credentials.json</code>（<code>ha_token</code>）、<code>.task/…/.auth/*.json</code> 全都如此。</div>
+  <div><b>影响。</b>本机任何<b>以该用户身份运行</b>的进程（包括这一堆常驻的 node/cmd/codex-bridge、编辑器插件、以及任何被这些工具间接执行的代码）都能读到全部令牌与 HA 长期令牌；提权到本机管理员同样能读。这不是「取巧绕过」，而是「没有任何一层是它自己的」：一旦某个以该用户运行的组件被攻破，凭据即刻失守。</div>
+  <div><b>修复方向。</b>Windows 档改用 <code>icacls &lt;file&gt; /inheritance:r /grant:r "%USERNAME%:R"</code>（或 <code>win32security</code>）显式收紧；或把凭据放到只有服务账户可读的目录并对目录设 ACL；NAS/Linux 档保持 0600 即可。同时把这条写进 <code>README</code> 的权限说明，避免「设了 0600 就安全」的错觉。</div>
+</div>
+</div>
+
+<div class="finding f-low">
+<h3>F-11 <code>af_secrets</code> 声明的「<code>credentials.json</code> 优先」优先级链根本没有实现 <span class="sev s-low">低</span></h3>
+<div class="kv">
+  <div><b>声明。</b><code>af_secrets.py:1-12</code> 的 docstring 写：读取优先级是 <code>credentials.json（af_config 内的文件存储）&gt; secret 文件 &gt; 环境变量</code>；<code>docker-compose.api.yml:34</code> 也照抄了这条链。</div>
+  <div><b>实现。</b><code>load_secret()</code>（<code>af_secrets.py:26-39</code>）只做两段：<b>secret 文件 → 环境变量</b>，整段代码里没有任何 <code>credentials.json</code> 的读取。而 <code>TokenRegistry._load_env()</code>（<code>af_auth.py:165-193</code>）读 <code>AUTOFORGE_API_TOKEN</code> / <code>AUTOFORGE_TOKENS</code> / <code>AUTOFORGE_REVOKED_TOKENS</code> 用的就是 <code>load_secret</code> ⇒ <b>API 令牌永远不可能来自 <code>credentials.json</code></b>。真正读 <code>credentials.json</code> 的是 <code>af_config</code>，而且只服务 <code>ha_token</code> / <code>api_token</code> 这两个键（<code>af_config.py:93-103</code>）。</div>
+  <div><b>为什么要算一条发现。</b>它属于本轮点名的那一类：「声明了但没接线」比「写错了」更危险 —— 运维会照着文档把令牌写进 <code>credentials.json</code>，然后<b>鉴权静默不生效</b>（甚至更糟：以为配了令牌所以是 fail-closed 的 403，实际因为「一个令牌都没读到」而走进 <code>registry.enabled == False</code> 那条分支）。这不是猜测，<code>docker-compose.api.yml:75-78</code> 的注释就在抱怨一次同族事故（键名写错 ⇒ 值被喂给一个没人读的空位、鉴权照旧失败且不留原因）。</div>
+  <div><b>修复方向。</b>二选一：要么让 <code>load_secret</code> 真的先去问 <code>af_config</code>；要么把两处 docstring 与 compose 注释改成「<code>credentials.json</code> 只服务 HA/API 凭据，令牌只从 secret/环境变量读」。并补一条测试：断言文档里写的每个键名都在代码里有读取点（这个仓已经有 <code>tests/unit/test_compose_env_key_source.py</code> 这类键名同源腿，扩到本条即可）。</div>
+</div>
+</div>
+
+<div class="finding f-low">
+<h3>F-12 同族的文档漂移：旧 docstring 与实现相反 <span class="sev s-low">低</span></h3>
+<table>
+<tr><th>位置</th><th>文档说</th><th>实现是</th></tr>
+<tr><td><code>af_api.py:35</code></td><td>「未配置任何令牌时全站公开（向后兼容原型期局域网使用）」</td><td>已改成 fail-closed：无令牌 ⇒ 403（<code>:370-384</code>）</td></tr>
+<tr><td><code>af_api.py:554</code>、<code>:600</code></td><td><code>/api/store/export</code>「读端点，不强制鉴权」、<code>/api/metrics</code>「读端点不强制鉴权」</td><td>两条都挂了 <code>Depends(_read)</code>（<code>:552</code>、<code>:598</code>）</td></tr>
+<tr><td><code>af_auth.py:480-487</code></td><td>函数名 <code>_rand6</code></td><td>返回 8 位（<code>range(8)</code>），docstring 自己也承认已是 8 位</td></tr>
+<tr><td><code>af_audit.py:3-7</code></td><td>「G1 记录四类必填事件」</td><td><code>ALL_EVENT_TYPES</code> 已有 22 类（<code>:54-77</code>）</td></tr>
+<tr><td><code>af_service.py:2511</code> 附近 / <code>:2503</code></td><td>（<code>P1-19</code> 注释）令牌经环境变量传递</td><td>一致，本次核对通过（列出来是为了说明这一处<b>不是</b>漂移）</td></tr>
+</table>
+<p class="small muted">「漂移」本身不产生漏洞，但它正是 F-11 与专项 §四.1 得以长期存在的土壤：读文档的人会以为某机制生效。建议把这一类收进一条门禁 —— 至少让文档里出现的 env 键名与函数名在代码里有读取点/定义点对账。</p>
+</div>
+
+<h2>四、专项：声明了但没接线的安全机制</h2>
+<p>这一节按任务的第三条线索（「tick 自愈是死代码」）顺藤摸瓜，列出本轮找到的<b>同一类</b>问题：代码/文档宣告存在、代码也实装了、但<b>从未被接进主流程</b>。判据统一用 <code>git grep</code> 全仓找调用点（这会同时覆盖工作区已修改的文件）。</p>
+
+<h3>4.1 <code>tick_watchdog_pass</code>：tick 自愈机制零调用点（已知三条之三，<b>仍然成立</b>）</h3>
+<div class="finding f-high" style="margin-top:8px">
+<div class="kv">
+  <div><b>定义与宣告。</b><code>af_live.py:83-109</code> 定义了 <code>tick_watchdog_pass(*restart=None)</code>，返回 <code>alive/running/held_safe_halt/stopped/restarted/unrecovered</code> 六档，唯一自愈分支是「意外终止」，并明确<b>不重启 SAFE HALT</b>（安全红线）；它还被导出到模块的 <code>__all__</code>（<code>af_live.py:51</code>）。
+  文档把它记成已完成项：<code>docs/ADM联动执行记录-AF.md:180</code> 写「④ tick 线程自愈，区分原因重启（裁定 C）」，并以 <code>tests/unit/test_af_live.py</code> 的三条腿作为证据；
+  <code>af_tick_supervisor.py:222-224</code> 的 docstring 更直接：「主线程 watchdog（<code>af_live.tick_watchdog_pass</code>）<b>仅</b>在意外终止时重启本线程」。</div>
+  <div><b>实际调用点。</b><code>git grep -n tick_watchdog_pass</code> 的全部命中：<code>af_live.py:51</code>（导出清单）、<code>af_live.py:83</code>（定义）、<code>af_tick_supervisor.py:223</code>（docstring 里提到）、<code>docs/ADM联动执行记录-AF.md:180</code>（记账）、<code>tests/unit/test_af_live.py:310/319/327/334</code>（测试）。<b>生产代码里零调用点。</b></div>
+  <div><b>为什么这比「写错了」危险。</b>读代码的人（包括评审、包括未来的自己）看到 docstring 与记账表，会认为「tick 线程有自愈」。事实上<b>没有任何循环在巡检它</b>：<code>_ticker_thread</code>（<code>af_live.py:64</code>）一旦意外退出，没有任何东西会调用 <code>tick_watchdog_pass</code> 去发现并重启它。
+  同时那条安全红线（SAFE HALT 绝不被自愈抵消）是<b>只由单元测试保证的属性</b> —— 单元测试直接调这个函数并断言 <code>calls == []</code>，而生产里根本没有调度者，于是「红线成立」这个结论在真实运行中既无法被触发、也无法被验证。这是典型的「测试绿了、机制不在」的假绿。</div>
+  <div><b>攻击者视角。</b>直接可利用性低（需要先能让 tick 线程意外退出），但后果是<b>静默的可用性塌陷</b>：真机 watch 的 tick 线程死后，服务照常回 200、health 也不一定报，自动化悄悄停摆 —— 对「家居自动化」这类场景，安静地不执行比报错更糟。所以它的准确定性是<b>声明的可用性保证不成立</b>，而不是一个远程漏洞。</div>
+  <div><b>可达性判定。</b><span class="sev s-ok">确定成立</span>（零调用点由 grep 现读确证）。</div>
+  <div><b>修复方向。</b>要么真接线（在 tick 线程的宿主循环/健康巡检里按固定周期调 <code>tick_watchdog_pass(restart=…)</code>，并把返回档位落进 <code>/api/health</code>），要么把 docstring 与记账表改成「本机制位已就绪但未接线」。
+  并对同类做一次<b>结构性扫尾</b>：给所有「已导出但零调用」的公开函数出一张清单（<code>__all__</code> 减去实际引用点），因为这类残留靠读代码发现不了。</div>
+</div>
+</div>
+
+<h3>4.2 <code>af_secrets</code> 的 <code>credentials.json</code> 优先级链</h3>
+<p>见 <b>F-11</b>：声明 <code>credentials.json &gt; secret 文件 &gt; 环境变量</code>，<code>load_secret</code> 只实现后两段，而令牌注册表正是走 <code>load_secret</code> 读的 ⇒ 文档承诺的那条路径对令牌<b>完全不通</b>。</p>
+
+<h3>4.3 扩展路由安装器：写好了，但今天没有挂载</h3>
+<p>见 <b>F-06</b>。<code>af_runtime_plugins.api_handlers/install_api</code>（<code>af_runtime_plugins.py:290-343</code>）与 <code>af_conflict_runtime.install_api</code>（<code>:618-640</code>）都已实装并可挂载，但全仓没有调用点 ⇒ 5 条 <code>/api/conflicts*</code> 与插件端点今天不可达。
+<b>这一条与本轮主题的关系是反向的</b>：它不是「机制没生效」，而是「一台没接线的机器，接线时也不带钥匙」—— 一旦接线，那些路由就是无鉴权路由（详见 F-06 的修复方向：必须在 <code>add_api_route</code> 上补依赖）。</p>
+
+<h3>4.4 接线正确、但需要点名的两处（反例，用来划清边界）</h3>
+<ul>
+  <li><b>MCP 面的默认拒绝是<b>真的</b>接线了。</b><code>_guard()</code>（<code>af_mcp.py:98-120</code>）在 <code>scope is None</code> 时放行、其余情况在无身份时<b>拒绝</b>，并且在「鉴权已配却无法确定合法启动身份」时使用空 scope 的拒绝身份 <code>MCP_NOACCESS</code>（<code>:66-68</code>）；<code>dispatch</code> 每次调用都过 <code>_guard</code>（<code>:955-957</code>），还把 <code>arguments</code> 与 <code>inputSchema</code> 对账（<code>:958-964</code> 的 <code>_undeclared_args</code>）。
+  我特别核对了「HTTP <code>/mcp</code> 挂 <code>write</code> 之后，write 令牌能否越权调 live 工具」—— 不能：工具层按真实令牌主体再判一次 scope，<code>live</code> 工具仍会被拒。这一处是设计-实现同源的样板。</li>
+  <li><b>单写者租约（只读降级）是接线了的，但挂法不一致。</b><code>_write</code> 在降级时被整体替换为 503 阻塞器（<code>af_api.py:441-448</code>），因此绝大多数写端点在降级实例上会被拒；<code>_readonly_guard</code> 另挂在 6 条「不通过 <code>_write</code>」的端点上（<code>build/bind/sim/spec.compile</code> 与 <code>live.run</code>/<code>undo</code>）。
+  <code>/api/user/auth-codes</code> 刻意使用<b>未被重绑</b>的 <code>_write_scope</code>（<code>:426-430</code>），以便降级时仍按「明文只在 write 面」的口径供读 —— 这是<b>有意设计</b>，注释里写清了理由，不算漏。
+  也就是说这条机制不是「中间件统一挂」，而是<b>逐端点手动挂</b>：将来新增写端点如果忘了用 <code>_write</code>，就会在降级实例上被放行。这和 F-06 是同一个失效模式，建议用同一个结构性门禁（遍历路由断言守卫存在）覆盖。</li>
+</ul>
+
+<h2>五、前两轮已知问题的逐条核实</h2>
+<table>
+<tr><th>已知问题（第二轮口径）</th><th>本轮结论</th><th>行号漂移与证据</th></tr>
+<tr>
+  <td><b>① <code>af_api.py:1019-1029</code>：无管理员时 login 兼容模式接受任意凭据</b></td>
+  <td><span class="sev s-crit">仍然存在，且工作区改了签发主体</span></td>
+  <td>工作区位置 <b><code>1020-1038</code></b>（漂移 +1 行）。同一档里 <code>POST /api/auth/register</code>（<code>986-1010</code>）<b>完全没有守卫</b>，等于同一漏洞的第二条入口 —— 而它是本轮<b>运行时实测到的那一条</b>（1.6：200 + 令牌）。工作区把签发主体从 <code>"owner"</code> 改成 <code>body.username</code>：主体落到 <code>_OWNER_SUBJECTS</code>（<code>:259</code>）集合外，<b>真实主人从此只能看到被掩码的授权码清单</b>（功能回退）。详见 <b>F-01</b>。</td>
+</tr>
+<tr>
+  <td><b>② <code>af_api.py:363-373</code>：<code>AF_ALLOW_NOAUTH</code> 可把鉴权整体放行</b></td>
+  <td><span class="sev s-crit">仍然存在，且在工作区被放大成无条件放行</span></td>
+  <td>工作区位置 <b><code>355-404</code></b> 是 <code>requires()</code> 整体，新增的 4 行落在 <b><code>366-369</code></b>（<code>git diff</code> hunk <code>@@ -363,6 +363,10 @@</code> 为证）。<b>HEAD 里这个开关只在 <code>not registry.enabled</code> 分支内生效</b>（那一档本来就是「没配令牌=不设防」的世界），工作区把它提到 <code>registry.enabled</code> 检查之前 ⇒ 已配令牌的正常部署也会开门，72 条带 scope 的端点全部失守。详见 <b>F-02</b>。</td>
+</tr>
+<tr>
+  <td><b>③ <code>tick_watchdog_pass</code> 是死代码</b></td>
+  <td><span class="sev s-high">仍然成立，一行未动</span></td>
+  <td><code>git grep tick_watchdog_pass</code> 命中：<code>af_live.py:51</code>（<code>__all__</code>）、<code>:83</code>（定义）、<code>af_tick_supervisor.py:223</code>（docstring 提及）、<code>docs/ADM联动执行记录-AF.md:180</code>（记账称已完成）、<code>tests/unit/test_af_live.py:310/319/327/334</code>（四条测试腿）。<b>生产代码零调用点</b>，与第二轮结论一致。详见 <b>§4.1</b>。</td>
+</tr>
+</table>
+
+<h2>六、已核实为安全 / 误报排除</h2>
+<p>审计的价值一半在「查过且没问题」。以下都是主动找过、有依据、判定无须上报的面 —— 也标明判定强度。</p>
+<table>
+<tr><th>面</th><th>判定</th><th>依据</th></tr>
+<tr><td>路径穿越 / 任意文件读写</td><td><span class="sev s-ok">安全</span></td><td><code>GraphStore._dir()</code> 白名单 <code>alnum + - _</code>，其余字符一律替换、首尾 <code>_</code> 再 strip（<code>af_store.py:227-230</code>）；<code>../</code>、<code>\</code>、盘符、UNC、<code>%2e%2e</code> 均无法存活；<code>/api/store/export|import</code> 走请求体 JSON，不接路径</td></tr>
+<tr><td>静态托管穿越</td><td><span class="sev s-ok">安全</span></td><td><code>resolve() + is_relative_to(root)</code>（<code>af_api.py:1434-1440</code>），并显式规避了 <code>startswith</code> 把 <code>/mimo</code> 与兄弟目录 <code>/mimo-secret</code> 当同树的陷阱</td></tr>
+<tr><td>命令注入（<code>shell=True</code> / 字符串拼接）</td><td><span class="sev s-ok">安全</span></td><td>全 <code>src</code> 唯一 <code>subprocess</code> 调用点 <code>af_service.py:2550</code>：参数为固定列表、无 <code>shell=True</code>、无字符串拼接、无用户可控可执行文件名（<code>forge</code> 从 PATH 解析）；另有 <code>os.kill(int(pid))</code> 读的是 store 内的 <code>watch.pid</code>，非法内容会被 <code>int()</code> 拒（<code>af_watch.py:270-330</code>）</td></tr>
+<tr><td>CORS</td><td><span class="sev s-ok">安全</span></td><td>默认是显式 localhost 白名单（<code>af_api.py:456-467</code>），不是 <code>*</code>；<code>allow_credentials=True</code> 与显式 origin 组合合法</td></tr>
+<tr><td>令牌 / 口令比较的时序侧信道</td><td><span class="sev s-ok">安全</span></td><td><code>hmac.compare_digest</code> 用于令牌（<code>af_auth.py:281</code>）与用户名/口令哈希（<code>:285</code>、<code>:1150-1155</code>）</td></tr>
+<tr><td>密码存储</td><td><span class="sev s-ok">安全</span></td><td>PBKDF2-HMAC-SHA256，100000 轮、16 字节随机盐、存放 <code>{salt, hash, iterations}</code>，非明文非弱哈希（<code>af_auth.py:1060-1118</code>）</td></tr>
+<tr><td>已签发令牌无界增长</td><td><span class="sev s-ok">安全</span></td><td><code>ISSUED_TTL_S = 86400</code>、<code>MAX_ISSUED = 10000</code>，超出即拒发（<code>af_auth.py:141-146</code>、<code>:417-448</code>）</td></tr>
+<tr><td>机密入仓（<code>.env</code> / store / 前端 env）</td><td><span class="sev s-ok">安全</span></td><td><code>.env</code> 未跟踪、<code>.gitignore:26</code> 已忽略、<code>git log --all -- .env</code> 为空；<code>.forge/</code> 被忽略（<code>:34</code>）；三个 Vite <code>.env.production</code> 只含 <code>VITE_USE_MOCK</code>/<code>VITE_API_BASE</code>，无令牌值；<code>docker/.env.example</code> 只有键名占位<br><span class="muted">（注：仓库根的 <code>issued_tokens*</code> 旁路不在此列 —— 见 F-03）</span></td></tr>
+<tr><td>密钥出现在错误响应里</td><td><span class="sev s-ok">安全</span></td><td>R-57 已接线：完整 traceback 只落服务端日志（<code>af_mcp.py:1017-1019</code>），客户端只收到错误摘要</td></tr>
+<tr><td>损坏文件导致静默重置</td><td><span class="sev s-ok">安全</span></td><td><code>_refuse_when_list_file_unreadable</code>（<code>af_auth.py:520-539</code>）、<code>_persist_issued</code> 拒写（<code>:424-435</code>）、<code>_revoked_poisoned</code> 半读保护 —— 读不出就 fail-closed，不用空集覆盖</td></tr>
+<tr><td>HTTP 请求体的结构注入</td><td><span class="sev s-ok">安全</span></td><td>全部走 Pydantic 模型；IR 过 schema；bundle 导入复算 SHA256 并逐版本校验后才落盘（<code>af_store.py:770-830</code>）</td></tr>
+<tr><td>MQTT 入向（外部收件箱流量反向驱动它）</td><td><span class="sev s-ok">安全</span></td><td>AF 明确禁订 <code>butler/inbox/#</code> 与 <code>butler/inbox/*</code>（<code>af_mqtt_bridge.py:103-108</code>）；<code>af_adapters/inbox.py:110-150</code> 是纯出向投递，失败如实 <code>CallResult.fail</code>，不伪造成功</td></tr>
+<tr><td>MCP 工具面默认拒绝 + 参数对账</td><td><span class="sev s-ok">安全</span></td><td><code>_guard</code>（<code>af_mcp.py:98-120</code>）无身份即拒；拒绝身份 <code>MCP_NOACCESS</code> 空 scope（<code>:66-68</code>）；每次 <code>dispatch</code> 过闸（<code>:955-957</code>）并与 <code>inputSchema</code> 对账（<code>:958-964</code>）。已核对：<code>/mcp</code> 只挂 write 时，<code>live</code> 类工具仍被工具层按真实主体拒掉，<b>write 令牌不能越权到 live</b></td></tr>
+<tr><td>真机下发的闸门</td><td><span class="sev s-ok">安全（四重闸接线完整）</span></td><td>① <code>AUTOFORGE_LIVE_ENABLED=1</code> 服务端开关，默认关（<code>af_service.py:1769</code>、<code>:1780</code>、<code>:1890</code> 回 403）；② <code>live_allow</code> 非空白名单且 IR 写目标必须 ⊆ 白名单（<code>:1896-1898</code>，缺白名单回 400）；③ 请求体 <code>confirm=true</code>（<code>af_api.py:195-201</code>）；④ 端点级 <code>live</code> scope（<code>:815-825</code>）。并且 HA 令牌<b>只从服务端取、绝不从请求体收</b>（<code>af_service.py:1993</code>）；<code>clock</code> 刻意不入 <code>LiveRunBody</code>，防被审计方自己写审计时间（<code>af_api.py:821-822</code>）</td></tr>
+<tr><td>XFF 伪造</td><td><span class="sev s-ok">安全（默认不信任）</span></td><td><code>af_api.py:316-323</code>：只有显式打开 <code>AUTORFORGE_TRUST_PROXY</code> 才采信 <code>X-Forwarded-For</code>。副作用见 F-09</td></tr>
+<tr><td>配对码可离线/在线穷举</td><td><span class="sev s-ok">已缓解</span></td><td>8 位纯数字（10^8 空间，<code>af_auth.py:480-487</code>，上一轮把 6 位判为可 0.5s 穷举并已扩位）+ TTL 300 秒 + 兑换 10 次/分/IP 且超限封 IP 5 分钟（<code>:545-547</code>）⇒ 单 IP 在窗口内仅 50 次机会。残留（无全局计数、兑换默认全权限）已并入 <b>F-05</b></td></tr>
+</table>
+
+<h2>七、未覆盖与限制</h2>
+<ol>
+  <li><b>随工作时间变化。</b>审计期间工作区被另一个进程持续改写（1.6 已给三次不同的 <code>git status</code> 与三个 mtime）。本报告是 2026-10-10 16:37–16:52 的快照；<code>af_service.py</code>、<code>af_mqtt_bridge.py</code>、<code>af_cli.py</code> 的引用可能已随新改动漂移。建议复用时先按 一.1 的 blob 前缀对账。</li>
+  <li><b>逐端点 HTTP 矩阵未跑完。</b>收尾时托管设备无响应（两次超时 + 一次 <code>EXECUTION_ERROR</code>），因此「无令牌 / 错误令牌 / 正确令牌」三档的 403-200 对照、<code>/docs</code> 与 <code>/openapi.json</code> 的可达性、以及 <code>AF_ALLOW_NOAUTH</code> 的放大效应<b>均未实测</b>。标 <span class="sev s-med">码面证据</span> 的判定请按 七.1 的命令自行复核一次（一分钟内可完成）。</li>
+  <li><b>未跑测试。</b>遵守「内存紧张、不跑全量测试」的交代（空闲 1193 MB / 16322 MB）。因此所有「测试是否覆盖」的判断都来自读测试文件，不是执行结果。</li>
+  <li><b>未覆盖的模块。</b>本轮把力气集中在鉴权/授权/暴露/审计这条线上，以下只做了外围确认，内部未逐行审：<code>af_shadow</code> / <code>af_canary</code> / <code>af_premiere</code> / <code>af_evo</code> / <code>af_nl_*</code>（自然语言入口）/ UI 构建产物 / <code>docker/Dockerfile.api</code> / 随仓携带的 <code>homesdk</code> wheel（二进制，未反编译）。</li>
+  <li><b>未审的真实环境。</b>NAS 宿主自身的防火墙、Docker 网络、反代配置、以及 <code>192.168.2.200</code> 上的仓库副本都不在本机，无法确认。本报告关于 compose 暴露面的结论只针对 <code>docker/docker-compose.api.yml</code> 这份仓内文件。</li>
+  <li><b>未做的事（有意）。</b>未读取、比对或回显任何令牌值；未对公开 GitHub 仓库做查询；未修改项目内任何文件；未触发任何真机下发或设备控制。</li>
+</ol>
+
+<h2>八、部署侧加固清单（按性价比排序）</h2>
+<table>
+<tr><th style="width:34px">#</th><th>动作</th><th>挡住什么</th><th>代价</th></tr>
+<tr><td>1</td><td>容器端口从 <code>0.0.0.0:8787</code> 收到 <code>127.0.0.1:8787</code>，前面加反代终结 TLS；只让 DB 机器与主人的设备可达（防火墙白名单）</td><td>F-09（同网段抓包即拿全权限令牌）、F-08 的全部外部可达性</td><td>低（改两行 + 反代配置）</td></tr>
+<tr><td>2</td><td>把 <code>issued_tokens*</code>、<code>*.tmp</code>、<code>*_clean.json</code> 写进 <code>.gitignore</code>，删掉仓库根那两个残留文件，并<b>吊销其中出现过的全部令牌</b></td><td>F-03（一次 <code>git add -A</code> 就把活令牌推去公开仓库）</td><td>低（立即做，且现在是唯一窗口：HEAD 还没推）</td></tr>
+<tr><td>3</td><td>关掉生产档的 <code>/docs</code>、<code>/redoc</code>、<code>/openapi.json</code></td><td>F-08（端点清单与交互式控制台）</td><td>低（三个参数）</td></tr>
+<tr><td>4</td><td>给「首次引导」加真正的准入：一次性引导秘密或本机 TTY 的 <code>forge auth init-admin</code>；删掉 login 的无管理员兼容分支；<code>issue_for_agent</code> 默认 scope 降到 <code>("read",)</code></td><td>F-01（零凭据换全权限，本轮唯一实测成功的接管路径）、F-05 的一半</td><td>中（要动引导流程与前端提示）</td></tr>
+<tr><td>5</td><td>把 <code>AF_ALLOW_NOAUTH</code> 的判据退回 <code>not registry.enabled</code> 分支内部（或加二次确认变量）；顺手把 compose 里对该变量的透传改成注释掉</td><td>F-02（一次 <code>export</code> 就全站裸奔）</td><td>低（回退 4 行）</td></tr>
+<tr><td>6</td><td>写端点统一挂审计依赖：把 <code>subject/scopes</code> 落进 <code>AuditEvent</code> 并持久化（append-only 文件或远端 syslog），<code>/api/store/export</code> 也计入</td><td>F-04（今天做完事查不出谁做的）</td><td>中（要改数据模型 + 落盘位置）</td></tr>
+<tr><td>7</td><td>加一条路由守卫门禁：测试里遍历 <code>app.routes</code>，断言除白名单外每条路由都带鉴权依赖；同一门禁覆盖 <code>_readonly_guard</code> 的挂载一致性</td><td>F-06（接线即漏）、F-04 里那 4 条只有租约守卫的端点、以及将来所有「新端点忘挂守卫」</td><td>低（一个测试 + 一份白名单）</td></tr>
+<tr><td>8</td><td>引入 admin 档；<code>revoke</code>、<code>agents</code> 写、<code>credentials/update</code> 提到 admin</td><td>F-07（任何 write 令牌能锁门）</td><td>中（要动 scope 模型与 UI）</td></tr>
+<tr><td>9</td><td>Windows 侧落盘权限改用 <code>icacls</code> 显式收紧（保留继承对本地进程无效）；Linux/NAS 侧维持 0600</td><td>F-10（凭据实际靠继承 ACL，同用户进程可读）</td><td>低</td></tr>
+<tr><td>10</td><td>把 <code>af_secrets</code> 的优先级链要么实现、要么改文档；并把 <code>af_api.py:35/554/600</code> 等旧 docstring、<code>_rand6</code> 这类过时命名一并订正</td><td>F-11、F-12（照文档配了但机制不生效）</td><td>低（文档/命名为主）</td></tr>
+<tr><td>11</td><td>给 <code>tick_watchdog_pass</code> 做决定：<b>真接线</b>（宿主循环按周期调用，档位落进 <code>/api/health</code>）或<b>改声明</b>（docstring 与 <code>docs/ADM联动执行记录-AF.md:180</code> 都改成「位已就绪、未接线」）</td><td>§4.1（声明的 tick 自愈不存在，故障表现为静默停摆）</td><td>低（二选一，别继续两边不一致）</td></tr>
+<tr><td>12</td><td>配对弹性化：兑换出的令牌默认 <code>read</code>，主人弹窗里显式勾选授权范围；<code>agent_name</code> 在 UI 里按不可信输入转义并标注来源</td><td>F-05（匿名侧可驱动弹窗 + 兑换即全权限）</td><td>中</td></tr>
+</table>
+
+<h2>附录 A：无鉴权端点全清单（15 条 + 3 条内置）</h2>
+<table>
+<tr><th>端点</th><th>位置</th><th>说明</th></tr>
+<tr><td><code>GET /api/health</code></td><td><code>af_api.py:481-484</code></td><td>设计上就该公开</td></tr>
+<tr><td><code>GET /api/auth/whoami</code></td><td><code>:962-967</code></td><td>无身份时回 <b>401</b>（<code>:965-966</code>），自限范围</td></tr>
+<tr><td><code>GET /api/auth/has-admin</code></td><td><code>:981-984</code></td><td>把「store 里有没有管理员」这个状态直接告诉匿名者 ⇒ 成为 F-01 的侦察前置</td></tr>
+<tr><td><b><code>POST /api/auth/register</code></b></td><td><code>:986-1010</code></td><td><b>F-01 入口一</b>：无管理员时签发 read+write+live</td></tr>
+<tr><td><b><code>POST /api/auth/login</code></b></td><td><code>:1012-1038</code></td><td><b>F-01 入口二</b>：无管理员时的兼容分支</td></tr>
+<tr><td><code>POST /api/auth/logout</code></td><td><code>:1040-1047</code></td><td>登出，仅作用于当前令牌</td></tr>
+<tr><td><code>GET /api/auth/me</code></td><td><code>:1049-1055</code></td><td>无身份时回 <b>401</b>（<code>:1052-1053</code>）</td></tr>
+<tr><td><code>GET /api/mcp/pair-request</code></td><td><code>:1108-1136</code></td><td>SSE 推送口；令牌经 <code>?token=</code>（F-09）</td></tr>
+<tr><td><b><code>POST /api/mcp/pair/request</code></b></td><td><code>:1196-1224</code></td><td><b>F-05 入口一</b>：匿名，6 次/分/IP，<code>agent_name</code> 直驱主人 UI</td></tr>
+<tr><td><b><code>POST /api/mcp/pair/redeem</code></b></td><td><code>:1225-1247</code></td><td><b>F-05 入口二</b>：匿名，10 次/分/IP，兑换默认 read+write+live</td></tr>
+<tr><td><b><code>POST /api/build</code></b></td><td><code>:569-574</code></td><td><b>只有 <code>_readonly_guard</code>，没有任何鉴权</b>；IR 校验/编译</td></tr>
+<tr><td><b><code>POST /api/bind</code></b></td><td><code>:577-582</code></td><td>同上；实体占位解析，会触达 HA 侧解析</td></tr>
+<tr><td><b><code>POST /api/sim</code></b></td><td><code>:585-590</code></td><td>同上；<b>仿真入口，零凭据资源耗尽面</b>（事件数有界，但有界 ≠ 不贵）</td></tr>
+<tr><td><b><code>POST /api/spec/compile</code></b></td><td><code>:646-651</code></td><td>同上；自然语言规格编译</td></tr>
+<tr><td><code>GET /{full_path:path}</code></td><td><code>:1409-1448</code></td><td>SPA fallback，<b>只在传了 <code>--ui-dir</code>/<code>--ui-user-dir</code> 时注册</b>（本机探测未传 ⇒ 实际是 14 条）。已阻断 <code>api/</code>、<code>docs</code>、<code>openapi.json</code></td></tr>
+<tr><td><code>GET /docs</code> · <code>GET /redoc</code> · <code>GET /openapi.json</code></td><td>FastAPI 内置</td><td><b>F-08</b>；未显式关闭</td></tr>
+</table>
+<p class="small muted">其余 72 条（30 read / 39 write / 3 live）都需要相应 scope 的 Bearer 令牌。在 <code>AF_ALLOW_NOAUTH</code> 被放大生效时，这 72 条<b>一并</b>变成零凭据可达（F-02）。</p>
+
+<h2>附录 B：一句话给每个发现配的复现入口</h2>
+<table>
+<tr><th>发现</th><th>一分钟复现</th></tr>
+<tr><td>F-01</td><td>清空 store 的 <code>.auth/</code> 后 <code>curl -s -X POST localhost:8787/api/auth/register -H 'Content-Type: application/json' -d '{"username":"x","password":"x1234567"}'</code> ⇒ 期望 200 + token</td></tr>
+<tr><td>F-02</td><td><code>AF_ALLOW_NOAUTH=1 forge serve …</code> 后对 <code>/api/store/export</code> 不带任何头请求 ⇒ 若返回 200 则放大已生效（对照：不设该变量时应 403）</td></tr>
+<tr><td>F-03</td><td><code>git status --porcelain | grep issued_tokens</code> 与 <code>git check-ignore -v issued_tokens.json.tmp</code>（无输出 = 未被忽略）</td></tr>
+<tr><td>F-04</td><td><code>git grep -c audit -- src/autoforge/af_api.py</code>（无命中）与 <code>af_audit.py</code> 里 <code>deque(maxlen=5000)</code></td></tr>
+<tr><td>F-05</td><td>观察 <code>issue_for_agent(subject)</code> 省略 scopes 的调用点，与 <code>:317-319</code> 的默认档对照</td></tr>
+<tr><td>F-06</td><td><code>git grep -n 'add_api_route' -- src/autoforge/af_runtime_plugins.py af_conflict_runtime.py</code>（两处均无 <code>dependencies=</code>）</td></tr>
+<tr><td>F-08</td><td>不带令牌请求 <code>/openapi.json</code> 与 <code>/docs</code></td></tr>
+<tr><td>F-10</td><td>Windows 上对本机任一 <code>.auth/*.json</code> 跑 <code>icacls</code>，可见继承 ACL 而非仅属主可读</td></tr>
+<tr><td>§4.1</td><td><code>git grep -n tick_watchdog_pass</code> ⇒ 除测试与 docstring 外无生产调用点</td></tr>
+</table>
+
+<footer>
+AutoForge 安全与暴露面审计报告 · 第三轮 · 对象 <code>E:\NAS\AutoForge</code> 工作区（HEAD <code>62a859f</code> / <code>af_api.py</code> blob <code>1f517a1</code> / <code>af_auth.py</code> blob <code>1756954</code>）· 审计时点 2026-10-10 16:23–16:52（UTC+8）· 全程只读，未修改任何项目文件；运行时探测仅绑定 127.0.0.1:8791，测毕已停进程并清理临时目录与上一轮计划任务残留。<br>
+本报告不含任何令牌、口令、密钥或连接串的值；所有凭据相关信息均以路径、键名与条目数呈现。
+</footer>
+
+</div>
+</body>
+</html>

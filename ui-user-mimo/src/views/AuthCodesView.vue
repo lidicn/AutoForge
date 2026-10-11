@@ -34,7 +34,20 @@ const progress = computed(() => {
 
 async function copyCode (code: string, key: string) {
   try {
-    await navigator.clipboard.writeText(code)
+    // 优先用现代 Clipboard API（HTTPS 环境）
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(code)
+    } else {
+      // Fallback：HTTP 环境下用 textarea + execCommand
+      const textarea = document.createElement('textarea')
+      textarea.value = code
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
     copiedKey.value = key
     setTimeout(() => { if (copiedKey.value === key) copiedKey.value = null }, 1500)
     message.success('已复制到剪贴板')
@@ -177,6 +190,9 @@ async function revoke (code: string) {
 .short-card { padding: 16px; }
 .since { margin-left: 6px; letter-spacing: 0; text-transform: none; }
 .short-card .halo { margin: 14px 0 12px; }
+/* 授权码是 8 位，覆盖全局 6 列网格 */
+.short-card .cells { grid-template-columns: repeat(8, 1fr); max-width: 420px; }
+.short-card .cell { font-size: 22px; }
 .countdown { display: flex; align-items: center; gap: 10px; }
 .cd { font-size: 22px; font-weight: 600; color: var(--amber); letter-spacing: 0.04em; }
 .cd.hot { color: var(--bad); }
