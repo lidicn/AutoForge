@@ -1155,10 +1155,9 @@ def build_app(
             "requested_by": info.subject if info else "admin",
             "version": _APP_VERSION,
         }
-        tmp_path = _UPDATE_MARKER + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(marker, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, _UPDATE_MARKER)
+        # D-1 修复：改用 atomic_write_text（mkstemp 随机名 + fsync + replace），
+        # 不再用固定名 .tmp + 非原子 check-then-write，避免并发提交时内容交错。
+        atomic_write_text(_UPDATE_MARKER, json.dumps(marker, ensure_ascii=False, indent=2))
 
         # 清除旧结果
         if os.path.isfile(_UPDATE_RESULT):

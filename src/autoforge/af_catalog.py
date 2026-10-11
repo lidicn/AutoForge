@@ -35,6 +35,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 from .af_adapters import DEFAULT_HA_URL, HATransport
 from .af_affordance import affordance_for, domain_of
+from .af_env import env_number
 from .af_flock import FileLock
 from .af_atomic import atomic_write_text
 from .af_store import DEFAULT_STORE_ROOT
@@ -257,8 +258,10 @@ class DeviceCatalog:
         self.ha_token = ha_token if ha_token is not None else os.getenv("AUTOFORGE_HA_TOKEN", "")
         #: 传输层套接超时（秒）：HA 不可达时必须**有界失败**，不能把调用方挂死。
         #: 可用 `AUTOFORGE_HA_TIMEOUT` 覆盖（测试里设很小值即可秒失败）。
-        self.timeout = float(
-            timeout if timeout is not None else os.getenv("AUTOFORGE_HA_TIMEOUT", "10")
+        # C-8 修复：改用 env_number 安全解析，配错值时回落默认 10 并告警，而非启动即 ValueError。
+        self.timeout = (
+            float(timeout) if timeout is not None
+            else env_number("AUTOFORGE_HA_TIMEOUT", 10.0, lo=0.1, hi=300.0)
         )
         #: `(mtime, size) -> parsed catalog`，防止 O(N) 次调用重复读盘解析
         self._cache: tuple[float, int, dict[str, Any]] | None = None

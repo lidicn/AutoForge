@@ -63,6 +63,9 @@ class TriggerHistory:
     def __init__(self, persist_dir: str | None = None) -> None:
         self.persist_dir = persist_dir
         self._events: dict[str, list[dict]] = {}
+        # C-3 修复：每个自动化保留最近 1000 条触发记录，防止常驻进程单调增长。
+        # 预测器 learn 只需近期历史，过老数据无价值且占内存/磁盘。
+        self._max_events_per_automation = 1000
         self._load()
 
     @property
@@ -100,7 +103,11 @@ class TriggerHistory:
         rec: dict[str, Any] = {"at": _iso(at)}
         if state is not None:
             rec["state"] = {str(k): str(v) for k, v in state.items()}
-        self._events.setdefault(automation_id, []).append(rec)
+        rows = self._events.setdefault(automation_id, [])
+        rows.append(rec)
+        # C-3 修复：超过上限时裁剪最旧的记录，保持最近 N 条。
+        if len(rows) > self._max_events_per_automation:
+            del rows[: len(rows) - self._max_events_per_automation]
         self._save()
 
     # 持久化 ─────────────────────────────────────────────────────
