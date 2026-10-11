@@ -10105,5 +10105,8 @@ M1 摘掉 sink 传参、M2 撤销脱敏、M3 吞掉写失败、M4 去掉裁剪�
   `af_api.py:984`／`:1005` 两枚 `fake-ok-const`（登录线在途文件，非本批射程；同一张表另有 78 枚存量计数未动）。
   本批新增的两行 `typer.echo`（成功走 stdout、⚠️ 走 stderr）**没有**进可观测性门的计数：那一跑仍是
   149 站点／23 枚具名码／24 站点，与 §二之一百一十六 逐字相同。
-- commit ／远端读数：**待提交后补记**。
+- commit `f181533`（`git show --stat HEAD` 现读 7 files changed／675 insertions／31 deletions；已推
+  `origin/master:main` ⇒ `b11fba0..f181533`，`git push` RC=0；`git ls-remote origin refs/heads/main` 自证
+  `f181533cadc690e9e4ecdccd5da4a95d7586c0de`）。本小节那三格远端读数由紧随其后的记账提交补进本文件，
+  所以本文件里出现的 `f181533` 是**上一枚提交**的哈希，不是本提交自己的——这一格按 §二之一百一十六 同一写法承认。
 
