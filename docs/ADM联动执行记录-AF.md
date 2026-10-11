@@ -10634,6 +10634,7 @@ fix = {'text_layer_node_kinds': ['on','if','do','ask','wait','set','pass'],
 `python scripts/check_oneshot_layout.py .` ⇒ **RC=0**，读数行原文：
 `读数：入库面 785 个文件／根目录 \`.py\` 0 个／单下划线脚本 0 枚／\`scripts/oneshot/\` 5 个／存量登记 0 条（上限 0）／迁移记录 4 行`
 ⇒ `✓ 仓库根没有一次性脚本，一次性件在 \`scripts/oneshot/\`，登记面与入库面逐行对上`。
+⚠️ 那个 **785 是暂存本批判据文件之前**的现读；`git add tests/unit/test_oneshot_layout_gate.py` 后同一行读 **786**（第四遍 `gates.sh` 实测，见 §七）。这个总数**不是判据**（门对撞的是 `scripts/oneshot/` 的 5 个与根目录 0 枚），写在这里是为了让下一个人不把 785 当锚点。
 
 ### 四、单测腿
 
@@ -10659,6 +10660,8 @@ fix = {'text_layer_node_kinds': ['on','if','do','ask','wait','set','pass'],
 - `bash -n gates.sh` ⇒ **RC=0**；CR 三面皆 **0**（工作树／`git show :gates.sh`／`git show HEAD:gates.sh`，`tr -dc '\r' | wc -c` 量）。
 - 卫生门的**结论块排在 owner 主体门之前**（`gates.sh:582` vs `:590`）——主体门按裁定今天就红，排在它后面本门就永远没有说话的机会。
 - 两遍跑（记账前）：a／b 均 **RC=1、12092 B、md5 `e93631303df44db09970b7fd9f3434ac`**，`diff` 输出为空。
+- 第三遍（两份 docs 记账＋对账文档补句全部落盘后）：**RC=1、12092 B、md5 与 a／b 逐字节相同**（存证 `E:\tmp\gates_arch08_c.txt`）⇒ "记账面不在任何门射程"这一句是**实测**出来的，不是推导。
+- **第四遍（本批新判据文件 `git add` 之后）**：**RC=1、12092 B**，与 c 遍**只差一行**（`diff` ⇒ 第 88 行，`偏移 10670`）：卫生门那行自报的「入库面 **785** 个文件」变「**786**」——新判据文件进了索引，计数自然 +1；其余全部字符等长且逐字节相同 ⇒ 解释得完。⚠️ 这个数**没有被任何判据钉住**（清单 §一／§二 里没有它，门只把 `scripts/oneshot/` 的 5 个与根目录 0 枚拿去对撞），所以 c 遍"逐字节相同"的结论与本遍的"差一行"不矛盾：前者证"记账散文不在射程"，后者证"入库面计数进射程只以登记项为准，不以总数为准"。
 - **读数漂移逐行解释**：§二之一百二十一 记的 11680 B／`46ca8fb5…` 与今天不同代（中间落了 §一百十八／§一百十九／§一百二十一 三批）。拿存证里可比的那份 `E:\tmp\gates_q3_c.txt`（10407 B）逐行 diff：13 处单行变更＋1 段新增，其中 12 处归那三批（`src/` 多了 `af_alert.py` ⇒ 各门扫描计数 102→103、undefined-name 224→230、状态落盘 51→52；进程模型生命周期 4→5 枚、同步原语 34→35；可观测性留痕 146→156、具名码 21→29；有界缓存注册表 3→4 项、容器 129→131；覆盖门 `check_*.py` 25→27、echo 文案 83→89 行——这两处由 §一百十九 与本批各加一枚门各占一半）；**归本批的只有卫生门那 3 行＋空行 = 399 B**（`sed -n '87,90p' | wc -c` 现读）。
 - 今天让链退 1 的仍是 **AST 门**：`fake-ok-const` `af_api.py:984`／`:1005`（登录线在途），新增/未获批 2、存量 95 被基线吸收、全量 97／上限 97——本批**没碰账本、没写豁免、没抬上限**。owner 主体门三条红（A `:1175`／B `:1181`／B `:1188`）按裁定 §3 Q1 丙是**预期红**，且因链在 AST 门就 exit，本批不改变它今天不影响 RC 这一事实。
 
@@ -10674,10 +10677,17 @@ fix = {'text_layer_node_kinds': ['on','if','do','ask','wait','set','pass'],
 
 ### 十、存证（`E:\tmp`，不进仓）
 
-`af_oneshot_legs.txt` md5 `2a9badf0f421897079c0dab9f0b6f4a1`／`gates_arch08_a.txt`＝`gates_arch08_b.txt` md5 `e93631303df44db09970b7fd9f3434ac`／`oneshot_mutation_driver.sh` md5 `cd0c9a675becdff0e90084716da45c51`／`af_oneshot_base`·`af_oneshot_legs`（18 份副本树，跑完可弃）／`af_head_auth`（纯 HEAD 对撞树）。
+`af_oneshot_legs.txt` md5 `2a9badf0f421897079c0dab9f0b6f4a1`／`gates_arch08_a.txt`＝`gates_arch08_b.txt`＝`gates_arch08_c.txt` md5 `e93631303df44db09970b7fd9f3434ac`（三遍 12092 B 逐字节相同；c 遍在两份 docs 记账落盘后跑）／`gates_arch08_d.txt` 12092 B（第四遍，与 c 遍只差第 88 行的 785→786，逐行解释在 §七）／`oneshot_mutation_driver.sh` md5 `cd0c9a675becdff0e90084716da45c51`／`af_oneshot_base`·`af_oneshot_legs`（18 份副本树，跑完可弃）／`af_head_auth`（纯 HEAD 对撞树）。
 
 ### 十一、归档判定（只动一句话，不夸口）
 
 ARCH-08 从本批起算**已收口**（判据在场且 18 腿变异自证过）。但 `AutoForge审计报告.html` **仍不移入 `docs/audit/归档`**：ARCH-10 的并发／生命周期运行期腿未收 ⇒ 对账文档 §二 那句维持，残余从两条减为一条。⛔ 不写"第六轮架构审计全部闭环"。
+
+### 十二、提交态现读与两处订正（写于第一枚提交之后）
+
+- **第一枚**：`git commit` ⇒ **`648f03b`**，`git show --stat` 现读 **12 files changed, 881 insertions(+), 3 deletions(-)**。批前 HEAD `8ce85a1`（＝当时的 `origin/main`）。暂存面逐枚＝新门／新清单／新判据／`gates.sh`／`scripts/oneshot/` 五份（4 份 R100＋新 README）／两份记账＋对账文档补句。**并发在途四格（`af_api.py`／`af_auth.py`／`docker/docker-compose.api.yml`／`ui-user-mimo/*`）与 `docs/audit/参考/FFL-200题测试提示词.md`、`docs/ADM联动执行计划-AF.md` 一条没暂存**；仓根那四枚未跟踪产物与三枚审计 HTML 一个没删、没入库。
+- **订正①（归属）**：本批 §十九 那行一度把「README 2 处死链」写进本批改动面——⛔ 不实，那两行早已由 `c1c362f` 落仓；本批对 ARCH-08 只动了对账文档那一行的定性（改成"下一批已收口"）与 §二 归档判定。已就地改掉，不靠"下一批再说"。
+- **订正②（读数的遍数）**：§十九 原写"两遍逐字节相同"，实际按步 6 在记账后又跑了第三遍且逐字节相同（见 §七 第三枚子弹），已改成"三遍"并写明第三遍的时序。
+- **第二枚**＝本批记账校正（§七 的第三／第四遍读数与逐行解释、§三 的 785→786 注、§十 存证补一份、§十九 那行的两处归属订正与遍数），落 `docs/ADM联动执行记录-AF.md` ＋ `docs/architecture/AF完整架构与运行时说明.md` 两份。
 
 
