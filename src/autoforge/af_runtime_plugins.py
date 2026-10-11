@@ -329,7 +329,8 @@ def install_api(app: Any, ext: RuntimeExtensions) -> bool:
                 app.add_api_route(path, endpoint, methods=[method])
                 mounted = True
         except Exception:
-            pass
+            # BUG-L2 修复：端点注册失败不得静默 pass，否则服务启动但缺端点，排障时无痕迹。
+            logger.warning("扩展模块 %s 的 conf 分级引擎端点注册失败", op, exc_info=True)
 
     # 冲突仲裁器端点
     if ext.conflict is not None:
@@ -338,6 +339,7 @@ def install_api(app: Any, ext: RuntimeExtensions) -> bool:
             _conflict_install(app, ext.conflict)
             mounted = True
         except Exception:
-            pass
+            # BUG-L2 修复：同上，冲突仲裁器端点注册失败需留痕。
+            logger.warning("扩展模块 %s 的冲突仲裁器端点注册失败", op, exc_info=True)
 
     return mounted

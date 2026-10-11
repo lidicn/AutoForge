@@ -48,6 +48,7 @@ FastAPI 自带 `/docs`（Swagger UI）与 `/openapi.json`，可直接作为前�
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 import warnings
@@ -86,6 +87,8 @@ from .af_env import env_int
 from .af_store import ArchiveNameConflict, ArchiveOwnerUnknown, GraphStore
 
 __all__ = ["build_app"]
+
+logger = logging.getLogger("autoforge.api")
 
 #: Bearer 令牌提取（auto_error=False：缺失时不报错，交由鉴权依赖决定）
 _bearer = HTTPBearer(auto_error=False)
@@ -678,7 +681,10 @@ def build_app(
             data = json.loads(sc.read_text(encoding="utf-8"))
             return {"ok": True, "asks": data.get("asks", []), "ts": data.get("ts", 0)}
         except Exception:
-            return {"ok": True, "asks": []}
+            # BUG-L1 修复：读失败不得静默返回 asks:[]，否则调用方把"读失败"当"无待答"，提问被静默丢失。
+            # 写侧 af_live.py 已有 logger.warning，读侧补对等留痕 + ok=False 让调用方能区分。
+            logger.warning("pending_asks 读失败，返回 ok=False 而非空列表", exc_info=True)
+            return {"ok": False, "asks": [], "error": "read_failed"}
 
     # 暴露 ask 节点的原生控件元数据（供前端渲染下拉/滑杆/时间轴等）
     @app.get("/api/asks/{name}", dependencies=[Depends(_read)])
