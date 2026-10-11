@@ -9959,3 +9959,20 @@ M1 摘掉 sink 传参、M2 撤销脱敏、M3 吞掉写失败、M4 去掉裁剪�
 - 任务 #120 收这一件；#79（登录线窗内）新增一格「Q13 的 HTTP／`stats()` 脸告示挂载」。
 - `docs/audit/AutoForge审计报告.html` §ARCH-07 那格的口径更新在 `docs/可观测性清单.md` §六／§七，不在本报告里改写。
 
+### 七、提交与远端读数（本提交之后补记）
+
+- 暂存面逐条核过：只 `git add --` 七份本批文件（`src/autoforge/af_audit.py`／`src/autoforge/af_apply.py`／
+  `docs/可观测性清单.md`／本文件／`docs/architecture/AF完整架构与运行时说明.md`／
+  `tests/unit/test_deploy_audit_persistence.py`／`tests/unit/test_observability_gate.py`），
+  `git status --porcelain` 里并发登录线的 `af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`／
+  `docs/ADM联动执行计划-AF.md`／`docs/audit/参考/FFL-200题测试提示词.md` 全部保持左列空白（未暂存），四份仓根未跟踪产物未动。
+  ⛔ 全程没有用 `git add -A`。
+- 提交前重跑命名判据（`gates.sh` 不跑 pytest，仓内判据要单独点名才不作哑红）：
+  `…Python313\python.exe -m pytest tests/unit/test_deploy_audit_persistence.py tests/unit/test_observability_gate.py -q`
+  ⇒ **70 passed in 21.08s**，`pytest_rc=0`。
+- `gates.sh` 文档改完之后又跑两遍：四遍（改动前两遍＋改动后两遍）**全部逐字节相同**
+  10412 B／md5 `c4d5465b9ebe54810411dac848893a0e`，`diff` 空；`GATES_RC=1` 的唯一红源仍是
+  `af_api.py:984`／`:1005` 两枚 `fake-ok-const`（登录线在途文件，非本批射程）。
+- commit `479e237`（已推 `origin/master:main`；远端 `refs/heads/main` = `479e237afdcc6b9f3273170092afa518a1867c87`，
+  `git ls-remote origin refs/heads/main` 自证；推送区间 `20af42e..479e237`）。
+
