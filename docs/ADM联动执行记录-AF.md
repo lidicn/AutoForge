@@ -10692,3 +10692,124 @@ ARCH-08 从本批起算**已收口**（判据在场且 18 腿变异自证过）�
 - **推送与远端自证（写于推送之后，故本行不含在上方"四遍"读数的时序内）**：`git push origin master:main` ⇒ `8ce85a1..80e013c  master -> main`（`PUSH_RC=0`）；`git ls-remote origin refs/heads/main` ⇒ `80e013c2ad54cb6b5d5a7d7396bebf8a84bec82e` == `git rev-parse HEAD`。本节的这一行由**第三枚**提交携带（与 §二之一百二十一 同一手法），推上去之后远端会领先本机刚记的那枚 sha 一枚——这是"记账落后于事实一枚"的固有形状，⛔ 不靠把它写进第二枚来消除（第二枚写不了自己之后的读数）。
 
 
+
+## §二之一百二十三 · #118：四枚门的取数面从「混合工作树」改成「入库面快照」，本地读数与 CI 同源
+
+**条目**：AF 名下任务 #118（裁定 `20261011-AF第六轮与第二期审计攒批十三问-裁定.md` §四 开的那族红，§五 扩到 `gates.sh`）。
+
+### 一、复测对撞表（逐条现读，改前）
+
+| CI／本地那一格 | 现读复测 | 分派 |
+|---|---|---|
+| `test_observability_gate::test_real_repo_http_face_readings_are_pinned` `assert 89 == 91` | 本地以**在途工作树**读 `Depends=91`、以**入库面**读 `89`；`docs/可观测性清单.md` 自动段第 94 行写的是 91 | 真缺陷（假期望），本批落码 |
+| 可观测性自动段 4 行漂移 | 入库面复现同一组 4 行：`af_api.py:479/476/461` → `:475/:472/:457` 与 `Depends 91→89` | 同上 |
+| 进程模型 5 处 | 入库面复现 4 行漂移：`af_auth.py:568/764/989/1069` → `:563/:759/:984/:1064` | 同上 |
+| 信任边界两行档位不符 | 入库面复现：`GET /api/user/agents` 清单写 `dep+requires(read)`、现读 `requires(read)`；`DELETE /api/user/agents/{agent_id}` 清单写 `requires(write)+security:HTTPBearer`、现读 `requires(write)` | 同上 |
+| `check_owner_subject.py` 三枚红（`:1170/:1175/:1180`） | 入库面读出**同样的三枚、同样的行号** | ⛔ 不属本批：按设计红（裁定 20261011《八问》§3 Q1 丙，归 #79 窗） |
+
+改前那三份清单的自动段是在并发登录线的在途工作树上生成并提交上去的，所以「本地绿、CI 红」；**根因不是代码缺陷**，是门的取数面没有定义。
+
+### 二、落码（一个取数器 + 四枚门接线）
+
+- 新 `scripts/af_face.py`：`Face.open(root)` 定面、`Face.snapshot(rel_dir)` 出树。名单取 `git ls-files -s -z`（含 stage≠0 冲突条目判红），内容取**一次** `git cat-file --batch` 的裸 blob；CI 上索引即 HEAD ⇒ 两边同源。
+  - ⚠️ 为什么是"一次子进程"而不是逐份 `git show`：本机实测 103 份逐份 **11.50s**（Windows 起进程 ≈110ms/次），一次快照 **2.52s**（＋ `close()` 删临时树 1.45s）。链上跑 20 多枚门，这个差量决定改造可行性。
+  - ⚠️ 为什么用 `cat-file` 而不是更便宜的 `git checkout-index --prefix`（实测 0.35s）：后者会跑**过滤器**——本机把 `core.autocrlf` 改成 `true` 或将来加一条 `.gitattributes`，本地副本就与 CI 的 checkout 在行尾上分家，那正是本模块要消灭的东西；`cat-file` 直读对象库，不过滤器。代价 2.2s/枚门，买的是"与 git 配置无关的字节面"。
+  - ⚠️ 定面用的是 `rev-parse --show-toplevel` **恰等于**取数根，不是 `--is-inside-work-tree`：后者会向上找父目录的 `.git`，而合成树落在 `AppData\Local\Temp\pytest-*`，祖先里只要躺着一枚仓库就会把「假想的小树」读成别人的索引——那比红更坏。这条有反例腿（`test_ancestor_repo_is_not_mistaken_for_own_index`）。
+  - 非仓库 ⇒ 退回磁盘面**且不复制**，`label` 必须进结论行（「读磁盘」不许伪装成「读索引」）。
+- `check_process_model.py`／`check_observability.py`：`_snap(root)` 成唯一取数入口，`_rel()` 走快照（读数字符串不因换面而变，自动段锚点形状因此不动），D/E/F 的 `trees` 键改快照路径，`anchor_ok()` 首步取面、塌了报 `exit 2`，绿行自报取数面。
+- `check_trust_boundary.py`：运行期路由表必须**真导入**包，所以把索引面 `src/` 导出成临时树再 import。本机有一条 `__editable__.autoforge-0.1.0.pth` 指向工作树，会抢在 `sys.path` 前把导入带回在途代码，故三件套：临时摘 `sys.meta_path` 里的 editable finder、清 `sys.modules` 的 `autoforge.*`（用后原样装回）、导入后**逐模块探针自证** `__file__` 落在快照内——落不进去就 `exit 2`，⛔ 不用在途读数冒充入库面。
+- `check_owner_subject.py`：`af_api.py` 与豁免标记同批改读入库面（三枚按设计红的行号因此与 CI 一致）。
+- `gates.sh` **一行未改**：四枚门本就在链上，本批只换门内部的取数面。
+
+### 三、按入库面重生成的三段自动区（`--write` 后重跑）
+
+- `docs/进程模型清单.md`：生命周期 5 枚／原语 35 枚／共享名 9 枚 ⇒ `RC=0`
+- `docs/可观测性清单.md`：留痕 156 站点／具名码 29 枚·31 站点／信封 trace_id 6 枚／射程外 0 枚 ⇒ `RC=0`
+- `docs/信任边界清单.md`：90 条路由（14 条非鉴权档全部在册／2 个未挂载安装器）⇒ `RC=0`
+- 三份清单与四份门 CR=0（`tr -dc '\r' | wc -c` 逐份量）。
+
+### 四、判据腿（新 `tests/unit/test_gate_face.py`，7 条）
+
+合成树族：未暂存的改动**读不到**＋`git add` 后**立刻读到**（正反两面都钉，只测一面会放过「门根本没换面」）／未入库新文件不在射程／祖先有仓时退回磁盘面／空那一层抛 `FaceError` 不读成「干净」。真仓族：`Face.open(REPO).mode==index`／快照内容逐字节 == `git show :src/autoforge/af_api.py`（并反向自证：工作树与索引不同面时，读到工作树即判红）／三门结论行都自报取数面。
+另修两枚既存腿：`test_process_model_gate.py:308` 用 `REPO/CLI_REL` 拼 `trees` 的键（换面后键在快照里 ⇒ `KeyError`）、`test_observability_gate.py:159` 的 `91`→`89`。四份门测试文件合跑 **145 passed／2 failed**（那两条），修后与面腿一起的终值见本节末。
+
+终值（`cat-file` 版落码后现读）：`python -m pytest tests/unit/test_gate_face.py -q` ⇒ **7 passed in 51.51s**；`pytest tests/unit/test_process_model_gate.py tests/unit/test_observability_gate.py tests/unit/test_trust_boundary_gate.py tests/unit/test_owner_subject_gate.py -q` ⇒ **147 passed in 84.29s**。逐字节稳定：四枚门各跑两遍（`E:\tmp\af118_a_*.txt`／`af118_b_*.txt`），`cmp -s` 全部 `byte-identical=YES`，大小与 md5 逐枚为 `check_process_model 296B/81f53b82…`、`check_observability 305B/32a1d5aa…`、`check_trust_boundary 341B/ef1a6ce7…`、`check_owner_subject 1127B/b9cea8a2…`（前三枚 `RC=0`，owner 那枚 `RC=1`＝三枚按设计红）。
+
+### 五、两棵树对撞（本批的变异自证替代形态）
+
+⚠️ **偏差登记，请追认**：本批没有跑 `E:\tmp` 的注入式副本树驱动；改造的是「面」而不是「一条判据」，所以自证换成两棵树对撞 + 上节的合成树正反腿。副本树＝纯 `git archive HEAD`（无 `.git` ⇒ 门自动走磁盘面），它的**现读列**与本批工作树的**入库面读数**逐字相同：`af_auth.py:563/759/984/1064`、`af_api.py:475/472/457`、`Depends=89`、信任边界那两行档位、owner 三枚在 `:1170/:1175/:1180`。⇒「入库面读数 == HEAD 读数」拿到独立复现，且磁盘降级档在真门上端到端跑通。
+
+`cat-file` 版落码后重跑同一棵副本树（`HEAD=4b1ecc7`，先 `cmp` 证过 `git show HEAD:src/autoforge/af_api.py` 与副本树那份逐字节相同），四枚门在磁盘面上把 CI 那三条红**原样读出来**（存证 `E:\tmp\af118_headout_*.txt`）：
+
+```
+check_process_model   RC=1  ✗ 进程模型门禁发现 5 处（自动段 4 行漂移：af_auth.py:568/764/989/1069 → 563/759/984/1064）
+check_observability   RC=1  ✗ 可观测性门禁发现 5 处（af_api.py:479/476/461 → 475/472/457；Depends 91 → 89）
+check_trust_boundary  RC=1  ✗ 信任边界门禁发现 3 处（GET /api/user/agents 与 DELETE /api/user/agents/{agent_id} 两行档位）
+check_owner_subject   RC=1  红：三枚（:1170 字面量名单／:1175 DELETE 缺主体绑定／:1180 PATCH 缺主体绑定）
+```
+
+⇒ 三件事同时成立：① 新的取数器**没有在真门上造假绿**（同一枚门在纯 HEAD 树上仍报出 CI 那三条）；② 磁盘降级档端到端可用；③ owner 那三枚与 CI 行号逐字一致，归属仍是 #79 窗。
+
+### 五之二、本批自己造成并已订正的一格误判（登记为事实，不是辩解）
+
+第一版 `snapshot()` 用 `git checkout-index --prefix`，判据腿 `test_snapshot_bytes_equal_index_blob` 报 **索引 blob 60577 字符／快照读出 59135 字符**，我当场把根因写成「checkout-index 跑了 smudge，把 LF 导出成 CRLF」，并据此换成 `cat-file --batch`。**那句根因是错的**：
+
+- 现读证伪：`git checkout-index -f --prefix=$T/ -- src/autoforge/af_api.py` 之后 `git show :src/autoforge/af_api.py | cmp - $T/…` ⇒ **逐字节相同**（72781 字节／1442 枚 CRLF），本仓 `core.autocrlf=false` 且**没有 `.gitattributes`**；
+- 真根因在**那条腿自己**：它拿 `Snapshot.text()`（`read_text` 走 universal-newline，`\r\n`→`\n`，72781 字节读成 59135 字符）去比 `git show` 原始输出的解码值 60577 字符——比出来的是**行尾归一的差**，不是取数面的差；
+- 处置：腿改成比 `read_bytes`（并另钉一条"`text()` 只许是 blob 的行尾归一形态"），`snapshot()` 仍换成 `cat-file`，但换的理由从"证伪 smudge"改成"**与本地 git 配置无关**"（将来谁把 `autocrlf` 打开或加了 `.gitattributes`，`checkout-index` 那条路就会真的分家）；`af_face.py` 的 docstring 同步写死这条行尾陷阱。
+- 结论：**换面决定保留，写错的根因收回**。仓内 blob 本身是 CRLF 这件事（不是工作树才有 CRLF）也一并记在这儿，供后续批次引用。
+
+### 六、口径代价与残余（不谎称收口）
+
+1. **入库面看不见未暂存的改动**：新写一份违规文件在 `git add` 之前不会被扫到。与本仓既有先例同源（`check_oneshot_layout.py`／`check_pkg_markers.py` 判据口径同为入库面），防的是「进了库的东西」。
+2. **登录线提交时这些行号会再漂一次**，由判据 A 逼着那时重新 `--write`——这是门设计里的成本，不是本批遗漏。
+3. `anchor_ok` 里「依据指向仓内真实存在的文件」那一格仍读磁盘面（登记面），未随本批改；`check_gates_coverage`／其余 `check_*.py` 不在本批射程。
+4. owner 三枚按设计红维持原状，本批不抬 `tally`／不写 `baseline`。
+5. **本批的"本地绿"里有半边仍来自磁盘面**：四枚门把**清单文档**从磁盘读、把**代码**从入库面读。文档一旦改了没 `git add`，本地读到的是改后的那版、CI 读到的是 HEAD 那版 ⇒ 这一缝要靠"文档与代码同批提交"来堵，本批自身遵守（三份清单与四枚门在同一枚提交里）。彻底收法是把文档也走快照，但那会让 `--write` 的写点与读点分家，属口径决定，随下节一起递。
+6. **链上其余门仍读磁盘面**（AST／计数棘轮／undefined-name／卫生门…）⇒ `gates.sh` 的输出今天**两种口径并存**，见 §七 最后一段。逐枚换面不是纯接线活：每枚门要先核对自己的写点（`--write`）与读点是否该同面，故不在本批射程。
+
+### 七、`gates.sh` 整链接两遍（改完两份 docs 之后跑）
+
+```
+GATES_RC=1     12279 B     md5 61b3e66c1d4b1c1eac7351dfef1025c6      ← 遍 a
+GATES_RC=1     12279 B     md5 61b3e66c1d4b1c1eac7351dfef1025c6      ← 遍 b（cmp -s 逐字节相同）
+```
+
+与上一批存证 `E:\tmp\gates_arch08_e.txt`（12092 B／md5 `e93631303df44db09970b7fd9f3434ac`）差 **+187 B／6 行变更＋1 行消失**，逐行解释：
+
+| 那一行 | 差值归属 |
+|---|---|
+| `✓ undefined-name 门禁干净（扫描 230 个文件）`→`231` | 本批新增 `scripts/af_face.py` 进了被扫树（那枚门仍读磁盘面）——与上一批"785→786 同一形状"，非缺陷 |
+| 信任边界／进程模型／可观测性三行绿结论各追加 `；入库面（git 索引；CI 上索引即 HEAD，两边同源）` | **本批设计要的那一格**：降级档只能被这样看见，绿行必须自报面 |
+| owner 三枚红的行号 `:1175/:1181/:1188` → `:1170/:1175/:1180` | **本批的目标**：那枚门从在途工作树换到入库面，行号因此与 CI 逐字一致（对撞表 §一 第五行） |
+| 末行 `GATES_RC=1` 消失 | 上一批那份存证由驱动脚本在重定向**之后**追加了一枚标签行，本批两遍都是裸重定向 ⇒ 差的是标签不是本体 |
+
+链上让 `RC=1` 的红源**一条没变**：AST 门禁两枚 `fake-ok-const`（`af_api.py:984`／`:1005`，登录线在途，那枚门仍读磁盘面）＋ owner 三枚按设计红（归 #79 窗）。计数棘轮 `全量 97 / 上限 97`、`基线内存量 95 条 / 过期 0` 与上一批同一读数——⚠️ 顺带登记一格事实：上一批 §十九 写的是 `98 > 97` 红，而对撞用的那份 e 遍存证已经是 `97/97`，差的那条是 `af_test.py#fake-ok-const#TestChannel.clear` 过期指纹被按门禁自身语义删掉（§二之一百二十二 已记），不属本批。
+
+**代码面提交后再跑第三遍**（`E:\tmp\af118_gates_c.txt`，`GATES_RC=1`，12279 B／md5 `6765cf78b7417adb93025b385a4547cb`）：与遍 a 只差**一行**——卫生门自报的「入库面 786 个文件」→「788 个文件」＝本批两枚新文件（`scripts/af_face.py`＋`tests/unit/test_gate_face.py`）进了索引；那个总数不是判据（判据对撞的是根目录 `.py` 0／单下划线 0／`scripts/oneshot/` 5／存量 0），与 §二之一百二十二 记的"785→786 同一形状"同类。字节数不变是因为该行 786 与 788 同为 3 位。
+
+⚠️ **本批造成的一种新的"混面"必须写明**：链上只有那四枚门换到了入库面，AST／棘轮／undefined-name 等仍读磁盘面 ⇒ 同一份 `gates.sh` 输出里两类读数口径并存。红源归属因此更好判（凡 `af_api.py`/`af_auth.py` 行号在磁盘面读出的都跟在途面有关），但**这不等于整条链同源**；把其余门也换面不在本批射程（每枚门要各自核 `--write` 的写点与读点），已补进 §六 第 6 项。
+
+### 八、⛔ 待递 DCD 追认（本批改的是裁定明确留白的那一格）
+
+裁定 `20261011-AF第六轮与第二期审计攒批十三问-裁定.md` §四 给的修法是两选一（① 真仓腿与门禁一起改跑 `git archive HEAD` 的干净副本树／② 标 CI-only 按 HEAD 口径重钉），并明写「**本件不自决『清单文档该跟哪棵树』**」。本批落的既不是①也不是②，而是第三条路（**入库面快照**：目标与①相同＝本地读数与 CI 同源，能力上多一格"看得见已暂存未提交的东西"）。按《申请DCD决策支援流程》这属于"拿不准两个方案各有道理"＋"动了验证口径"，**必须递追认，不许按意图落、按字面沉默**：
+
+- 申件：`E:\NAS\关键决策部\inbox\20261012-AF-门禁取数面口径-决策申请.md`（三档：甲 入库面快照（本批现状，已落码）／乙 裁定原推荐①＝HEAD 副本树／丙 维持混合工作树＋真仓腿标 CI-only）
+- 递件前需带的证据：本节 §一 对撞表、§五 的两棵树逐字对撞、§六 的口径代价、`af_face.py` docstring 的行尾陷阱段
+- 状态：**未递**（本批收口时只落仓内记账；投递与回执归下一批，#118 在追认落定前不结案）
+
+### 九、存证清单（`E:\tmp`，不进仓）
+
+| 文件 | 内容 | md5 |
+|---|---|---|
+| `af118_a_check_process_model.txt`／`af118_b_…` | 入库面第一遍／第二遍（各 `RC=0`，296 B） | `81f53b822034dfdb30089986b17fd09f`（两遍同值） |
+| `af118_a_check_observability.txt`／`af118_b_…` | 同上（`RC=0`，305 B） | `32a1d5aa68e0c8cf7f116a38033029cc`（两遍同值） |
+| `af118_a_check_trust_boundary.txt`／`af118_b_…` | 同上（`RC=0`，341 B） | `ef1a6ce7e23afc38eb92f46aab2428d8`（两遍同值） |
+| `af118_a_check_owner_subject.txt`／`af118_b_…` | 三枚按设计红（`RC=1`，1127 B） | `b9cea8a261d2e96414a902163a96e76c`（两遍同值） |
+| `af118_headout_check_process_model.txt` | 纯 HEAD 副本树（磁盘面）复现 CI 的 5 处红 | `a3702accda999ad45c67df7022500e5a` |
+| `af118_headout_check_observability.txt` | 同上，5 处（含 `Depends 91→89`） | `92187e820132feb13b7c6d5f4b568ff8` |
+| `af118_headout_check_trust_boundary.txt` | 同上，3 处（两行档位） | `650fa4a91517c4a1ec7737c4e52522e8` |
+| `af118_headout_check_owner_subject.txt` | 与入库面那份**逐字节相同** ⇒ 三枚红两边同源 | `b9cea8a261d2e96414a902163a96e76c` |
+| `af118_gates_a.txt`／`af118_gates_b.txt` | 整链接两遍（`GATES_RC=1`，12279 B，`cmp -s` 相同） | `61b3e66c1d4b1c1eac7351dfef1025c6` |
+| `af118_gates_c.txt` | 代码面提交后的第三遍（12279 B，与 a 只差卫生门那一枚 786→788） | `6765cf78b7417adb93025b385a4547cb` |
+| `af118_head/` | `git archive HEAD` 的纯副本树（无 `.git` ⇒ 磁盘面），`af_api.py` 先 `cmp` 过与 `git show HEAD:` 同字节 | — |
