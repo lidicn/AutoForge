@@ -10605,4 +10605,7 @@ fix = {'text_layer_node_kinds': ['on','if','do','ask','wait','set','pass'],
 **到期日不由 AF 填**——#79 窗的开合在 owner 手里，拿不到日期就不写估计数。
 
 本批改动面：`docs/plan/版本开发计划.md`（新增 §〇之二）＋ 本文件本节 ＋ 架构说明 §十八 第 33 条与 §十九 一行 ＋ 裁定书末尾 `## 执行回填（AF · 2026-10-11 · 第八批…）`。
+- **提交与远端自证（写于提交之后，故本行不含在上方"五遍"读数的时序内）**：`git commit` ⇒ **`1b1ecb2`**（`3 files changed, 101 insertions(+)`，暂存面只有上述三份仓内文件；`docs/ADM联动执行计划-AF.md` 与并发登录线在途四格仍未暂存）；
+  `git push origin master:main` ⇒ `affb5a3..1b1ecb2  master -> main`（`PUSH_RC=0`）；`git ls-remote origin refs/heads/main` ⇒ `1b1ecb2b78ac45a3be38bc7e4f6cbe5ef52a9a6c` == `git rev-parse HEAD`。
+- **裁定书回执校验**：`validate-receipt.ps1 -Path decisions\20261011-AF发布面与镜像可追溯-裁定.md` ⇒ 六项全 ✓、三道硬门通过（命中 2 份 `decisions\` 文件）。
 
