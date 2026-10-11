@@ -9976,3 +9976,134 @@ M1 摘掉 sink 传参、M2 撤销脱敏、M3 吞掉写失败、M4 去掉裁剪�
 - commit `479e237`（已推 `origin/master:main`；远端 `refs/heads/main` = `479e237afdcc6b9f3273170092afa518a1867c87`，
   `git ls-remote origin refs/heads/main` 自证；推送区间 `20af42e..479e237`）。
 
+## §二之一百一十七 · 裁定 20261011 §3 Q7.1＋Q7.2 的仓内半边落地：serve 退出收掉自己拉起过的 watcher；同一批把我上一格写错的「SIGTERM 走回 `finally`」订正掉，并把那一格递成 §六 问 4（2026-10-11）
+
+**依据裁定**：`E:\NAS\关键决策部\decisions\20261011-AF第六轮与第二期审计攒批十三问-裁定.md` §3 Q7.1（进程 supervisor
+归属＝部署面 compose `restart:`，仓内 ⛔ 不自建第二套，**但须补"serve 退出前收子进程"的兜底**）／§3 Q7.2（serve
+要不要信号钩子＝**做**；落码时必须写清「谁来收／停多久／停不完怎么答」三问）。上一条相关记录：§二之百（ARCH-06
+清单＋门，当时明确「没有给任何进程补钩子」，那格等的就是本批）。
+
+### 一、落码前先立的一条约束：不动 `af_service.py` 一行
+
+`stop_watch` 那条链已经是正确的收手段（sidecar `owner` 对 `watch.pid` 核验 → 核验过才 `os.kill(pid,15)` → 按
+`_WATCH_EXIT_WAIT_S`（合计 ≈4.4 秒）退避探协调锁是否真空闲 → 空闲才回收诊断件，`exit_unconfirmed` 时保留现场且
+刻意不升 SIGKILL）。本批**只调用它**，实现落在 `af_cli.py`。原因不是省事：往 `af_service.py` 插行会让
+`check_process_model.py` 的自动段整段行号漂移（§二之一百一十六 已经量过：4 行 → 12 行漂移 → 约 50 处散文锚点要重钉，
+其中一部分在**已归档报告**里），而那个文件族归并发登录线在途改动。⇒ 落点全部在 `af_cli.py`，并且新代码一律放在
+**最后一个已钉锚点之后**（`serve` 尾部），注释块刻意保持 7 行，让 `atexit.register` 仍然停在 `:1488`。
+
+### 二、三条腿的形状
+
+- `reap_watch_child(store_root, readonly, where="")`（`af_cli.py:1505`）：`readonly` 或已收过 ⇒ 返回 `None`；
+  盘上没有 `watch.pid` ⇒ 返回 `None` 且一个文件都不碰（手工 `forge watch` 起的 watcher 本来就没有 PID 文件，
+  `stop_watch` 自己也拒绝对它动刀）；否则调 `af_service.stop_watch(store_root=…)`，成功打一行到 stdout、
+  没干净把 `stop_watch` 那句 `reason`／`error` 原样打到 stderr（serve 的 stderr 就是容器日志）。裁定那三问的答案
+  写进它的 docstring：谁来收＝拿到单写者锁的那个 serve 进程；停多久＝复用既有 ≈4.4 秒退避表，不另立第二套预算；
+  停不完怎么答＝`exit_unconfirmed` 保留 sidecar／PID、不删锁、不升 SIGKILL，那句话原样报出。
+- 腿一 `finally`（`:1497`）：`bridge.stop()` 之后直调，`where="finally"`。
+- 腿二 `atexit`（`:1488`）：`atexit.register(reap_watch_child, store_root, readonly)`——裁定 Q7.2 点名的就是这条腿。
+- 腿三 幂等（`:1502`）：`_SERVE_REAP_DONE = threading.Event()`，两条腿都可能走到，真收只做一次（走两遍＝退出白等
+  一倍预算）。用 Event 不用集合，免得给有界缓存门添新键。
+
+### 三、现读对撞：我上一段刚写进注释里的那句是错的，本批订正并登记缺口
+
+落码时我在 `af_cli.py` 注释与 `check_process_model.py` 判据 F 的说明里都写了「uvicorn 会把 `run()` 之前装的处理器
+存起来、整段服务期间不生效＝死码，所以 SIGTERM 的优雅关闭由 uvicorn 走回判据 D 那个 `finally`」。**那句不成立**，
+现读证据（Python 3.13.7／uvicorn 0.53.0，`…\Python313\Lib\site-packages\uvicorn\server.py`，现读时刻 2026-10-11 01:00）：
+
+- `:45-48` `HANDLED_SIGNALS = (SIGINT, SIGTERM)`，`:49-50` win32 追加 SIGBREAK；
+- `:86` `run()` = `asyncio_run(self.serve(...))`；`:88-90` `serve()` 把 `_serve` **包进** `with self.capture_signals():`；
+- `:334-336` 非主线程 ⇒ 只 `yield` 就走（不接管）；`:339` `original_handlers = {sig: signal.signal(sig, self.handle_exit) …}`；
+- `:342-344` `finally:` 里把处理器**还原成 `run()` 之前那一枚**；
+- `:348-349` 紧接着 `for captured_signal in reversed(self._captured_signals): signal.raise_signal(captured_signal)`；
+- `:351-356` `handle_exit` 记账那枚信号并把 `should_exit` 置真（第二次 SIGINT 才升 `force_exit`）。
+
+于是分信号两样：Ctrl+C 还原到的是 Python 默认处理器 ⇒ 抛 `KeyboardInterrupt` ⇒ 异常正常展开 ⇒ 我的 `finally` 与
+`atexit` 都跑；**SIGTERM（`docker stop`／`kill <pid>`）还原到 SIG_DFL ⇒ 进程当场以 143 死在 `uvicorn.run()` 里面 ⇒
+两条腿都不跑**。⇒ 裁定 Q7.1 那句「serve 退出前收子进程」在 SIGTERM 这一档**今天没有覆盖**，孤儿 watcher 的现状回到
+§三 那两行（下一次 `start_watch` 抢占或人工 `stop_watch` 才发现）。上一段那句「死码」也错在同一个地方：那枚处理器
+恰恰在退出那一刻生效，这正是 Ctrl+C 能走回 `finally` 的机制。
+
+补处理器（只翻旗子、抛异常）能把 SIGTERM 接回 `finally`，代价是**退出状态从 143 变成 0**，而 compose 的 `restart:`
+读的就是退出状态——「被 `docker stop` 停掉」与「自己正常退出」会在部署面上长得一模一样。这一格属运行时契约＋部署面
+语义 ⇒ ⛔ 不自决：登记成 `docs/进程模型清单.md` §六 **问 4**（甲＝装只翻旗子的处理器并接受 143→0；乙＝维持现状；
+丙＝改由部署面兜，`stop_signal`／`stop_grace_period`／entrypoint 包装，那三格本就在 #79 窗里），任务 **#122**，
+随本批写进回执第五批的新问一格。Windows 侧另有一层：`os.kill(pid,15)` 在那边等价强杀、没有优雅语义，所以这条链路的
+真机验收只能在 POSIX（容器／NAS）做，本批不在 Windows 上假装验过。
+
+### 四、门：判据从五条升成六条
+
+- **F（新）**：三件事全 AST 判，不看文本包含——①`af_cli.py` 里 `atexit.register` 的注册对象必须是 `ast.Name`
+  且 `id == "reap_watch_child"`（注册空函数或只印日志的钩子不算）；②`reap_watch_child` 函数体内必须有
+  `_callee(...).endswith("stop_watch")` 的调用（复用那条链，不自己发信号）；③同一函数体内必须有测试式含
+  `readonly` 的 `ast.If`（只读档去收就是误杀别人的子进程）；④注册站点所在函数必须是 `serve`（靠 `_func_map` 判归属）。
+- **D（收紧）**：`uvicorn.run(` 所在 `try` 的 `finalbody` 现在必须**同时**读得出 `bridge.stop()` 与 `reap_watch_child(`。
+  绿色读数那条也改成「serve 收尾／watch SIGTERM／serve 退出兜底三条形状锚点都在」。
+- 计数：生命周期站点 4 → **5**、`atexit.register` 上限 0 → **1**（§四 加了顺序说明：先在 §三 认领、再抬上限，
+  反了会同时吃 B、C 两枚红）、同步原语 33 → **34**（那枚 Event）、模块级共享名 **9 未动**。
+- 读数（命令原文＋现读）：
+  `PYTHONPATH` 无关，直接 `/c/Users/lidicn/AppData/Local/Programs/Python/Python313/python.exe scripts/check_process_model.py`
+  ⇒ **RC=0**，`✓ 进程模型门禁干净（现读生命周期 5 枚全部在册且认领可读；同步原语 34 枚、模块级共享名 9 枚逐行对撞一致；
+  serve 收尾／watch SIGTERM／serve 退出兜底三条形状锚点都在）`；`--write` ⇒ `✓ 已重新生成 … 自动段（生命周期 5 枚／
+  原语 34 枚／共享名 9 枚；手工段未动）`，RC=0。
+
+### 五、判据腿与真机形状
+
+`tests/unit/test_serve_exit_reap.py`（新，8 条）跑**真子进程**：`subprocess.Popen([sys.executable,"-c","while True: sleep"])`
+＋ 手工铺 `watch.pid` 与 `watch.lock.info`（owner 用 `{hostname}-{pid}-cafe1234` 凑足 sidecar 那 8 位十六进制尾），逐条对撞
+真收／只读不收／幂等／无 PID 文件不碰现场／身份不符 `refused_to_kill`＋`pid_mismatch_with_sidecar`／`exit_unconfirmed`
+（把 `_WATCH_EXIT_WAIT_S` 打成空表）保留文件／`stop_watch` 抛异常时不把 serve 打崩、只响一声；最后一条
+`test_serve_installs_the_hook_on_a_real_store` 把 `atexit.register` 本身打桩后**真调 `serve()`**（uvicorn／af_api 给假模块，
+`FileLock` 给假锁），断言注册的恰好一枚钩子＝`(reap_watch_child, [store_root, False])` 且 `finally` 那条腿恰好再调一次
+`where="finally"`。⚠️ 这里有一处实现细节值得记：`import atexit` 在 `serve` 里 ⇒ `af_cli.atexit` 这个模块属性不存在，
+所以桩必须打在真 `atexit` 上，否则 `setattr` 当场红；把桩函数注册进真 `atexit` 又会污染解释器退出队列，所以是
+「打桩 `atexit.register`＋断言记录到的 `(fn, args)`」这一种形状。
+
+`tests/unit/test_process_model_gate.py` 加 7 条 F 腿（删钩子／注册对象换人／挪出 `serve`／收手不经 `stop_watch`／
+去掉 `readonly` 短路／只删 `finally` 那一腿时**F 必须仍然绿**——两判据互不遮蔽）、1 条真仓腿（钩子确实指向那把
+收子进程的手），并把新读数钉死：站点 5、`atexit.register` 计数 1、清单 §四 那行 `atexit.register = 1`、
+登记表 prose→register 腿 5。合跑：`pytest tests/unit/test_process_model_gate.py tests/unit/test_serve_exit_reap.py -q`
+⇒ **49 passed in 27.60s**，RC=0。
+
+### 六、E 盘副本树变异自证（七腿，0 失败）
+
+`/c/Users/lidicn/AppData/Local/Programs/Python/Python313/python.exe /e/NAS/tmp/q7_mutation_driver.py` ⇒ RC=0，逐腿读数：
+
+| 腿 | 注入 | RC | 必须读到 | 结果 |
+|---|---|---|---|---|
+| M0 | 什么都不改（绿基线） | 0 | `进程模型门禁干净` | ✓ |
+| M1 | 删掉 `atexit` 那一腿 | 1 | `F：` | ✓ |
+| M2 | 注册对象换成 `print` | 1 | `不是 \`reap_watch_child\`` | ✓ |
+| M3 | 钩子挪出 `serve`（注册在别的函数里） | 1 | `不在 \`serve\` 里` | ✓ |
+| M4 | 收手不经过 `stop_watch` | 1 | `没有 \`stop_watch(\` 调用` | ✓ |
+| M5 | 去掉 `readonly` 短路 | 1 | `没有按 \`readonly\` 短路` | ✓ |
+| M6 | 删掉 `finally` 那一腿（D 的后半） | 1 | `D：` | ✓ |
+
+每腿都在 `E:\NAS\tmp\q7mut` 的新鲜副本树上做（只拷 `src/autoforge/*.py`＋那份门＋清单＋执行记录），注入前先
+`ast.parse` 验语法、注入后断言锚点真的命中原文，M3 那一腿最初因为 dedent 出错变成 `exit 2`（扫描器射程塌），
+改成「先删再在文件末尾追加一枚带自己 `import atexit` 的函数」才拿到预期的 F 红。
+
+### 七、未落项归属
+
+- SIGTERM 那一档收不到子进程 ⇒ **⛔ 未裁**，`docs/进程模型清单.md` §六 问 4 ＋ 任务 **#122**，随回执第五批递新问；
+  在此之前 §三 两行的「收不到会怎样」与 §六 收尾句都不写"已闭环"。
+- compose 的 `restart:`／`stop_signal`／`stop_grace_period` 三格仍在 **#79** 窗内（`docker/*` 是并发登录线在途文件）。
+- 本批**没碰** `af_api.py`／`af_auth.py`／`docker/*`／`ui-user-mimo/*`／`docs/audit/参考/FFL-200题测试提示词.md`，
+  `docs/ADM联动执行计划-AF.md` 保持未暂存，仓根四份未跟踪产物未动。
+- 任务位：**#121** 本批；**#122** 是那格新问。
+
+### 八、提交与远端读数（本提交之后补记）
+
+- 暂存面逐条核过：只 `git add --` 七份本批文件（`src/autoforge/af_cli.py`／`scripts/check_process_model.py`／
+  `docs/进程模型清单.md`／`tests/unit/test_process_model_gate.py`／新文件 `tests/unit/test_serve_exit_reap.py`／
+  本文件／`docs/architecture/AF完整架构与运行时说明.md`），并发登录线的 `af_api.py`／`af_auth.py`／`docker/*`／
+  `ui-user-mimo/*`／`docs/ADM联动执行计划-AF.md`／`docs/audit/参考/FFL-200题测试提示词.md` 全部保持左列空白。
+  ⛔ 全程没有用 `git add -A`。
+- 文档全部改完之后 `gates.sh` 连跑两遍（`GATES_PYTHON=/c/Users/lidicn/AppData/Local/Programs/Python/Python313/python.exe`）：
+  两遍**逐字节相同**，10434 B／md5 `ce9774f7e16d690f08e80091ddf21a70`，`diff` 空；与本文 §五 那批代码改完之后、
+  记账改动之前那一跑的读数一致（同一 md5）⇒ 记账这三份 docs 没动摇任何门。`GATES_RC=1` 的唯一红源仍是
+  `af_api.py:984`／`:1005` 两枚 `fake-ok-const`（登录线在途文件，非本批射程；同一张表另有 78 枚存量计数未动）。
+  本批新增的两行 `typer.echo`（成功走 stdout、⚠️ 走 stderr）**没有**进可观测性门的计数：那一跑仍是
+  149 站点／23 枚具名码／24 站点，与 §二之一百一十六 逐字相同。
+- commit ／远端读数：**待提交后补记**。
+

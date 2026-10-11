@@ -8,7 +8,8 @@
    `af_pending.py:42` ✓、`af_telemetry.py:48` ✓，但 `af_service.py:851/1549` 现在是 `:853/:1551`，
    serve 单写者租约从 `af_cli.py:1435` 漂到 `:1451`；报告漏点了 `af_service.py` 自己的 3 枚 `FileLock`；
 2. **「全树 `signal.signal` 命中数为 0」今天不成立**：`af_cli.py:631` 装着 SIGTERM 处理器
-   （§二之九十三 那批落的），watch 的优雅收尾因此能走回既有 `finally`；`atexit` 确实仍 0 命中；
+   （§二之九十三 那批落的），watch 的优雅收尾因此能走回既有 `finally`；`atexit` 在复测那天确实 0 命中
+   （2026-10-11 裁定 `20261011…十三问-裁定.md` §3 Q7.2 落地后为 1 枚，钉在判据 F）；
 3. **「没有等价物锁住共享可变状态的归属」成立**——这一格是本批要落的。全树 `global` 改写到的模块级名
    共 9 枚／6 个文件，其中 `af_live.py` 占 3 枚而该模块 `threading.Lock` 数为 **0**；报告说的「漏网点」
    在 tick 状态上是真的。
@@ -16,9 +17,10 @@
 **本门判的是"有没有对账"，不是"有没有竞态"**。9 枚里有 4 枚是写一次的懒加载单例（引用赋值在 GIL 下原子），
 无锁是可接受的现状——门把它们**登记**下来，人不据此判红。到底哪一枚需要锁、要不要给 serve 补停机钩子、
 子进程归谁重启，是运行时语义与部署口径，递 DCD（见清单 §六），不在本门射程内。
+（后两问已由裁定 `20261011-AF第六轮与第二期审计攒批十三问-裁定.md` §3 Q7 裁并落地：重启**归部署面**、
+仓内只补「serve 退出前收子进程」的兜底，钉成判据 D 的后半与判据 F；`af_live` 那三枚 `global` 加锁是 Q7.3。）
 
-五条判据，各自单独可红：
-
+六条判据，各自单独可红：
 - **A 自动段对撞**：`docs/进程模型清单.md` 的自动段（`<!-- AUTO-BEGIN/END -->` 之间）必须逐行等于现读
   的三张表＋一行计数。新增/删除/移动一枚 `Popen`、换一把锁、多一个 `global` 名，都红。
 - **B 默认拒绝**：每一枚生命周期站点（拉起子进程、发信号、装处理器、注册退出钩子）必须在
@@ -28,14 +30,26 @@
 - **C 只减不增**：`## 四、每类上限` 里每个 kind 的登记上限 ≥ 现读。计数下降由 A 逼着人下调上限
   （自动段里的计数行会变），所以 C 只管新增那一侧。
 - **D serve 收尾形状**：`af_cli.py` 里必须存在一个 `try`，其 **body** 含 `uvicorn.run(` 调用、
-  其 **finalbody** 含对 `bridge` 的 `.stop()` 调用。这是「正常关闭与崩溃不再走同一条路径」的现有那一半，
-  报告说它不存在——把它钉成门，改坏了立刻红。
+  其 **finalbody** 同时含对 `bridge` 的 `.stop()` 调用与 `reap_watch_child(` 调用。前半是「正常关闭与
+  崩溃不再走同一条路径」的现有那一半（报告说它不存在），后半是裁定 §3 Q7.1 那句「serve 退出前收子进程」
+  ——两条都钉成门，改坏了立刻红。
 - **E watch SIGTERM 收尾形状**：装 `signal.signal(signal.SIGTERM, …)` 的那个函数体内必须有一个 `try`，
   其 finalbody 同时含 `stop.set()`／`ticker.join(`／`coord.release()`。§二之九十三 的原话是「把 SIGTERM
   接回既有 `finally`」，本判据就是那句的实现面锚点。
+- **F serve 退出兜底形状**（裁定 §3 Q7.2）：`af_cli.py` 里必须同时读得出三件事——①一枚
+  `atexit.register(reap_watch_child, …)`，注册对象必须**指名**那枚收子进程的函数（注册一枚空函数或
+  只印一行日志的钩子不算）；②`reap_watch_child` 函数体内有 `stop_watch(` 调用，也就是复用既有那条
+  「核验身份 → SIGTERM → 等协调锁空闲 → 清诊断件」的链，而不是自己另发一枚信号；③同一函数体内
+  `readonly` 短路存在（只读降级档不可能拉起 watcher，去收就是误杀别人的子进程）。
+  ⛔ 本判据**不要求**在 serve 里再装一枚 `signal.signal(SIGTERM,…)`，但别把原因读反：现读 uvicorn
+  0.53.0 `server.py:343-349` 在出上下文时把处理器**还原成 `run()` 之前那枚**、再 `signal.raise_signal`
+  重投。所以 Ctrl+C（还原到 Python 默认处理器 ⇒ 抛 `KeyboardInterrupt`）走得回判据 D 那个 `finally`，
+  而 SIGTERM 还原到 SIG_DFL ⇒ 进程当场以 143 死在 `uvicorn.run()` **里面**，`finally` 与 `atexit`
+  两条腿都不跑。把它接回来要付退出状态 143→0 的代价（compose `restart:` 读到的语义跟着变），
+  那是运行时契约 ⇒ 不在本门射程，记 `docs/进程模型清单.md` §六 问 4。
 
 射程前提（读不到就 `exit 2`，不许「没有发现」冒充「没有问题」）：`src/autoforge` 不在、任一 `.py`
-解析不了、清单文件不在、自动段标记缺失、§三／§四 标题缺失、`af_cli.py` 读不出（D/E 的射程）、
+解析不了、清单文件不在、自动段标记缺失、§三／§四 标题缺失、`af_cli.py` 读不出（D/F 的射程）、
 登记表一条都解析不出、上限表一条都解析不出、**生命周期站点总数为 0**（全树连一枚 `os.kill` 都扫不出
 ＝扫描器坏了，不是代码干净）。
 
@@ -376,12 +390,15 @@ def serve_teardown_shape(trees: dict[Path, ast.Module], root: Path) -> list[str]
         if "uvicorn.run(" not in body_txt:
             continue
         fin_txt = ast.unparse(node.finalbody)
-        if re.search(r"\bbridge\.stop\(\)|bridge is not None:\s*\n\s*bridge\.stop\(\)", fin_txt):
+        if re.search(r"\bbridge\.stop\(\)|bridge is not None:\s*\n\s*bridge\.stop\(\)", fin_txt) \
+                and "reap_watch_child(" in fin_txt:
             found.append(f"try@{node.lineno}")
     if not found:
         return [
-            "D：`af_cli.py` 里读不出「`uvicorn.run` 所在的 `try` 其 `finally` 停掉桥」这一形状——"
-            "serve 的正常关闭与崩溃又要走同一条路径了（ARCH-06 那一格的现状锚点）"
+            "D：`af_cli.py` 里读不出「`uvicorn.run` 所在的 `try` 其 `finally` 既停桥、又调 `reap_watch_child`」"
+            "这一形状——serve 的正常关闭与崩溃又要走同一条路径了（ARCH-06 那一格的现状锚点），"
+            "而裁定 §3 Q7.1 要的「退出前收子进程」也没了：watcher 是 `start_new_session=True` 起的，"
+            "本进程死了它继续持有协调锁"
         ]
     return []
 
@@ -423,6 +440,63 @@ def watch_sigterm_shape(trees: dict[Path, ast.Module], root: Path) -> list[str]:
                 f"E：`{owner}` 里装了 SIGTERM 处理器，却没有一个 `finally` 同时做 `stop.set()`／`ticker.join(`／"
                 "`coord.release()`——SIGTERM 与 Ctrl+C 不再是同一条收尾路径"
             )
+    return findings
+
+
+def serve_exit_hook_shape(trees: dict[Path, ast.Module], root: Path) -> list[str]:
+    """判据 F：serve 的退出兜底必须**真的接到那把收子进程的手上**（裁定 20261011 §3 Q7.2）。
+
+    只查「有没有 `atexit.register`」是测不出空钩子的：注册一枚只印日志的函数，退出照样留下孤儿
+    watcher。所以这里查的是**指向**——首参必须指名 `reap_watch_child`，而那枚函数体内必须调得到
+    `stop_watch(`、并有 `readonly` 短路。两条都按 **AST 节点**判，不按文本包含判：函数 docstring 里
+    本来就写着「readonly」「停多久」这些词，按文本查会假绿。
+    """
+    p = root / CLI_REL
+    tree = trees.get(p)
+    if tree is None:
+        return [f"F：`{CLI_REL}` 不在解析范围内——serve 退出兜底形状无从判"]
+    hooks = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and _callee(n) == "atexit.register"]
+    if not hooks:
+        return [
+            "F：`af_cli.py` 读不出任何一枚 `atexit.register`——裁定 §3 Q7.2 那条兜底腿没了。"
+            "`finally` 盖住的是抛出链正常展开的那一格，`atexit` 盖的是解释器正常退出的那一格，缺后者就只剩一条腿"
+        ]
+    fmap = _func_map(tree)
+    named = [h for h in hooks
+             if h.args and isinstance(h.args[0], ast.Name) and h.args[0].id == "reap_watch_child"]
+    if not named:
+        return [
+            f"F：`atexit.register` 注册的对象不是 `reap_watch_child`（现读 "
+            f"{[ast.unparse(h.args[0]) if h.args else '<无参>' for h in hooks]}）——"
+            "钩子换成空函数或只印一行日志，serve 退出照样留下孤儿 watcher"
+        ]
+    outside = [fmap.get(id(h), "<module>") for h in named]
+    findings: list[str] = []
+    if not any(f == "serve" for f in outside):
+        findings.append(
+            f"F：那枚 `atexit.register` 不在 `serve` 里（外层函数读出来是 {outside}）——"
+            "钩子注册在别处就不知道该收哪一份 store"
+        )
+    fn = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "reap_watch_child"),
+        None,
+    )
+    if fn is None:
+        findings.append("F：`atexit.register` 指名 `reap_watch_child`，但这个函数在 `af_cli.py` 里读不出来")
+        return findings
+    if not any(isinstance(n, ast.Call) and _callee(n).endswith("stop_watch") for n in ast.walk(fn)):
+        findings.append(
+            "F：`reap_watch_child` 体内没有 `stop_watch(` 调用——自己另发一枚信号就绕过了"
+            "「先按 sidecar 核验 PID 身份、核验不过不杀」那条既有链（§二之一百零六 BUG-06 收的那一格）"
+        )
+    if not any(
+        isinstance(n, ast.If) and "readonly" in ast.unparse(n.test) for n in ast.walk(fn)
+    ):
+        findings.append(
+            "F：`reap_watch_child` 里没有按 `readonly` 短路的分支——只读降级档不可能拉起 watcher，"
+            "去收就是误杀别人的子进程"
+        )
     return findings
 
 
@@ -512,9 +586,10 @@ def check(root: Path) -> tuple[list[str], dict]:
                 f"C：`{kind}` 现读 {n} 枚，§四 登记上限 {ceilings[kind]}——新增必须先过 §三 认领，再抬上限"
             )
 
-    # D / E 收尾形状
+    # D / E / F 收尾形状
     findings.extend(serve_teardown_shape(trees, root))
     findings.extend(watch_sigterm_shape(trees, root))
+    findings.extend(serve_exit_hook_shape(trees, root))
     return findings, info
 
 
@@ -523,7 +598,7 @@ def anchor_ok(root: Path) -> str | None:
         return f"`{PKG_REL}/` 目录不在盘上——本门的射程对象整个消失"
     cli = root / CLI_REL
     if not cli.is_file():
-        return f"`{CLI_REL}` 不在盘上——D／E 两条收尾形状判据没有对象"
+        return f"`{CLI_REL}` 不在盘上——D／F 两条 serve 收尾形状判据没有对象"
     doc_p = root / DOC_REL
     if not doc_p.is_file():
         return f"`{DOC_REL}` 不在盘上——清单本身就是本门的产物"
@@ -603,14 +678,14 @@ def main(argv: list[str]) -> int:
         print(
             "  修法：A 跑 `python scripts/check_process_model.py --write` 重生成自动段（先想清楚该不该动）；"
             "B 给新站点在 §三 补一行 `- `文件:行号` · kind=… · 拉起：… · 收：… · 收不到会怎样：… · 依据：… · 认领：…`，"
-            "过期登记要删；C 先认领再抬 §四 上限；D/E 是把 serve／watch 已有的收尾路径钉住的锚点，"
+            "过期登记要删；C 先认领再抬 §四 上限；D/E/F 是把 serve／watch 已有的收尾路径钉住的锚点，"
             "改坏它的形状请连同本门一起说明，不要顺手删掉 `finally`。"
         )
         return 1
     print(
         f"✓ 进程模型门禁干净（现读生命周期 {info['sites']} 枚全部在册且认领可读；"
         f"同步原语 {info['prims']} 枚、模块级共享名 {info['shared']} 枚逐行对撞一致；"
-        "serve 与 watch 两条收尾形状锚点都在）"
+        "serve 收尾／watch SIGTERM／serve 退出兜底三条形状锚点都在）"
     )
     return 0
 

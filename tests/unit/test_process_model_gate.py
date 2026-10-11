@@ -3,16 +3,17 @@
 
 三条纪律，逐条对应下面真实存在的腿：
 
-1. **真仓绿**：现读的 4 枚生命周期站点、33 枚同步原语、9 枚模块级共享名与 `docs/进程模型清单.md` 逐行对撞，
-   并把几枚**读数本身**钉死（计数行、`af_live` 占 3 枚名且该模块锁数为 0）——"门绿"不等于"门在看"，
+1. **真仓绿**：现读的 5 枚生命周期站点、34 枚同步原语、9 枚模块级共享名与 `docs/进程模型清单.md` 逐行对撞，
+   并把几枚**读数本身**钉死（计数行、`af_live` 占 3 枚名且该模块锁数为 1、其余六枚仍无锁）——"门绿"不等于"门在看"，
    读数钉住才防得住扫描器静默退化；
-2. **每条判据单独可红**：合成树上 B／C／D／E 各注入一枚，红的那条必须带自己的字母前缀；
+2. **每条判据单独可红**：合成树上 B／C／D／E／F 各注入一枚，红的那条必须带自己的字母前缀；
 3. **反空集与"注入未生效"自证**：全树读不出生命周期站点要走 `exit 2`（不许把"扫不到"当"没问题"）；
    每一次变异都断言锚点真的命中了原文，否则整轮绿是假的（§二之九十九 的 MX2 就是栽在这一格）。
 """
 from __future__ import annotations
 
 import importlib.util
+import ast
 import re
 import subprocess
 import sys
@@ -40,18 +41,28 @@ def load_trees(root: Path) -> dict:
     return trees
 
 
-AF_CLI = '''"""合成 serve／watch 两条收尾形状。"""
+AF_CLI = '''"""合成 serve 收尾＋退出兜底／watch 两条收尾形状。"""
+import atexit
 import signal
 import uvicorn
 
 
-def serve(store_root):
+def serve(store_root, readonly):
     bridge = _start_bridge()
+    atexit.register(reap_watch_child, store_root, readonly)
     try:
         uvicorn.run(bridge.app, host="0.0.0.0")
     finally:
         if bridge is not None:
             bridge.stop()
+        reap_watch_child(store_root, readonly, where="finally")
+
+
+def reap_watch_child(store_root, readonly, where=""):
+    if readonly:
+        return None
+    from . import af_service
+    return af_service.stop_watch(store_root=store_root)
 
 
 def watch(stop, ticker, coord):
@@ -67,6 +78,12 @@ def watch(stop, ticker, coord):
         ticker.join(timeout=2.0)
         coord.release()
 '''
+
+#: F 判据在合成树上的三段锚点：改坏任一段都只该让 F 红，所以变异腿按这三段下手。
+FAKE_ATEXIT = "    atexit.register(reap_watch_child, store_root, readonly)\n"
+FAKE_REAP_IN_FINALLY = '        reap_watch_child(store_root, readonly, where="finally")\n'
+FAKE_STOP_WATCH = "    return af_service.stop_watch(store_root=store_root)\n"
+FAKE_READONLY_GUARD = "    if readonly:\n        return None\n"
 
 AF_SERVICE = '''"""合成一条 watch 生命周期线。"""
 import os
@@ -209,13 +226,13 @@ def test_real_repo_lifecycle_counts_pinned():
     assert by["subprocess.Popen"] == 1
     assert by["os.kill"] == 2
     assert by["signal.signal"] == 1
-    assert by["atexit.register"] == 0
+    assert by["atexit.register"] == 1
     assert by["os.fork"] == 0 and by["multiprocessing.Process"] == 0
 
 
 def test_real_repo_counts_line_in_doc():
     doc = (REPO / DOC_REL).read_text(encoding="utf-8")
-    assert "atexit.register=0" in doc and "signal.signal=1" in doc
+    assert "atexit.register=1" in doc and "signal.signal=1" in doc
     assert "os.kill=2" in doc and "subprocess.Popen=1" in doc
 
 
@@ -280,6 +297,25 @@ def test_real_serve_and_watch_shapes_present():
     trees = load_trees(REPO)
     assert cpm.serve_teardown_shape(trees, REPO) == []
     assert cpm.watch_sigterm_shape(trees, REPO) == []
+    assert cpm.serve_exit_hook_shape(trees, REPO) == []
+
+
+def test_real_exit_hook_wired_to_the_reaping_hand():
+    """真仓面把 F 的三段**指向**钉住，而不是只数一数 `atexit` 有没有出现。
+
+    裁定 §3 Q7.2 要的是"退出兜底真的去收子进程"，所以这里逐个现读：钩子必须在 `serve` 里、注册对象
+    必须指名 `reap_watch_child`、那枚函数必须经 `stop_watch` 复用身份核验链。少一段就是另一枚缺陷。
+    """
+    trees = load_trees(REPO)
+    p = REPO / cpm.CLI_REL
+    text = p.read_text(encoding="utf-8")
+    hooks = [n for n in ast.walk(trees[p])
+             if isinstance(n, ast.Call) and cpm._callee(n) == "atexit.register"]
+    assert len(hooks) == 1
+    assert ast.unparse(hooks[0].args[0]) == "reap_watch_child"
+    assert cpm._func_map(trees[p])[id(hooks[0])] == "serve"
+    assert 'reap_watch_child(store_root, readonly, where="finally")' in text   # D 的后半同一把手
+    assert "atexit.register = 1" in (REPO / DOC_REL).read_text(encoding="utf-8")  # §四 上限与现读同级
 
 
 def test_real_doc_states_range_exclusion():
@@ -427,6 +463,63 @@ def test_e_finally_missing_release_red(fake_repo: Path):
     assert "E：" in out and "coord.release" in out
 
 
+#: F 的五枚变异腿按**直接调 `cpm.serve_exit_hook_shape`** 判红，而不是整道门：删掉 `atexit` 那一行
+#: 会顺带让 A／B（站点没了、登记成了过期）一起响，那种混响读不出「F 这一段到底看不看得见」。
+#: 只有第一枚额外跑一次整门，证明 F 确实会汇入总读数（不会红在纸上）。
+
+def test_f_atexit_hook_removed_red(fake_repo: Path):
+    mutate(fake_repo, "src/autoforge/af_cli.py", FAKE_ATEXIT, "")
+    trees = load_trees(fake_repo)
+    findings = cpm.serve_exit_hook_shape(trees, fake_repo)
+    assert findings and findings[0].startswith("F：") and "atexit.register" in findings[0]
+    assert "兜底腿没了" in findings[0]
+    assert "F：" in findings_text(fake_repo)          # 汇入总读数
+    assert run_gate(fake_repo).returncode == 1
+
+
+def test_f_hook_points_at_something_else_red(fake_repo: Path):
+    """注册对象换成 `print`：钩子照样存在、`atexit` 命中数照样是 1，但退出时什么都没收。"""
+    mutate(fake_repo, "src/autoforge/af_cli.py",
+           "atexit.register(reap_watch_child, store_root, readonly)",
+           "atexit.register(print, store_root, readonly)")
+    findings = cpm.serve_exit_hook_shape(load_trees(fake_repo), fake_repo)
+    assert findings and findings[0].startswith("F：")
+    assert "不是 `reap_watch_child`" in findings[0]
+
+
+def test_f_hook_registered_outside_serve_red(fake_repo: Path):
+    """钩子挪进别的函数：它不知道该收哪一份 store（`store_root` 是 serve 的参数）。"""
+    mutate(fake_repo, "src/autoforge/af_cli.py",
+           "def serve(store_root, readonly):\n    bridge = _start_bridge()\n" + FAKE_ATEXIT,
+           "def serve(store_root, readonly):\n    bridge = _start_bridge()\n\n\n"
+           "def elsewhere(store_root, readonly):\n" + FAKE_ATEXIT)
+    findings = cpm.serve_exit_hook_shape(load_trees(fake_repo), fake_repo)
+    assert findings and any("不在 `serve` 里" in f for f in findings)
+
+
+def test_f_hook_target_does_not_reap_red(fake_repo: Path):
+    """`reap_watch_child` 还在、名字还对，但体内不再经 `stop_watch`——自己另发信号就绕过了身份核验。"""
+    mutate(fake_repo, "src/autoforge/af_cli.py", FAKE_STOP_WATCH, '    return print("killed")\n')
+    findings = cpm.serve_exit_hook_shape(load_trees(fake_repo), fake_repo)
+    assert findings and any("没有 `stop_watch(` 调用" in f for f in findings)
+
+
+def test_f_hook_without_readonly_shortcircuit_red(fake_repo: Path):
+    """只读降级档去收＝误杀别人的 watcher：这一格必须单独可红。"""
+    mutate(fake_repo, "src/autoforge/af_cli.py", FAKE_READONLY_GUARD, "")
+    findings = cpm.serve_exit_hook_shape(load_trees(fake_repo), fake_repo)
+    assert findings and any("没有按 `readonly` 短路" in f for f in findings)
+
+
+def test_d_reap_removed_from_finally_red(fake_repo: Path):
+    """D 的后半单独可红，且红只来自 D：`atexit` 那条腿没动，F 必须继续读绿。"""
+    mutate(fake_repo, "src/autoforge/af_cli.py", FAKE_REAP_IN_FINALLY, "")
+    trees = load_trees(fake_repo)
+    findings = cpm.serve_teardown_shape(trees, fake_repo)
+    assert findings and findings[0].startswith("D：") and "reap_watch_child" in findings[0]
+    assert cpm.serve_exit_hook_shape(trees, fake_repo) == []
+
+
 # ── 射程塌了必须 exit 2 ──
 
 def test_exit2_missing_src_dir(fake_repo: Path):
@@ -480,7 +573,8 @@ def test_register_section_turned_to_prose_still_red(fake_repo: Path):
     edit_doc_section(fake_repo, REGISTER, "全部登记改成散文，一行站点键都没有了。")
     out = findings_text(fake_repo)
     assert run_gate(fake_repo).returncode == 1
-    assert out.count("B：生命周期站点") == 4      # 合成树现读正是 4 枚，一枚都没放过
+    assert len(cpm.scan_lifecycle(load_trees(fake_repo), fake_repo)) == 5   # Popen／os.kill×2／signal.signal／atexit
+    assert out.count("B：生命周期站点") == 5      # 合成树现读正是 5 枚，一枚都没放过
 
 
 def test_register_rows_all_malformed_is_range_collapse(fake_repo: Path):

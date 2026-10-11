@@ -1477,11 +1477,68 @@ def serve(
             )
     bridge = _start_linkage_bridge(store_root=store_root)
     install_access_log_token_mask()
+    import atexit
+    # 裁定 20261011 §3 Q7.2 的第二条腿。SIGTERM 这一档**不在这里装处理器**，原因不是「装了不生效」：
+    # 现读 uvicorn 0.53.0 `server.py:89` 把 `_serve` 包进 `capture_signals()`，:339 用 `signal.signal`
+    # 接管 SIGINT／SIGTERM（:45-48），:343-344 出上下文时**还原成 `run()` 之前那枚**，:348-349 再
+    # `signal.raise_signal` 重投。于是 Ctrl+C 走得回下面的 `finally`（还原到的是 Python 默认处理器，
+    # 抛 KeyboardInterrupt），而 SIGTERM 还原到 SIG_DFL，进程当场以 143 死在 `uvicorn.run()` **里面**，
+    # `finally`／`atexit` 两条腿都不跑。补一枚只翻旗子的处理器能把它接回 `finally`，代价是退出状态
+    # 143→0、compose `restart:` 读到的语义跟着变 ⇒ ⛔ 不自决，那格记在 `docs/进程模型清单.md` §六 问 4。
+    atexit.register(reap_watch_child, store_root, readonly)
     try:
         uvicorn.run(app_, host=host, port=port, log_level="info")
     finally:
         if bridge is not None:
             bridge.stop()   # 显式 retained offline：LWT 只覆盖异常断连
+        # 裁定 20261011 §3 Q7.1 的仓内兜底：子进程的**重启**归部署面（compose `restart:`），仓内不
+        # 自建第二套 supervisor；但**收**不能等下一次有人调 `start_watch` 才发现。`start_new_session=True`
+        # 让 watcher 脱离本进程会话，serve 死了它会继续持有协调锁、按档位继续下发动作。
+        reap_watch_child(store_root, readonly, where="finally")
+
+
+#: `finally` 与 `atexit` 两条腿都可能走到，真收只做一次：`stop_watch` 自带 ≈4.4 秒等待预算
+#（`_WATCH_EXIT_WAIT_S`），走两遍就是让退出白等一倍。用 Event 而不是集合，免得给有界缓存门添新键。
+_SERVE_REAP_DONE = threading.Event()
+
+
+def reap_watch_child(store_root: str, readonly: bool, where: str = "") -> dict[str, Any] | None:
+    """serve 退出前收掉本 store 上的 watcher 子进程（裁定 20261011 §3 Q7.1 的仓内那一半）。
+
+    裁定要求同时写清的三问：
+
+    - **谁来收**：拿到单写者锁的那个 serve 进程。`readonly=True` 时 API 层拒绝写操作，本进程不可能
+      拉起过 watcher，所以**一律不收**——去收就是误杀别人的子进程。这一格只「收」不「拉」，重启仍归
+      compose，与「⛔ 不在仓内自建第二套 supervisor」那句不冲突。
+    - **停多久**：复用 `af_service.stop_watch` 的既有退避表（合计 ≈4.4 秒），不另立第二套预算，
+      免得两处说法各走各的；它内部先按 sidecar 的 `owner` 核验 PID，核验不过不发信号。
+    - **停不完怎么答**：`stop_watch` 回 `exit_unconfirmed` 时保留 sidecar／PID 文件、不删锁、**刻意不升
+      SIGKILL**（对方可能正在写持久化），这里把那句话原样打到 stderr——serve 的 stderr 就是容器日志。
+
+    盘上没有 `watch.pid` 痕迹时直接返回 `None` 且一个文件都不碰：手工 `forge watch` 起的 watcher
+    本来就没有 PID 文件，`stop_watch` 自己也拒绝对它动刀。
+    """
+    if readonly or _SERVE_REAP_DONE.is_set():
+        return None
+    if not (Path(store_root) / "watch.pid").exists():
+        return None
+    _SERVE_REAP_DONE.set()
+    from . import af_service
+    try:
+        result = af_service.stop_watch(store_root=str(store_root))
+    except Exception as exc:  # 收尾路径既不许把退出本身打崩，也不许假装收成功了
+        typer.echo(f"⚠️ serve 退出收 watcher 失败（{where or 'exit'}）：{type(exc).__name__}: {exc}", err=True)
+        return None
+    if result.get("ok"):
+        typer.echo(f"· serve 退出：已收掉 watcher（pid={result.get('pid')}，走 {where or 'exit'} 这条腿）")
+    else:
+        typer.echo(
+            f"⚠️ serve 退出没把 watcher 收干净（{where or 'exit'}）："
+            f"reason={result.get('reason') or result.get('exit')} "
+            f"{result.get('error') or result.get('hint') or result.get('why') or ''}",
+            err=True,
+        )
+    return result
 
 
 def _print_stats(runtime: Runtime) -> None:
