@@ -11098,3 +11098,91 @@ E   AssertionError: assert '86736488' in {'********'}
 
 - 行尾自证（两面对撞）：`README.md` 工作树 `CR=337`、`git show HEAD:README.md` 面 `CR=310`，本批净增 27 行 ⇒ 每一行都跟着该文件本来的 CRLF，无混排；`af_config.py` 两面 `233`／`226` 同一算法吻合；新判据文件 `CR=0`（与 `tests/unit` 其余文件同为 LF 面，⛔ 不是"整份重排"那种假绿，`git diff --numstat` 读 `27/0`、`9/2`、`2/2`、`1/1` 而非全文件重写）。
 - 存证（`E:\tmp`，不进仓）：`f10_gates_a.txt`／`f10_gates_b.txt`（各 12279 B，同一枚 md5）。
+
+
+## §二之一百二十六 · 收 20261012 审计包（`E:\NAS\ADM-auditkit\审计报告`）确证的那一格：`start_watch` 的一次性目录只增不减＋`watch.log` 无闸；顺带把自己上一批留下的三格账补平（2026-10-12）
+
+**一句话结论**：这一包里 AF 名下真缺陷只有一族（磁盘卫生，两席各报一次 Medium），其余四枚 headline 现读复核后有两枚是**形态误判**（把"except 返回保守值"读成 fail-open）、一枚已由 F15 收口、一枚行号取的是快照面。落码那一族走的是**清扫器＋身份锚点**而不是报告建议的"收尾时删目录"——删掉 IR 目录就等于删掉 sidecar 的身份锚点，还会和在途启动的对手抢刀。⛔ 本批未执行任何 docker 命令，NAS 在役容器零重建。
+
+### 一、复测对撞表（报告每一句 vs 现读）
+
+| 报告出处 | 报告原话（要点） | 现读（工作树，2026-10-12） | 分派 |
+|---|---|---|---|
+| `审计-a-AutoForge-doubao-butler-memory-agent-ADM-auditkit.md:66`／`汇总审计报告_20261012.md:48,273,549` | [Medium] `af_service.py:2709`＋`2737-2746`：`mkdtemp` 临时目录从不清理＋`watch.log` 追加无上限无轮转 | 确证。修前形状：`tempfile.mkdtemp()`（默认前缀 `tmp`）每调一次起一个新目录、里面只放一份 `deployed_ir.json`，全仓无任何回收路径；`watch.log` 以 `"ab"` 打开、无大小闸 ⇒ 目录与日志双双只增不减 | **① 真缺陷且 AF 职权内 ⇒ 本批落码**（`_reap_stale_watch_scratch`＋`_gate_watch_log`） |
+| `审计-a...:68`／`汇总审计报告_20261012.md:49` | [Low] `Popen` 失败后临时目录/PID 不清理（缺 try/finally） | 确证一半：临时目录那一格是真（失败后目录留在盘上），本批接在 `except` 分支里 `_drop_watch_scratch(scratch)`（`af_service.py:2867`）；**PID 那一格证伪**——sidecar `watch.lock.info` 与协调锁都在 `Popen` 成功之后才写，`Popen` 抛穿时盘上根本没有 PID 可漏 | **① 临时目录落码；PID 半边就地驳回并写明理由** |
+| `AutoForge_round-003_report.md:138-139`／`round-004_report.md:138-139`（规则 `py.except_return_failopen`） | `af_canary.py:103` except 返回 `True`（语义：放行／命中）⇒ fail-open | **证伪（形态误判）**。现读 `af_canary.py:103` 是 `has_drift()` 里 `except UnknownEntity: return True`——`True` 的语义是"**判定有漂移**"⇒ 触发重建、退到保守档，不是放行。把它改成 `False` 才是 fail-open：读不出实体就当"没漂移"，金丝雀静默通过 | **② 报告修法与既有口径相反 ⇒ 驳回**，零落码 |
+| `AutoForge_round-003_report.md:193-194`／`round-004_report.md:193-194` | `af_flock.py:132` except 返回 `True` ⇒ fail-open | **证伪**。现读 `af_flock.py:132` 是 `held_by_other()` 里抢锁失败分支的 `return True`——`True` 的语义是"**这把锁别人拿着**"⇒ 不去动那个 PID／不重复起 watcher。返回 `False` 才是放行侧 | **② 驳回**，零落码 |
+| `九项目审计汇总报告_20261012_CodeBuddy审计席.md:125` | 出站调用无超时 10 处（`af_orchestrator.py:2325`、`scripts/af_face.py:63,103` 等），常驻服务 half-open 会永久阻塞 | 这一族 F15 已收口：仓内有专门 `scripts/check_outbound_guard.py`，本批 `gates.sh` 链跑到并绿（遍 c 全文在存证里）⇒ 出向站点要么带超时要么在册 | **② 已由既有判据覆盖 ⇒ 不重开** |
+| `九项目审计汇总报告_20261012_CodeBuddy审计席.md:68,226`（X3） | `/api/asks/answer` 自签自验，"管家密钥填错必被拒"预期失效 | 确证为真，但落点在 `src/autoforge/af_api.py:928` 一枚——该文件是常年在途的登录线，本批**不碰**（并发在途名单） | **④ 真缺陷但跨面 ⇒ 挂 #79 窗**，本批不落码 |
+| `AutoForge_round-004_report.md:143`（`py.json_parse_unguarded`） | `af_cli.py:1062` `_metrics_snapshot` 循环内裸 JSON 解析，一条脏数据中断整批 | 行号取的是 zip 快照面：现读 `af_cli.py:1062` 是 `typer.echo(render_graph(graph).text)`，函数真身在 `:1078`，循环内那一枚 `json.loads` 在 `:1090`。形状属实但面是一次性 CLI（读自己写的 `events` 文件、抛穿就是响亮 traceback，不是静默损坏），按 §二之八十五"响亮失败优于静默"与"收益 <5% 默认不做" ⇒ 本批不落码 | **④ 登记为残余**，随 #99／#113 的复测队列处理 |
+
+⇒ 四枚 headline 里两枚被现读推翻（`has_drift`／`held_by_other` 的 `True` 都是保守侧，不是放行侧），一枚已被既有门覆盖，一枚落在 #79 窗。**本批只落磁盘卫生那一族**，这一点必须写清，免得下一个读包的人以为 AF 名下有四处"未修"。
+
+### 二、落码（`src/autoforge/af_service.py`，＋124／−2）
+
+- 四枚模块常量（单一真源，判据腿 D1 钉的就是"别处不许再抄一份数字"）：`WATCH_IR_PREFIX = "watch-ir-"`（`:2678`）、`WATCH_IR_FILENAME = "deployed_ir.json"`（`:2679`）、`WATCH_SCRATCH_MIN_AGE_S = 60.0`（`:2682`）、`WATCH_LOG_MAX_BYTES = 8 * 1024 * 1024`（`:2685`）。年龄下限不拍脑袋：`_WATCH_PROBE_DELAYS_S` 退避表合计 ≈11.9 s，取 **5 倍余量** ⇒ 清扫器绝不碰一个正在启动窗口里的目录。
+- `_reap_stale_watch_scratch(root, keep_graph, *, now=None)`（`:2688`）：只扫 `watch-ir-*` 前缀；跳过 sidecar 所在目录（`keep_graph` 的父目录——**那是身份锚点，不是垃圾**）；跳过年龄不足者；**只删"目录里恰好只有 `deployed_ir.json`"那一格形状**（F12 口径：归属未知不再放行，别的形状一律 `WATCH_SCRATCH_SHAPE_FOREIGN` 出声不删）；glob／unlink／rmdir 三档失败各一枚具名码。
+- `_drop_watch_scratch(scratch)`（`:2737`）：启动失败路径的配套回收，`OSError` ⇒ WARNING 且**返回 False 绝不抛穿**——回收失败不能把一次启动的返回值改成崩溃。
+- `_gate_watch_log(root)`（`:2752`）：`watch.log` 超 `8 MiB` 才轮转一档（旧那份 `watch.log.1` 先删再改名），失败只出声、不拦启动。轮转的语义是**丢掉一档日志**，所以成功那一手按 WARNING（`WATCH_LOG_ROTATED`）而不是 INFO。
+- 接线（`start_watch` 内）：`:2825` **先扫旧再建新**（顺序本身就是判据 A1）；`:2856` `_gate_watch_log(root)` 排在 `open("ab")` 之前（判据 A3）；`:2867` `except` 分支里 `_drop_watch_scratch(scratch)`（判据 A4）。
+- 轮转那一手的 `log.rename(backup)`（`:2770`）被原子写门的"替换脸"判据扫到，走的是门自己给的**就地豁免**通道并写满理由（搬运的是已写完的整份日志，不存在截断窗口，正名由本次启动独占开新）——⛔ 没有动 `.atomic-write-baseline.txt` 一个字节，基线只减不增那条口径不因本批而松。
+
+### 三、判据腿／变异自证／门禁对撞
+
+- 判据文件 `tests/unit/test_watch_scratch_space.py`（新，307 行，LF）：A 族形状腿（A1 扫旧先于建新、A2 `mkdtemp` 的 `prefix` 必须是那个常量、A3 `_gate_watch_log` 的**调用点**行号必须早于 `.open` 站点、A4 失败分支里必须有 `_drop_watch_scratch`）、D 族常量单源（D1 上限与年龄下限、D2 清扫器只有一枚 `.glob` 且图案必经常量）、B 族行为腿 11 枚（陈旧目录删／sidecar 留／太新留／异形留／`tmp*` 不碰／glob 塌回 0／drop 成对／drop 失败回 False／超限轮转／未超限不动／改名被挡时出声／无日志文件静默／端到端 `start_watch` 在 `Popen` 抛异常时把陈旧目录扫干净且零 `watch-ir-*` 残留）、C 族反空集两枚（C1 把修前形状种回去必须被四条形状判据逐一咬住，C2 三枚 helper 必须既定义又被 `start_watch` 调用）。
+  **现读**：`python -m pytest tests/unit/test_watch_scratch_space.py -q` ⇒ **19 passed in 2.53s**；与原子写／进程模型两族合跑 ⇒ **104 passed, 1 skipped**。
+  A3 那一枚本批改过才可信：原判据写 `"_gate_watch_log" in _call_names(c)`，`ast.walk` 会把**外层 FunctionDef** 也交出来，其 `lineno` 是 `def` 那一行 ⇒ `min(gate)` 永远最小，变异 M3 跑成绿（假绿）。修成 `isinstance(c, ast.Call) and ast.unparse(c.func) == "_gate_watch_log"` 之后 M3 才红。坑写进那一枚的注释里。
+- 变异自证（副本树 `E:\tmp\af129_mut`，`git archive HEAD` 导出，驱动 `drive.py` md5 `4161e1c8eaf2793c3913938d9fc785e2`）：**9/9 腿符合预期**——M0（什么都不改）与 MZ99（同义改写）`RC=0`，M1–M7（逐判据注入）`RC=1`；每腿带"注入未生效就 FAIL"护栏（比对注入前后 src 与文档逐字节未变）。MZ99 第一次是红的，因为 D2 过拟合到内联 f-string 那一形，改成经一跳 `ast.Assign` 解析变量之后转绿——**那是门写错了不是代码写错了**，按纪律修门。
+- 清单与门：
+  - `docs/进程模型清单.md` 自动段重生成（生命周期 5 枚／原语 35 枚／共享名 9 枚），手工段 §三 两枚行号重钉 `:2704→:2820`、`:2738→:2858`（差 116 行是本批插入的三枚 helper）；`python scripts/check_process_model.py` ⇒ **RC=0，结论行"进程模型门禁干净"**。
+  - `docs/可观测性清单.md` 自动段重生成（168 站点／31 文件；具名码 37 枚／40 站点；无码 128 枚），§三 新增 9 行（本批 8 枚 `WATCH_*` 码＋上一批漏认领的 `CRED_FILE_ACL_NOT_RESTRICTED`），并把 7 枚过期行号重钉（`af_catalog.py` 六枚 `293/297/375/554/628/633→296/300/378/557/631/636`、`af_config.py:93→94`）。⚠️ 归属要说清：`af_config.py:93→94` 那一漂是**本席上一批**（`5b06f80` F-10 加了一行 import）造成的，`af_catalog` 六枚是 HEAD 上就有的账实漂移；两笔都是机械重钉，没有改任何语义。
+  - 上一批那枚不带码的 `凭据文件限权未生效` WARNING 补上具名码 `CRED_FILE_ACL_NOT_RESTRICTED`（`af_config.py:134`）——**这是消自己欠的账，不是抬上限**。
+- `gates.sh` 逐字节对撞（`GATES_PYTHON` 指向本机那条带 homesdk 的 Python 3.13.2；默认 `python3` 那条没装 homesdk，链第 25 行就 `exit 2` 打印"未安装"——这一格踩过，别把它读成"门禁崩了"）：
+  - 遍 a ↔ 遍 b：`15923 B`／md5 `f8509594a12b113d566ebab70a00b78a`，`diff` 空，`GATES_RC=1`。
+  - 遍 c ↔ 遍 d（补完豁免那一行之后）：`16640 B`／md5 `a5b5ab81e331c0ebfae668cba7155c65`，`diff` 空，`GATES_RC=1`。
+  - a ↔ c 唯一差：原子写门从"1 条红（`af_service.py:2770` 裸替换脸）"转绿 ⇒ 现读"替换脸站点 11 处／就地豁免 6 站"。**转绿是因为消掉了一枚真违规，不是因为抬了任何上限。**
+- 每条红的归属（现读证据 = 纯 HEAD 副本树 `E:\tmp\af129_head` 同链跑一遍，md5 `6faf74e87c66a7a31dc12cec1b6a8022`；那份没有 git 索引所以链末包标记门如实 `exit 2`，前面各门读数可比）：
+
+| 红 | 本批面 | HEAD 面 | 归属 |
+|---|---|---|---|
+| homesdk 依赖门 新增/未获批 8 条（error 1／warn 7）＋过期基线条目 1 | 同读数 | 同读数 | **HEAD 存量**（本批没动依赖面） |
+| 信任边界门禁 7 处 | 同读数 | 同读数 | **并发在途**（`af_api.py` 那批端点），#79 窗 |
+| owner 主体单一真源 3 枚红（`af_api.py:1310/:1316/:1323`） | 同读数 | 同读数 | **HEAD 存量**，#79 窗 |
+| 可观测性 3 处：C 无码 WARNING `86 > 83`／E `af_api-logger-sites 0 vs 1`／E `af_api-ok-false-sites 5 vs 10` | 3 处 | **33 处**（含同样这三枚，C 当时读 `87 > 83`） | **HEAD 存量**；本批把 33 消到 3，并把 C 减 1（补码那一手）。⛔ 没有抬 §四 上限——"冻结的存量缺陷算不算欠债"是评审口径，等裁 |
+| 原子写门 | 绿（自遍 c 起） | 绿 | 本批自己的豁免，理由逐字在册 |
+
+- 回归分段（整树单进程 3–4.5 分钟被截断报 `RC=127`，不是缺陷）：`tests/unit` **15 failed／3483 passed／46 skipped**、`tests/contract` 57 passed、`tests/f14` 104 passed、`tests/acceptance` 38 passed＋10 skipped、`tests` 其余 553 passed（＋65 subtests passed）。五段加总 **4306** ＝ `python -m pytest tests --collect-only -q` 现读的 `4306 tests collected`。
+  15 枚失败**一枚都不在本批文件里**，且纯 HEAD 副本树同跑复现出同一组 15 枚（副本树另多两枚 `test_gate_face` 失败是"那份树没有 git 索引"的取数面差异，不是仓内红）⇒ 归属 **#118／#113 的 HEAD 存量族**，本批新增失败为 0。
+
+### 四、残余与不自决
+
+1. 清扫器只认 `watch-ir-*` 前缀。HEAD 之前每次 `start_watch` 用的是默认前缀，盘上留下的 `tmp*` 目录**不在新射程内**（判据 B 族专门钉了"`tmp*` 不碰"）——那是 NAS／部署侧的一次性清理，⛔ 本批不执行任何远端删除，列在部署窗待办。
+2. `watch.log` 只留一档（`watch.log.1`）。报告建议"轮转"但没说留几代；本批钉死一代并在 `WATCH_LOG_ROTATED` 的登记理由里写明"成功轮转会丢掉上一档"。要更多代是产品口径，不是缺陷。
+3. X3（`/api/asks/answer` 自签自验）落点 `af_api.py:928` ⇒ 挂 #79，本批不碰。
+4. CLI 的循环内裸 `json.loads`（现读 `af_cli.py:1090`）按响亮失败口径不落码；若 owner 判"该逐条跳过"，那是"值不值"的另一档。
+5. `docs/ADM联动执行计划-AF.md` 不入批；`af_auth.py`／`docker/*`／`ui-user-mimo/` 全树不碰；未跟踪件（`docker-compose.api.yml.tmp`、`docker/docker-compose.api-test.yml`、`issued_tokens_clean.json`、`docs/audit/propose_round005/`、`docs/audit/归档/*`）留在原处不动。
+
+### 五、存证（`E:\tmp`，不进仓）
+
+`af129_gates_a.txt`／`af129_gates_b.txt`（15923 B，md5 `f8509594a12b113d566ebab70a00b78a`）、`af129_gates_c.txt`／`af129_gates_d.txt`（16640 B，md5 `a5b5ab81e331c0ebfae668cba7155c65`）、`af129_gates_head.txt`（纯 HEAD 副本链，21375 B，md5 `6faf74e87c66a7a31dc12cec1b6a8022`）、`af129_head_obs.txt`（HEAD 面可观测性 33 处，md5 `a2b0d0b2742a5560a21b0c4d9b4fd8bb`）、`af129_aw_head.txt`／`af129_aw_work.txt`（原子写门豁免前后，md5 `421bcc4a762cf1b72a90d77ef9fb2377`／`695751a33f96d25edf9523962d03ff15`）、`af129_mut\drive.py`（9 腿驱动，md5 `4161e1c8eaf2793c3913938d9fc785e2`）。
+
+- 行尾自证（两面对撞，`tr -dc '\r' | wc -c`）：`src/autoforge/af_service.py` 工作树 0／HEAD 0；`docs/可观测性清单.md` 0／0；`docs/进程模型清单.md` 0／0；`tests/unit/test_watch_scratch_space.py` 0（新文件，无 HEAD 面）；`src/autoforge/af_config.py` 工作树 237／`git show HEAD:src/autoforge/af_config.py` 面 233——**该文件本来就是 CRLF**，本批那一处编辑新增 4 行各带一枚 `\r`（`git diff --numstat` 读数 5／1，不是整份重排），差值与新增行数逐枚对得上。
+
+### 六、补记（同批）：把本批文件暂存之后再复核那一族"真仓读数腿"
+
+上面"回归分段"那一格是在**尚未暂存**的树上取的（那时索引面＝HEAD，本批改动不在任何门的射程里）。本批文件按名 `git add` 之后重跑四份门测试，`tests/unit/test_observability_gate.py` 读到 **6 failed／49 passed**——把同一份文件在纯 HEAD 副本树（`E:\tmp\af129_head`，无 git 索引 ⇒ 退磁盘面＝HEAD 字节）里跑，得到**同一组 6 枚失败**（`E:\tmp\af129_t_obs_head.txt`，6 failed／49 passed in 57.07s）⇒ 这六枚在 HEAD 上就是红的，属 #118/#113 名下的假期望族，不是本批引入。
+
+逐枚归属与处置（改的都是**期望值**，⛔ 一个上限数字没动）：
+
+| 腿 | HEAD 现读 | 暂存后现读 | 本批改动 | 处置 |
+|---|---|---|---|---|
+| `test_real_repo_site_readings_are_pinned` | 站点 160（pin 156）／文件 31（pin 30）／warning 101（pin 97）／info 8 | 168／31／108／9 | 站点 +8、warning +7、info +1（全带码） | **订正为真值** 156→168、30→31，docstring 里把 `156→160` 明确划成"HEAD 存量、本批不认领" |
+| `test_real_repo_named_code_readings_are_pinned` | 带码 31／具名码 29（pin 正确）／无码合计 129（pin 125）／无码 warning 87（pin 83） | 40／37／128／86 | 带码 +9、新码 +8；无码 **−1**（`af_config.py:134` 那枚补码） | 订正 31→40、29→37、125→128、83→86；重码白名单加第三枚 `WATCH_SCRATCH_DELETE_FAILED`（两条腿同一句承诺：那个一次性目录没删掉） |
+| `test_real_repo_q83_promotion_did_not_move_the_uncoded_ceiling` | error 10／warning 87（pin 83） | error 10／warning 86 | −1（收紧） | 订正 83→86，并把"§四 上限未动、门在 C 判据上照旧红"写进 docstring |
+| `test_real_repo_every_named_code_is_registered` | B 项 12 枚红（HEAD 清单的 `af_catalog`／`af_config` 锚点漂） | B 项 0（本批 `--write` 重生成＋锚点重钉后） | 收掉 B 族 | 数字订正 29/31→37/40；这一腿的 B 半段因本批的清单重生成而**真转绿**，不是靠抬上限 |
+| `test_real_repo_http_face_readings_are_pinned` | `logger_sites` 1（pin 0）／`ok_false` 10（pin 5）／`ok_true` 32（pin 28）／`depends` 96（pin 89） | 同左 | 无（`af_api.py` 本批一行没动） | **留红不动**：那一面归 #79 窗，§五 的"已还"状态要跟着 af_api 真值一起改，本批不代改 |
+| `test_real_repo_gate_is_green` | 33 处红 | 3 处红（C `86>83`／E `af_api-logger-sites`／E `af_api-ok-false-sites`） | 消掉 30 处 | **留红不动**：三条都是 HEAD 存量，抬 §四 上限是评审口径、不在本批自决范围 |
+
+终值（逐条现读，不是推算）：`pytest tests/unit/test_observability_gate.py -q` ⇒ **2 failed／53 passed**（修前同一份文件 **6 failed／49 passed**，本批把四枚假期望订正成真值、另两枚如实留红）。四份门/行为文件各跑一次：`test_watch_scratch_space.py` **19 passed**（RC=0）、`test_process_model_gate.py` **41 passed**（RC=0）、`test_observability_gate.py` 2 failed／53 passed（那两枚＝表里最后两行的 HEAD 存量）、`test_atomic_write_gate.py` **30 passed**（RC=0）⇒ 本批新增失败 **0**。`tests/unit/test_observability_gate.py` 行尾自证：工作树 CR `0`／HEAD 面 CR `0`。
+
+⚠️ 上面"回归分段"那一格 `tests/unit` 的 `15 failed` 是**暂存前**（索引面＝HEAD）的读数，且那 15 枚里有 6 枚就落在 `test_observability_gate.py`。按同一份文件的两次现读对算：6 → 2 ⇒ 该段的 15 枚在本批只可能降到 **11 枚**（⚠️ 这是同一文件两次读数的差值推算，暂存后没有重跑整段 `tests/unit`，引用时按"推算"对待，要终值就重跑那一段）。⛔ 不以此冒充"CI 全绿"——CI 上那两枚留红＋`gates.sh` 的 C 判据照样会响。

@@ -131,7 +131,11 @@ class Config:
             #: 不改变写入结果，只把没收成的那一档留在日志里。
             acl_state, acl_note = restrict_file_acl(tmp_path)
             if acl_state not in ("not_windows", "restricted"):
-                _logger.warning("凭据文件限权未生效（%s）：%s", acl_state, acl_note)
+                _logger.warning(
+                    "CRED_FILE_ACL_NOT_RESTRICTED 凭据文件限权未生效（%s）：%s",
+                    acl_state,
+                    acl_note,
+                )
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(json.dumps(data, ensure_ascii=False, indent=2))
                 f.flush()

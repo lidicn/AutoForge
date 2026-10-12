@@ -61,13 +61,19 @@ def test_real_repo_site_readings_are_pinned(real):
     155 → 156、error 20 → 21（裁定 20261011《八问》§3 Q2 乙）：`Scheduler._run_delayed` 新增一枚
     带码留痕 `SCHED_DELAYED_CALLBACK_FAILED`。文件数不动（`af_scheduler.py` 本来就在射程里），
     无码存量不动（这一枚带码，不吃 §四 的格子）。
+
+    156 → 168（执行记录 §二之一百二十六）拆两半记账，⛔ 不混成一句"漂了 12"：
+    ① 156 → 160 是 **HEAD 存量**（先前批次留下的过期钉，本批不认领那 +4；那四枚是无码 WARNING，
+       与 §四 C 判据现读的同一批数对齐）；文件数 30 → 31 也是那一半留下的；
+    ② 160 → 168 是本批 +8：`_reap_stale_watch_scratch`／`_drop_watch_scratch`／`_gate_watch_log`
+       七枚 WARNING ＋ `WATCH_SCRATCH_REAPED` 一枚 INFO，全部带码 ⇒ 不吃 §四 的无码格子。
     """
     from collections import Counter
 
     lv = Counter(s["level"] for s in real["sites"])
-    assert len(real["sites"]) == 156
-    assert len({s["path"] for s in real["sites"]}) == 30
-    assert dict(lv) == {"debug": 19, "info": 8, "warning": 97, "error": 21, "exception": 11}
+    assert len(real["sites"]) == 168
+    assert len({s["path"] for s in real["sites"]}) == 31
+    assert dict(lv) == {"debug": 19, "info": 9, "warning": 108, "error": 21, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -77,23 +83,36 @@ def test_real_repo_named_code_readings_are_pinned(real):
 
     带码站点 30 → 31、具名码 28 → 29（裁定 20261011《八问》§3 Q2 乙新增 `SCHED_DELAYED_CALLBACK_FAILED`）。
     无码存量 125 与它的三档分布不动——§四 的上限是照无码那一组钉的，新站带码 ⇒ 不吃那一格。
+
+    31 → 40 站／29 → 37 枚（执行记录 §二之一百二十六）：本批新增 9 枚带码站点、8 枚新码。
+    多出来的那一站是 `WATCH_SCRATCH_DELETE_FAILED` 的两站形状（见下面白名单）。
+    无码存量 125 → 128 拆两半：HEAD 存量 +4（那批无码 WARNING，本批不认领）− 本批 1
+    （`af_config.py:134` 那枚原本不带码的凭据 ACL 留痕补上 `CRED_FILE_ACL_NOT_RESTRICTED`）＝ 128。
+    ⚠️ §四 的 WARNING 上限 83 一字未动，门在 C 判据上仍红（现读 86）——本批只是把"现读"钉回真值，
+    没有把欠账读成绿，也没有替存量抬上限。
     """
     from collections import Counter
 
     coded = real["coded"]
-    assert len(coded) == 31
-    assert len({s["code"] for s in coded}) == 29
-    # 31 站／29 枚＝仓内两例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
+    assert len(coded) == 40
+    assert len({s["code"] for s in coded}) == 37
+    # 40 站／37 枚＝仓内三例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
     # ① `DEPLOY_AUDIT_PERSIST_FAILED` 同时出自「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」
     #    两条腿——同一句承诺（台账没落稳）；
     # ② `OWNER_ALERT_PUBLISH_FAILED` 出自「投递抛出」与「投递返回未被接受（code=…）」两条腿——
     #    同一句承诺（这条告警没送到收件箱），裁定 20261011 §3 Q8.1。
-    # 免得下一个人把这两条例外读成"码可以随便复用"。
+    # ③ `WATCH_SCRATCH_DELETE_FAILED` 出自「清扫器逐个删旧目录」与「start_watch 收尾删本次 scratch」
+    #    两条腿——同一句承诺（那个一次性目录没删掉，磁盘卫生没做成），执行记录 §二之一百二十六。
+    # 免得下一个人把这几条例外读成"码可以随便复用"。
     dup = {code for code, n in Counter(s["code"] for s in coded).items() if n > 1}
-    assert dup == {"DEPLOY_AUDIT_PERSIST_FAILED", "OWNER_ALERT_PUBLISH_FAILED"}, f"重码名单漂了：{dup}"
+    assert dup == {
+        "DEPLOY_AUDIT_PERSIST_FAILED",
+        "OWNER_ALERT_PUBLISH_FAILED",
+        "WATCH_SCRATCH_DELETE_FAILED",
+    }, f"重码名单漂了：{dup}"
     nc = Counter(s["level"] for s in real["sites"] if not s["code"])
-    assert sum(nc.values()) == 125
-    assert nc["warning"] == 83 and nc["exception"] == 11 and nc["info"] == 7
+    assert sum(nc.values()) == 128
+    assert nc["warning"] == 86 and nc["exception"] == 11 and nc["info"] == 7
 
 
 Q83_CODES = ("DEVICE_GUARD_CATALOG_INJECT_FAILED", "DEVICE_ACL_LOAD_FAILED")
@@ -117,13 +136,18 @@ def test_real_repo_q83_security_degradations_are_error(real):
 
 
 def test_real_repo_q83_promotion_did_not_move_the_uncoded_ceiling(real):
-    """这两枚本来就带具名码 ⇒ 升档不吃 §四 的无码格子，棘轮未动是**推导出来的**，不是巧合。"""
+    """这两枚本来就带具名码 ⇒ 升档不吃 §四 的无码格子，棘轮未动是**推导出来的**，不是巧合。
+
+    83 → 86（执行记录 §二之一百二十六）：HEAD 现读 87，那个 +4 是先前批次留下的无码 WARNING 存量
+    （pin 停在 83 已经过期，⛔ 不是本批引入的）；本批反向 **收紧 1 枚**——`af_config.py:134`
+    那枚凭据 ACL 留痕补上了具名码。**§四 的上限 83 一个数字没动**，门在 C 判据上照旧红。
+    """
     from collections import Counter
 
     nc = Counter(s["level"] for s in real["sites"] if not s["code"])
     by_code = {s["code"] for s in real["coded"]}
     assert set(Q83_CODES) <= by_code, "带码这一前提是'棘轮未动'的根据，码没了就要重新谈上限"
-    assert nc["error"] == 10 and nc["warning"] == 83, (
+    assert nc["error"] == 10 and nc["warning"] == 86, (
         f"无码存量漂了（error={nc['error']} warning={nc['warning']}）——这跟 Q8.3 无关，"
         "但要在这里响，免得有人把两件事记成同一件"
     )
@@ -134,7 +158,7 @@ def test_real_repo_every_named_code_is_registered(real):
     findings, info = gate.check(REPO)
     b = [f for f in findings if f.startswith("B：")]
     assert not b, "\n".join(b)
-    assert info["codes"] == 29 and info["coded"] == 31
+    assert info["codes"] == 37 and info["coded"] == 40
 
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):

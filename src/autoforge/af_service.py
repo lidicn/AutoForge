@@ -2671,6 +2671,117 @@ def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[
     return result
 
 
+#: watch 的部署 IR 落在**每次新建的一次性目录**里，目录名必须每回不同：它是 sidecar `graph`
+#: 字段的身份锚点（`start_watch` 靠"sidecar 里那条路径就是我这次写的"证明锁归本次），
+#: 固定名会把上一条 watch 的残留读成"本次启动成功"（2026-10-09 现场实测撞过）。
+#: 前缀同时是清扫器的射程——只有这一个形状会被本层删。
+WATCH_IR_PREFIX = "watch-ir-"
+WATCH_IR_FILENAME = "deployed_ir.json"
+#: 清扫跳过比这更年轻的目录：并发的另一次 `start_watch` 可能正处在"已建目录、还没写出 sidecar"
+#: 的窗口里（那窗口就是 `_WATCH_PROBE_TOTAL_S` ≈ 11.9 秒），这里取五倍余量。
+WATCH_SCRATCH_MIN_AGE_S = 60.0
+#: `watch.log` 的大小闸：超限轮转一档（旧那份进 `watch.log.1`）。watch 子进程逐条触发写日志，
+#: 没有闸就是常驻服务里一个无界增长的磁盘文件（20261012 审计席确证的那一族）。
+WATCH_LOG_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _reap_stale_watch_scratch(
+    root: Path, keep_graph: "str | None", *, now: "float | None" = None
+) -> int:
+    """删掉历次 `start_watch` 留下的 `watch-ir-*` 目录，返回删掉的份数。
+
+    三条例外一律留下：① sidecar 现在指着的那份部署 IR（在役 watcher 的身份，不是垃圾）；
+    ② 建出来还不足 `WATCH_SCRATCH_MIN_AGE_S` 的；③ 目录里不只 `deployed_ir.json` 的——形状
+    不是本层写出的就是归属未知，按第十八轮 F12 的口径**不动**。
+    删不掉只出声、不抛穿：磁盘卫生不值得让一次 watch 启动失败。
+    """
+    deleted = 0
+    try:
+        candidates = sorted(root.glob(f"{WATCH_IR_PREFIX}*"))
+    except OSError as exc:
+        logger.warning("WATCH_SCRATCH_SWEEP_FAILED root=%s err=%s —— 本次不清扫", root, exc)
+        return 0
+    keep = Path(keep_graph).parent if keep_graph else None
+    moment = time.time() if now is None else now
+    for scratch in candidates:
+        if keep is not None and scratch == keep:
+            continue
+        try:
+            if not scratch.is_dir():
+                continue
+            if moment - scratch.stat().st_mtime < WATCH_SCRATCH_MIN_AGE_S:
+                continue
+            entries = sorted(p.name for p in scratch.iterdir())
+        except OSError as exc:
+            logger.warning("WATCH_SCRATCH_DIR_UNREADABLE path=%s err=%s —— 跳过这一份", scratch, exc)
+            continue
+        if entries != [WATCH_IR_FILENAME]:
+            logger.warning(
+                "WATCH_SCRATCH_SHAPE_FOREIGN path=%s 内容=%s —— 不是本层写出的形状，不动",
+                scratch,
+                entries,
+            )
+            continue
+        try:
+            (scratch / WATCH_IR_FILENAME).unlink()
+            scratch.rmdir()
+        except OSError as exc:
+            logger.warning("WATCH_SCRATCH_DELETE_FAILED path=%s err=%s", scratch, exc)
+            continue
+        deleted += 1
+    if deleted:
+        logger.info("WATCH_SCRATCH_REAPED count=%d root=%s", deleted, root)
+    return deleted
+
+
+def _drop_watch_scratch(scratch: Path) -> bool:
+    """子进程**确定没起来**那一档（`Popen` 抛错）就地收回本次目录，不留到下一次启动才扫。"""
+    try:
+        ir = scratch / WATCH_IR_FILENAME
+        if ir.exists():
+            ir.unlink()
+        scratch.rmdir()
+    except OSError as exc:
+        logger.warning(
+            "WATCH_SCRATCH_DELETE_FAILED path=%s err=%s —— 本次目录留下，由下一次启动清扫", scratch, exc
+        )
+        return False
+    return True
+
+
+def _gate_watch_log(root: Path) -> None:
+    """开新 watch 之前给 `watch.log` 上大小闸：超限就轮转一档，旧那份进 `watch.log.1`。
+
+    此刻父进程已给旧 watch 发过 SIGTERM，但它可能还持着日志句柄 ⇒ Windows 上 `rename` 会失败。
+    轮转失败只出声、不拦启动：宁可不轮转，也不能让日志卫生把一次 watch 启动打死。成功轮转会丢掉
+    上一档 `watch.log.1`，那是日志的删除，所以按 WARNING 出声。
+    """
+    log = root / "watch.log"
+    try:
+        size = log.stat().st_size
+    except OSError:
+        return  # 文件不在（或读不出）＝没有超限可言
+    if size < WATCH_LOG_MAX_BYTES:
+        return
+    backup = log.with_name("watch.log.1")
+    try:
+        if backup.exists():
+            backup.unlink()
+        log.rename(backup)  # fixed-tmp: exempt(这张替换脸搬运的是已经写完的整份 watch.log，不是半成品 tmp ⇒ 没有截断窗口；正名那一份由本次 start_watch 独占开新，不存在第二个同名写者)
+    except OSError as exc:
+        logger.warning(
+            "WATCH_LOG_ROTATE_FAILED path=%s size=%d err=%s —— 本轮不轮转，继续追加", log, size, exc
+        )
+        return
+    logger.warning(
+        "WATCH_LOG_ROTATED path=%s size=%d cap=%d backup=%s",
+        log,
+        size,
+        WATCH_LOG_MAX_BYTES,
+        backup,
+    )
+
+
 def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) -> dict[str, Any]:
     """启动 watch 进程跑指定 IR。
 
@@ -2685,6 +2796,11 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
     - 停旧 watch 前先核验 PID 身份（`_verified_pid`）；核验不过就**不杀**，由新 watcher 自己去
       抢协调锁，抢不到就如实回 `coord_lock_held_by_other`（带 `previous_watch` 说明没杀成的原因）。
       "端点立刻返回 job id、由前端轮询"那一半要改 HTTP 面（`af_api.py`），不在这次的射程内。
+
+    20261012 审计席确证的两格磁盘卫生（本批收）：
+    - 每次启动建的 `watch-ir-*` 目录**先扫旧再建新**（`_reap_stale_watch_scratch`），`Popen` 抛错
+      那一档就地收回本次那份。目录名仍必须每次不同——它是 sidecar 的身份锚点，见上面那段。
+    - `watch.log` 在起子进程前过大小闸（`_gate_watch_log`）：超 `WATCH_LOG_MAX_BYTES` 轮转一档。
     """
     import subprocess
     import tempfile
@@ -2705,8 +2821,11 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
         except (ProcessLookupError, PermissionError, OSError):
             old_pid_identity = "old_watch_signal_failed"
     previous_watch = {"pid": old_pid, "identity": old_pid_identity}
-    # 写 IR 到临时文件
-    tmp = Path(tempfile.mkdtemp(dir=str(root))) / "deployed_ir.json"
+    # 先扫掉历次留下的 watch-ir-* 目录，再建本次的（sidecar 指着的那份不扫，它是身份不是垃圾）。
+    _reap_stale_watch_scratch(root, previous_holder.get("graph"))
+    # 写 IR 到一次性目录里的临时文件
+    scratch = Path(tempfile.mkdtemp(prefix=WATCH_IR_PREFIX, dir=str(root)))
+    tmp = scratch / WATCH_IR_FILENAME
     # 走原子助手：这份 IR 随后被独立进程读取，崩在半截会让部署侧读到半个图
     # （判据 E，审计 BUG-05）
     atomic_write_text(tmp, json.dumps(ir, ensure_ascii=False, indent=2))
@@ -2734,6 +2853,7 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
     # 持着一份只会让 Windows 上的 watch.log 无法轮转/删除，而 `Popen` 抛错的异常路径原来连
     # 引用计数回收都走不到。
     try:
+        _gate_watch_log(root)
         with (root / "watch.log").open("ab") as logf:
             proc = subprocess.Popen(
                 cmd,
@@ -2743,6 +2863,8 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
                 env=child_env,
             )
     except Exception as e:
+        # 子进程确定没起来 ⇒ 本次这份 scratch 就地收回，不等下一次启动才扫。
+        _drop_watch_scratch(scratch)
         return {"ok": False, "error": f"启动 watch 失败: {e}"}
     # 写 PID 文件（供 `stop_watch` 用）。内容仍是裸数字——**可信身份不在这里**，而在 sidecar 的
     # `owner`（`{hostname}-{pid}-{uuid8}`）：停之前两边必须对得上，见 `_verified_pid`。
