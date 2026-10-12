@@ -28,6 +28,7 @@ __all__ = [
     "TrialStore",
     "issue",
     "consume",
+    "stats",
     "enter_trial",
     "report_assert_failure",
     "pause_and_notify",
@@ -506,6 +507,11 @@ def issue(store_diff_sha256: str, ttl_s: int = 300) -> str:
 
 def consume(code: str, store_diff_sha256: str) -> ConsumeResult:
     return _default_premiere.consume(code, store_diff_sha256)
+
+
+def stats() -> dict[str, float | int]:
+    """默认仓库的只读读数（已发码数 / 码空间 / 占用率）——见 PremiereStore.stats。"""
+    return _default_premiere.stats()
 
 
 def enter_trial(store_diff_sha256: str, hours: int = 24,

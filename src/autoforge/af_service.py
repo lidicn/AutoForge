@@ -285,6 +285,14 @@ def health(
     except Exception:
         # 探测失败不能带崩 /api/health，但也不许咽得无声：具名码 + exc_info，与 EXPERIENCE_OBSERVE_SKIPPED 同族。
         logger.debug("TICK_HEALTH_PROBE_SKIPPED", exc_info=True)
+    # 裁定 20261011（过期授权码与触发历史保留策略）§3 的那一枚只读读数接进健康面：
+    # 它把「码空间何时会紧」从形容词变成可读的数。⛔ 这一格只读，不触发任何裁剪／删除动作。
+    premiere_stats = None
+    try:
+        from . import af_premiere
+        premiere_stats = af_premiere.stats()
+    except Exception:
+        logger.debug("PREMIERE_HEALTH_PROBE_SKIPPED", exc_info=True)
     from .af_time import house_tz_status
     return {
         "ok": ok,
@@ -300,6 +308,7 @@ def health(
         "tick_health": tick_health,
         "ticker_alive": ticker_alive,
         "tick_exit_reason": tick_exit_reason,
+        "premiere": premiere_stats,
         # DCD 20261001·§五：时区口径必须可读到「env 生效了还是落到 fallback」，
         # 否则 AF_TZ 写错也只会静默 +8，与 MA 同批披露的假绿同型。
         "tz": house_tz_status(),
