@@ -11259,3 +11259,25 @@ E   AssertionError: assert '86736488' in {'********'}
 - 现读 `scripts/verify_ui_nas_deploy.py:50-56` 的 `WRITE_MARKERS` 名单里**含 `docker exec`（`:53`）与 `cp `（`:51`）**，而"容器内 md5／mtime"只有 `docker exec md5sum`／`docker exec ls` 两条通道——本批那几枚读数全部是本席在脚本**外用 `ssh` 手敲**取的，脚本自身发不出去。
 - ⇒ 落那条检测腿＝**要放宽一条防写守卫**（哪怕只放到"`docker exec <容器> md5sum|ls`"的白名单形状），而"这份只读核对脚本能不能对生产容器下命令"正是该件 §二 那一问的另一面。⛔ **本批因此不落检测腿**，挂在裁定之后；#131 的口径同步改成"等裁＋#79 窗"。
 - 记这条的理由：不写就等于给下一个席留一句"申请书说能做、实际没做"的暗差——同族形状在 §二之一百二十六 那条"报告修法与既有裁定相反"里已经撞过一次。
+
+## §二之一百二十八 · 补裁定 20261011《AF 过期授权码与触发历史保留策略》§4 五条验收的判据腿：那半边的码早在 `c63fe4e` 就进了仓，但**一条腿都没有**；本批只加测试，零 src 改动，并把上一轮一条**错误的归属**就地订正（2026-10-12）
+
+- **为什么这一格是真活**：仓内归档判据写的是"每条落到「已修＋判据」或「已证伪＋理由」才移入归档"。裁定 §3 的落码半边（`af_premiere.stats()` `src/autoforge/af_premiere.py:188-202`）交付了，判据面却是空的——现读 `git grep -n "stats" HEAD -- tests/unit/test_af_premiere.py` **RC=1 零命中**（批前 HEAD＝`a518cc3`）。按判据这既不是"已修"也不是"已证伪"，是一条**没验收的已交付**。
+- **落码面＝零**。新增一份 `tests/unit/test_dcd_20261011_code_retention_gauge.py`（九枚腿／193 行／9317 字节／工作树 CR=0），把裁定 §4.1／4.2／4.3 钉成三族两形状：行为腿 A1／B1／C1／C4 ＋ 源码形状负控 A2／B2／B3／C2 ＋ 形态面 C3。§4.4（`af_pretrigger.py` diff 为空）与 §4.5（`check_imports.py` baseline 不变）按现读各给一枚读数。
+- **判重口径那一格钉的是裁定自己撤回过的初稿**（§〇.4 本席自我翻案）：M1 把"只对活跃集判重"种回源码，A1（行为）与 A2（源码形状）**同时**红——这条腿的全部价值就在于它让那次撤回不可被无声改回去。
+- **三枚"腿先写漏了"的形状如实登记**（不写就是给下一席留暗差，与 §二之一百二十七 那条补记同一族纪律）：
+  1. M3（`load()` 按状态过滤）起初只红 B2 不红 B1 ⇒ 单对 `save()/load()` 往返**抓不住"启动即过滤"**（内存里的册面根本没动）。B1 因此补了"另起一个 `PremiereStore` 从同一份盘恢复"那一格。
+  2. M4（`stats()` 顺手 `self.save()`）起初只红 C2 不红 C1 ⇒ **裁定字面那条负控（"落盘文件逐字节不变"）判不出"多写了一次内容完全相同的盘"**。新增 C4 用 `atomic_write_text` 调用计数＝零 来判。两格都是**加严**方向，已在回执 §五 显式请追认。
+  3. M6（`stats()` 只算一次就回缓存）起初整条绿 ⇒ 因为"每次调用都重算再 update 回共享字典"的写法会自愈。换成**算一次就回缓存**的真形状后，C1 补的那格"册面加一枚、读数必须跟着变"才把它咬住。
+- **变异自证**（`E:\tmp\af132_mutations.py` 跑在 `git archive HEAD` 副本树 `E:\tmp\af132_tree`，⛔ 不碰工作树；三道护栏＝注入锚点必须命中＋注入后逐字节必须变＋`ast.parse` 必须过＋运行时 `af_premiere.__file__` 必须落在副本树里）：`DRIVER_RC=0`，八腿 MISMATCH=0。逐腿表全文进存证 `af132_mutation_results.txt`：M0／MZ99 绿，M1＝A1+A2，M2＝B2+B3，M3＝B1+B2，M4＝C2+C4，M5＝C1+C3，M6＝C1（期望与实际逐字相同）。
+- **读数**：
+  - `python -m pytest tests/unit/test_dcd_20261011_code_retention_gauge.py tests/unit/test_af_premiere.py -q --no-header` ⇒ `35 passed in 1.05s`（新增九枚与该模块原有 26 枚合跑全绿，新增腿没把既有期望顶红）。
+  - `git diff --name-only | grep -c pretrigger` ⇒ `0`；`git status --porcelain | grep -c pretrigger` ⇒ `0`（**§4.4 闭合**）。同场未暂存名单是 `src/autoforge/af_auth.py`／`docker/docker-compose.api.yml`／`docs/ADM联动执行计划-AF.md`／`docs/audit/*` 归档移动——**全部属并发在途会话，本批一行没带走**。
+  - `GATES_PYTHON=… python scripts/check_imports.py` ⇒ `RC=0`，`Baseline lock: 103 modules, 0 violations.`（**§4.5 后半闭合**，与批前同读数；本批不加 import 边）。
+  - 分段回归（**§4.5 前半**）：`tests/unit` ⇒ `11 failed, 3496 passed, 46 skipped in 580.93s`；`tests/contract` ⇒ `57 passed`；`tests/f14` ⇒ `104 passed`；`tests/acceptance` ⇒ `38 passed, 10 skipped`；其余 `tests` ⇒ `553 passed + 65 subtests`；`--collect-only` ⇒ `4315 tests collected`。加总 3553+57+104+48+553＝**4315**＝collected ✓；且 4315 对上一批现读 4306 ＝ **+9 ＝ 恰为本批新增九枚腿**，没有任何既有腿被顶掉或改名。
+  - 那 11 枚失败的**逐枚名单已现读枚举**（第二遍 `tests/unit` 带 `-rf`）：`test_dcd_20261004_auth_limits` 2 枚（`af_auth.py` 并发在途面）、`test_stability_r3_20261011::test_no_test_file_writes_os_environ_directly` 1 枚（offender 现读＝`tests/unit/test_credential_file_acl_f10.py:70`，是 §二之一百二十五 那批留的账，⛔ 不是本批的文件）、`test_gate_face`／`test_observability_gate` 2／`test_sim_dep_floor_gate`／`test_trust_boundary_gate` 2／`test_ui_api_paths_gate` 2 共 8 枚（#118 门取数面族）。⇒ **本批新增失败 0**，11 枚全部落在既有归属上。
+- **归属订正（这条比那九枚腿更值钱）**：本批之前，"把读数接成 health 的新键"记的是「要动 `af_api.py:501` ⇒ 属并发登录线 ⇒ 排 #79 窗」。现读推翻：`src/autoforge/af_api.py:501` 是 `return svc.health(store, presence=presence, readonly=readonly)`，**整份透传、不挑键**，`af_mcp.py:143` 同理；health 那个字典是在 `af_service.py:246` 里现搭的，而 `af_service.py` 此刻**干净**。⇒ 真正的前置不是窗口，是三条仓内动作：模块级 `stats()` 转发、health 加键时探测失败**不许静默**（按 `TICK_HEALTH_PROBE_SKIPPED` 同形状出具名码＋`logger.debug(..., exc_info=True)`）、那枚码先登记进 `docs/可观测性清单.md` §三（那族棘轮只减不增）。已按这四步重开 AF 任务 #133，⛔ 不再挂 #79。**为什么主动写这条**：错误归属的代价不是"多等一个窗"，是**下一个席会照它排期、然后发现排错了**。
+- **DCD 面**：`inbox/20261012-AF-过期授权码与触发历史保留策略-回执.md`（三道硬门 `validate-receipt.ps1` 全 ✓，长回执按工序在裁定书末尾 `## 执行回填` 留一行指路），含两处加严偏差请追认与一条未落项归属；裁定 §3 那四条 ⛔（不动判重／不在 `save()` 裁剪／不新增 `PREMIERE_CODE_PRUNED`／不动 `af_pretrigger.py`）逐条给"未动"证据。
+- **不自决清单**：触发历史面按裁定 §1 引 `20261011-AF稳定性第三轮残余八问-裁定.md` §3 Q4，本批零动作；Q4 甲（时间窗裁剪）仍等 owner 给 N／M 天数与删除清单前置。
+- **门禁多遍逐字节对撞**（本批唯一的门读数变化是"扫到了一份新文件"）：`bash gates.sh` 两遍 ⇒ `PASS_A_RC=1`／`PASS_B_RC=1`，两遍 **逐字节相同**（`16640 B`／`md5=9e777ee88daeb6a7b7ea9768d6a4b90d`）。与上一批存证（`af129_gates_c.txt`／`af127_gates_a.txt`，`16640 B`／`a5b5ab81e331c0ebfae668cba7155c65`）**全文件只差一行**：`✓ undefined-name 门禁干净（扫描 234 个文件）` → `（扫描 235 个文件）`——差的正是本批新增的那一份测试文件（字节数同＝`234`→`235` 等长，所以 size 未变、md5 变了）。⇒ 本批没有把任何一枚门从绿顶红，也没有抬任何一枚上限；`RC=1` 那一格仍是上一批就在红的**信任边界门禁**（同族八枚 `test_*_gate.py::test_real_repo_*` 取数面腿属 #118 在途），归因未变。
+- **改完 docs 之后补跑读这两份 docs 的腿**：`grep -rl "ADM联动执行记录-AF\|AF完整架构与运行时说明" tests/ --include=*.py` 现读两枚文件 ⇒ `pytest tests/unit/test_diagnostic_code_catalog.py tests/unit/test_test_area_delete_guard.py -q` ⇒ `25 passed in 6.99s`（本批的 §十九 新行与 §二之一百二十八 新节没把任何一枚在册期望顶红）。
