@@ -11186,3 +11186,10 @@ E   AssertionError: assert '86736488' in {'********'}
 终值（逐条现读，不是推算）：`pytest tests/unit/test_observability_gate.py -q` ⇒ **2 failed／53 passed**（修前同一份文件 **6 failed／49 passed**，本批把四枚假期望订正成真值、另两枚如实留红）。四份门/行为文件各跑一次：`test_watch_scratch_space.py` **19 passed**（RC=0）、`test_process_model_gate.py` **41 passed**（RC=0）、`test_observability_gate.py` 2 failed／53 passed（那两枚＝表里最后两行的 HEAD 存量）、`test_atomic_write_gate.py` **30 passed**（RC=0）⇒ 本批新增失败 **0**。`tests/unit/test_observability_gate.py` 行尾自证：工作树 CR `0`／HEAD 面 CR `0`。
 
 ⚠️ 上面"回归分段"那一格 `tests/unit` 的 `15 failed` 是**暂存前**（索引面＝HEAD）的读数，且那 15 枚里有 6 枚就落在 `test_observability_gate.py`。按同一份文件的两次现读对算：6 → 2 ⇒ 该段的 15 枚在本批只可能降到 **11 枚**（⚠️ 这是同一文件两次读数的差值推算，暂存后没有重跑整段 `tests/unit`，引用时按"推算"对待，要终值就重跑那一段）。⛔ 不以此冒充"CI 全绿"——CI 上那两枚留红＋`gates.sh` 的 C 判据照样会响。
+
+### 七、提交态与推送自证（本批第二格记账）
+
+- 本批实提交 **8 份**（`git show --stat HEAD` 现读）：`535b0c0 fix(20261012 审计 §二之一百二十六)`，`625 insertions(+)／55 deletions(-)`，与上面 §十九 那行"本批改动面 8 份"逐字对齐（批前 HEAD 现读 `ff37ff1`）。
+- 暂存面自证：`git diff --cached --numstat` 在本批只列出那 8 份；`git diff --name-only`（未暂存）留着 `docker/docker-compose.api.yml`、`src/autoforge/af_auth.py`、`docs/ADM联动执行计划-AF.md` 与 `docs/audit/*` 的归档移动 ⇒ 并发在途面一行没被本批带走；未跟踪件（`issued_tokens_clean.json`、`docs/audit/propose_round005/`、`docs/audit/归档/*`、`docker-compose.api.yml.tmp`、`docker/docker-compose.api-test.yml`）原处未动。
+- 推送（owner 在本目标文本里明确要"提交到 GitHub"）：`git push origin master:main` ⇒ `ff37ff1..535b0c0  master -> main`，`git ls-remote origin refs/heads/main` 现读 `535b0c0f595c31c4086ec1fdec5e915818146df8` ＝ 本地 `git rev-parse HEAD` 同一枚。⛔ 只推 `master:main`，没有推任何分支名以外的东西。
+- ⚠️ 推后 CI 现读（`python scripts/gh_ci_status.py`）：run **173**（`535b0c0`）`status=in_progress`；其前连跑 164–172 全部 `conclusion=failure`（HEAD 存量红，归 #113／#118 那两族），⛔ 本批不声称这枚推上去就转绿。
