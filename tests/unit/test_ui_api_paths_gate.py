@@ -450,6 +450,14 @@ def test_real_ui_and_src_are_clean_and_counted():
     两条都有真调用方（`ui-user-mimo/src/views/LoginView.vue` 里直接 `fetch`，即第四张调用脸），
     所以 `check(sites, routes)` 本来就判不出红——红的是计数这一格：跨层契约变了要留名。
     同一批把 `ui-user-mimo` 的调用点从 20 抬到 22（就是这两条 fetch）。
+
+    54 → 58 / 53 → 57 / 90 → 94（20261012 收，同样红在本批之前的 HEAD 上）：`117f4dd`
+    （WebUI 一键升级，宿主侧 sidecar）给 `ui/src/api/client.ts` 加了四条 `/system/*` 调用点
+    （`version`／`update/check`／`update`／`update/status`），同一批给服务端加了四条同名装饰器路由
+    （`grep -Ec "@app\\.(get|post|put|patch|delete)" src/autoforge/af_api.py` 现读 87 → 91）。
+    取数两面都按 HEAD 干净导出树复测过（`git archive HEAD` ⇒ 58／57／94／excluded 2），
+    ⛔ 不是把并发在途工作树的读数钉进来。四枚调用点全有真消费者 ⇒ 门的 `check()` 照旧判不出红，
+    红的仍然只是这一格计数。
     """
     mod = _module()
     sites, unparsed = mod.collect_ui_sites(ROOT / "ui" / "src")
@@ -457,13 +465,13 @@ def test_real_ui_and_src_are_clean_and_counted():
     assert unparsed == []
     assert mount_errs == []
     assert mod.check(sites, routes) == []
-    assert len(sites) == 54 and len(excluded) == 2
+    assert len(sites) == 58 and len(excluded) == 2
     live = [s for s in sites if "transport" not in s["kinds"]]
-    assert len(live) == 53 and len(sites) - len(live) == 1   # +1 = `api/client.ts` 的 `fetch` 包装
+    assert len(live) == 57 and len(sites) - len(live) == 1   # +1 = `api/client.ts` 的 `fetch` 包装
     mounted = sum(1 for r in routes if r["how"] == "add_api_route")
     assert mounted == 5                              # af_conflict_runtime._ROUTES
-    assert len(routes) - mounted + len(excluded) == 87   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（现读 87 对 87；旧锚点 `grep -c "@app."` 把 @app.exception_handler 那行也数进来，HEAD 上就偏 1）
-    assert len(routes) == 90                          # 85 条参与匹配的装饰器路由 + 5 挂载表（af_api 的装饰器行共 87＝85＋被排除的 /mcp 与 /{full_path:path}）
+    assert len(routes) - mounted + len(excluded) == 91   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（现读 91 对 91；旧锚点 87 停在 `117f4dd` 之前）
+    assert len(routes) == 94                          # 89 条参与匹配的装饰器路由 + 5 挂载表（af_api 的装饰器行共 91＝89＋被排除的 /mcp 与 /{full_path:path}）
     assert boundary == ["src/autoforge/af_runtime_plugins.py"]
     assert sum(1 for s in sites if s["exempt"]) == 0
 
@@ -633,11 +641,14 @@ def test_unregistered_tree_goes_red_not_green(tmp_path):
 
 
 def test_all_trees_of_this_repo_are_in_scope_and_green(capsys):
-    """真仓 `--all` 的整条读数：三棵树各自的调用点数、跨树反向读数——这条就是本批的第一手读数。"""
+    """真仓 `--all` 的整条读数：三棵树各自的调用点数、跨树反向读数——这条就是本批的第一手读数。
+
+    `ui 53 → 57` 与 §一之 54/90 同因（`117f4dd` 那四条 `/system/*`），出处见上面那条的 docstring。
+    """
     mod = _module()
     assert mod.main(["check_ui_api_paths.py", "--all"]) == 0
     out = capsys.readouterr().out
-    for name in ("ui 53", "ui-user 19", "ui-user-mimo 22"):
+    for name in ("ui 57", "ui-user 19", "ui-user-mimo 22"):
         assert name in out, out
     assert "传输层包装 3 处" in out, out
     assert "SSE 建流 2 处" in out, out
