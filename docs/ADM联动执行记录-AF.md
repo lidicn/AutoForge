@@ -11491,4 +11491,6 @@ git -C E:/NAS/AutoForge diff --stat  1a6613a..HEAD -- docs     # 增删面
 git -C E:/NAS/AutoForge show --stat HEAD                       # 最近一枚（只有这一行会随下一枚移动）
 ```
 
-判据不变：**`git diff --name-only 1a6613a..HEAD` 无一份 `src/`**（现读三份，全在 `docs/` 下）⇒ 与上面 五 的门禁五遍同一 md5 互为佐证。`git status` 现读：并发在途的 `docker/docker-compose.api.yml`、`src/autoforge/af_auth.py` 与 `docs/audit/` 那族删除**一份未暂存、一份未动**。
+判据不变：**`git diff --name-only 1a6613a..HEAD` 无一份 `src/`**（现读三份，全在 `docs/` 下）⇒ 与上面 五 的门禁五遍同一 md5 互为佐证。`git status` 现读：并发在途的 `docker/docker-compose.api.yml`、`src/autoforge/af_auth.py` 与 `docs/audit/` 那族删除**一份未暂存、一份未动**。⚠️ 本节之后为记账门禁遍 f 另落一枚 docs 提交——它同样落在 `1a6613a..HEAD` 射程内，所以本格只给取法、⛔ 不钉"本批共 N 枚"（钉了就会被产出它的那只手作废，这是本文件 §八 记过的同一个坑）。
+
+**十、门禁遍 f 与 a/b/c/d/e 的逐字节对撞**：⚠️ 第一次 fire **塌在 preflight，不是判红**——我照 `gates.sh:26` 报错文案里硬写的那条 `C:/Program Files/Python313/python.exe` 去设 `GATES_PYTHON`，而**本机没有这条路径**（正解在 `C:/Users/lidicn/AppData/Local/Programs/Python/Python313/python.exe`，homesdk 以 editable 装在那份上）⇒ `af143_gates_f.txt` 只有 **219 字节／`F_RC=2`**，一行判据都没跑。按本机现读解释器重跑 ⇒ `af143_gates_f2.txt` 现读 **16521 B**（＝门输出体 16513 ＋ 我自己追加的 `F2_RC=1` 终标 8 字节），`head -c 16513` 与遍 e **diff 空**、md5 同为 **`1812389a093472efb370b2c2a0df929b`**、CR=**55**、✓**21**／✗**2**（仍是 `:79` 信任边界 7 处、`:93` 可观测性 1 处）、`F2_RC=1` ⇒ a/b/c/d/e/f **六遍同一枚 md5**：本批这几枚 docs 提交没挪动任何一门的一格，⛔ 未抬任何上限。形状教训两条：**① 别把工具自己打印的"先执行…"当可抄读数**——那格路径在本机是错的，且它错的方式恰好让门"看起来已经跑过"；**② `RC=2` 是射程塌，⛔ 不许当判红进台账**（同一格若只记 `F_RC=2` 而不记解释器，下一个人会以为门变了）。
