@@ -52,22 +52,19 @@ class _Recorder:
         return self.replies[min(len(self.calls) - 1, len(self.replies) - 1)]
 
 
-def _win(tmp: Path, replies, *, raises=None, domain="WORKSTATION", user="forgeuser"):
-    """在 Windows 那一档下跑一次助手（`platform_name` 接缝，不碰真 `os.name`）。"""
+def _win(tmp: Path, replies, mp, *, raises=None, domain="WORKSTATION", user="forgeuser"):
+    """在 Windows 那一档下跑一次助手（`platform_name` 接缝，不碰真 `os.name`）。
+
+    身份两枚键走 `monkeypatch.setenv`：原本不存在的键由 pytest 回收成"不存在"，
+    ⛔ 不许直写 `os.environ`——那会把值泄漏给同一进程里后面的 fail-closed 腿（判据见
+    `test_stability_r3_20261011.py::test_no_test_file_writes_os_environ_directly`）。
+    """
     rec = _Recorder(replies, raises=raises)
-    env = {"USERDOMAIN": domain, "USERNAME": user}
-    old = {k: os.environ.get(k) for k in env}
-    os.environ.update(env)
-    try:
-        state, note = af_atomic.restrict_file_acl(
-            tmp / "credentials.json", runner=rec, platform_name=NT
-        )
-    finally:
-        for key, value in old.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+    mp.setenv("USERDOMAIN", domain)
+    mp.setenv("USERNAME", user)
+    state, note = af_atomic.restrict_file_acl(
+        tmp / "credentials.json", runner=rec, platform_name=NT
+    )
     return state, note, rec
 
 
@@ -82,10 +79,11 @@ def test_a1_on_posix_the_helper_is_a_no_op_and_spawns_nothing(tmp_path):
     assert rec.calls == [], f"POSIX 上不该起任何进程：{rec.calls}"
 
 
-def test_a2_on_windows_the_helper_issues_a_fixed_arg_list(tmp_path):
+def test_a2_on_windows_the_helper_issues_a_fixed_arg_list(tmp_path, monkeypatch):
     state, note, rec = _win(
         tmp_path,
         [_Proc(0, stdout="处理成功"), _Proc(0, stdout="WORKSTATION\\forgeuser:(F)\r\nSYSTEM:(F)")],
+        monkeypatch,
     )
     assert state == "restricted", (state, note)
     argv, kwargs = rec.calls[0]
@@ -101,47 +99,46 @@ def test_a2_on_windows_the_helper_issues_a_fixed_arg_list(tmp_path):
 
 # ── B. 返回档：每一档都可判，且一律不改变写入结果 ──
 
-def test_b1_refused_return_code_is_reported_not_raised(tmp_path):
-    state, note, _rec = _win(tmp_path, [_Proc(1, stderr="拒绝访问。")])
+def test_b1_refused_return_code_is_reported_not_raised(tmp_path, monkeypatch):
+    state, note, _rec = _win(tmp_path, [_Proc(1, stderr="拒绝访问。")], monkeypatch)
     assert state == "refused", (state, note)
     assert "rc=1" in note
 
 
-def test_b2_missing_icacls_is_reported_not_raised(tmp_path):
-    state, note, _rec = _win(tmp_path, [_Proc(0)], raises=FileNotFoundError(2, "找不到 icacls"))
+def test_b2_missing_icacls_is_reported_not_raised(tmp_path, monkeypatch):
+    state, note, _rec = _win(
+        tmp_path, [_Proc(0)], monkeypatch, raises=FileNotFoundError(2, "找不到 icacls")
+    )
     assert state == "failed", (state, note)
     assert "FileNotFoundError" in note
 
 
-def test_b3_readback_still_showing_inherited_ace_is_its_own_state(tmp_path):
-    state, note, _rec = _win(tmp_path, [_Proc(0), _Proc(0, stdout="BUILTIN\\Users:(I)(RX)")])
+def test_b3_readback_still_showing_inherited_ace_is_its_own_state(tmp_path, monkeypatch):
+    state, note, _rec = _win(tmp_path, [_Proc(0), _Proc(0, stdout="BUILTIN\\Users:(I)(RX)")], monkeypatch)
     assert state == "still_inherited", (state, note)
     assert "(I)" in note
 
 
-def test_b4_no_identity_resolves_refuses_to_guess_a_principal(tmp_path):
-    state, _note, rec = _win_no_identity(tmp_path)
+def test_b4_no_identity_resolves_refuses_to_guess_a_principal(tmp_path, monkeypatch):
+    state, _note, rec = _win_no_identity(tmp_path, monkeypatch)
     assert state == "no_identity"
     assert rec.calls == [], "身份都读不出来，就不该发出任何一条授权命令"
 
 
-def _win_no_identity(tmp: Path):
+def _win_no_identity(tmp: Path, mp):
+    """身份两枚键都拿不到那一档：`delenv(raising=False)` 让"本来就没有"也算数。"""
     rec = _Recorder([_Proc(0)])
-    old = {k: os.environ.get(k) for k in ("USERDOMAIN", "USERNAME")}
-    os.environ.pop("USERDOMAIN", None)
-    os.environ.pop("USERNAME", None)
-    try:
-        state, note = af_atomic.restrict_file_acl(
-            tmp / "credentials.json", runner=rec, platform_name=NT
-        )
-    finally:
-        os.environ.update({k: v for k, v in old.items() if v is not None})
+    mp.delenv("USERDOMAIN", raising=False)
+    mp.delenv("USERNAME", raising=False)
+    state, note = af_atomic.restrict_file_acl(
+        tmp / "credentials.json", runner=rec, platform_name=NT
+    )
     return state, note, rec
 
 
-def test_b5_every_returned_state_is_in_the_declared_catalog(tmp_path):
+def test_b5_every_returned_state_is_in_the_declared_catalog(tmp_path, monkeypatch):
     for replies in ([_Proc(7, stderr="x")], [_Proc(0), _Proc(0, stdout="")], [_Proc(0), _Proc(9)]):
-        state, _note, _rec = _win(tmp_path, replies)
+        state, _note, _rec = _win(tmp_path, replies, monkeypatch)
         assert state in af_atomic.ACL_STATES, f"名单外的返回档：{state}"
 
 

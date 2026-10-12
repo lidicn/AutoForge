@@ -5,7 +5,12 @@
 （PyPI 现读：`>=3.11` 最新 `0.13.109`、`>=3.14` 是 `0.13.371`）。
 
 红腿按三条判据各自单独打（A 裸名／B 在册下界逐面／C 依据锚点），绿腿把真仓读数钉死
-（18 条依赖、六枚 extra 的条数、在册那枚在 `sim` 与 `dev` 两面同为 `>=0.13.109`）。
+（19 条依赖、六枚 extra 的条数、在册那枚在 `sim` 与 `dev` 两面同为 `>=0.13.109`）。
+
+钉值漂移史：`18 → 19`（`api` 那枚 extra `2 → 3`）。涨的那一条是 `c63fe4e` 落 AF8 时给 `api` 显式声明的
+`pydantic>=2.0`（`af_api.py` 顶层裸 import，此前靠 fastapi 传递依赖侥幸可用）。⇒ 这条腿当时**没跟着重钉**，
+于是在 HEAD 上红了很久：门自己 RC=0（它按现读算，不存数），只有把现读数字钉进断言的这条腿会红。
+这正是 §二之一百三十 记的那一族"把某一批的现读数字当永久期望"的形状——⛔ 修法不是删断言，是**带上出处重钉**。
 """
 from __future__ import annotations
 
@@ -72,9 +77,9 @@ def test_real_repo_is_green_and_pinned():
     assert mod.anchor_ok(ROOT) is None
     findings, info = mod.check(ROOT)
     assert findings == [], f"真仓读数不该为空却给出：{findings}"
-    assert info["total"] == 18, f"包声明依赖总数现读 {info['total']}"
+    assert info["total"] == 19, f"包声明依赖总数现读 {info['total']}"
     assert info["core"] == ["jsonschema>=4.20", "typer>=0.12"], info["core"]
-    assert info["extras"] == {"api": 2, "dev": 10, "ha": 1, "homesdk": 1, "mqtt": 1, "sim": 1}, info["extras"]
+    assert info["extras"] == {"api": 3, "dev": 10, "ha": 1, "homesdk": 1, "mqtt": 1, "sim": 1}, info["extras"]
     want, per = info["floors"][VHASS]
     assert want == FLOOR and per == {"sim": FLOOR, "dev": FLOOR}, f"在册下界现读 {want} / {per}"
 
