@@ -179,32 +179,77 @@ def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
 
 
 def test_real_repo_http_face_readings_are_pinned(real):
-    """`af_api.py` 的失败出口形状：0 枚留痕／5 枚 `ok: False`／1 个异常处理器／89 枚 Depends。
+    """`af_api.py` 的失败出口形状。⛔ 带账的两格钉「§五 登记 == 现读」，不带账的两格才钉死现状＋出处。
 
-    ⚠️ 89 是**入库面**读数（#118 那批改的取数面）。在途工作树曾读到 91——那条腿在本地绿、CI 红，
-    红的就是这一格的期望值取自并发在途面。
+    裁定 `20261012-AF可观测性台账过期三格` §三 第三步点名上一版的形状：它写的是 `logger_sites == 0`，
+    于是涨成 1 时只会喊「1 != 0」，说不出「账又过期了」——现在这腿直接对撞 §五 的登记值，
+    账实一脱钩就喊改账（连同状态），要漂也得先有人把 §五 那一行改了。
+    `ok_true`／`depends` 不是 §五 的读数键、没有账可对，按 #134/#135 的既有口径重钉现读并留出处。
+
+    ⚠️ 取数面＝**入库面**（#118 那批）。在途工作树曾读到 91——那条腿本地绿、CI 红，
+    红的就是期望值取自并发在途面。
     """
     http = real["http"]
-    assert http["logger_sites"] == 0, "af_api 一旦开始记日志，§五 那行的状态要改成「已还」"
-    assert len(http["ok_false"]) == 5
-    assert http["ok_true"] == 28
+    debt, errs = gate.parse_debt((REPO / gate.DOC_REL).read_text(encoding="utf-8"))
+    assert not errs, "\n".join(errs)
+    assert debt["af_api-logger-sites"]["num"] == http["logger_sites"], (
+        f"§五 `af_api-logger-sites` 登记 {debt['af_api-logger-sites']['num']}，现读 "
+        f"{http['logger_sites']}——要么改账（连同状态），要么把这次改动说明白"
+    )
+    assert debt["af_api-ok-false-sites"]["num"] == len(http["ok_false"]), (
+        f"§五 `af_api-ok-false-sites` 登记 {debt['af_api-ok-false-sites']['num']}，现读 "
+        f"{len(http['ok_false'])}——同上"
+    )
     assert len(http["handlers"]) == 1, "两条装饰器挂同一函数，处理器数按函数计"
     assert len(http["middleware"]) == 1
-    assert http["depends"] == 89
+    # 无账可对的两格，现状重钉：28 → 32、89 → 96，出处 `117f4dd`（WebUI 一键升级新增端点）
+    # ＋ `86bd023`／`0055e61`（round-005 审计确证 bug 修复）。
+    assert http["ok_true"] == 32
+    assert http["depends"] == 96
 
 
-def test_real_repo_debt_rows_match_fresh_readings():
-    """E 判据：§五 四枚读数键与现读逐一对撞，且各自有状态与认领。"""
+def test_real_repo_debt_rows_match_fresh_readings(real):
+    """E 判据的仓内那半：§五 四枚读数键与**现读**逐一对撞。⛔ 不写死数字——写死就等于再造一份「账停在旧值」。
+
+    状态档跟着对撞：`账过期·待补码`（裁定 20261012 §二 1 新引入的第四档）只许用在
+    「登记值已按现读改对、但这一格欠的是补码」——补码落地后改的是**状态**，不是 §四 的六行上限。
+    """
     doc = (REPO / gate.DOC_REL).read_text(encoding="utf-8")
     debt, errs = gate.parse_debt(doc)
-    assert not errs, f"\n".join(errs)
+    assert not errs, "\n".join(errs)
     assert set(debt) == set(gate.DEBT_KEYS)
-    assert debt["af_api-logger-sites"]["num"] == 0
-    assert debt["af_api-ok-false-sites"]["num"] == 5
-    assert debt["envelope-trace-id-sites"]["num"] == 6
-    assert debt["http-request-id-sites"]["num"] == 0
+    fresh = {
+        "af_api-logger-sites": real["http"]["logger_sites"],
+        "af_api-ok-false-sites": len(real["http"]["ok_false"]),
+        "envelope-trace-id-sites": len(real["env"]),
+        "http-request-id-sites": len(real["req"]),
+    }
+    for key, n in fresh.items():
+        assert debt[key]["num"] == n, f"`{key}` 登记 {debt[key]['num']}，现读 {n}——账停在旧值"
+    assert debt["af_api-logger-sites"]["status"] == "账过期·待补码"
+    assert debt["af_api-ok-false-sites"]["status"] == "账过期·待补码"
     assert debt["envelope-trace-id-sites"]["status"] == "已还"
     assert debt["http-request-id-sites"]["status"] == "欠账"
+
+
+def test_real_repo_ceilings_did_not_rise_with_the_debt_rows(real):
+    """裁定 §四 验收矩阵的**开关行**（row 3）：§五 改账之后，§四 六行必须一格未抬。
+
+    这一腿红了＝裁定被读反了（把「账实相符」当成「授权 AF 替自己上调棘轮」，正是判例 A 堵的形状）。
+    真要动这六行：先补码让现读下降，或另开一件评审——⛔ 不许顺手把期望值跟着现读改。
+    """
+    doc = (REPO / gate.DOC_REL).read_text(encoding="utf-8")
+    ceilings, errs = gate.parse_ceilings(doc)
+    assert not errs, "\n".join(errs)
+    assert ceilings == {
+        "debug": 14, "info": 7, "warning": 83, "error": 10, "exception": 11, "critical": 0,
+    }, f"§四 六行动了：{ceilings}"
+    # 现读仍高于上限的那一格是**已知欠账**，本批按裁定不认领、也不抬上限。
+    # 86 这一钉是「§4.1 差集名单的新鲜度」而非新账：补码掉一枚就红在这里，逼人重取差集、改名单。
+    nc = gate._no_code_counts(real["sites"])
+    assert nc["warning"] == 86, (
+        f"warning 无码现读是 {nc['warning']}，不是 86——§4.1 的逐枚差集（86−83＝3）要重取"
+    )
 
 
 def test_real_repo_access_log_anchor_present():
@@ -713,7 +758,7 @@ def test_e_unknown_debt_key_is_red(synth):
 
 
 def test_e_bad_status_word_is_red(synth):
-    """状态只认三档：写成"应该没事"就读不出，而读不出必须响，不能静默滑过这一行。"""
+    """状态只认那四档：写成"应该没事"就读不出，而读不出必须响，不能静默滑过这一行。"""
     _replace(
         synth["root"] / "docs" / "可观测性清单.md",
         "- `af_api-logger-sites` = 0 · 状态：欠账",
@@ -721,6 +766,22 @@ def test_e_bad_status_word_is_red(synth):
     )
     f = _findings(synth["root"])
     assert "E" in _rules(f), f
+
+
+def test_e_ledger_expired_status_parses_and_stays_accountable(synth):
+    """第四档 `账过期·待补码`（裁定 20261012 §二 1）必须能被 §五 解析——否则"改账"这一步本身会把门判红。
+
+    反空集：把这一档换成没在册的词（`test_e_bad_status_word_is_red`）必须响；换成它在册的那一档
+    且数字仍与现读对撞 ⇒ E 一条不许响。⛔ 这一档只动 §五，不碰 §四 六行。
+    """
+    doc = synth["root"] / "docs" / "可观测性清单.md"
+    _replace(doc, "- `af_api-logger-sites` = 0 · 状态：欠账",
+             "- `af_api-logger-sites` = 0 · 状态：账过期·待补码")
+    f = _findings(synth["root"])
+    assert "E" not in _rules(f), f
+    parsed, errs = gate.parse_debt(doc.read_text(encoding="utf-8"))
+    assert not errs, errs
+    assert parsed["af_api-logger-sites"]["status"] == "账过期·待补码"
 
 
 def test_e_claim_shape_is_red(synth):
