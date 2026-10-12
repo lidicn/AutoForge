@@ -11251,3 +11251,11 @@ E   AssertionError: assert '86736488' in {'********'}
 - 任务面：#81 的"第二次烤镜像的源提交"半边按现读收口（＝`68c30ae`；执行人那一格按 §三.4 属"读不出且要落码才读得出"，转 #130 三件套），"在役面落后 104 个提交"与热改收口归 #79／部署窗。新格：**在役容器层热改未回灌**（`af_auth.py` 那份仓内 0 命中）挂 #79（文件归属），政策半边另递 DCD（查重 `find-decision.ps1 "热改 容器 docker cp 回灌 在役"` ⇒ decisions/ 与判例库各 **0 命中**，非重投）。
 - 存证（`E:\tmp`，不进仓）：`af127_nas_verify.txt`（脚本全文 RC=1）、`af127_nas_inspect.txt`（inspect＋两侧 md5＋`git status` 名单）、`af127_afapi_faces.txt`（`af_api.py` 各提交脸）、`af127_nas_diff.txt`（远端 `git diff --stat` 与 `af_auth.py` 函数级 diff 摘录，⛔ 不含任何凭据值）、`af127_ci_now.txt`／`af127_ci_174_jobs.txt`。
 - 行尾自证：本文件工作树 CR＝0（新增段落全部 LF），`git show HEAD:docs/ADM联动执行记录-AF.md` 面亦 CR＝0。
+
+### 七、补记（投递 DCD 后就地订正一格，2026-10-12）
+
+`inbox/20261012-AF-在役容器热改口径-决策申请.md` §五① 原话写的是"把 E1／E2 那三条对撞固化成 `scripts/verify_ui_nas_deploy.py` 的新判据腿，**这条纯仓内、零远端写**"。投递后现读复核，**这句不成立，已在申请件 §五之二 就地撤回**：
+
+- 现读 `scripts/verify_ui_nas_deploy.py:50-56` 的 `WRITE_MARKERS` 名单里**含 `docker exec`（`:53`）与 `cp `（`:51`）**，而"容器内 md5／mtime"只有 `docker exec md5sum`／`docker exec ls` 两条通道——本批那几枚读数全部是本席在脚本**外用 `ssh` 手敲**取的，脚本自身发不出去。
+- ⇒ 落那条检测腿＝**要放宽一条防写守卫**（哪怕只放到"`docker exec <容器> md5sum|ls`"的白名单形状），而"这份只读核对脚本能不能对生产容器下命令"正是该件 §二 那一问的另一面。⛔ **本批因此不落检测腿**，挂在裁定之后；#131 的口径同步改成"等裁＋#79 窗"。
+- 记这条的理由：不写就等于给下一个席留一句"申请书说能做、实际没做"的暗差——同族形状在 §二之一百二十六 那条"报告修法与既有裁定相反"里已经撞过一次。
