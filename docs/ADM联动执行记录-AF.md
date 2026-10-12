@@ -11373,3 +11373,16 @@ E   AssertionError: assert '86736488' in {'********'}
 - **不自决清单**：`af_api.py`／`af_auth.py`／`docker/` 两份 compose／`ui-user-mimo/` 一行没碰；HTTP 响应体带码那一格仍按归属纪律挂在 #79 窗；合并窗与端到端验收锚（早 7:10 TTS）未跑，⛔ 不用"各环节单测绿"冒充端到端；其余 14 份缺回填的裁定书本批不批量动（每份要逐条现读，压缩着写就会写成假话）。
 - **提交态**：本枚为纯记账提交，sha 由 `git log -1` 现读。
 - **同日追加第三份（⛔ 不是另起一批，是同一普查名单上的下一格）**：`decisions/20261009-AF确认闸预演档与拒绝终态-裁定.md` 的《执行回填》写回（现读 50→**85 行**、CR=0、`validate-receipt.ps1` 三道硬门过）。逐条现读：§〇 硬前置消费者仍在 `af_executor.py:648,651`（＋`:211` 确认后重入真执行、`:847` 确认会话沿用最近 ask 的 room）；§一 甲"不挂起但必须留痕"不只是落了码，还有**独立判据腿**——`tests/unit/test_requires_confirm_runtime.py:197` 的断言原文写着 `assert "confirm_skipped_dry_run" in notes, "跳过必须留痕，不能与'拦了'长得一样"`，正是裁定 §一 末段的可执行版本；§二 2.1 的拒绝审计在 `af_audit.py:68`＋`af_executor.py:231`（`confirm_denied:{kind}`，kind 进 message）；§二 2.2 的诊断码 `CONFIRM_WITHOUT_DENY_PATH` 在 `af_scanner.py:56,99,516,522`，而"发诊断却不注册"那一格由通用判据 `tests/unit/test_diagnostic_code_catalog.py` 兜住。判据腿现读 `20 passed in 0.52s`（`test_requires_confirm_runtime.py`＋`test_confirm_exit_diagnostic.py` 合跑）。偏差只登记时限（落码 10-09／10-10，回台账 10-12）；被驳回的丙（加被拒标记、动响应形状）本就没授权，`af_api.py` 一行没碰。⇒ **台账欠账 16 份，本批闭 3 份，剩 13 份**挂在 #138。
+
+## §二之一百三十四 · 目标逐格对撞表：计划 §六 六行＋§七 五卡按 HEAD 现读逐格复测，未落半边逐格指名卡点（零落码）（2026-10-12）
+
+- **为什么这一格是真活**：owner 的目标是"完成计划的全部内容"。收口前必须有一张**逐格**对撞表说明每行现在到底在哪，否则会重演 §二之一百三十/一百三十一 那件事——**过期归属的代价不是难看，是下一个人排错**。⛔ 表里的数一律现读，不抄计划文档里的旧读数（计划文档此刻还躺在并发在途面，`git status` 现读 `M docs/ADM联动执行计划-AF.md`）。
+- **计划 §六（下一阶段：更紧密联动，DCD 20261006）六行现读**（取数＝`git show HEAD:<file> | grep -c`，一律取**入库面**，⛔ 不用工作树冒充 CI 口径）：
+  - 行 2（`adm/autoforge/status` 发 JSON，载荷出库侧）⇒ `git show HEAD:src/autoforge/af_mqtt_bridge.py | grep -c "encode_status"` ＝ **3** ✓ 已落。
+  - 行 3（断连/凭据缺失 → degraded＋`ADM_ERR_BROKER_UNREACHABLE`）⇒ 同面 `grep -c "mark_degraded(ADM_ERR_BROKER_UNREACHABLE)"` ＝ **1** ✓ 已落（工作树侧行号读数见 §二之一百三十三：`af_mqtt_bridge.py:36,370,448,512,627,633`）。
+  - 行 5（MCP/HTTP 统一码）⇒ **两格分裂，按现读记账不按 ✅ 记账**：`git show HEAD:src/autoforge/af_mcp.py | grep -c ADM_ERR` ＝ **14**（MCP 半边已落），`git show HEAD:src/autoforge/af_api.py | grep -c ADM_ERR` ＝ **0**（HTTP 半边未落）。⇒ 计划 §六 那句"第 5 项 ✅（AF 半边）"字面成立，但**成立的是带缺口的半边**：HTTP 那一格卡在 `af_api.py` 的并发在途归属（任务 #79 窗），⛔ 不是"AF 少写几行"。
+  - 行 1／行 4／行 6 ⇒ 三行都在**合并窗**后面（真 broker＋镜像重烤＋MA 真发洞察）。行 6 另有一格新事实：验收探针在库侧**存在**（`E:\NAS\homesdk\scripts\verify_adm_linkage.py` 现读在盘），但 AF 仓内 `grep -rln "verify_adm_linkage" tests scripts` ⇒ **0 命中**，只在计划文档里被引用——即**AF 侧没有任何一条腿跑过它**，开窗时第一件要做的就是把探针接进验收读数，⛔ 不许现在就按"三组全绿"记账。
+- **计划 §七（以 AF 为核心，DCD 20261008）五卡现状**：卡 1／卡 3／卡 4 的仓侧半边已落（逐格落点与判据见 §二之一百三十三 那份执行回填）；卡 2（`ma_query` 节点）⇒ 现读 `grep -rn "ma_query" src tests` **0 命中**，前置＝MA 三路径 MCP MVP，不在 AF 手里；卡 5（端到端验收锚）⇒ 依赖卡 2＋合并窗，未跑。⇒ **卡 2／卡 5 没有一格是"AF 能收却没收"**。
+- **结论（对撞后的真值，⛔ 不是完成声明）**：计划 §六／§七 共 11 格，其中 **5 格仓侧已落并带判据腿**，**6 格的未落半边逐格有指名卡点**——MA 侧接口（卡 2）、NAS 合并窗（§六 行 1／4／6、卡 5、以及部署通道各件）、`af_api.py` 归属（HTTP 带码）、以及 12 件 DCD 待裁（可观测性三格、常驻通道 ticker、契约护栏 3 的 N 值、入向载荷进 DSL、WebUI 自更新 Q5–Q7、发布面 Q1 甲三件套、稳定性八问 Q4 甲、热改口径、双源 `af_local` 切除、20261009 首演名单待 owner 勾、`SIGTERM` 收子进程问 4、取数面口径）。⇒ 目标**未达成**，本表的作用是把这些"未达成"从模糊的"还没做完"换成可复核的**逐格指名**。
+- **不自决清单**：⛔ 没有为了"看起来在收口"去动任何账本数字、清单 AUTO 段或 `--write`；未执行任何 docker／远端删除；`af_api.py`、`af_auth.py`、`docker/` 两份 compose、`ui-user-mimo/` 全树本批一行没碰；计划文档本身不入批（并发在途面）。
+- **提交态**：本枚＝纯记账（本文件＋§十九 一行），sha 由 `git log -1` 现读，⛔ 不提前自抄。
