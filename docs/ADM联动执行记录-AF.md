@@ -11193,3 +11193,61 @@ E   AssertionError: assert '86736488' in {'********'}
 - 暂存面自证：`git diff --cached --numstat` 在本批只列出那 8 份；`git diff --name-only`（未暂存）留着 `docker/docker-compose.api.yml`、`src/autoforge/af_auth.py`、`docs/ADM联动执行计划-AF.md` 与 `docs/audit/*` 的归档移动 ⇒ 并发在途面一行没被本批带走；未跟踪件（`issued_tokens_clean.json`、`docs/audit/propose_round005/`、`docs/audit/归档/*`、`docker-compose.api.yml.tmp`、`docker/docker-compose.api-test.yml`）原处未动。
 - 推送（owner 在本目标文本里明确要"提交到 GitHub"）：`git push origin master:main` ⇒ `ff37ff1..535b0c0  master -> main`，`git ls-remote origin refs/heads/main` 现读 `535b0c0f595c31c4086ec1fdec5e915818146df8` ＝ 本地 `git rev-parse HEAD` 同一枚。⛔ 只推 `master:main`，没有推任何分支名以外的东西。
 - ⚠️ 推后 CI 现读（`python scripts/gh_ci_status.py`）：run **173**（`535b0c0`）`status=in_progress`；其前连跑 164–172 全部 `conclusion=failure`（HEAD 存量红，归 #113／#118 那两族），⛔ 本批不声称这枚推上去就转绿。
+
+## §二之一百二十七 · NAS 在役面回灌（只读）：镜像源码脸精确钉到 `68c30ae`，另两枚是**容器层热改**，其中 `af_auth.py` 那一份在仓内任何提交里都不存在（2026-10-12）
+
+**一句话结论**：`docs/ADM联动执行计划-AF.md` §5.2 那句"谁烤的、烤到哪个提交，这台机器读不出（要部署机 `docker inspect`）"本轮**读出来了**，而且读出来的形状和计划里的假设不一样——**镜像那一层是单一提交（`68c30ae`），在役容器整体却不是任何提交**：`/app/src` 里有两枚文件是烤好之后被写进容器可写层的，其中 `af_auth.py` 的脸经过全史对撞在仓内 0 命中。⛔ 本批远端**零写动作**（跑过的命令逐枚列在 §四），无 build／up／restart／cp／rm，在役容器没有被本批碰过一下。
+
+### 一、取数通道与前置
+
+- 只读核对脚本：`python scripts/verify_ui_nas_deploy.py` ⇒ **RC=1**，绿 4（L1 通道／L4 资源名／L5 md5 三方／L7 命令形状）、BAD 2（L2 端口绑 `0.0.0.0`／`[::]`、L3 `restart=unless-stopped`×1 且 `healthcheck` 0）、NA 2（L6／L8）。存证 `E:\tmp\af127_nas_verify.txt`。
+- 本批**第一次**在远端跑 docker 命令，且只跑读的那一类：`docker inspect`、`docker image inspect`、`docker exec … md5sum`、`docker exec … ls -l`。判据是 `Dockerfile.api:20` 的 `COPY src ./src`（＋ `:34` 的 `pip install -e .`）⇒ 容器里 `/app/src/autoforge/*.py` 的字节就是烤入那一刻的源码，所以**逐字节 md5 对撞能把在役源码钉回具体提交**，不需要第二份元数据。
+- 三路对撞的口径：容器内 md5 ↔ NAS 宿主机工作树 md5 ↔ 本机 `git show <c>:<path> | md5sum`（仓内 blob 面）。三方都量，任何"容器 == 某提交"的结论都必须同时给出"工作树等不等于它"，否则会被现场未提交改动冒充成提交态。
+
+### 二、读数（现读时刻 2026-10-12 09:44—09:47 ＋0800）
+
+| 格子 | 现读 | 命令 |
+|---|---|---|
+| 镜像烤成时刻 | `autoforge-api:latest` `created=2026-10-08T16:33:30.232501562+08:00`，`id=sha256:21a98aa3…` | `docker image inspect --format` |
+| 容器／进程时刻 | 容器 `created=2026-10-09T03:57:50Z`，`started=2026-10-11T15:16:21Z`（UTC） | `docker inspect --format` |
+| 挂载面 | **只有 `/data`、`/ui`、`/mimo` 三枚 bind**，`/app/src` 不在射程 ⇒ 源码确实烘在镜像层里（compose 注释里那条热挂源码是注释态） | `docker inspect --format "{{json .Mounts}}"` |
+| 镜像标签面 | `Config.Labels` 只有 `com.docker.compose.{project,service,version}` 三枚，**没有 git_sha／build 号** | `docker image inspect --format "{{json .Config.Labels}}"` |
+| 源码脸＝`68c30ae` | `af_service.py` `33f0a50c…`、`af_config.py` `182bea09…`、`af_mqtt_bridge.py` `36d5bc7a…`——三枚容器内 md5 与 `git show 68c30ae:src/autoforge/…` 逐枚相同 | 两侧 md5 对撞 |
+| 时间咬合 | `68c30ae` 提交时刻 `2026-10-08 16:30:44 +0800`，镜像 `16:33:30 +0800` ⇒ **烤成于该提交之后 2 分 46 秒** | `git show -s --format=%ad` ↔ `image inspect` |
+| 落后量 | `git rev-list --count 68c30ae..HEAD`（HEAD=`0cc5394`）＝ **104**；`git merge-base --is-ancestor 68c30ae HEAD`＝真 | `git rev-list`／`merge-base` |
+| NAS 工作树 | `git rev-parse --short HEAD`＝`68c30ae`，`git status --porcelain`＝14 行（7 枚 ` M` ＋ 7 枚 `??`） | 远端只读 `git` |
+
+**容器可写层那两枚（决定性的一格）**：
+
+| 文件 | 容器内 md5 | 对得上的提交脸 | 容器内 mtime | 对不上的地方 |
+|---|---|---|---|---|
+| `af_api.py` | `26e1aef6…` | 全史（`git log --all -- … \| md5sum` 逐枚扫，48 枚候选提交）唯一命中 **`0055e61`**（2026-10-11 23:16:54 ＋0800） | `2026-10-11 15:16:12 +0000`（＝启动前 9 秒） | 镜像烤成于 10-08，**mtime 晚于镜像 ⇒ 不可能来自镜像层**；NAS 工作树同 md5 ⇒ cp 源就是那棵树 |
+| `af_auth.py` | `4998f3c8…` | **0 命中**（16 枚候选提交逐个 `git show … \| md5sum` 扫完） | `2026-10-09 04:01:41 +0000`（首次起容器后 11 分钟） | 同一枚 md5 在 NAS 工作树上；`git diff --stat` 在远端读作 `af_auth.py \| 126 +++-` ⇒ 这是**登录线在途件被热烤进生产**，仓内没有这份字节 |
+
+`af_service.py` 一栏还能反过来证明"树动了、镜像没动"：NAS 工作树那份 md5＝`3a1eb8cd…`＝本机 `ecacff2`（10-08 21:06，烤之后 4.5 小时）的 blob，而容器里仍是 `68c30ae` 那份 ⇒ **FFL 那两个真 bug 的修复（`ecacff2`）压根没进在役镜像**。
+
+### 三、结论与对计划的更正
+
+1. **计划 §5.2 的"上界读不出"这一格现在有真值**：镜像源码面 = `68c30ae`（不是旧文案的"≥ `488901c`、上界读不出"，也不是 §四 那句"HEAD 那 26 个提交"——26 这个数是 10-04 的快照，现读是 **104**）。⛔ 计划文档本身不入本批（`docs/ADM联动执行计划-AF.md` 在并发未暂存名单里），这两处更正在这里落字，由 owner／下一批回写。
+2. **但"在役面"整体 ≠ 任何单一提交**：镜像层（10-08）＋ 容器可写层两枚热改（10-09／10-11）。所以任何"按提交验收线上"的判据都必须先证明 `/app/src` 与镜像层一致，否则 md5 对撞对到的是热改后的脸。
+3. **风险（登记，不自决）**：`docker compose up -d --force-recreate` 或任何重烤都会**同时吞掉** `af_api.py`（等于 `0055e61`，仓内有、重烤也带得走）与 `af_auth.py`（仓内没有，吞掉就找不到第二份，除非 NAS 工作树那份还在）；而 `restart: unless-stopped` 只保层不保重建。现读 `linkage.wired=false`、`AUTOFORGE_LIVE_ENABLED` 态、以及 NAS 那 7 枚 `??` 备份件（`af_api.py.bak-20261008-235543` 等）说明这台机器上"现场手改＋热 cp"是常态动作。
+4. **"是谁烤的"仍然读不出**，且读不出的原因就是 #130 那三件套：镜像无 `git_sha` label、`/api/health` 无 `build`（L8 现读 `build=null`，tags 全是 `latest`／`pre-f13-backup`／`pre-f11-backup`／`pre-group-backup`／`nonroot` 这类无提交身份的名字）。本轮是靠"三枚源码 md5 反推提交"补上的，属**一次性取证**，不可重复运行——这正是《发布面》裁定 §3 Q1 甲要的字段。**新增佐证，不重开已裁的那一问。**
+
+### 四、本批远端跑过的命令（逐枚，全为读）
+
+`ssh lidicn@192.168.2.200` 下：`hostname`（脚本 L1）、`docker ps`／`docker images`（脚本 L2／L8）、宿主机 `md5sum` 三枚源码、`git rev-parse --short HEAD`／`git status --porcelain`／`git diff --stat`／`git diff -U0 src/autoforge/af_auth.py`、`docker inspect`（`Config.Image`／`Created`／`State.StartedAt`／`Mounts`）、`docker image inspect`（`Created`／`Id`／`Config.Labels`）、`docker exec autoforge-api md5sum`（4 枚）、`docker exec autoforge-api sh -c "ls -l --time-style=full-iso …；ls /app/src/autoforge | grep -E 'bak|tmp'"`（容器内无 `.bak`／`.tmp` 残留）。
+
+- ⛔ 没有跑过：`build`／`up`／`restart`／`stop`／`kill`／`cp`／`rm`／`commit`／任何写 `docker`，也没有在 NAS 上写任何文件（存证全落在本机 `E:\tmp`）。
+- 两处 L2／L3 违例（端口绑所有接口、`unless-stopped` 无探针）改的是 `docker/*`，与登录线同窗 ⇒ **不自决**，挂 #79／部署窗。
+
+### 五、推后 CI 与记账态
+
+- `python scripts/gh_ci_status.py` 现读（09:48）：run **174**（`0cc5394`）`completed/failure`、run **173**（`535b0c0`）`completed/failure`——上一节那条 `in_progress` 到此收口为 `failure`。
+- `jobs 38192558135` 现读红枚集合＝`quality-gates`／`adm-linkage-contracts`／`ui-user-mimo-judgments`／`pytest`，绿枚＝`ui-typecheck-build`／`layering-gates` ⇒ 与 §二之一百二十六 记的 172／173 红枚集合**逐枚同名**，本批没有新增红 job。
+- 远端 main 现读 `git ls-remote origin refs/heads/main`＝`0cc53949f0b101a623526b7aed8a73efc95b59a3`＝本机 HEAD。
+
+### 六、分派与存证
+
+- 任务面：#81 的"第二次烤镜像的源提交"半边按现读收口（＝`68c30ae`；执行人那一格按 §三.4 属"读不出且要落码才读得出"，转 #130 三件套），"在役面落后 104 个提交"与热改收口归 #79／部署窗。新格：**在役容器层热改未回灌**（`af_auth.py` 那份仓内 0 命中）挂 #79（文件归属），政策半边另递 DCD（查重 `find-decision.ps1 "热改 容器 docker cp 回灌 在役"` ⇒ decisions/ 与判例库各 **0 命中**，非重投）。
+- 存证（`E:\tmp`，不进仓）：`af127_nas_verify.txt`（脚本全文 RC=1）、`af127_nas_inspect.txt`（inspect＋两侧 md5＋`git status` 名单）、`af127_afapi_faces.txt`（`af_api.py` 各提交脸）、`af127_nas_diff.txt`（远端 `git diff --stat` 与 `af_auth.py` 函数级 diff 摘录，⛔ 不含任何凭据值）、`af127_ci_now.txt`／`af127_ci_174_jobs.txt`。
+- 行尾自证：本文件工作树 CR＝0（新增段落全部 LF），`git show HEAD:docs/ADM联动执行记录-AF.md` 面亦 CR＝0。
