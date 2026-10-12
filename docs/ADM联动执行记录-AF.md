@@ -11348,3 +11348,18 @@ E   AssertionError: assert '86736488' in {'********'}
 - **这一格随后被远端自己证实**（同一脚本第二读，`total_count=186`）：`run 184 … 03fddda status=completed conclusion=failure`——即"⛔ 不声称转绿"不是保守说法，而是已发生的读数；`run 185 8bcdb9d`／`run 186 e656644` 此刻 `in_progress`，`success runs: []`。⚠️ 这一枚失败**是本批预期内的红**（出处＝上面那两门在册账），与 #134/#135 之前"远端逐枚 failure"同源；转绿的唯一路径是把那两份账收掉（一份等 DCD 裁、一份等登录线进 HEAD 后 `--write`），⛔ 不靠抬上限。
 - **不自决清单**：`docs/信任边界清单.md` 的 AUTO 段那 4 行未登记路由**不在本批重生成**（理由见上面归属订正第三条：`--write` 会把并发在途那两行一起抄进清单）；可观测性 §四 上限与 §五 欠账数字一个没动；`.gates-tally.txt`／`.gates-baseline.txt`／`.atomic-write-baseline.txt` 零改动；`src/autoforge/af_api.py`、`af_auth.py`、`docker/` 两份 compose、`ui-user-mimo/` 全树本批一行没碰（改动面只有 `tests/unit/` 那一份文件）。
 - **提交态**：产品面首枚 `e4a763b`（`git show --stat` 现读＝1 份／17 增 6 删）；记账面第一枚 `03fddda`（现读＝2 份／20 行新增，本文件 +19、§十九 +1），记账面第二枚 `8bcdb9d`（现读＝2 份／6 增 3 删，把上面那两格"门名单 23 条／CI 远端读数"补进同一节与 §十九 同一行，改动面仍只有这两份 docs）。推送现读：`git push origin master:main` ⇒ `03fddda..8bcdb9d  master -> main`，推后 `git ls-remote origin refs/heads/main` ＝ `8bcdb9d47b588e501885c1c44f3e97be320eaa97` ＝ 本地 `git rev-parse HEAD` 同一枚。⛔ 只推 `master:main`。⚠️ 本节这格补记本身另起一枚纯 docs 提交（那一枚的 sha 由 `git log -1` 现读，⛔ 不在写之前自抄——自抄必然是写后漂移的值）；推后 CI 不声称转绿：那两门的红账在 HEAD 面就成立。
+
+## §二之一百三十二 · 补 20261001《homesdk 接入四问》裁定的《执行回填》台账（#101 的第一格，零落码）（2026-10-12）
+
+- **为什么这一格是真活**：裁定书 `E:\NAS\关键决策部\decisions\20261001-AF-homesdk接入四问-裁定.md:9-11` 里 DCD 自己写下的补正条目——"《执行回填》区一直空着……AF 2026-10-05 的告知落在 inbox、没回填到本裁定末尾"，并点名这正是制度 §6.7 的"回执与台账分家"。任务 #101 把这一格挂了七天才现读复核：⛔ 不是"内容已交过所以等价"，台账空着就是空着。
+- **落码面＝零 src、零测试**。只有一份裁定书的**追加式**《执行回填》节（原 99 行 → 现读 136 行，CR=0，⛔ 未改写 DCD 的原字一句），加上本节记账。
+- **逐条结果按现读取数，不按记忆取数**（每条都带命令原文）：
+  - 问题 1（A＋DCD 亲自写 `homesdk.time`）⇒ 消费侧已落：`zipfile` 直读随附 wheel `docker/homesdk/homesdk-0.3.2-py3-none-any.whl` 的 `.py` 面 **17 枚，命中 `homesdk/time.py`**（⛔ 不靠"版本相同"推断"我调的那格在里面"，这条按 [[pin-artifact-two-faces]] 的教训走字节面）；运行期真值 `house_tz_status()` ⇒ `mechanism: 'homesdk.time'`。
+  - 问题 2（甲 IANA／`HOMESDK_TZ`，旧键降别名）⇒ `af_time.py:84-85,91,94,103` 在册，判据腿 `tests/unit/test_af_homesdk_time.py`＋`test_af_house_tz.py` 现读 **`20 passed in 19.29s`**。
+  - 问题 3（A 分两步）⇒ 仓内半边 `pyproject.toml:70 "homesdk>=0.3.2"`；镜像半边按裁定字面"不单独开"仍在等既有窗 ⇒ 归"未落项"，⛔ 不擅自开窗（本席连 `docker` 都没执行）。
+  - 问题 4（授权改 AgentOps 共享模板，三处）⇒ 前两处现读已落（`AgentOps/gates/templates/ci/gates.yml:13,50` 把"不许出现 `continue-on-error`"写成禁令＋计数棘轮；`templates/gates.sh:27-30,46` 解释器探不到即红）；裁定点名的 MA 待同步项 `memory-agent/.github/workflows/gates.yml` 现读 `continue-on-error` **0 命中**。**第三处（模板自带"已知违规样本必须非零"自检）本席 `grep -n "已知违规\|违规样本\|非零"` ⇒ 0 命中**：⛔ 不写成"已落"，在偏差登记第 2 格里如实请 DCD 裁定"算未落还是有另一形态覆盖"。
+  - 附带题（丙→乙渐进）⇒ 丙半边在 `af_service.py:1142-1148`（契约面 `ok` 仍恒 True，遥测面 `attach_telemetry(ok=bool(expect_report.get("ok", True)) …)` 吃真实判据）；乙半边卡 AF+DB 同窗，属"按设计的中间态"不是漏做。
+- **与"未裁"那一格的边界**：双源 fallback（`af_local`）切除**仍未裁**——回填里原样写明"卡在 DCD 裁定，不卡在 AF"，⛔ 不借回执自决。
+- **自查读数**：`validate-receipt.ps1 -Path <裁定书>` ⇒ 六项全 ✓（依据裁定可解析／原申请路径／逐条落点 file:line／读数命令原文／偏差登记／未落项归属），`RC=0`。
+- **不自决清单**：AgentOps 那份共享模板的第三处自检本席**没补**（跨仓治理面，且本批目标只是把台账闭合，不是顺手改模板）；可观测性／信任边界两门在册账一字未动；`af_time.py`、`af_service.py`、`pyproject.toml` 本批一行没碰（改动面只有 DCD 那一份裁定＋本仓两份记账 docs）。
+- **提交态**：本格只有记账面（⛔ 零产品面），sha 由 `git log -1` 现读，本席不提前自抄。
