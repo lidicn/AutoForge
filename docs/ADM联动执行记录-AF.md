@@ -11606,3 +11606,67 @@ git -C E:/NAS/AutoForge show --stat HEAD                 # 最近一枚（只有
 ```
 
 `git status` 现读：并发在途的 `docker/docker-compose.api.yml`、`src/autoforge/af_api.py`、`src/autoforge/af_auth.py`、`scripts/gh_ci_status.py`、`scripts/host_update.sh` 与 `docs/audit/` 那族删除（**含 三 那两份命中口令原文的件**，它们本就是未跟踪／未暂存态）**一份未暂存、一份未动**；`docs/ADM联动执行计划-AF.md` 未入本批。
+
+## §二之一百四十一 · 订正本日 §二之一百四十 与架构说明第 41 条里那句「容器侧 0 处分支字面／源分支只由预检脚本决定」——现读**不成立**（写侧 `af_api.py:1152` 有 `master` 缺省，且运行期接受任意传入）；另登记三格未跟踪承重件与仓根凭据形状件（零落码）
+
+**一、为什么会错，以及错在哪**：§一百四十 四 那句"容器侧**写站点 0 处、分支字面 0 处**"是用**一条只罩住读侧的 grep** 得出的——`grep -rn "_UPDATE_PREVIEW\|update_available\.json" src scripts`，它的射程只有"读 `.update_available.json`"这一条通道。自更新其实是**两条通道**，我只撞了第一条。补扫（同一时刻现读，命令原文照录）：
+
+| 判据 | 命令原文 | 现读 |
+|---|---|---|
+| 全树 `master` 字面 | `grep -rn '"master"' src/autoforge --include='*.py'` | **恰 1 处**＝`src/autoforge/af_api.py:1152 branch = (body.branch or "master").strip()`（⛔ 不是 0） |
+| 写侧通道（第二条） | `grep -n "_UPDATE_MARKER" src/autoforge/af_api.py` | `:1070` 路径定义（`.update_request.json`）／`:1146` 进行中冲突检查／**`:1161 atomic_write_text(_UPDATE_MARKER, json.dumps(marker…))`＝容器确实写文件**／`:1170` 回显路径／`:1177` status 读 |
+| 入参面 | `grep -n "branch: str \| None" src/autoforge/af_api.py` | `:136`（`UpdateBody.branch: str \| None = None`）⇒ **admin 可在 `POST /api/system/update` 的 body 里传任意分支名**，缺省才落 `master` |
+| 宿主应用侧（已入库那份） | `grep -n "REF\|fetch\|reset --hard" scripts/host_update.sh` | `:72` 注释"读取目标分支（默认 master）"、**`:73` `REF=…json.load(…MARKER).get('ref','master')… \|\| echo "master"`**、`:92 git fetch --force origin "$REF"`、`:102 git reset --hard "origin/$REF"` |
+| ★ 预检那份的交付态 | `git log --oneline --all -- scripts/host_check_update.sh`；`git ls-tree -r HEAD --name-only \| grep -c host_` | **全历史 0 命中＝从未进任何提交**；HEAD 树里 `host_*` 只有 **1** 份（`scripts/host_update.sh`，且现读 ` M` 在途）⇒ §一百四十 四.2 引的那**五处 `master`（`:24/:38/:58/:59/:79/:88`）全在一份未跟踪文件里** |
+
+**二、订正后的正确表述（覆盖 §一百四十 四 与架构说明第 41 条 ★ 那一格）**：
+1. **容器侧不"只读"**：读侧（`:1098` check／`:1174` status／`:1075` version）确实只读预览件；但**写侧** `:1123 POST /api/system/update` 会**把分支写进 marker**（`:1152` 缺省 `master`、`:1161` 原子写），宿主 `scripts/host_update.sh:73` 再按 marker 的 `ref` 取分支去 `fetch`／`reset --hard` ⇒ **"源分支这件事只由预检脚本决定"不成立**，它是**运行期由请求体决定、缺省落 `master`**。
+2. **§2.3 的结论方向不变、但成立的理由换了一格**：AF 今天两侧仍同为 `master`（发布线 `master`＋缺省档 `master`×2 处：`af_api.py:1152`、`host_update.sh:73`），所以 DCD 那句"对 AF 没有源可取"仍然**不成立**；但一致性比 §一百四十 写的更脆——**它不是"改脚本一行"才会断，而是 `POST /api/system/update {"branch":"main"}` 一次调用就能把它断开**，且这条端点在 `af_api.py`＝#79 窗的在途文件上、其 `body.branch` **没有白名单校验**（现读 `:136` 只声明 `str | None`）。⇒ 递交 DCD 的那问（要不要立「发布线 == 自更新源判定分支」的门、门归谁）**范围要扩**：只比脚本字面不够，还得管住 `body.branch` 的取值域。已按"同日补记进原件"追加进 `inbox/20261013-AF-口令原文在册与发布线一致性-决策申请.md` §十（⛔ 另起新件）。
+3. ⛔ **本节不改动 §一百四十 的原文**：错的那句留在原地当证据，因为它同时说明"只读一条通道"这种取证形状为什么会漏——下一个读的人要的是这条教训，不是一个被悄悄改干净的结论。
+
+**三、顺带扫出的三格未跟踪态（与 DCD 今日判例「『没交付的』不许被读成绿」同族，但方向相反：没交付的却是**承重件**）**：`git status --porcelain` 现读（本仓 25 行，其中 `??` 12 行）——
+- `?? scripts/host_check_update.sh`（2779 B、mtime 10-13 11:22）＝**铁律第三跳的预检生产者**，crontab `*/5` 跑的是 NAS 上那份；仓内这份从未提交 ⇒ 按新口径它**不算交付**，而它偏偏是 `.update_available.json` 的唯一生产者。⛔ 本批不自决 `git add`（名字与 `host_update.sh` 只差一词、且属部署侧承重件，归 #125／#130 那条发布线待裁面）。
+- `?? scripts/host_update_nas.sh`（193 行）＝同族第三份，同样未入库。⇒ 宿主侧脚本已有**三份、两种命名**，其中两份在 git 之外。
+- `?? issued_tokens_clean.json`（**147 B**、mtime 10-09 12:23、仓根）＝顶层键 `scopes`／`subject`，体内**含 1 枚 16 位以上十六进制串**（⛔ 本文件不抄值、不打印值）。这不是 MQTT 口令，是**另一类凭据形状**躺在仓根未跟踪件里；按 rev 6 那句"发现任何文件里出现口令原文 ⇒ 就地停手并按制度 §6.7 上报"，本席**停手**：⛔ 不删、⛔ 不改、⛔ 不 `git add`、⛔ 不打开第二遍读值，只登记路径／字节数／mtime／键名与"1 枚长串"这一计数，具体归属等 DCD／出资人定向（若出资人要它，正确落点是仓外凭据面而非仓根）。
+- 另 `?? docker-compose.api.yml.tmp`（6588 B、mtime 10-09 11:56）＝仓根一枚固定名 `.tmp` 残留，属 #34 那族"固定名 .tmp"形状的**现场残留**（非本批产物，⛔ 本批不删他人件）。
+⇒ 这四格一并进 §十 那份申请的上报面；⛔ 本批在仓内不执行任何删除动作（远端／本地删除都属越界）。
+
+**四、读数与本批其余结论不受影响**：`grep -rn "ma_query" src/autoforge` 仍 **3 命中**、盘上腿仍 `取材=HEAD树` 绿、九面口令扫数逐面未变（那一轮用的模式锚在 `MQTT_PASSWORD|MQTT_PASSWD|MQTT_PASS` 键名上，与本次补扫的是两条不同通道）。⛔ 零落码、⛔ 未抬上限、⛔ 未动 `.gates-*.txt`、⛔ 未 push；本批未使任何联动腿由绿转红（盘上仍 4/5、现网仍 0/5）。门禁遍 e 与遍 d 的逐字节对撞结果见 五（若不同则逐行解释，解释不了不收口）。
+
+**五、门禁遍 e／f／g（⚠️ 先记账面顺序，再记读数）**：`GATES_PYTHON=C:/Users/lidicn/AppData/Local/Programs/Python/Python313/python.exe` 下 `bash gates.sh > E:/tmp/gaf01_gates_<e|f>.txt`。
+- **遍 e 的顺序如实（这一格重要）**：`ls -la --time-style=%H:%M:%S` 现读 ⇒ `gaf01_gates_e.txt` **15:47:28**、本文件 **15:47:31** ⇒ **文档最后一次写落在门跑完之后 3 秒**，所以遍 e **不是**"订正全文落笔之后的干净面"（本节 四／五 落笔时门已在读工作树）。⛔ 因此本批不以 e 冒充终局面，另起**遍 f**（下面所有 docs／申请件改动**全部落笔之后**才 fire），e 只作对照留档。
+- **遍 e 读数**：`E_RC=1`、`35208 B`、md5 `ec77ad69957b4708f8b01567552ef62f`，`cmp E:/tmp/gaf01_gates_e.txt E:/tmp/gaf01_gates_d.txt` ⇒ **`CMP_RC=0`（无输出＝逐字节相同）**；CR 计数 **150**，标记行 **✓20／✗3**（✗＝信任边界 7 处、进程模型 22 处、可观测性 71 处，逐条归属见 §二之一百三十九 五／六，⛔ 非本批）。⚠️ md5 与遍 d 同（`ec77ad69…`）而**与遍 a／b／c 不同**（那三遍是 `ac0686b0…`）——差因在 §二之一百三十九 十三 已钉死：本批那一枚提交进了索引，`git ls-files src` 的 `.py` 计数把入库面读数抬高，不是门漂移。
+- **遍 f 终值（上面 一—七 全部落笔之后 fire）**：`F_RC=1`、`35208 B`、md5 **`ec77ad69957b4708f8b01567552ef62f`**，`cmp E:/tmp/gaf01_gates_f.txt E:/tmp/gaf01_gates_d.txt` ⇒ **`CMP_RC=0`（无输出＝逐字节相同）**；CR=**150**、`grep -c "^✓"`＝**20**、`grep -c "^✗"`＝**3**（信任边界 7／进程模型 22／可观测性 71，逐条归属见 §二之一百三十九 五／六，⛔ 非本批）。⇒ **d／e／f 三遍同一枚 md5**：本批这几枚订正＋记账改动没挪动任何一门的一格，⛔ 未抬任何上限。⚠️ 如实登记最后一格：本行（五 的 f 终值）与下面 八 是**在遍 f 跑完之后**补写的，形状与前批 §十一 同（一门读工作树、而"读数落在文档里"这件事必然晚于门跑完）；本仓两枚 `check_*.py` 的射程都不含这两份记账 docs（现读：`grep -n "ADM联动执行记录\|AF完整架构" scripts/*.py` ⇒ 命中只在 docstring／输出字符串里，无一处 `open()` 它们，见 §二之一百三十八 的射程核对），故这一格补写不会使 f 失效。
+- **遍 g 终局面（f 之后又改了两处——本节 五 的标题与 九 的表格转义——改完才 fire）**：`G_RC=1`、`35208 B`、md5 **`ec77ad69957b4708f8b01567552ef62f`**；`cmp E:/tmp/gaf01_gates_g.txt E:/tmp/gaf01_gates_f.txt` ⇒ **`CMPG_F_RC=0`**，`cmp E:/tmp/gaf01_gates_g.txt E:/tmp/gaf01_gates_d.txt` ⇒ **`CMPG_D_RC=0`**（两枚 cmp 均无输出＝逐字节相同）；CR=**150**、`grep -c "^✓"`＝**20**、`grep -c "^✗"`＝**3**（同 三枚归属，⛔ 非本批）。⇒ **d／e／f／g 四遍同一枚 md5**。⚠️ 同一形状如实登记第二遍：**本行读数写在遍 g 跑完之后**，且 g 之后还改了两处记录面（本节 五 末尾那条"⛔ 不再另起遍 h"的说明本身＋架构说明 §十九 本批那格从「d／e／f 三遍」改成「d／e／f／g 四遍」）——两处都是**记录 g 的动作**，不是新的取数面；且转义修完后的这两处 docs 改动**不在任何一门射程内**（核对法与结果照上面 f 那条：`grep -n "ADM联动执行记录\|AF完整架构" scripts/*.py` 无一处 `open()` 这两份），故这一格不会使 g 失效；⛔ 不因此再另起遍 h 冒充"完全终局面"——那一遍同样会被它自己的记录行作废（本仓 §二之一百三十九 十一 已把这条形状钉死）。
+
+**六、投递面的一格现读变化：那份申请件已被 DCD 改名登记「已受理」**（⚠️ 这一格必须写，否则下一个按路径去找的人会撞空）：
+- 现读 `ls E:/NAS/关键决策部/inbox/20261013-AF-*.md` ⇒ **只有一份**，名 `20261013-AF-口令原文在册与发布线一致性-决策申请【已受理】.md`（**16598 B**、mtime **15:54:01**）；本件首投时的 `…-决策申请.md`（11386 B）这一名字**现读不存在** ⇒ 改名发生在 DCD 侧受理动作里，⛔ 不是本席的手。
+- 本节的 §十 补记落进了**改名后的那一份**：证据三条＝① `wc -l` 由 85 行进到含 §十 的体量、② 文件 mtime 15:54:01 与本次写同刻、③ `grep -n "^## "` 现读 §一—§九 九节在位且 §十 位于 85 行（尾部）⇒ **DCD 只加了名字后缀、未在件内追加文字**（§九 之后原为页脚，本席的 §十 插在页脚之前，页脚已改为「15:2x 首投／15:5x 同日补记 §十」）。
+- ⚠️ 教训一条（进本仓纪律，不进代码）：**同日补记前必须先 `ls` 现读文件名**，不能沿用它写下时的路径。本席这次是靠"写完之后 `ls` 对撞字节数与 mtime"才发现改名，属**运气**，不属流程；下一次先 `ls` 再写。
+- 复核：`powershell.exe -NoProfile -ExecutionPolicy Bypass -File …\validate-application.ps1 -Path <改名后的现读路径>` ⇒ **硬门全过、`VALIDATE_RC=0`**，七项 ID 全 ✓，证据列现读**路径 26 处／读数 34 处**（§十 追加后从 12／12 涨上来），file:line 精度那项命中 10 处。⛔ 本件除 §十 外一字未改（§三 方案表与 §五 倾向"甲"原样）。
+- **"未在件内追加文字"这一条用字节算式钉死**（⛔ 不靠肉眼看diff）：`python -c` 现读改名后文件 `size=16598`、`## 十、` 的字节偏移 `idx=11287`、其前头部 `11287 B`、其后 `5311 B`；本件首投时 `11386 B` ⇒ **11386 − 11287 ＝ 99 B ＝ 被本席替换掉的那行旧页脚的长度**，§十 之前逐字节未变。⇒ DCD 这次只做了"改名登记受理"，件内文字是本席一个人的手，这条对下一个核"谁写了这份申请"的人有用。
+
+**七、MA 席位 15:49 那份件里有一条点名转给 AF 的口径更正，本批如实登记而不在本批收**（`inbox/20261013-MA-联动路线图rev6的四格读数两条上报与一条旧口径更正-登记【已受理】.md` §四，原文那句「AF／DB 若沿用同款表述，建议各自 `docker inspect` 现读一次 `RW` 再定窗口——本席位⛔ 代查他仓」）：
+- AF 侧**确实沿用了同款表述**：§十八 第 39 条／执行记录 §二之一百二十七（任务 #81）那格的机制论证写的是「`Dockerfile.api` 是 `COPY src` ⇒ 容器内 `/app/src` 的字节就是烤入时的源码」。MA 现读推翻的正是这一类机制推断——它那边 `/app/src` **被宿主的只读 bind mount 覆盖**，于是 `git pull`＋`docker restart` **能**把新代码带进现网、⛔ 不需要重烤。
+- ⇒ AF 的结论暂不改动，因为本批那格不是纯推断：三枚采样文件的**容器内 md5 与 `68c30ae` 的 blob 逐枚相同**（三方对撞），即便 `/app/src` 是 bind mount，那次读数也仍然成立——但**"烤入"这一句归因可能是错的**（同一份字节也可以来自 bind 上的同一棵树）。要收的格＝在部署窗内 `docker inspect` 现读 `Mounts`（含 `RW` 与 `Source`），把归因从"镜像层"改成现读口径。⛔ **本批不跑任何 docker 命令**（批次红线），已挂任务 **#144**，归属＝NAS 合并窗（#76／#79 族）＋执行人＝owner 点头后的本席。这一格与 #131（在役容器层热改未回灌）同面：若 `/app/src` 真是 bind mount，#131 那两枚热改的**来源**也要一起改口径。
+- 顺带登记：MA §四 的影响 1「现网落后不是链路断，而是没人点过 WebUI 更新」与本席 #125（WebUI-only 更新口径，Q5–Q7 已递 DCD 待裁）同题——**MA 那侧用现读支持了"WebUI 更新是可用的"**，这条对 DCD 裁 #125 有用，本席把它转述进 #143 的待裁面而不自取结论。
+
+**八、同一轮补扫把 `G-AF-08` 的"盘上半边"读松了一格（现读缺的正是路线图自己钉的那枚负控；本批零落码，新挂 #145）**：路线图 rev 7 `G-AF-08` 的出口判据第二句＝「`POST /api/system/update` 能在**脏树时拒执**（负控：往部署树放一个未收编改动 ⇒ 必须拒，⛔ 不静默覆盖）」，而它的 `读数` 那行现在写的是"形状已在"。三面现读（两面对撞：自写扫描＋真跑 `grep -nE`，⛔ 不用 `head` 的退出码冒充 `grep` 的）：
+
+```
+face=src/autoforge/af_api.py            grep_E_rc=1 hits=0 lines=[]
+face=scripts/host_update.sh             grep_E_rc=1 hits=0 lines=[]
+face=scripts/host_check_update.sh       grep_E_rc=1 hits=0 lines=[]      （模式 porcelain|dirty|stash|脏）
+```
+
+⇒ 判定侧（`af_api.py:1123` 只核版本号与"已有请求"两格）与执行侧都**没有脏树检查**；`scripts/host_update.sh` 的形状是 `:84 tar czf "$BACKUP" … src/ ui/ ui-user-mimo/` 备份之后 **`:102 git reset --hard "origin/$REF"` 无条件覆盖**（失败回滚路径 `:123` 同样 `reset --hard`）。⇒ 这一格的如实写法不是"未验证"而是**"盘上就不成立"**：静默覆盖会发生，缓解只有那份 tar（⛔ 不是 git 层拒执，回滚要人手掏 tar）。⚠️ 一并登记一处口径差：rev 7 那行还写着"裁定书 §五-3 承诺的追加判据（发布线↔自更新源同一条）在约束面**仍 0 处**"——那一格归 DCD 的手，与本席这格是两件事，⛔ 混写会让下一个读数的人以为同一格有两双手。落点两格都撞在途文件（`af_api.py`＝#79 窗；`scripts/host_update.sh` 现读 ` M`）⇒ ⛔ 本批不落码，挂 **#145**，窗口顺序排在 #125（WebUI 自更新口径待裁）之后。
+
+**九、提交态（⛔ 未 push；本格只写取法，⛔ 不钉本枚 sha／枚数）**：批前 HEAD 现读 **`9fba5df`**（本席第三枚 docs 提交，已提交祖先，后续提交挪不动它；⛔ 不用 `HEAD~N`）。取法：
+
+```
+git -C E:/NAS/AutoForge log --oneline 22c2d16..HEAD      # 今日全批枚数与摘要行（含 16f35f9 落码枚）
+git -C E:/NAS/AutoForge diff --name-only 9fba5df..HEAD   # 本枚订正的文件名
+git -C E:/NAS/AutoForge show --stat HEAD                 # 最近一枚（只有这一行会随下一枚移动）
+```
+
+`git status` 现读：并发在途的 `docker/docker-compose.api.yml`、`src/autoforge/af_api.py`、`src/autoforge/af_auth.py`、`scripts/gh_ci_status.py`、`scripts/host_update.sh` 与 `docs/audit/` 那族删除**一份未暂存、一份未动**；本枚只 add 两份记账 docs。⛔ 零落码、⛔ 未动 `.gates-tally.txt`／`.gates-baseline.txt`／`.atomic-write-baseline.txt`、⛔ 未跑任何门的 `--write`、⛔ 未 push。
