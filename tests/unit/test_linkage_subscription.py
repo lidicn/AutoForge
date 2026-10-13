@@ -281,6 +281,44 @@ def test_inbound_readings_are_surfaced(tmp_path):
     assert inbound["feed"]["root"].endswith("linkage_events")
 
 
+def test_insights_side_of_inbound_face_is_surfaced(tmp_path):
+    """洞察那半边的计数从前"有数、没有脸"：`insights_in`/`insights_rejected` 只在 `counts` 里，
+    健康面读不到 ⇒ 路线图 `af_subscribes_insights` 那一格的现网半边任何只读命令都给不出逐字
+    `PASS`（零值分不清"没订"还是"对端没发"）。本腿锁三键齐全、取值对得上、两条队列的拒收不串。
+    """
+    client = FakeClient()
+    bridge, _ = _bridge(tmp_path, client=client)
+    bridge.start()
+    bridge.handle_message(None, None, _msg(INSIGHTS_TOPIC, {"natural_language": "x", "conf": 0.5}))
+    bridge.handle_message(None, None, _msg(PRESENCE_TOPIC, PRESENCE_OK))
+
+    inbound = af_mqtt_bridge.linkage_status(bridge)["inbound"]
+    assert inbound["insights_subscribed"] == [INSIGHTS_TOPIC]
+    assert inbound["insights_in"] == 1
+    assert inbound["insights_rejected"] == 1      # 缺稳定身份：记在 insights 那族计数上
+    assert inbound["rejected"] == 0               # ⛔ 不与在场/健康的 `linkage_rejected` 共用
+    assert inbound["subscribed"] == list(LINKAGE_TOPICS)   # 既有语义不动：那行仍只锁 LINKAGE_TOPICS
+    assert client.subscribed == [INSIGHTS_TOPIC, *LINKAGE_TOPICS]
+
+
+def test_insights_face_stays_present_when_subscription_is_off(tmp_path):
+    """订阅关掉 ⇒ `insights_subscribed` 为空表、两枚计数键**仍在**（零值 ≠ 键不存在）。
+
+    反空集那一腿：如果实现写成"没订就不给键"，取数方 `KeyError` 会被读成"读数取不到"，
+    而路线图要的是能区分"这条进程没订"与"订了但对端没发"。
+    """
+    client = FakeClient()
+    clock = _clock()
+    sink = make_linkage_feed(store_root=tmp_path / "store", clock=clock)
+    bridge = AfMqttBridge(client, linkage_sink=sink, clock=clock, subscribe_insights=False)
+    bridge.start()
+
+    inbound = af_mqtt_bridge.linkage_status(bridge)["inbound"]
+    assert inbound["insights_subscribed"] == []
+    assert inbound["insights_in"] == 0 and inbound["insights_rejected"] == 0
+    assert client.subscribed == list(LINKAGE_TOPICS)
+
+
 def test_make_linkage_feed_keeps_two_separate_directories(tmp_path):
     """洞察队列与联动队列分开：一条满了要拒收，一条满了要裁旧，共用目录就只剩一种回收策略。"""
     feed = make_linkage_feed(store_root=tmp_path / "store")

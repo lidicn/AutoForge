@@ -1070,10 +1070,17 @@ def linkage_status(bridge: "AfMqttBridge") -> dict[str, Any]:
         # 卡3 的入向半边：订了哪两条、收了多少、拒了多少、队列现在多重。
         # `feed.wired=False` 就是"桥在、但没给落盘队列"——此时每条入向事件都在拒收计数里，
         # 读数会显示 `rejected` 一路涨而 `presence_in` 恒零，这比"看着健康其实全丢了"好读。
+        # 洞察那条线以前只有 `counts`、没有脸（`insights_in`/`insights_rejected` 自 `:805`/`:813`
+        # 就在记，`stats()` 也带出，但健康面读不到）⇒ 现网只能证明"消息到过"，证不了"订了没有"。
+        # 这三键把已有状态原样接出去：⛔ 不新造对外面、⛔ 不动 `state`/`degraded` 语义
+        # （那面的形制由裁定 20261007 §二 丁A 定过），`insights_subscribed` 与 `subscribed` 同形（列表，未订＝空）。
         "inbound": {
             "subscribed": list(LINKAGE_TOPICS) if bridge.subscribe_linkage else [],
+            "insights_subscribed": [INSIGHTS_TOPIC] if bridge.subscribe_insights else [],
             "presence_in": bridge.counts.get("presence_in"),
             "device_health_in": bridge.counts.get("device_health_in"),
+            "insights_in": bridge.counts.get("insights_in"),
+            "insights_rejected": bridge.counts.get("insights_rejected"),
             "rejected": bridge.counts.get("linkage_rejected"),
             "feed": bridge.linkage_stats(),
         },

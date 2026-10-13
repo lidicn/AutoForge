@@ -389,13 +389,17 @@ API base：`VITE_API_BASE ?? 'http://localhost:8787/api'`。这三棵树的调�
  "reasons": ["ADM_ERR_BROKER_UNREACHABLE"],     // 与 retained status 载荷同一来源
  "publish_errors": 0,
  "inbound": {"subscribed": ["ma/presence", "ma/device-health"],  // subscribe_linkage=False ⇒ []
+             "insights_subscribed": ["ma/insights"],             // subscribe_insights=False ⇒ []
              "presence_in": 12, "device_health_in": 3, "rejected": 1,
+             "insights_in": 4, "insights_rejected": 1,
              "feed": {"wired": true, "root": "…/linkage_events", "limit": 500,
                       "ttl_s": 86400.0, "per_kind": {"presence": 12, "device_health": 3},
                       "unreadable": [], "watermark": "1759996800123|presence|-9f3c1a2b.json"}}}
 ```
 
 `inbound` 是卡3 那一半的读数面，四条都可证伪：`subscribed` 为空 ⇒ 这条进程根本没订（`--no-linkage-subscribe` 一类），不是"对端没发"；`feed.wired=false` ⇒ 桥在但没给落盘队列，于是每条入向事件都进 `rejected`、`presence_in` 恒零（这比"看着健康其实全丢了"好读）；`unreadable` 非空 ⇒ 盘上有读不出来的条目（诊断环形清单，最多 50 条，不参与任何判定）；`watermark` 是**已消费到哪一条**的水位，只随 tick 线程抽取而推进，`serve` 里它恒为空串（见 3.4）。
+
+洞察那半边的三键（`insights_subscribed`／`insights_in`／`insights_rejected`，2026-10-13 起）补的是"有计数、没有脸"那一格：两枚计数自 `af_mqtt_bridge.py:805`/`:813` 就在 `counts` 里、`stats()` 也带出，但健康面读不到 ⇒ 只读取数分不清"没订"与"订了但对端没发"。订阅面与 `subscribed` 同形（列表，未订＝空表），计数键**恒在**（零值 ≠ 键不存在）。两条队列的拒收仍分开计数：`insights_rejected` 与 `rejected`（=`linkage_rejected`）⛔ 不共用。
 
 **"readonly=true 但写面 200"不是矛盾**：前者是身份，后者看 `write_gate`。`no_lease` = 探不到租约状态，**绝不塌回 `open`**。
 
@@ -565,4 +569,5 @@ FAILED tests/unit/test_ui_api_paths_gate.py::test_all_trees_of_this_repo_are_in_
 | 2026-10-10 | HEAD `a734a02` + 裁定 20261010（测试区删除面）回执批次（纯文档面） | §九 那条 ⚠️"还剩的政策半边待裁"翻成落地口径：三格全裁**甲**、AF 侧**零代码改动**——§二 维持形状守卫（不收成 `{root}/test` 前缀白名单；乙列候选但需 DB 给权威树的现读路径；丙要先给测试区落归属标记）⇒ **同级目录照删＝裁定的已知边界，不是遗漏**；§三 维持 scope `write` + 无面板（采用的依据与 AF 现读逐字一致：两棵第一方 UI 树对 `af_test` 0 命中、`/api/test/*` 路由 0 条）；§四 **判例入册**：不可逆操作的守卫，对照量必须由调用方现递，被守卫的模块不许自带第二份真值。§十六 残余第 5 条的尾句同步收尾；说明文档 §十 那格改成三条（射程边界／权限与面板／判例原文）、§十八 B.3 措辞跟着收。**同源自查查出一格新残余并登记成 §十六 第 13 条**（`af_store.py` 的 overwrite 备份 `__ovbak__` 静默回收：5 枚 `ignore_errors=True`、残留对 `history()`/`names()` 隐形、判据 0 条点名），本批只登记不修 |
 | 2026-10-10 | HEAD `d6802bc` + §十六 残余第 13 条收口批次（代码面已提交 `3ace9b6`，未推） | 备份回收的静默面落成三枚读数面：5 枚 `ignore_errors=True` 全撤、删除收成一个入口 `_purge_tree`（`af_store.py:73-95`，残留按盘上现数）；报告新格 `residual_backups`（`:806`/`:867-869`，不进 `errors`、不动 `ok`）＋ CLI `af_cli.py:956-959` echo ＋ WARNING `:732`/`:749`；让位前清不掉旧备份改抛 `BackupNotReclaimed`（`:58`，抛出点 `:673`），替掉那柄伪装成撞车的 `FileExistsError [WinError 183]`。判据 11 条腿（`tests/unit/test_overwrite_backup_reclaim.py`，失败注入走 rmtree 内部的 `os.unlink`/`os.rmdir`，日志面带哨兵自证）＋变异 9 枚全杀。上一批两处措辞就地更正（清理触发点只有一枚、不是"没有"；备份目录名固定故"越攒越多"不成立）。剩 HTTP 那半边仍 500，接 409 要动在途 `af_api.py` ⇒ 随 #79。门禁两遍逐字节相同（`GATES_RC=1`、新增未获批 2 条、基线 96、7877 字节） |
 | 2026-10-10 | HEAD `fa71f86` + §十八 B.4 收口批次（代码面已提交 `d8f2234`，未推） | §八"冲突档"那格补一句实测口径并同步表格"落盘"列：`observe` 档不改行为，但守卫失明**不再静默**——三站里 band 那站两档都拒发（裁定 20261008 §四 未给试演档开口子），另两站在试演档照常执行却照样落一条 `af_watch` 常驻指示（detail 新键 `blocked`）+ 一条 WARNING；对端 retained `af/status` 只在真拦下时发。修前那句"降级通知半边由 `_notify_guard_blind` 承担"是文档承诺、探针实测在 observe 档一次都没被调用（调用点站在 `if observe:` 之后）。判据 24→32 条腿、变异 M0 全绿＋M1–M9 全杀；门禁两遍逐字节 7877 字节、基线未动。剩半边（试演期失明是否对端可见）属跨仓 `degraded` 词汇，AF 不自加、留 DCD。详见执行记录 §二之九十 |
+| 2026-10-13 | 批前 HEAD 现读取法＝`git log -1 --format=%h`（本格不自抄将被下一枚作废的 sha）＋ 联动健康面洞察三键批次（代码面 `src/autoforge/af_mqtt_bridge.py` ＋两份单测，⛔ 未推） | §3.4 的 `linkage.inbound` 例子与解读补三键：`insights_subscribed`／`insights_in`／`insights_rejected`。此前那两枚洞察计数"有数、没有脸"（`counts` 里有、健康面读不到），只读取数分不清"没订"与"订了但对端没发"⇒ 路线图 `af_subscribes_insights` 那格的现网半边给不出逐字 `PASS`。计数键恒在（零值 ≠ 键不存在），订阅面与 `subscribed` 同形（未订＝空表），两条队列的拒收仍⛔ 不共用计数。全文见执行记录 §二之一百四十四 |
 | 2026-09-24 | 当时 HEAD | 初版（端到端实测后） |

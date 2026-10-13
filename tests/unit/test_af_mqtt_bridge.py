@@ -746,6 +746,8 @@ def test_linkage_subscriptions_can_be_turned_off():
     bridge.start()
     assert client.subscribed == [INSIGHTS_TOPIC]
     assert linkage_status(bridge)["inbound"]["subscribed"] == []
+    # 两条入向线的订阅面分开给键：关掉联动不该把洞察那格也一起说成"没订"。
+    assert linkage_status(bridge)["inbound"]["insights_subscribed"] == [INSIGHTS_TOPIC]
 
 
 def test_insight_without_sink_is_refused_loudly():

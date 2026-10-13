@@ -11862,3 +11862,56 @@ git -C E:/NAS/AutoForge show --stat HEAD                 # 最近一枚（只有
 - **单测腿复测**：`python -m pytest tests/unit/test_ma_query_adapter.py -q` ⇒ **32 passed in 4.34s**（与 E5 同判据；本枚未改测试）。
 - **取数命令（⛔ 不写值）**：字节数 `wc -c < E:\tmp\rl143_gates_h.txt`；逐字节 `cmp` 三对；CR `tr -dc '\r' < 文件 | wc -c`；判定行 `grep -c "^✓"`／`grep -c "^✗"`。
 - **遍 j（本枚最后一次，两份 docs 的全部文字含 ⑦ 那格落笔之后 fire）**：`GATES_PYTHON=python bash gates.sh` ⇒ **J_RC=1**、**35715 B**、md5 `339195831c8bc8bc7b2ab04215aa93d4`、`cmp rl143_gates_j.txt rl143_gates_h.txt` ⇒ **RC=0**，CR=151、`^✓`=21、`^✗`=3。⚠️ 登记一句诚实话：**记录遍 j 的这一段本身写在 fire 之后**——按「门读**入库面**、docs 未暂存 ⇒ 不在射程」这一既有判据（并由 h／i／j 与上一批 d／e 四枚逐字节全等实证），这一步不可能改动任何读数；⛔ 因此不停手重跑第 5 遍。
+
+---
+
+## §二之一百四十四 · 收上一枚自己认下的那一格：把 `ma/insights` 的入向读数从"有数、没有脸"接成可只读取证的脸（任务 #148；路线图 G-AF-01 的 AF 观测半边）
+
+**一、批次身份与射程**：本枚是**落码枚**，只做 §二之一百四十三 那格自认缺陷的修法半边（AF 职权内：仓内可观测面），⛔ 不碰任何他席在途文件。改动面＝`src/autoforge/af_mqtt_bridge.py`（`git diff --numstat HEAD` ⇒ **7 增／0 删**）＋`tests/unit/test_linkage_subscription.py`（**38 增／0 删**，两条新腿）＋`tests/unit/test_af_mqtt_bridge.py`（**2 增／0 删**，既有那腿多两断言）＋三份 docs（执行记录本节、`AF完整架构与运行时说明.md` §十八 第 43 条收口补记＋§十九 一行、`AF完整知识文档.md` §3.4 例子与解读＋变更记录一行）。⛔ 未动 `af_api.py`／`af_auth.py`／`host_update.sh`／`docker/` 两份 compose／`ui-user-mimo/`；⛔ 未动 `.gates-tally.txt`／`.gates-baseline.txt`／`.atomic-write-baseline.txt` 一个数字；⛔ 未新增 `ADM_ERR_*`；⛔ 未执行 docker；⛔ 未动计划文档；⛔ 未动路线图与链主两棵树；⛔ 未 push。
+
+**二、落码面（现读行锚点，⛔ 不写"应该在哪"）**：`linkage_status()` 的 `inbound` 块（`af_mqtt_bridge.py:1077` 起）补三键——
+- `:1079` `"insights_subscribed": [INSIGHTS_TOPIC] if bridge.subscribe_insights else []`（与 `subscribed`（`:1078`）**同形**：列表、未订阅＝空表，⛔ 不用 `None` 冒充"没订"）；
+- `:1082` `"insights_in": bridge.counts.get("insights_in")`、`:1083` `"insights_rejected": bridge.counts.get("insights_rejected")`——两枚都直取 `counts`（容器定义 `:567`、初值 `:570`/`:571`、写站点 `:805`/`:813`），⛔ 不新建计数、⛔ 不与在场/健康的 `rejected`（`linkage_rejected`，`:1084`）共用；
+- 语义面**一个字都没动**：`state`／`degraded`／`reasons`／`wired`／`publish_errors` 的取法与裁定 20261007 §二 丁A 的形制一致，`/api/health` 的装配路径仍是 `af_service.py:206-208` → `linkage_status`，`af_api.py` 那侧（`:488` 的 `@app.get("/api/health")`）本轮**只读未改**，它把 `linkage` 整份字典透出、⛔ 没有键白名单 ⇒ 加键不需要动在途文件（这一点是本枚能落在 AF 职权内的承重前提，取证：`grep -rn "presence_in|device_health_in|\.inbound" ui-user-mimo/src` ⇒ **0 命中**（无 UI 消费者），`grep -rln "linkage" tests/contract tests/f14 tests/acceptance` ⇒ **无文件**（无契约腿钉死键集），所以三键是**纯增量**，不可能把任何既有读数改成另一个值）。
+
+**三、判据腿读数（真仓面 + 反空集面两面都要有）**
+- 真仓腿（现读，⛔ 不引用批前记忆数）：`python -m pytest tests/unit/test_linkage_subscription.py -q` ⇒ **19 passed in 1.89s**（批前同文件 17 枚，本枚 +2）；`python -m pytest tests/unit/test_af_mqtt_bridge.py -q` ⇒ **52 passed in 0.90s**（条数不变）；两文件合跑 ⇒ **71 passed in 4.07s**。
+- 新腿一 `test_insights_side_of_inbound_face_is_surfaced`：三键齐全、`insights_in==1`、`insights_rejected==1` 而 `rejected==0`（两条队列的拒收不串）、`subscribed` 仍 `== list(LINKAGE_TOPICS)`（既有语义未被顶掉）、`client.subscribed == [INSIGHTS_TOPIC, *LINKAGE_TOPICS]`。
+- 新腿二 `test_insights_face_stays_present_when_subscription_is_off`：`subscribe_insights=False` ⇒ 订阅面给**空表**、两枚计数键**仍在**且为 `0`（零值 ≠ 键不存在）。这一腿就是"反空集"那一格：如果实现写成"没订就不给键"，取数方 `KeyError` 会被读成"读数取不到"，而 `af_subscribes_insights` 要区分的正是"这条进程没订"与"订了但对端没发"。
+
+**四、反证腿表（副本树 `E:\tmp\af148_mut`，⛔ 全程不碰工作树）**：树＝`git archive HEAD` 导出（不带任何未提交改动），只把本批的**测试文件**放上去，src 逐腿改。取数根已当场核对：`python -c "...import autoforge.af_mqtt_bridge as m; print(m.__file__)"` ⇒ `E:\tmp\af148_mut\src\autoforge\af_mqtt_bridge.py`（⛔ 不是工作树那份；editable 安装会指回原仓，所以每条腿都带 `PYTHONPATH=src` 并核过模块 `__file__`）。
+
+| 腿 | src 面 | 期望 | 现读 |
+|---|---|---|---|
+| N1 修前形状种回去 | HEAD 原样（无三键）＋本批测试 | 必须被扫出 | **3 failed, 68 passed**（三处均 `KeyError: 'insights_subscribed'`，含 `test_af_mqtt_bridge.py:750`）⇒ 新腿不是空转 |
+| N2 订阅标志接错 | `[INSIGHTS_TOPIC] if bridge.subscribe_linkage else []` | 必须被扫出 | **2 failed, 69 passed**（错标志恰好让"只关联动"那腿与"关洞察"那腿同时读反） |
+| N3 计数键接空 | `counts.get("insights_in_v"/"insights_rejected_v")` | 必须被扫出 | **2 failed, 69 passed**（读成 `None` 被 `==1`／`==0` 两腿各抓一次） |
+| M0 什么都不改 | 本批 src 原样＋本批测试 | 必须绿 | **71 passed** |
+| 注入生效护栏 | 每条注入前 `python - <<PY` 里 `assert count==1` | 注不进就中止 | 三腿各打印 `M2 injected`／`M3 injected`，N1 走 `cp` 前 `grep -c insights_subscribed src/...` ⇒ **0**（确认副本树真的没有那三键） |
+
+**五、偏差自报（⛔ 不按字面沉默）**：投递件 `inbox/20261013-AF-路线图rev9四格盘上复现与现网点名命令包-登记.md` §六之一 与本节上一枚的措辞是"同族补**两**键"，实落**三**键——多出的是订阅面键 `insights_subscribed`。理由如上：只有两枚计数的话，`insights_in=0` 这一读数分不清"没订"还是"订了但对端没发"，那一格的现网半边照样给不出逐字 `PASS`。该偏差已**追加登记进同一件投递件**（⛔ 不起新名、⛔ 不改件号），并在 §十八 第 43 条的收口补记里同文写明。
+
+**六、回归分段与 13 枚红的逐枚归属**（⛔ 整树单进程会在 3–4.5 分钟处被截断报 `RC=127`，按段跑；本枚 `tests/unit` 段跑满 1024.44s）：
+
+| 段 | 读数 |
+|---|---|
+| `tests/unit` | **13 failed, 3635 passed, 46 skipped** in 1024.44s ⇒ 加总 **3694**（＝上一枚 §二之一百四十二 那格的 3692 ＋ 本枚两条新腿；⛔ 不是"跑少了"） |
+| `tests/contract` ＋ `tests/f14` ＋ `tests/acceptance` 合跑 | **199 passed, 10 skipped**（与批前 57／104／38 三枚加总逐字相同） |
+| 本批新腿两文件 | **71 passed** |
+| 其余 linkage 相关 8 文件（`test_af_cli_linkage_wiring`／`test_af_cli_serve_lease`／`test_bounded_caches_gate`／`test_ci_interpreter_gate`／`test_linkage_feed`／`test_owner_alert`／`test_serve_exit_reap`／`test_stability_r3_20261011`） | **146 passed** |
+
+13 枚红的逐枚归属（**枚数与上一枚完全相同，本枚新增失败 0**）：`test_dcd_20261004_auth_limits.py` 2 枚＝#79 登录线在途面；`test_trust_boundary_gate.py` 2 枚＋`test_process_model_gate.py` 2 枚＋`test_observability_gate.py` 6 枚＝三门的真仓腿，对应门禁里 ✗7／✗22／✗71 那三枚存量红；`test_gate_face.py::test_three_gates_announce_their_face` 1 枚＝既有红。这 13 枚单独合跑现读 ⇒ **3 failed, 6 passed**（auth 两枚＋gate_face 一枚），另 10 枚在四份门测试文件里现读 ⇒ **10 failed, 134 passed**；两轮失败原文 `grep -c insights` ⇒ **0**（无一枚因本批三键而起）。⛔ 存量红不因本枚转绿，⛔ 不抬任何上限。
+
+**七、门禁遍（⛔ 本批改的是 `src/`，门吃**入库面** ⇒ 先把三份代码面暂存再 fire）**：遍 a ＝ 三份 src/测试已 `git add`、三份 docs 未暂存时 `GATES_PYTHON=python bash gates.sh` ⇒ **A_RC=1**、输出体 **35715 B**、md5 `339195831c8bc8bc7b2ab04215aa93d4`、`^✓`=21／`^✗`=3。⚠️ 这一读数的含义要说白：**门把我这次的代码改动吃进去了（入库面），结论行与上一批遍 d／e／h／i／j 逐字节全等**——因为本枚不新增留痕站点、不新增 `ADM_ERR_*`、不动路由表与生命周期站点，所以三枚存量红的条数（7／22／71）本来就不该动；动了反而是门写错。
+
+遍 b（三份 docs 全部落笔、投递件 §十 追加完之后 fire）⇒ **B_RC=1**、文件 **35722 B**、`^✓`=21／`^✗`=3、三条 `^✗` 逐字为「信任边界 7 处／进程模型 22 处／可观测性 71 处」（与遍 a 同）。**那 7 个字节是差在本席自己的存证件上，不差在门的输出上**：`rl144_gates_b.txt` 尾部多了一行 `B_RC=1`＋行尾 `LF`（7 B）。剥掉那一行做逐字节对撞：`head -n -1 rl144_gates_b.txt > b_body.txt`（**35715 B**、md5 `339195831c8bc8bc7b2ab04215aa93d4`）＋ `cmp b_body.txt rl144_gates_a.txt` ⇒ **RC=0**，输出体内 CR=151（与历遍同）。⇒ 至此六遍（a／b＋上一批 d／e／h／i／j）**输出体逐字节同一 md5**。
+遍 c（本节的记录文字写完之后再 fire，用来证"记录文字本身不吃进门"）⇒ **C_RC=1**、剥尾行后输出体 **35715 B**、md5 `339195831c8bc8bc7b2ab04215aa93d4`、`cmp c_body.txt b_body.txt` ⇒ **RC=0**、`^✓`=21／`^✗`=3 ⇒ **七遍全等**。⚠️ 如实声明形制：本行文字写于遍 c 之后，所以"遍 c 的输出里没有这一行"是**构造性事实**、不是巧合——三份 docs 不在任何 `check_*.py` 射程内，这一点由 a／b／c 三遍全等 + 上一批五遍全等共同撑着；若下一批出现差值，⛔ 先怀疑射程，⛔ 不许把差值解释成"文档不算"。
+
+**八、不自决清单与未落项归属**
+1. **现网那半边仍然不归本枚**：三键只是让"取数"成为可能；`af_subscribes_insights` 的 `PASS` 要的是容器内一次只读取数（裁定 20261013 §二 问 1 甲＋乙′），卡在出资人窗口，⛔ 本席不是执行者。落码后**新增的只读取数命令**已随本枚**追加进同一件投递件的新 §十**（⛔ 不起新名、⛔ 不改件号；`…-登记【已受理】.md` 现为 26272 B／CR=0），内含三块：① `/api/health` 取 `linkage.inbound` 三键的命令原文、② 镜像层对撞命令（`grep -c insights_subscribed /app/src/…`）、③ 三档判据形制表。★ **其中最重要的一条是本席自己先讲明的**：首次读数**大概率是 `ABSENT`**——在役镜像源码面本席此前已精确钉到 `68c30ae`（§二之八十一），那层里没有这三枚键 ⇒ `ABSENT` 证的是**部署滞后**、⛔ 证不了代码缺失；这正是 #144 那一格（在役层 vs 仓内层归因）的同族，⛔ 本枚不冒充已闭合。
+2. **新裁定 20261013 反过来改了本席已交的东西（就地更正，不另起文）**：其 §二 判定"乙′ 状态证明②＝被读文件 `mtime` 不变"这条**作废**（持续重冻的文件 `mtime` 必然变 ⇒ 真·只读探针会被误判成越线），投递件 §五 那四条腿的统一前置**正好踩这条**⇒ 已就地改写为「`StartedAt` 同一 ＋ 目标键取值 **sha8 首尾相等**；`mtime` 只作记录、⛔ 作作废条件」，并把作废的原文留在该节文字里可查。其 §一 加第四档「**取数面未建**」⇒ 投递件 §六之一 本席自认的那格**按新档重记**（此前记成"缺读数"，归错了：不是没人跑，是仓里那条只读取数脸不存在）；归属写"该仓席位先落可观测半边"，⛔ 不写"执行人没来"。
+3. 链主那侧的尺子（`verify_adm_linkage.py --af-ma`）⛔ 本席不改一行；它下一次读 `af_subscribes_insights` 的盘上形状会不会因此变绿，由链主判。
+4. §三 里那句"没有键白名单"的承重前提是**盘上现读**；NAS 在役容器层是否与此一致，仍挂 #144（`docker inspect` 的 Mounts/RW 归出资人窗口）。
+5. 裁定 §四 新执行型「**沙箱型**」**不给本枚四格现网点名扩权**：那四条读的是**在役容器的对外脸**，仍属只读型 ⇒ 仍要出资人点名／窗口。沙箱型解锁的是"只写容器 `/tmp`、按前缀自清"那一类（对应 run37 那种门档），⛔ 本席不借它给自己放行。
+
+**九、存证清单（`E:\tmp`，不进仓）**：`af148_mut\`（副本树：N1／N2／N3／M0 四条腿跑在那里）、`rl144_gates_a.txt`（35715 B，md5 见上）、`rl144_gates_b.txt`／`rl144_gates_c.txt`（遍 b／c）、unit 段整轮输出＝后台任务件（337 B 尾部，含 `13 failed, 3635 passed, 46 skipped in 1024.44s` 那一行）。
