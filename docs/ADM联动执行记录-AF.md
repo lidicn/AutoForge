@@ -11670,3 +11670,9 @@ git -C E:/NAS/AutoForge show --stat HEAD                 # 最近一枚（只有
 ```
 
 `git status` 现读：并发在途的 `docker/docker-compose.api.yml`、`src/autoforge/af_api.py`、`src/autoforge/af_auth.py`、`scripts/gh_ci_status.py`、`scripts/host_update.sh` 与 `docs/audit/` 那族删除**一份未暂存、一份未动**；本枚只 add 两份记账 docs。⛔ 零落码、⛔ 未动 `.gates-tally.txt`／`.gates-baseline.txt`／`.atomic-write-baseline.txt`、⛔ 未跑任何门的 `--write`、⛔ 未 push。
+
+**十、★ 本席刚落地那枚提交（现读 `git log --oneline -1`，勿抄本节的字面）的 subject 里有一处错值，如实登记并订正于本枚**：那行写的是「**✓21 无变**」，而本批四遍（d／e／f／g）的存证现读是 **`grep -c "^✓" E:/tmp/gaf01_gates_g.txt` ⇒ 20**、`grep -c "^✗"` ⇒ **3**（同 f／同 d，md5 `ec77ad69957b4708f8b01567552ef62f`、`35208 B`、`G_RC=1`）。⛔ `✓21／✗2` 是**上一批之前**（HEAD 尚在 `eb0e796` 那侧）的旧档读数，本批早就是 `✓20／✗3`（另一席位的 `22c2d16` 把进程模型／可观测性两格推进红集，见 §二之一百三十九 五 与上面的 八）。
+- 错因一句话：**commit message 里的门读数是我手抄的第二份**，没有从本批存证现读生成。文档正文（本节 五／八 与架构说明 §十九 那格）写的都是正确的 `✓20／✗3` ⇒ 本次是"同一批里 message 与 body 两个口径"，不是全批读错。
+- 处置：⛔ **不 amend**（本仓红线：只在 owner 明确要求时才 amend；且那枚已提交、改它的 sha 会让 §九 的锚点链一起漂）。旧 subject 原样留在历史里可查（取法 `git log --format='%h %s' 9fba5df..HEAD`），本节是它的订正面；⛔ 不删本节里"那行写的是什么"这句指路。
+- 教训一条（进本仓纪律，不进代码）：**凡 message／记账里要带门读数，只允许从本批存证文件现读生成，禁止沿用上一批 message 里的数字**——这与 §二之一百三十七 那条"钉提交枚数的手正是作废它的手"是同族（那族钉的是 sha 与枚数，这次钉的是计数），判据同样是"取法代替抄值"。
+- 提交态（本枚）：⛔ 不钉本枚 sha／枚数，取法照 九 那三行；本枚只 add 两份记账 docs。
