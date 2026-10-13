@@ -11494,3 +11494,58 @@ git -C E:/NAS/AutoForge show --stat HEAD                       # 最近一枚（
 判据不变：**`git diff --name-only 1a6613a..HEAD` 无一份 `src/`**（现读三份，全在 `docs/` 下）⇒ 与上面 五 的门禁五遍同一 md5 互为佐证。`git status` 现读：并发在途的 `docker/docker-compose.api.yml`、`src/autoforge/af_auth.py` 与 `docs/audit/` 那族删除**一份未暂存、一份未动**。⚠️ 本节之后为记账门禁遍 f 另落一枚 docs 提交——它同样落在 `1a6613a..HEAD` 射程内，所以本格只给取法、⛔ 不钉"本批共 N 枚"（钉了就会被产出它的那只手作废，这是本文件 §八 记过的同一个坑）。
 
 **十、门禁遍 f 与 a/b/c/d/e 的逐字节对撞**：⚠️ 第一次 fire **塌在 preflight，不是判红**——我照 `gates.sh:26` 报错文案里硬写的那条 `C:/Program Files/Python313/python.exe` 去设 `GATES_PYTHON`，而**本机没有这条路径**（正解在 `C:/Users/lidicn/AppData/Local/Programs/Python/Python313/python.exe`，homesdk 以 editable 装在那份上）⇒ `af143_gates_f.txt` 只有 **219 字节／`F_RC=2`**，一行判据都没跑。按本机现读解释器重跑 ⇒ `af143_gates_f2.txt` 现读 **16521 B**（＝门输出体 16513 ＋ 我自己追加的 `F2_RC=1` 终标 8 字节），`head -c 16513` 与遍 e **diff 空**、md5 同为 **`1812389a093472efb370b2c2a0df929b`**、CR=**55**、✓**21**／✗**2**（仍是 `:79` 信任边界 7 处、`:93` 可观测性 1 处）、`F2_RC=1` ⇒ a/b/c/d/e/f **六遍同一枚 md5**：本批这几枚 docs 提交没挪动任何一门的一格，⛔ 未抬任何上限。形状教训两条：**① 别把工具自己打印的"先执行…"当可抄读数**——那格路径在本机是错的，且它错的方式恰好让门"看起来已经跑过"；**② `RC=2` 是射程塌，⛔ 不许当判红进台账**（同一格若只记 `F_RC=2` 而不记解释器，下一个人会以为门变了）。
+
+## §二之一百三十九 · 落 AF-01 的 R1（#142）：`ma` 取数适配器＋四条只读 action＋静默空值判据——G-AF-01 的**盘上腿转绿**（出口判据 3 命中；现网那一列仍 0/5 等窗）
+
+**一、这件是什么**：路线图 `E:\NAS\关键决策部\roadmaps\AF-联动路线图.md`（**rev 1**，本席只读）的 **G-AF-01** 那格，今天从"AF 未开工"变成"AF 已落码并自证"。链主投递件 AF-01 的 R1（排期 2026-10-13、超时点 10-14 18:00）＝建 `src/autoforge/af_adapters/ma.py`：**单次下发的纯执行层** MCP 客户端（⛔ 无重试／无降级／无语义层超时），四条只读 action，出网必经 `guarded_open`。路线图钉的出口判据是 `grep -rn "ma_query" src/autoforge --include='*.py'` ≥1 命中 **且** 探针 `af_ma_query_adapter` 的盘上腿转绿 ⇒ 两格今天都成立（读数见 四）。**本批落盘面＝`src/` 四份（一份新建）＋测试三份（一份新建）＋本文件本节＋架构说明四处**。
+
+**二、落码面（`git diff --numstat` 与 `wc -l` 现读；⛔ 未暂存任何并发在途件）**
+
+| 文件 | 增删／行数 | 内容 |
+|---|---|---|
+| `src/autoforge/af_adapters/ma.py` | 新建 **486 行**、CR=0 | `MaAdapter`＋`MA_ACTIONS` 四枚＋`_guard_shape` 静默空值判据＋`_decode_envelope`（SSE 与 `structuredContent` 两形）＋`_post` 走 `guarded_open` |
+| `src/autoforge/af_adapters/__init__.py` | 2/0 | 导出 `MaAdapter` |
+| `src/autoforge/af_adapters/base.py` | 2/1 | `_L0_DOMAINS` 加 `"ma"`（四条只读动作 ⇒ 不落 L2 保守档） |
+| `src/autoforge/af_runtime.py` | 7/1 | `build_runtime(..., ma_endpoint="", ma_token="")` 在**唯一收口点**注册第四枚适配器（`:302`） |
+| `tests/unit/test_ma_query_adapter.py` | 新建 **444 行**／**32 腿**（27 个 `def test_`，其中传输层那枚参数化展开 6 例）、CR=0 | 三族：形状判据／入参与码映射／**图级三腿**（编译面＋注册面＋仿真面） |
+| `tests/unit/test_bounded_caches_gate.py` | 8/2 | 真仓钉值 132→**133**＋增量出处逐条给（见 五） |
+| `tests/unit/test_f15_outbound_guard.py` | 3/2 | 收口计数 5→**6**＋注释按现读改写（见 五） |
+
+**三、形状与判据（每条都指得到代码与腿）**
+1. **四条 action 的参数面**取 MA 入库面真源：`route_question(question, days)`／`list_analysis_templates(category)`／`export_insight(template_id)`／`run_analysis_template(template_id, days, start, end, include_timeline)`（`ma.py:76-81`）。名单外的键**不透传**（`test_policy_param_is_refused_instead_of_reaching_the_transport` 断言"一条都不出网"）；`entity_id` 是 AF 侧专用键（`AF_ONLY_PARAMS`，`:82`），只用来把 `entities[]` 里那一枚实体的**标量**挑出来放回 `data` 顶层——这一手正是 §二之一百三十七 那格"DSL 取不到列表元素"的适配器内补偿，⛔ 不是给 DSL 加下标语法。
+2. **静默空值判据**（链主 R3 定、DCD 追认）两条点名的腿都在：`{"ok": True}` 与 `{"ok": True, "insight": {}}` 一律抛 `AdapterError`，码取 homesdk 目录**已有**的 `ADM_ERR_PAYLOAD_INVALID`（⛔ 不新造码）——腿＝`test_export_insight_missing_insight_block_raises_not_silent_empty`／`test_export_insight_all_three_blocks_empty_raises_not_silent_empty`。同一判据不许反过来把**真实空答案**拦成形状塌：`templates: []` 放行（`test_empty_template_list_is_a_true_answer_not_blocked`）。
+3. **对端答 `ok: false` 是业务结果**，`CallResult.fail(code=ADM_ERR_INTERNAL)` 交 IR 的 `on_error` 边兜（`test_ok_false_is_a_business_answer_not_a_shape_collapse`）：⛔ 不冒充成功，也⛔ 不判成形状塌。
+4. **传输层四档各带自己的码**（`test_transport_failures_carry_their_own_code`，6 例）：套接超时与 408/504⇒`ADM_ERR_UPSTREAM_TIMEOUT`；连接拒绝／不可达与 5xx⇒`ADM_ERR_PEER_OFFLINE`；401/403⇒`ADM_ERR_AUTH_REQUIRED`；解不出信封、超字节上限、无 `result`⇒`ADM_ERR_PAYLOAD_INVALID`。缺端点（`AUTOFORGE_MA_MCP_URL`）或缺凭据（`AUTOFORGE_MA_MCP_TOKEN`）＝缺通道，fail-closed 报 `ADM_ERR_AUTH_REQUIRED`（`test_missing_credentials_refuse_to_send`）。会话过期⛔ 不在适配器内重试——重试不是执行层的活。
+5. **图级三腿**证明它不是"单测绿、四张脸接不到"：`test_ma_query_node_compiles_without_canary_or_confirm_diagnostic`（编译面 `scan.ok is True` 且 `L2_NEEDS_CONFIRM`／`L2_NEEDS_CANARY` 都不出现）、`test_ma_query_is_registered_on_the_shared_runtime_builder`（`"ma" in runtime.adapters` 且缺省 `dry_run is True`）、`test_simulation_binds_result_var_to_call_result_shape`（仿真走一条真图，`ma_answer` 恰好三键 `success/data/error`，`dry_run` 档⛔ 不伪造读数——断言 `"summary_text" not in json.dumps(bound)`）。
+
+**四、出口判据对撞（命令原文＋现读，2026-10-13T06:0xZ）**
+- `grep -rn "ma_query" src/autoforge --include='*.py'` ⇒ **3 命中**（`af_adapters/ma.py:3`、`:4`、`af_runtime.py:299`）⇒ 路线图那格"≥1"成立。存证 `E:/tmp/gaf01_grep_after.txt`（md5 `c36be5560fa0d18af1dd1f7756bfa2ef`）；`grep -c "class " ma.py` ⇒ **2**（探针那枚盘上判据的形状）。
+- 探针 `verify_adm_linkage.py --af-ma` ⇒ `PROBE_RC=1`、**`两列全绿 0/5｜盘上 4/5｜现网 0/5`**，`af_ma_query_adapter` 的盘上读数从**改码前 3/5** 变成 `AutoForge/src/autoforge/af_adapters/ma.py 命中 1 形状`。存证 `E:/tmp/probe_afma_after.txt`（md5 `fdf783c5499e1c27db2942f99b04507c`）。⚠️ 整体仍 `[RED]`／`NOT READY`：五枚红腿里 `e2e_insight_to_draft` 是"盘上＋现网"双红（缺证据件 `E:\NAS\ADM链主\探针证据\af-ma-insight-to-draft.md`），另四枚全在现网列且点名缺字段 `['verdict','ts','source','cmd']` ⇒ 等 NAS 合并窗，**⛔ 本批不声称联调过**。
+
+**五、本批自己引入的红与两处真仓钉值（⛔ 不靠抬上限换绿）**
+- **有界缓存门第一次判红是本批造成的**，原文照贴：`[有界缓存] 新增增长容器 af_adapters/ma.py::MaAdapter.intents（:195）既不在注册表/固定键表/持久化单调集/基线名单，那一行也没带豁免标记`。处置＝补**就地** `# bounded-cache: exempt(…)`（理由与 `af_adapters/inbox.py:107` 同形：`call()` 是唯一写入口、按 `INTENTS_MAX=200` 裁头、读侧是仿真效果展开与测试，dry_run 记的就是"本会发什么"所以不该有 TTL 腿）⇒ `RC=0`。⛔ 未动注册表与基线任何数字（现读结论行：注册表 5 项／固定键 3 项／单调集 1 项／**扫到增长容器 133 个**／基线冻结 113／就地豁免 18 处／死写 0）。
+- 两枚**真仓钉值**被本批挪动，按现读重钉（门本身两面都绿，不是抬上限）：`tests/unit/test_bounded_caches_gate.py` 的 `len(containers)` 132→**133**（增量逐条给出处：容器＝`MaAdapter.intents`，豁免理由原文在册，封顶腿＝`tests/unit/test_ma_query_adapter.py::test_intent_ring_is_bounded`）；`tests/unit/test_f15_outbound_guard.py` 期望的"走 guarded_open 收口"5→**6**（新增站点＝`af_adapters/ma.py`；门自报"扫描 104 个文件、出站站点 8 处：走 guarded_open 收口 6 处、自建 opener 2 处（都挂了重定向守卫）、裸 urlopen 0 处、就地豁免 0 处"）。两文件重钉后合跑 `70 passed in 92.29s`。
+- **红面逐枚归属用两面对撞做实**：`git archive HEAD` 导副本树 `E:\tmp\af_head_gaf01`，同一枚解释器跑五枚门 ⇒ HEAD 面 `check_observability RC=1`（71 处）／`check_process_model RC=1`（22 处）／`check_trust_boundary RC=1`（7 处）与工作树**逐值相同**（存证 `E:/tmp/head_face_gates_gaf01.txt` md5 `c93b522de6167f6eb698ed9ff1269b65` ↔ `E:/tmp/worktree_face_gates_gaf01.txt` md5 `b2b1e49bd364499eb4e38982c98af649`）；HEAD 面 `check_bounded_caches RC=0` 读 **132**、`check_outbound_guard RC=0` 读 **103 文件·5 收口** ⇒ 证实本批只挪这两格。AST 新增 8 条（error 1／warn 7）逐枚都在 `af_api.py`（登录线在途），棘轮 `98 > 97` 与"过期基线 3 条"、owner 主体门那 3 条同为 HEAD／在途面，⛔ 非本批。
+- **反空集腿**（新判红先问"什么都不改会不会绿"）：`E:\tmp\ma_negcontrol.py`（⛔ 仓内不留）在运行期把 `"ma"` 从 `_L0_DOMAINS` 摘掉后现读对照 ⇒ 改前 `classify=L0`、诊断 `['DO_WITHOUT_ON_ERROR','EXPECT_MISSING']`；摘掉后 `classify=L2` 且多出 `L2_NEEDS_CONFIRM`；种回去回到 `L0`。存证 `E:\tmp\ma_negcontrol_out.txt`（md5 `55af7911aab6eb1afbd427ad9a67fd70`）⇒ "取数节点不被要求确认"是被扫出来的，不是门没看见。
+
+**六、门禁遍 a／b**：`gates.sh` 在 `GATES_PYTHON=<本机 Python313>` 下 ⇒ `GATES_RC=1`、输出体 **35208 B／md5 `ac0686b07b5a06b2c2efee08e8661acb`**（`md5sum` 直读，两遍同一枚且 `cmp` 逐字节相同；CR=150、标记行 ✓20／✗3，✗＝信任边界 7 处、进程模型 22 处、可观测性 71 处）。存证 `E:/tmp/gaf01_gates_a.txt`／`E:/tmp/gaf01_gates_b.txt`。⚠️ 这与上一批 §十 记的 `16513 B／✓21／✗2／md5 1812389a…` **不是同一枚读数，而差因不是本批**：本席批前后 HEAD 从 `eb0e796` 挪到 `22c2d16`（另一席位落地的"审计第四期 33 条修复"），进程模型门与可观测性计数自此进入红集——上面 五 的 HEAD 副本树面已把 71／22／7 三枚"在 HEAD 上就红"钉住，本批对这三格一动未动。
+
+**七、回归分段（⛔ 整树单进程会在 3–4.5 分钟处被截断报 127）**：unit **`13 failed, 3605 passed, 46 skipped in 609.93s`**（存证 `E:/tmp/gaf01_unit_after.txt`，md5 `3dcc08dc600422bba6f1c3a2d3a24338`，尾行 `UNIT_RC=1`）＋ contract `57 passed` ＋ f14 `104 passed` ＋ acceptance `38 passed, 10 skipped` ＋ 其余 `553 passed`（另有 65 subtests）⇒ **段加总 4426 ＝ `python -m pytest tests --collect-only -q` 现读 `4426 tests collected in 14.74s`**。新测试文件单独复跑 `32 passed in 2.17s`。13 枚失败逐枚归属：`test_dcd_20261004_auth_limits` 2 枚＝并发登录线在途件（`af_auth.py`／`af_api.py`）；`test_observability_gate` 6 枚＋`test_process_model_gate` 2 枚＋`test_trust_boundary_gate` 2 枚＝**真仓腿连坐**那三枚门（HEAD 面同红，见 五）；`test_gate_face::test_three_gates_announce_their_face` 1 枚＝子进程跑那三枚门，同族连坐。⛔ 本批新增失败 0：重钉前那遍是 15 failed／3603 passed，本次 13 枚＝消掉的正是本批自己挪动的那两枚钉值（`test_bounded_caches_gate` 与 `test_f15_outbound_guard` 各一枚，均已不在失败名单）。
+
+**八、与裁定／派工字面的一处偏差（⛔ 不沉默，显式请追认）**：链主 R3 那句"顶层读三块"若按字面做成**三枚键逐键硬要**，会把"对端多给／少给一键"判成形状塌——MA 的 `export` 面除三块外还带 `metadata`（`templates.py:405-408`），键集会演进。本席取**"至少一键在、且在场的键不许全空"**（`_REQUIRED_KEYS`／`_ALL_EMPTY_REFUSED`，`ma.py:89-97`）：两条点名的腿照旧抛、⛔ 未放宽成放行，收窄的只有"逐键"这一格。**请 DCD／链主裁这一格算追认还是要求改成逐键**；若要逐键，改动面只在 `_guard_shape` 一处＋对应腿，本批已把两处名字留全。
+
+**九、不自决清单／未落项归属**：⛔ 不动 MA／DB／homesdk 一字节（甲案＝MA 本轮零代码）；⛔ 不给 DSL 加列表下标、不做 `params` 运行期插值（架构说明 §十八 第 40 条那两处结构性缺口原样有效）；⛔ 不新造 `ADM_ERR_*` 码；⛔ 不动 `.gates-tally.txt`／`.gates-baseline.txt`／`.atomic-write-baseline.txt` 与可观测性 §四 六行；⛔ 不跑任何门的 `--write`（`af_api.py`／`af_auth.py` 在途未清）；⛔ 不开合并窗、不碰 NAS 容器、不执行任何 docker 命令；⛔ 不 push。未落项与归属：现网列 **0/5**（#76 合并窗，另含 `e2e_insight_to_draft` 那份证据件）；HTTP 响应体那格（#79 窗，`af_api.py`）；`G-AF-04` 卡出资人窗口；`G-AF-06` 等 homesdk 0.3.3 wheel（#93／#80）；`G-AF-07` 执行人＝DCD／NAS，⛔ 非 AF 射程，本席如实登记而不宣称完成。⚠️ 另登记一格"文档面刻意不动"：计划 `docs/ADM联动执行计划-AF.md` §7.5 四仍写着"落码批带两条腿"（将来式），本批⛔ 不改计划文档（批次纪律：计划文档不入本批），由本节指路——下一个读计划的人以本节 三 的两枚腿名为准。
+
+**十、提交态（⛔ 未 push；本格只写取法，⛔ 不钉本枚 sha／枚数）**：批前 HEAD 现读 **`22c2d16`**（已提交祖先，后续提交挪不动它；⛔ 不用 `HEAD~N`，那个 `N` 每落一枚就错一格——本文件 §一百三十七 与 §一百三十八 各栽过一次）。取法：
+
+```
+git -C E:/NAS/AutoForge log --oneline 22c2d16..HEAD      # 本批全量枚数与摘要行
+git -C E:/NAS/AutoForge diff --name-only 22c2d16..HEAD   # 本批全量文件名
+git -C E:/NAS/AutoForge show --stat HEAD                 # 最近一枚（只有这一行会随下一枚移动）
+```
+
+`git status` 现读：并发在途的 `docker/docker-compose.api.yml`、`src/autoforge/af_api.py`、`src/autoforge/af_auth.py`、`scripts/gh_ci_status.py`、`scripts/host_update.sh` 与 `docs/audit/` 那族删除**一份未暂存、一份未动**；`docs/ADM联动执行计划-AF.md` 未入本批。⚠️ 本节之后为记账门禁遍 c 另落一枚 docs 提交，本格同样只给取法不钉枚数。
+
+**十一、门禁遍 c 与 a／b 的逐字节对撞**：⚠️ 顺序如实——遍 c 是在本文件本节＋架构说明四处（§二 运行链、§四 分岔点、§四 新增 MA 侧 bullet、§十八 第 40 条、§十九 一行）**全部落笔之后**fire 的，不是"记账全完后跑的"；本节这一格则是 c 跑完之后补写的。`GATES_PYTHON=C:/Users/lidicn/AppData/Local/Programs/Python/Python313/python.exe` 下 `bash gates.sh > E:/tmp/gaf01_gates_c.txt` ⇒ **`C_RC=1`、35208 B、md5 `ac0686b07b5a06b2c2efee08e8661acb`、CR=150**，`cmp E:/tmp/gaf01_gates_c.txt E:/tmp/gaf01_gates_a.txt` ⇒ **无输出（逐字节相同）**。⇒ a／b／c **三遍同一枚 md5**：本批这几枚 docs 改动没挪动任何一门的一格，⛔ 未抬任何上限。两枚 docs 文件的 CR 现读均为 **0**（架构说明 677 行、本文件 11547 行；表格新行的管道符计数 **4**＝列数对，⛔ 没重演 §一百三十八 那次"锚点吃半行"）。
+
+**十二、路线图 rev 5 的两条观测面对撞（本节按现读自证，不等链主下轮巡检）**：rev 5 那行「`ma.py` **不在任何提交里，是未跟踪文件**」在本批提交后自动失效，取法两条（提交后现读）：`git -C E:/NAS/AutoForge --no-optional-locks cat-file -e HEAD:src/autoforge/af_adapters/ma.py; echo rc=$?` ⇒ **rc=0**（改前＝`fatal: path ... exists on disk, but not in 'HEAD'`，本席 06:49Z 实测原文在册）；`git status --porcelain -- src/autoforge/af_adapters/ma.py` ⇒ **空输出**（改前 `?? `）。⇒ 铁律第一跳（E 盘 → 提交）本批完成；第二跳（提交 → GitHub `main`）⛔ 不是本席的手能伸的：push 需 owner 明确点头，且 rev 5 已经把「`origin/main ahead=11`」更正成**分支错位假红**（AF 工作分支＝`master`，`origin/master..HEAD` ⇒ 0），逐仓发布线口径归 DCD／出资人（链主已投 `inbox\20261013-ADM-链主盘上取材范围与逐仓发布分支-决策申请.md` 第 2 格），本席不猜、不自决。
