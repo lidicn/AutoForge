@@ -201,6 +201,46 @@ def test_user_cooldown_beats_circuit():
     assert kinds(events)[-1] == "user_cooldown"          # 用户冷却优先于熔断
 
 
+class _BoomLocks(dict):
+    """冷却登记失败用的注入体：锁表一碰就抛，其余状态原样不动。"""
+
+    def pop(self, *args, **kwargs):
+        raise RuntimeError("cooldown registration exploded")
+
+
+def test_failed_cooldown_registration_blocks_the_entity():
+    """DCD 20261008 裁定§五：冷却登记失败 ⇒ 该实体进入"冷却登记待补"态，登记成功前 AF 不写它。
+
+    取证形状：注入的实体**本来就没持锁**，且失败发生在 `_cooldown_until` 写入之前
+    ⇒ 若仍放行，唯一可能的原因就是把登记失败吞掉（修前形状），这条腿因此同时是反空集腿。
+    """
+    conf = FakeConf({"A": 0.9})
+    arb, events, _, _ = make_arbiter(conf, FakeClock(), cooldown_after_user=30.0)
+    arb._locks = _BoomLocks()
+    arb.on_user_override("light.kitchen")
+    arb._locks = {}
+    degraded = [e.details for e in events if e.kind == "degraded"]
+    assert degraded[-1]["phase"] == "user_override"
+    assert degraded[-1]["fail_open"] is False
+    assert degraded[-1]["cooldown_pending"] is True
+    assert arb.request(["light.kitchen"], "A", "i-1", "light.turn_on", {}) is RequestDecision.REJECT
+    assert [e.details["phase"] for e in events if e.kind == "degraded"][-1] == "cooldown_pending_block"
+
+
+def test_successful_re_registration_lifts_the_pending_block():
+    """待补态的出口只有"登记成功"：重登后同一实体恢复可写，且不再留待补标记。"""
+    conf = FakeConf({"A": 0.9})
+    arb, events, _, _ = make_arbiter(conf, FakeClock(), cooldown_after_user=30.0)
+    arb._locks = _BoomLocks()
+    arb.on_user_override("light.kitchen")
+    arb._locks = {}
+    assert arb.request(["light.kitchen"], "A", "i-1", "light.turn_on", {}) is RequestDecision.REJECT
+    arb.on_user_override("light.kitchen")                 # 登记成功
+    assert kinds(events)[-1] == "user_cooldown"
+    arb._cooldown_until.clear()                            # 只验待补态解除，不叠冷却档
+    assert arb.request(["light.kitchen"], "A", "i-2", "light.turn_on", {}) is RequestDecision.ALLOW
+
+
 def test_multi_entity_all_or_nothing():
     conf = FakeConf({"X": 0.5, "H": 0.95, "Y": 0.98})
     arb, _, _, _ = make_arbiter(conf, FakeClock())

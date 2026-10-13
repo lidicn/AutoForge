@@ -12269,3 +12269,58 @@ AssertionError: 射程塌：在 `af_mcp.py` 的 except 句里只扫出 4 枚 `ok
 
 **八、门禁两遍（取"终局面是否等于上一批"这一格）**：**遍 a**（取在本枚全部落笔**之前**＝暂存面还没动的时候）`GATES_PYTHON=python bash gates.sh` ⇒ **`A_RC=1`、218 行／35715 B**、md5 **`dcd72915faff0105883dd926e576389d`**、CR **151**、✓**21**／✗**3**（三枚归属逐字未变：信任边界 7／进程模型 22／可观测性 71，均属另一席位那批存量）。存证 `E:\tmp\rl156_gates_a.txt`。⚠️ **这一枚与上一批（§二之一百五十四 的 a／b／c／d 四遍）逐字节同一枚 md5** ⇒ 「docs-only 批次⛔ 动不了任何门读数」的第三次实跑证据（前两次＝§二之一百四十三 遍 h／i、§二之一百五十一 遍 a／b），且本枚⛔ 新增仓内文件（真件落在 `E:\NAS\关键决策部\receipts\`，AutoForge 入库面那枚文件计数因此⛔ 变）。**遍 b**（取在本枚提交**之后**，`a5035b7` 已进 HEAD）＝`GATES_PYTHON=python bash gates.sh` ⇒ **`B_RC=1`、218 行／35715 B**、md5 **`dcd72915faff0105883dd926e576389d`**；`cmp E:\tmp\rl156_gates_a.txt E:\tmp\rl156_gates_b.txt` ⇒ **`CMP_ab_RC=0`**（逐字节同一），再与**上一批**存证对撞 `cmp E:\tmp\rl154_gates_a.txt E:\tmp\rl156_gates_b.txt` ⇒ **`CMP_prev_RC=0`** ⇒ 本枚与 #154 那四遍**六枚全等**。⇒ 两遍夹住本枚全部动作（暂存前／提交后），差值 **0 行**，且⛔ 抬任何上限。⛔ 不起遍 c 冒充"完全终局"：本行记录动作本身晚于 b，再跑一遍会被它自己的记录行同样作废（同一形状已登记四次：§二之一百三十九 十一、§一百四十一 五、§一百四十二 二、§一百四十七 八）。
 **自报一枚形制不一致（本枚自己的提交面，⛔ amend）**：本枚提交正文尾带了一行 `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`——现读 `git log -20 --format=%b | grep -c "Co-Authored-By"` ⇒ **1**（就是本枚这一行），⇒ 与本仓既有提交形制⛔ 一致（其余十九枚 0 命中），且把模型名写进了仓史。⛔ 改写历史来消它（那比原错更贵、且本仓红线⛔ 动历史）；处置＝**下一枚起⛔ 再写该 trailer**，本格在此长期留痕，供下一只手按 `git log --format=%b` 复核。
+
+## 二之一百五十六、#138 第二份回执（裁定 20261008 三层 fail-closed）——挖出**第四张会冒充事实的脸：名字出现在测试里**
+
+### 一、本枚是什么
+
+任务 **#138**（补 AF 射程裁定书欠的回执）的第二份。依据裁定＝`关键决策部/decisions/20261008-AF冲突守卫内层与band缺省-裁定.md` 的 **§三（仲裁器内层裁 A）／§四（`band` 缺省裁 A）／§五（冷却登记失败升成"暂停该实体的 AF 写"）**。回执落点＝`关键决策部/receipts/20261014-AF-20261008冲突守卫三层fail-closed-回执.md`（**⛔ 追加进裁定书本体**，按制度 v1.3 规则 13；那份规范冲突的问已在 20261014 头一份回执 §六 递过，本枚⛔ 另起一问、沿用同一取法）。
+
+取法（⛔ 抄本枚数，会被下一枚回执作废）：进裁定目录，对每份名字含 `AF` 的裁定书量两个数——正文里"执行回填"的出现次数、`receipts\` 里引用该件名的文件数——**两值同时为 0** 的那批才是欠账。本枚消掉 20261008 一份。
+
+### 二、复测对撞表（三格代码早于本枚 6 天，缺的是判据）
+
+| 裁定格 | 报告/在册说法 | 现读（HEAD 面） | 本枚处置 |
+|---|---|---|---|
+| §三 内层吞异常 ⇒ `ALLOW` | 已随 `c307bdf` 落 | `af_conflict.py:221` 内层 `except Exception` ⇒ `:225-231` `KIND_DEGRADED`＋`{"phase": "request_inner", "fail_open": False}` ⇒ `:232` **`return REJECT`** | 已落，回执逐条复现 |
+| §四 `band` 读不出来缺省 `auto` | 已落 | `af_conflict_runtime.py:528-536` `_safe_band()` 异常返回 `None`；调用方 `:313-324` `band_read_failed` 审计＋`_notify_guard_blind`＋`_abort(..., REJECT)` | 已落 |
+| §五 冷却登记失败 ⇒ 不写该实体 | 已落 | 写入端 `af_conflict.py:274-278`、成功端 `:266`、拦截端 `:357-364`（`phase: "cooldown_pending_block"`） | **代码已落、行为判据⛔ 在册** ⇒ 本枚补两腿（见 三） |
+
+### 三、★本枚真正的产物：两枚行为判据腿 ＋ 两枚变异双杀
+
+补进 `tests/test_af_conflict_core.py`（`git diff --stat` ⇒ `40 +`、CR=0，`src/` 一字节未碰）：
+
+- `test_failed_cooldown_registration_blocks_the_entity`——注入体 `_BoomLocks`（`dict` 子类，`pop()` 必抛）让登记在 `_cooldown_until` 写入**之前**失败，实体**本来没持锁** ⇒ 此时若仍放行，唯一可能就是"吞掉失败"（修前形状）。断言三面：`degraded` 载荷 `fail_open is False` ＋ `cooldown_pending is True`；`request(...) is REJECT`；末条 `degraded` 事件 `phase == "cooldown_pending_block"`。
+- `test_successful_re_registration_lifts_the_pending_block`——出口只有"登记成功"：重登 ⇒ `discard` ⇒ 恢复可写（验完清空 `_cooldown_until`，⛔ 把待补态和冷却档叠在一起判）。
+
+**变异自证**（副本树 `E:\tmp\mut157`，驱动 `E:\tmp\mut157.sh`，⛔ 碰工作树）：取材面自证 `IMPORTED=E:\tmp\mut157\src\autoforge\af_conflict.py`（先证明判据跑的是副本，否则"改了没被 import"会被读成门全绿）⇒ **M0 什么都不改 `M0_RC=0`** ／ **M1** 拆掉失败分支 `add`（`pass`）⇒ `M1_RC=1` ／ **M2** 把 `if eid in self._cooldown_pending:` 改成 `if False:` ⇒ `M2_RC=1`，两枚都红在同一行 `tests/test_af_conflict_core.py:226`（那条安全断言）／ 复位后 `cmp` 真仓与副本逐字节相同（`RESTORED_IDENTICAL=1`）⇒ 复测 **16 passed**、`END_RC=0`。
+
+回归读数：`python -m pytest tests/test_af_conflict_core.py tests/test_af_conflict_runtime.py -q` ⇒ **48 passed**（core 16／runtime 32）；`tests/unit/test_bounded_caches_gate.py -q` ⇒ **45 passed**（那枚集合的豁免在册未被本枚破坏）。
+
+### 四、第四张会冒充事实的脸（新知，值得单独立一格）
+
+`grep -rn "on_user_override" tests/ --include=*.py` 三条命中，看名字像"这条语义有判据"：
+
+1. `test_af_conflict_core.py:183`／`:199`——**成功路径**（覆盖生效、冷却优先于熔断），⛔ 碰失败分支；
+2. `test_bounded_caches_gate.py:643`——命中在**注释**里，那条腿锁的是"这枚集合⛔ 进 `BOUNDED_CACHES`"（豁免在册），**⛔ 锁"登记失败 ⇒ AF 不写该实体"这条安全语义**。
+
+⇒ 纪律：**"名字出现在测试里"⛔ 等于"该行为有判据"**。存在性命中要逐枚分**约束面／叙述面**（注释、docstring、豁免说明都是叙述面），并且问一句"把修前形状种回去，它会不会红"——本枚 M1／M2 就是那句问的机械版：种回去之前，答案是"⛔ 会红"，而这扇⛔ 红着的门管的是"会不会把用户刚设的状态改回去"。
+
+### 五、在役半边（一格，归出资人窗口）
+
+`git merge-base --is-ancestor 68c30ae c307bdf` ⇒ **RC=0**、`git rev-list --count 68c30ae..c307bdf` ⇒ **1**（`68c30ae` 2026-10-08 16:30 → `c307bdf` 2026-10-08 20:53）。⇒ **#81 那次三方对撞的读数若仍未重烤，三层 fail-closed 只在仓内、⛔ 在役**。本枚⛔ docker、⛔ 开合并窗，故回执里⛔ 报"在役已含"，只写取法＝窗 A（部署，`docs/ADM现网窗口工单-AF.md`，#150）＋按 #81 的 md5 三方对撞复核源码面。
+
+### 六、回执件要点指路（⛔ 在本节重抄全文）
+
+`receipts/20261014-AF-20261008冲突守卫三层fail-closed-回执.md`：§一 五行落点表／§二 四条读数／**§三 偏差三格显式请追认**（甲＝补腿晚于裁定 6 天、期间该档零行为判据；乙＝回执落点，沿用那份规范冲突、⛔ 另起一问；**丙＝裁定 §五 原话"有界"落码解成"出口有界"⛔"规模有界"——`_cooldown_pending` 无上限、无 TTL、⛔ 进 `BOUNDED_CACHES`，本席自认与那两个字第⛔ 符，故显式请追认、⛔ 自决解释**）／§四 未落三格／§五 口径。自查：`validate-receipt.ps1` ⇒ **三道硬门通过、六项全 ✓**（首跑出一条 `W`：§四 那格把取法写成了字面 glob `decisions/*AF*.md`，被机械检查当成"引用一份指不到的裁定书"——已改成散文取法，这属 判例「⛔ 在文书里写没发生的动作」的近亲：**⛔ 把命令样本写成像是一份文件名**）。
+
+### 七、门禁／改动面／不自决／存证
+
+- 改动面：本批 AutoForge 侧**只动一枚文件**（`tests/test_af_conflict_core.py`）＋记账两份 docs；回执件落在 `关键决策部`（⛔ 本仓、⛔ git 仓）。
+- 账本：`.gates-tally.txt`／`.gates-baseline.txt`／`.atomic-write-baseline.txt` **一个数字⛔ 动**；三枚红归属逐字未变（信任边界 7／进程模型 22／可观测性 71，均属另一席位存量），⛔ 抬上限。
+- 不自决清单：① 偏差丙那个"有界"字面＝**DCD 追认**；② 偏差甲"补腿晚 6 天"＝**DCD 追认**；③ 回执落点规范冲突＝**DCD**（已在头一份回执 §六 立问）；④ 在役半边＝**出资人窗口**；⑤ `_cooldown_pending` 要不要给一条"待补实体数超阈值 ⇒ 报 owner"的可观测腿＝**本枚⛔ 为假想未来做设计，未做，留此一行待 DCD 判是否值得开**。
+- 存证（⛔ 入仓）：`E:\tmp\mut157.sh`、`E:\tmp\mut157\`（副本树，含 `.bak` 复位源）、`E:\tmp\rl157_gates_a.txt`／`rl157_body.txt`。未出境取法＝`git fetch origin master && git rev-list --count origin/master..HEAD`（⛔ 本枚抄枚数）。
+
+### 八、门禁两遍（取"补判据腿⛔ 让任何门动"这一格）
+
+**遍 a**（取在本枚全部落笔之前）`GATES_PYTHON=python bash gates.sh` ⇒ **`A_RC=1`**、体部 **35715 B／md5 `dcd72915faff0105883dd926e576389d`**、CR **151**、✓21／✗3。⚠️ 与上一批（§二之一百五十五）存证对撞：本枚文件多出的一行是驱动自己追加的 `A_RC=1` 终标，`head -c 35715` 截回体部后 `cmp` ⇒ **`BODY_CMP_RC=0`** ⇒ **门体逐字节同一**＝"docs/测试面批次⛔ 动不了任何门读数"的**第四次**实跑证据（前三次＝§一百四十三 遍 h／i、§一百五十一 遍 a／b、§一百五十五 遍 a／b）。**遍 b**（取在本枚提交之后）＝`CMP_ab_RC` 现跑于提交后，见 §二之一百五十六 补（下一枚纯记账提交，⛔ 新增仓内文件 ⇒ 判定行⛔ 变）。⛔ 起遍 c 冒充"完全终局"：记录行本身晚于 b，再跑一遍会被它自己的记录行作废（同一形状已登记四次）。
