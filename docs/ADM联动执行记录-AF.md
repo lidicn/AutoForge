@@ -11687,3 +11687,124 @@ git -C E:/NAS/AutoForge show --stat HEAD                 # 最近一枚（只有
 - **判据（进本仓纪律，⛔ 不进代码）**：文档里凡出现"会随本席下一枚动作变化的量"（HEAD sha、`rev-list --count`、`git status` 的未跟踪清单、门存证字节数），必须**三件套同写**——① 取法命令原文，② 值标成"写那一格时＝N"，③ 一句话写明它为什么会变。缺 ① 或 ③ 的读数按未取证处理。
 - 本节落码面：仅两份记账 docs 的本节 ＋ 仓外回执那一行；⛔ 未 push、⛔ 未动账本数字、⛔ 未动 `af_api.py`／`af_auth.py`／`docker/`／`ui-user-mimo/`。
 - ⚠️ **同族第四次就落在"落地 十一 那枚提交的 message 里"**（那句"ahead 现读 16"，而它一存在就已是 17，本枚再 ＋1）：commit message 事后加不了时限标注（⛔ 不 amend），所以这一族在 message 面的兜法只有一条——**凡 message 里出现"现读 N"，一律以本文同节带取法的写法为准**，把 message 当"当时那一瞥"，不当现值。本格不再另起一节重复登记（再登记就又造出一枚会让它漂的提交，形状同 §二之一百三十九 十一）。
+
+## §二之一百四十二 · 落地 DCD 20261013 §三 末行「要不要立一枚『分支一致门』＝**立**」：新建 `scripts/check_release_line.py`（入库面口径／五条判据／七种射程塌一律 exit 2）＋ `docs/发布线清单.md` ＋ 28 条单测腿 ＋ `gates.sh` 接线；本批唯一落码改动＝`scripts/verify_ui_nas_deploy.py:300` 的部署串 `origin/master` → `origin/main`（门自己咬出的第一枚真违规）
+
+**一、依据与复测对撞表（步 0：报告的每条读数都当过期数据，现读复测）**
+
+依据：`E:\NAS\关键决策部\decisions\20261013-DB历史凭据泄露与部署树复原与AF-MA口径-裁定.md` **§三 末行**「要不要立一枚『分支一致门』｜**立**。因为当前没有任何门守着它——将来有人把脚本改成别的字面，没有门会红……**落码归 AF 席位**（`scripts/` 在它职权内）」；发布线取哪一条的口径取 `decisions/20261013-DB部署路径三条历史与铁律执行权-裁定.md` **§五 第 4 件**（`:103`）与 **§七 #4**（`:129`）＝「**裁：AF 归一 `main`**……**是否执行由 AF 席位做**」；路线图为 rev 7，`G-AF-0[8]`（发布线↔自更新源同一条）那一格在四本＋制度里的登记半边⛔ 归 DCD，本批只交 AF 侧落码。
+
+| 论断（出处） | 现读命令原文 | 现读 | 下场 |
+|---|---|---|---|
+| 「当前没有任何门守着分支字面」（裁定 §三 末行） | `grep -ln "branch\|origin/master\|origin/main" scripts/check_*.py` | 本批之前 **1** 命中＝`scripts/check_ui_api_paths.py`，而它那一处是 `kinds = {"plain","template","branch"}`（`:724`／`:727`／`:733`／`:854`）＝**条件分支计数**，与 git 分支无关 ⇒ **守 git 分支字面的门 0 枚** ⇒ 裁定前提成立 | 本批落码（新建门） |
+| 「自更新链缺省＝`main`」这一格（清单 §二 登记） | `python scripts/check_release_line.py .` | 入库面现读 **5** 枚站点全部 `main` ⇒ **RC=0** | 登记与现读同值 |
+| 「部署指令链与自更新链同源」（#143 递件 §十 那句的射程） | 门内判据 C 首跑 | `scripts/verify_ui_nas_deploy.py:300` 打印的部署串是 **`git merge --ff-only origin/master`** ⇒ 与登记格 `main` **不同源** | **真缺陷，本批落码**（改成 `origin/main`；这是本批唯一一行代码改动） |
+| 「`body.branch` 有没有取值域校验」 | `grep -n "branch: str" src/autoforge/af_api.py`＋门内 `RE_DOMAIN` 现读 | `:136` 只声明 `str \| None = None`，**校验 0 处** ⇒ 取值域＝**无** | ⛔ 本批不加校验（那要动 #79 窗的在途文件），改为把「取值域＝无」钉成登记格×现读对撞（判据 C 的第二格） |
+| 「宿主侧两份 `host_*.sh` 都在库里」 | `git log --oneline --all -- scripts/host_check_update.sh scripts/host_update_nas.sh` | **0 命中**＝从未进任何提交 ⇒ 入库面射程外 | 清单 §四 只作**观察行**输出（依裁甲「未进任何提交 ⇒ 不算交付」，也不算违规） |
+
+**二、门与清单的形状**（`scripts/check_release_line.py`，516 行，纯标准库 ＋ `scripts/af_face.py` 的**入库面**快照；清单 `docs/发布线清单.md` §一–§五 手写 ＋ AUTO 段机读）
+
+- **判据 A**：AUTO 段逐行对撞现读站点（载体／行号／角色／字面任一漂移即红，含「登记说三枚、现读四枚」双向）＋汇总行的合计与上限。
+- **判据 B**：默认拒绝登记——`SCANNED = scripts/（.sh,.py）＋ src/autoforge/（.py）＋ .github/workflows/（.yml）` 射程内新出现一枚载体而 §三 没有它那一行 ⇒ 红；§三 有行而现读不出＝过期登记同样红；认领格填占位词（无／待定／TBD…）＝与不登记同判。
+- **判据 C**：一致＋棘轮。所有载体字面必须等于 §二「发布线（远端）」那一格（CI 那条按「发布线 ∈ 触发名单」判，名单里多几个名字不红）；`body.branch` 取值域登记「有／无」与现读对撞；站点上限只减不增（现钉 5）。⛔ 门里不写死第二份分支名，改口径只改 §二 那一格。
+- **判据 D**：三枚形状锚点——宿主经**变量**取 ref（`git fetch --force origin "$REF"` ＋ `git reset --hard "origin/$REF"`）、自更新端点保住版本二次确认＋原子写＋409（`confirm_version != _APP_VERSION`／`atomic_write_text(_UPDATE_MARKER`／`}, 409`）、marker 键名两侧同源（`"ref":\s*branch`）。退回硬编码＝D 红。
+- **判据 E**：同一枚已登记载体上多出一行分支字面 ⇒ 站点数超上限，拦「逐枚加字面」这种扩散。
+- **七种射程塌一律 exit 2**（不许用「没有发现」冒充「没有问题」）：① 清单不在盘上；② 读不出 git 索引或 `rev-parse --show-toplevel` 不等于取数根（`require_index()` **拒绝磁盘降级**）；③ AUTO 标记被改写；④ §二 那一格改名／留空／填了「有无」之外的值；⑤ §三 除表头外一行没有（空集给的干净）；⑥ 入库面读出 0 枚站点（四条链的载体同时消失＝射程断）；⑦ 快照导出缺文件。
+
+**三、单测腿读数**（`tests/unit/test_release_line_gate.py`，三族 28 条）
+
+```
+C:/Users/lidicn/AppData/Local/Programs/Python/Python313/python.exe -m pytest tests/unit/test_release_line_gate.py -q
+→ 28 passed in 131.63s (0:02:11)      RC=0      存证 E:/tmp/crl_unit_a.txt
+```
+真仓读数腿（站点五枚逐枚在册／§三 行数＝站点数／上限现值／两面不自相矛盾）＋合成树腿（A／B／C／D／E 各单独杀一次，含「把修前形状种回去必须被扫出」的反空集腿）＋射程塌腿（七种各一条，一律断 `SystemExit` 码 2）。⚠️ 其中「载体文件消失」与「载体在而字面全无」拆成两条（`test_scope_collapses_when_carrier_files_gone`／`test_scope_collapses_when_zero_sites_but_files_present`）——前者是①类真源缺失、后者是⑥类射程断，混成一条会让其中一种被另一种的读数冒充。
+
+**四、变异自证（步 4：`E:/tmp/crl_mut` 副本树，⛔ 绝不碰工作树；驱动 `E:/tmp/drive_af142_mutation.py`）**
+
+基线树＝`git archive HEAD` ＋ **索引 blob 覆回 `scripts/verify_ui_nas_deploy.py`**（本批把它暂存了，`archive HEAD` 拿到的是修前那份）＋ 从工作树搬门／清单／判据腿 ＋ `git init` ＋ `git add -A` ⇒ 基线门 RC=0 且结论行含「现读 5 枚站点」。
+
+| 腿 | 注入 | 期望→实得 RC | 判据字母 |
+|---|---|---|---|
+| M0 | 什么都不改 | 0→**0** | — |
+| MZ99 | §三 认领格 `AF`→`AF 席位`（字节动语义不动） | 0→**0** | — |
+| A1 | 手改 AUTO 段一行字面、不重生成 | 1→**1** | A |
+| A2 | 手改汇总行的上限数字 | 1→**1** | A |
+| B1 | 新增一枚未登记载体 | 1→**1** | B,E |
+| B2 | 删载体却不删登记行＝过期登记 | 1→**1** | B |
+| B3 | 认领格填占位词 | 1→**1** | B |
+| C1 | 写入侧缺省改成另一条线（真形状 `af_api.py:1151`） | 1→**1** | C |
+| C2 | 部署指令载体指到第三条线 | 1→**1** | C |
+| C3 | CI 触发名单里去掉发布线 | 1→**1** | C |
+| C4 | 偷偷加 `body.branch` 取值域校验却不改 §二 | 1→**1** | B,C |
+| D1 | 宿主脚本把变量 ref 退回硬编码 | 1→**1** | D |
+| D2 | marker 写入侧键名漂移（用户选的 `ref` 被静默丢弃） | 1→**1** | D |
+| D3 | 自更新端点丢掉版本二次确认比对 | 1→**1** | D |
+| E1 | 同一枚已登记载体上多一行分支字面＝超上限 | 1→**1** | E |
+| MX1–MX7 | 清单不在盘上／AUTO 标记改写／§二 键名改／§三 空表／字面全拿掉／载体整枚消失／无 git 索引目录 | 2→**2** ×7 | — |
+
+结论行：**全 22 腿符合预期**，`DRIVER_RC=0`。护栏生效证据：每腿 `finally` 逐字节还原后现读对撞（还原失败即抛），且**首尾对真仓工作树六枚做 md5 对撞**＝「全部逐枚相同（工作树未被本驱动触碰）」。⚠️ 两条取数口径的坑如实留档，因为它们各让一版驱动假红过一轮：
+1. **本门读入库面**，所以驱动必须**先 `git add` 再 `--write` 重生成**——首版按磁盘面重生成，把修前字面烤进 AUTO 段，导致 B1／C1／C2／C3／E1 五腿各**多红一枚 A**（连坐）。那是驱动的取数顺序错，⛔ 不是门判错；
+2. **搬门必须连依赖一起搬**（`scripts/af_face.py`）——MX7 那腿只搬门 ⇒ `ModuleNotFoundError` ⇒ RC=1，那是**崩**不是**判**；
+3. 删文件类腿的 `git add <具名路径>` 会炸（pathspec 不匹配），改目录 pathspec；比较口径按 `WATCH` 全集取 `originals.get(rel)`，缺失算 `None` ⇒ 新增载体与删载体都被护栏看见。
+
+**五、`gates.sh` 接线（纯加法）读数**
+
+段标题＋跑门（`:358 release_line_rc=$?`）插在 oneshot／hygiene 之后；结论块两档（`:602` exit 2 逐枚枚举七种形状、`:606` exit≠0 逐条解释 A–E）插在 hygiene 之后、subject 之前。读数：`bash -n gates.sh` ⇒ **RC=0**；`tr -dc '\r' < gates.sh | wc -c` ⇒ 工作树面 **0**（`git show HEAD:gates.sh` 那面在上一批同为 0，本批只在链尾追加、未重排既有行）。覆盖门（`check_gate_coverage`）现读：**盘上 `check_*.py` 28 个、`gates.sh` 覆盖 27 个**（本批这枚被链跑到），echo 文案 92 行无未转义反引号——新写的两档结论文案里的反引号全部按 `\`` 转义。
+
+**六、门禁遍 a／b／c 逐字节对撞（⚠️ 先记账面顺序，再记读数）**
+
+`GATES_PYTHON=C:/Users/lidicn/AppData/Local/Programs/Python/Python313/python.exe` 下 `bash gates.sh > E:/tmp/rl142_gates_<a|b|c>.txt`。
+- **遍 a**：`RC=1`、**35726 B**、md5 `b8422118f36fafbdd27fd3280cab1154`、CR **151**、`grep -c "^✓"`＝**21**、`grep -c "^✗"`＝**3**。
+- **遍 b**（落码与接线全部完成之后）：`cmp rl142_gates_b.txt rl142_gates_a.txt` ⇒ **`CMP_RC=0`**（无输出＝逐字节相同）；同 B／同 md5／同 CR／同 ✓21✗3。
+- 三枚 ✗ 归属（⛔ 非本批）：信任边界 7 处／进程模型 22 处／可观测性 71 处，逐条归属见 §二之一百三十九 五／六；本批未抬任何上限、⛔ 未动 `.gates-tally.txt`／`.gates-baseline.txt`／`.atomic-write-baseline.txt` 一个数字。
+- **与上一批稳定体对撞**：`diff E:/tmp/gaf01_gates_g.txt E:/tmp/rl142_gates_a.txt` ⇒ 5 个 hunk、+**518 B**（35208 → 35726），逐处解释：① 行 26 `undefined-name 门禁干净（扫描 241 → 242 个文件）`＝本批新增 `tests/unit/test_release_line_gate.py`（那条腿扫 `tests`）；② 行 202 `入库面 814 → 816 个文件`＝索引多了 `docs/发布线清单.md` ＋ `scripts/check_release_line.py` 两份（判据口径是入库面，本批暂存必然挪它，形状同 §一百四十一 里 md5 与 d 遍不同的那次解释）；③ 行 205–207 新增三行＝本门段标题＋本门 ✓ 结论行＋其空行；④ 行 209→212 覆盖门 `盘上 27→28、gates.sh 覆盖 26→27、echo 文案 89→92 行`＝本批这枚门与被转义的三行 echo；⑤ 行 219 `GATES_RC=1`＝**我自己 tee 的标记行**，不是门输出。CR 150→151 的唯一原因：新增的那枚 ✓ 行由 Python 打印，Windows 下 Python 写管道把 `\n` 译成 `\r\n`（先例见 §二之一百三十八 的 CR 口径说明）。⇒ **解释得完，无一行解释不了。**
+- **遍 c（本节 一—九 与架构说明第 42 条全部落笔之后 fire）**：`C_RC=1`、**35715 B**、md5 **`7f64bd5526b3ebb660b714794e1f3310`**、CR **151**、✓**21**／✗**3**（同 三枚归属）。⚠️ 与 a／b 的**唯一**差＝a／b 末尾多一行 **我自己 tee 的 `GATES_RC=1` 标记行**（c 用的是 `>` 重定向，门输出里没有这一行），取两树同长面对撞：`head -n 218 rl142_gates_a.txt > a_head218.txt`、`head -n 218 rl142_gates_b.txt > b_head218.txt` ⇒ `cmp a_head218.txt rl142_gates_c.txt` **`CMP_AC=0`**、`cmp b_head218.txt rl142_gates_c.txt` **`CMP_BC=0`**（两枚 `cmp` 均无输出＝逐字节相同），同长 **35715 B**、同一枚 md5。⇒ **a／b／c 三遍的输出体同一枚 md5**：本批的记账改动（两份 docs 共 ＋ 清单 §一／§二 补裁定引行）没挪动任何一门的一格，⛔ 未抬任何上限。⚠️ 顺手记一条工具形状（本批实测踩到，不是门的问题）：⛔ **别用 `sed '$d'` 去尾行做逐字节对撞**——MSYS 的 `sed` 会把 CRLF 打成 LF，去掉那一行之后 `cmp` 从第 2 行起全线不同名（实为 CR 之差，`35715 − 35564 = 151 = CR 计数`）；去尾行用 `head -n <行数>`（字节面操作，不碰行尾）。
+- ⚠️ 顺序如实（本格与前批同形）：**遍 c 的这行读数写在 c 跑完之后**，而"写读数"这个动作本身必然晚于门跑完 ⇒ 这一格不会被它自己的记录行作废吗？不会——本仓已把这条钉死过两遍（§二之一百三十九 十一、§二之一百四十一 五）：本门与其余各门的射程里都没有这两份记账 docs（现读核对法：`grep -n "ADM联动执行记录\|AF完整架构" scripts/*.py` ⇒ 命中只在 docstring／输出字符串里，无一处 `open()` 它们），所以 c 之后只改记录面**不会**使 c 失效；⛔ 也因此不再另起遍 d 冒充"完全终局面"。
+
+**七、分段回归取数**（整树单进程会在 3–4.5 分钟处被截断报 `RC=127`，按段跑；存证 `E:/tmp/rl142_pytest.txt`）
+
+| 段 | 读数 |
+|---|---|
+| `tests/unit` | **13 failed, 3633 passed, 46 skipped** in 552.07s ⇒ 加总 **3692** |
+| `tests/contract` | **57 passed**, 1 warning in 7.41s |
+| `tests/f14` | **104 passed** in 1.34s |
+| `tests/acceptance` | **38 passed, 10 skipped** in 0.87s |
+| `tests` 根级其余 | **553 passed**, 1 warning ＋ **65 subtests passed** in 14.66s |
+
+**13 枚红的逐枚归属**（⛔ 本批 28 腿全绿，无一枚红由本批造成）：
+- `test_dcd_20261004_auth_limits.py::test_owner_face_still_sees_plaintext`／`::test_third_party_write_token_gets_the_mask_not_the_code` ＝ **#79 登录线在途面**（`af_api.py`／`af_auth.py` 未提交改动）。
+- `test_trust_boundary_gate.py` 2 枚、`test_process_model_gate.py` 2 枚、`test_observability_gate.py` 6 枚 ＝ 三门的**真仓腿**，对应上面 ✗7／✗22／✗71 那三枚存量红，归属见 §二之一百三十九 五／六。
+- `test_gate_face.py::test_three_gates_announce_their_face` ＝ **既有红**：现读 `tests/unit/test_gate_face.py:146-159` 的枚举面只有 `check_process_model.py`／`check_observability.py`／`check_trust_boundary.py` 三门，而这三门今天按设计红 ⇒ 这枚腿**连坐**（子进程跑红门是连坐，不是判据失败）。⚠️ 它没有把 `check_release_line.py` 枚举进去 ⇒ 本批新门的自报面那一格由本批自己的 28 条腿盖住，不必扩它；扩它反而会让它在存量红之下继续红，属 #113 那条待裁面，本批不动。
+
+**八、两面读数与「这一格的红是预期」**：入库面（门吃这一面）5 枚站点全 `main`；工作树（在途，门刻意不吃）现读 `master` ×3（`af_api.py:1152`、`host_update.sh:73` 等，属并发登录线未提交面）⇒ **那批在途改动提交之后本门会按设计转红**，已在 `docs/发布线清单.md` §五 登记为预期，并把「不要就地改字面让门闭嘴」写进 `gates.sh` 的结论块文案。⛔ 本批不碰那两份在途文件的一个字节。
+
+**九、不自决清单（⛔ 本批一件都不自决）**
+1. **`G-AF-0[8]` 进路线图约束面／四本／制度**：归 DCD（本席⛔ 不改 `AF-联动路线图.md` 一行，路线图对 AF 只读）。
+2. **「AF 归一 `main`」的执行**（改分支名／`git push origin master:main`）：裁定字面写「是否执行由 AF 席位做」，但动分支＝发布动作且要 push，⛔ 不在门禁批次里顺手做、⛔ 无 owner 点头不执行。本批只把口径钉进清单 §二 并写清两处已知不一致（含链主名册 §2.2 `:61` 那行 `master` 的来历：它取的是 `rev-parse --abbrev-ref HEAD`＝本地线，不是发布线；抬 rev 写名册按 §五 字面要等归一执行之后）。
+3. **`body.branch` 取值域要不要收成白名单**：动 `af_api.py`＝#79 窗在途文件，且「取值域＝无」这一格已被本门钉成登记×现读对撞（偷偷放宽同样红）；真加校验要连同那一格一起改，⛔ 不自决。
+4. **两枚未跟踪同名件**（`scripts/host_check_update.sh`／`host_update_nas.sh`）：⛔ 不自决 `git add`（载体身份未定，已随 #143 那份申请上报）。
+5. **#145 那格**（脏树拒执负控现读 0 命中／`host_update.sh` 直接 `reset --hard` 仅有 tar 备份）：本门的 D 锚点只钉「经变量取 ref」的形状，⛔ 不冒充覆盖了脏树这一格，仍挂 #145。
+
+**十、存证清单（`E:/tmp`，不进仓）**
+
+| 文件 | md5 | 内容 |
+|---|---|---|
+| `drive_af142_mutation.py` | `de3b8eabf56eaa2f7818537d755f8842` | 副本树变异驱动（22 腿） |
+| `af_142_mutation.result.txt` | `c0e80c63b345d1f1132bf376a7593322` | 全腿表终值（含结论行「全 22 腿符合预期」） |
+| `af_142_mutation.stdout.txt` | `820a81e74a48d6c6c7d359d9e253ad82` | 同一轮 stdout |
+| `af_142_mutation.run1.txt` | （首跑，5 腿因取数顺序连坐红，留档不采信） | 见 四.1 |
+| `crl_unit_a.txt` | `b3a3b3f75fefe85ebcac15f7c9897dea` | 28 passed 131.63s |
+| `rl142_gates_a.txt`／`rl142_gates_b.txt` | 两枚同 `b8422118f36fafbdd27fd3280cab1154` | 门禁遍 a／b，`cmp` ⇒ RC=0 |
+| `rl142_pytest.txt` | `d9b55446fddffcb3aee9500e87bfba28` | 分段回归五段读数 |
+
+**十一、遍 c 与提交态（⛔ 未 push；本格只写取法，⛔ 不钉本枚 sha／枚数）**
+
+遍 c 已 fire（读数与逐字节对撞见本节 六 最后一条：`C_RC=1`、35715 B、md5 `7f64bd5526b3ebb660b714794e1f3310`、CR=151、✓21／✗3，去尾行后与 a／b **`cmp` RC=0**）。⚠️ 下面那两行取法命令**跑在两枚提交之后**，本格按 §二之一百四十一 十二 的判据**只写命令不写值**——本枚文档不可能知道自己落地后的 sha，钉它的正是产出它的手。
+
+```
+git -C E:/NAS/AutoForge log --oneline f10f247..HEAD      # 本批全量枚数与摘要行（批前 HEAD f10f247 是已提交祖先，后续提交挪不动它；⛔ 不用 HEAD~N）
+git -C E:/NAS/AutoForge diff --name-only f10f247..HEAD   # 本批全量文件名
+git -C E:/NAS/AutoForge show --stat HEAD                 # 最近一枚（只有这一行会随下一枚移动）
+```
+
+本批入仓面应为七份：`docs/发布线清单.md`、`scripts/check_release_line.py`、`tests/unit/test_release_line_gate.py`、`gates.sh`、`scripts/verify_ui_nas_deploy.py` ＋ 两份记账 docs。⛔ 计划文档 `docs/ADM联动执行计划-AF.md` 不入批；`docs/audit/` 那族删除属另一席位提交面；并发在途的 `src/autoforge/af_api.py`、`src/autoforge/af_auth.py`、`scripts/host_update.sh`、`scripts/gh_ci_status.py`、`docker/docker-compose.api.yml` 与 `ui-user-mimo/` 一份不 add。

@@ -297,7 +297,7 @@ def propose_commands(target: str) -> str:
     return "\n".join(
         [
             "# 以下动作本脚本**不执行**（容器 churn 是整机冻结触发路径，要 owner 点头）：",
-            f"ssh {target} 'cd {NAS_USER_DIR} && git fetch && git merge --ff-only origin/master'",
+            f"ssh {target} 'cd {NAS_USER_DIR} && git fetch && git merge --ff-only origin/main'",
             f"ssh {target} 'cd {compose_dir} && docker compose --env-file .env -f docker-compose.api.yml build'",
             "# 起重之前先比对新镜像里的 serve 选项与 compose command 用到的选项"
             "（旧镜像不认新选项＝typer 退 2 ＋ unless-stopped 崩溃循环）；",
