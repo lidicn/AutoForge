@@ -11549,3 +11549,60 @@ git -C E:/NAS/AutoForge show --stat HEAD                 # 最近一枚（只有
 **十一、门禁遍 c 与 a／b 的逐字节对撞**：⚠️ 顺序如实——遍 c 是在本文件本节＋架构说明四处（§二 运行链、§四 分岔点、§四 新增 MA 侧 bullet、§十八 第 40 条、§十九 一行）**全部落笔之后**fire 的，不是"记账全完后跑的"；本节这一格则是 c 跑完之后补写的。`GATES_PYTHON=C:/Users/lidicn/AppData/Local/Programs/Python/Python313/python.exe` 下 `bash gates.sh > E:/tmp/gaf01_gates_c.txt` ⇒ **`C_RC=1`、35208 B、md5 `ac0686b07b5a06b2c2efee08e8661acb`、CR=150**，`cmp E:/tmp/gaf01_gates_c.txt E:/tmp/gaf01_gates_a.txt` ⇒ **无输出（逐字节相同）**。⇒ a／b／c **三遍同一枚 md5**：本批这几枚 docs 改动没挪动任何一门的一格，⛔ 未抬任何上限。两枚 docs 文件的 CR 现读均为 **0**（架构说明 677 行、本文件 11547 行；表格新行的管道符计数 **4**＝列数对，⛔ 没重演 §一百三十八 那次"锚点吃半行"）。
 
 **十二、路线图 rev 5 的两条观测面对撞（本节按现读自证，不等链主下轮巡检）**：rev 5 那行「`ma.py` **不在任何提交里，是未跟踪文件**」在本批提交后自动失效，取法两条（提交后现读）：`git -C E:/NAS/AutoForge --no-optional-locks cat-file -e HEAD:src/autoforge/af_adapters/ma.py; echo rc=$?` ⇒ **rc=0**（改前＝`fatal: path ... exists on disk, but not in 'HEAD'`，本席 06:49Z 实测原文在册）；`git status --porcelain -- src/autoforge/af_adapters/ma.py` ⇒ **空输出**（改前 `?? `）。⇒ 铁律第一跳（E 盘 → 提交）本批完成；第二跳（提交 → GitHub `main`）⛔ 不是本席的手能伸的：push 需 owner 明确点头，且 rev 5 已经把「`origin/main ahead=11`」更正成**分支错位假红**（AF 工作分支＝`master`，`origin/master..HEAD` ⇒ 0），逐仓发布线口径归 DCD／出资人（链主已投 `inbox\20261013-ADM-链主盘上取材范围与逐仓发布分支-决策申请.md` 第 2 格），本席不猜、不自决。
+
+**十三、门禁遍 d（两枚提交之后）与 a／b／c 的逐字节对撞**：`GATES_PYTHON=C:/Users/lidicn/AppData/Local/Programs/Python/Python313/python.exe` 下 `bash gates.sh > E:/tmp/gaf01_gates_d.txt` ⇒ **`D_RC=1`、35208 B、md5 `ec77ad69957b4708f8b01567552ef62f`、CR=150、标记行 ✓20／✗3**；✗ 的三枚与 六 **逐名同**（信任边界 7 处／进程模型 22 处／可观测性 71 处），⛔ 既没新增红也没消掉红。`diff E:/tmp/gaf01_gates_a.txt E:/tmp/gaf01_gates_d.txt` ⇒ **恰 4 行输出＝两枚读数行**（各一对 `<`／`>`），没有第三行差：
+- `:32` 包标记门「索引内 **103** 个 `.py`」→「索引内 **104** 个 `.py`」；
+- `:202` oneshot 门「入库面 **812** 个文件」→「入库面 **814** 个文件」。
+
+差因逐枚钉死（同一时刻现读，⛔ 不靠推测）：`git ls-files src | grep -c '\.py$'` ⇒ **104**；`git ls-files | wc -l` ⇒ **814**；`git ls-tree -r 22c2d16 --name-only | wc -l` ⇒ **812**；`diff <(git ls-tree -r 22c2d16 --name-only | sort) <(git ls-tree -r HEAD --name-only | sort)` ⇒ 差集**恰两行** `src/autoforge/af_adapters/ma.py`、`tests/unit/test_ma_query_adapter.py`。⇒ 812→814 与 103→104 **都只由本批自己那两枚新文件进索引**造成：`ma.py` 在 `src/` 下 ⇒ 两枚门都吃它，测试文件在 `tests/` 下 ⇒ 只有 oneshot 那枚吃它（差 2 而非 1）。⛔ 未抬任何上限、⛔ 未动 `.gates-tally.txt`／`.gates-baseline.txt`／`.atomic-write-baseline.txt` 一个数字。⇒ 于是 a／b／c **同一枚 md5**（`ac0686b0…`，见 十一）而 d **不同**：差不是门漂，是**"提交"这一手**把真值抬上去了——这正是下一格那个"取材面"命题在门输出体上留下的脚印。
+
+**十四、DCD 裁定 20261013《盘上取材范围与逐仓发布分支》把尺子换了面，本批按新面自证**：裁定 §一 裁**甲** ⇒ 「盘上」列一律取 **HEAD 树**，且读数必须自带 `取材＝…树` 标注（判例「『没交付的』不许被读成绿」）。链主 15:05 已把尺子改到位（`E:\NAS\homesdk\scripts\verify_adm_linkage.py` mtime 现读 **2026-10-13 15:05**），本席 15:09 复跑 `--af-ma` ⇒ 存证 `E:/tmp/probe_afma_rev5.txt`（1739 B、md5 `2cc5578e0a9538540d6d0997795eac48`、`PROBE_RC=1`）：
+- `af_ma_query_adapter` 的盘上读数现长成 **`AutoForge/src/autoforge/af_adapters/ma.py 命中 1 形状｜取材=HEAD树`** ⇒ 本批那一格的绿是**提交绿**，不是"文件躺在盘上"。对照 06:49Z 那份 `E:/tmp/probe_afma_after.txt`（1640 B、md5 `fdf783c5499e1c27db2942f99b04507c`）：同一条读数**没有 `取材=` 字段**——不是那时没交付，是尺子还没换面。**两并存证都留着**，免得下一个读者把"标注出现"读成"交付发生"。
+- 汇总行仍 **`两列全绿 0/5｜盘上 4/5｜现网 0/5`**、`[RED]`／`NOT READY` 不变；五枚红腿与 四 逐名同，四枚只红在**现网**列（点名缺字段 `['verdict','ts','source','cmd']`），第五枚 `e2e_insight_to_draft` 双红（缺证据件 `af-ma-insight-to-draft.md`）⇒ 归 #76 合并窗，⛔ 本批不声称联调过。
+- ⚠️ 换面带来的一格**新暴露**，如实登记而不借它报喜：`af_pending_queue` 的盘上读数取的是 `AutoForge/src/autoforge/af_api.py 命中 1 形状｜取材=HEAD树`。那一格此前吃工作树，会把登录线在途改动算成"盘上绿"；现在只认 HEAD ⇒ **在途件的绿与提交绿自此分开**，本席⛔ 不据此宣称 `af_api.py`（#79 窗）的半边已交付。裁定 §一 的代价预告（"大量在飞的改动会当场把若干盘上绿打回红"）在 AF 这一侧本轮**未发生**（盘上仍 4/5，与换面前同数），这一点也照实记。
+
+## §二之一百四十 · 收路线图 rev 6《⛔ 运营指令》的 AF 半边：口令原文扫面九面取回 ⇒ 按判据**就地停手**；并现读推翻 DCD 同族裁定 §2.3 的一处承重前提（**零落码**，落的是两份外部文书）
+
+**一、这件是什么**：路线图 `E:\NAS\关键决策部\roadmaps\AF-联动路线图.md` 今天抬到 **rev 6**（2026-10-13 15:06，DCD 约束面；对 AF **只读**，⛔ 本席未改一行），新增一整节《⛔ 运营指令》。该节第一句是「**MQTT 口令轮换——现口令已泄露到 GitHub**」，末行给每席位一条硬判据：「**发现任何文件里出现口令原文 ⇒ 就地停手并按制度 §6.7 上报**」。本席按那句扫 AF 仓，结果**恰好触发"就地停手"那一档**：口令原文确实在盘上两份文件里。⇒ 本批**零落码**（⛔ 不动 `docker/` 两份 compose、⛔ 不碰任何口令值、⛔ 不重写历史），落的是**一份 L1 决策申请＋一份改写后的投递回执**＋本节与 §十三／§十四 两格记账。
+
+**二、rev 6 那一格的字面，与 AF 这一侧真实拥有的手**：指令写的是「把 `MQTT_PASSWORD`（及 `MQTT_USER` 若有变）换成出资人注入的新口令；broker 侧由出资人同批换」。AF 仓内那一面现读＝`docker/docker-compose.api.yml:73-74` 写的是 `${MQTT_USER:-}`／`${MQTT_PASSWORD:-}` **引用留空**（#47 那批落的键名同源面），`docker/docker-compose.api-test.yml:28-29` 同样留空 ⇒ **仓内从来没有值，只有键名与注入位**；把值换进去的手在 NAS 侧宿主环境，⛔ 不是本席位的手（本批也不开合并窗、不碰容器）。同批登记一句口径差：rev 6 的 §开关格 `:45-46` 仍写「无 `ma.py`／`grep ma_query` ⇒ rc=1，0 命中」——那是 rev 6 落笔时点的快照，本席现读已是 **3 命中**（见 §二之一百三十九 四），⛔ 本席不改路线图，指路由本节承担。
+
+**三、口令面九面扫数**（2026-10-13 15:31–15:36 本地时刻现读；模式只匹配「键名＋16 位以上十六进制串」，⛔ 输出全程脱敏、任何文书里都不落口令原文）：
+
+| # | 面 | 命令原文 | 现读 |
+|---|---|---|---|
+| 1 | AF 工作树（含未跟踪） | `git grep --untracked -lE '(MQTT_PASSWORD\|MQTT_PASSWD\|MQTT_PASS)[=: ]+["'\'']?[0-9a-fA-F]{16,}'` | **恰 2 份**，都在 `docs/audit/`：`propose_round005/AutoForge_auditkit_round005_20261011.md` 与 `归档/AutoForge_auditkit_round005_20261011.md`，**同一行 `:231`**（该行是审计工具包自己写的"内容"示例，值原文本表不抄） |
+| 2 | AF 索引面 | `git grep --cached -lE …` | **0**。⚠️ 第一版把 `--cached` 写在 `-lE` 之后 ⇒ `fatal: option '--cached' must come before non-option arguments`，那一版的"0"是**没跑成**不是**没命中**，已按修正语序重跑；这一格单列，免得下一个读者把 git 用法错当结论 |
+| 3 | AF HEAD 树 | `git grep -lE … HEAD`／`git ls-tree -r HEAD --name-only \| grep -c auditkit_round005` | 各 **0**（那两份从未进提交）；另 `git ls-files --error-unmatch` 对两份各跑一次 ⇒ 均 `did not match any file(s) known to git` |
+| 4 | AF 全历史逐枚 | `git rev-list --all \| wc -l` ⇒ **444**；`git rev-list --all \| xargs -n 50 git grep -lE …` | **历史全提交命中文件数 0**。口径注（两档都记，防打架）：`git rev-list --count HEAD` ⇒ **425**，差的 19 枚是 `wip/merge-v2.1-wip-20260927` 与 `nas/*` 侧枝；申请与本节都取**更宽那一档** |
+| 5 | GitHub `origin/master` | `git grep -lE … origin/master` | **0** |
+| 6 | GitHub `origin/main` | 同法 | **0** |
+| 7 | NAS 侧 remote refs（`nas/master`／`nas/main`／`nas/af-local`） | 逐 ref 同法 | 各 **0** |
+| 8 | 另三仓 HEAD（doubao-butler／memory-agent／homesdk） | `git -C <仓> grep -lE … HEAD` | 各 **0**（⛔ 只读，未进那三仓做任何写动作） |
+| 9 | 仓外协作目录（`E:\NAS\ADM链主`、`E:\NAS\关键决策部`） | 文件级 `grep -rlE …` | 各 **0** |
+
+⇒ 九面合起来的结论**不是**"AF 泄露了"，也**不是**"AF 干净"，而是三句可复核的话：① 值只在**审计工具包的产出件**里（本席既没 `git add` 过、也不动他人产出件）；② AF 的**任何一条 git 线**（本地 444 枚／GitHub 两条／NAS 三条）都没带过它；③ rev 6 那句"写进仓内文件后被推到 GitHub"的泄露形状**在 AF 仓不成立**，泄露面归属要从 broker 侧与另一席位查——本席不推测是谁推的。
+
+**四、★现读推翻 DCD 裁定 §2.3 的一处承重前提**（`decisions/20261013-ADM-盘上取材范围与逐仓发布分支-裁定.md` §2.3：「只要 AF 不归一分支，铁律第三跳（容器走 WebUI 自更新）对 AF 就没有源可取」）：
+1. **容器侧不做分支判定**：`grep -rn "_UPDATE_PREVIEW\|update_available\.json" src scripts` 现读 ⇒ `af_api.py:1072` 只是**路径定义**、`:1086` 是注释、`:1088`／`:1102` 是 `os.path.isfile`、`:1089`／`:1108` 是 `open(..., encoding="utf-8")` 读 ⇒ **写站点 0 处、分支字面 0 处**；唯一写者是宿主脚本 `scripts/host_check_update.sh:14 PREVIEW="$DATA_DIR/.update_available.json"`（crontab `*/5`，见 `:3` 注释行）。
+2. **分支判定全在宿主脚本，五处全 `master`**：`:24 git fetch --force origin master`、`:38 "branch": "master"`（fetch 失败兜底档）、`:58`／`:59` 的 `git rev-parse HEAD` 与 `origin/master`、`:79 "branch": "master"`（正常档）、`:88` 结论日志行。
+3. ⇒ **AF 的发布线（`master`）与自更新源的判定分支（`master`）今天已经是同一条**，§2.3 那句"没有源可取"对 AF **不成立**（它成立的是 DB 那一侧 `butler/update_gate.py` 写死 `main` 的写法——那一侧⛔ 本席不替 DB 判、也不进那三仓一字节）。
+4. ⚠️ **推翻之后换成一格真的风险，且它此前无人登记**：这一致性**没有任何门守着**。`host_check_update.sh` 是仓内普通脚本，改其中一行字面就能把第三跳**悄悄**断开；仓外还有 NAS 那份在役拷贝（§十八 第 39 条已证在役镜像源码面落后本机 HEAD **104** 枚）⇒ 是否把「该仓发布线 == 自更新源判定分支」升成 AF 仓内门（取法＝现读 `git rev-parse --abbrev-ref HEAD` 对撞脚本里的分支字面）、门归谁，**归 DCD／出资人定点**，本席**不建门、不自决**（自己建就是把一条裁定没给的落点按理解塞进仓里）。
+5. 顺带一格路径事实（供 DCD 修文）：路线图 `G-AF-08` 那格写的落点是 `src/autoforge/api/`，现读**该目录不存在**，自更新四枚端点全在 `af_api.py`（`:1075` version／`:1098` update-check／`:1123` update／`:1174` update-status）。⛔ 路线图对 AF 只读，本席不改。
+
+**五、两份外部文书与自查读数**：
+- 决策申请 `E:\NAS\关键决策部\inbox\20261013-AF-口令原文在册与发布线一致性-决策申请.md`——**85 行／11386 B／CR=0**、md5 `9c324d14d9c06eea455d228873e70192`；级别 **L1 紧急**；四档方案（甲＝审计包产出方脱敏＋判据改成「值只在注入位、仓内 0 处原文」／乙＝AF 改他人件／丙＝`git filter-repo` 重写历史／丁＝维持现状），⛔ 末档"维持现状"在场依制度 §六 规则 2；`validate-application.ps1` 硬门全过／`RC=0`。**投递后被本席自己钉回一格**：依据表 #8 原写"本仓无 `.env` 入库"，被 `git ls-files | grep '\.env'` 现读 **4 命中**（四枚都是前端构建件，逐枚查无 MQTT 凭据）当场证伪，已改成精确口径——原文照记，因为"自己的假设被自己的命令推翻"是本节该留的证据形态。
+- 投递回执 `E:\NAS\ADM链主\投递\回执\AF-01.md`——**43 行／10636 B／CR=0**、md5 `7aa23aa9697fa864317eba2f2297defa`、`grep -c "^- R[1-4] "`＝**4**；件号**沿用 AF-01**（⛔ 不起新名，依 `投递\协议.md` §三），只把引用版本抬到 **rev 6**。R1／R2／R3＝已落（R3 带一处**已显式请追认**的偏差，见 §二之一百三十九 八）；R4＝五格"需要别人动的面"逐格指名（分支口径已结案／请 DCD 更正 §2.3／rev 6 两格非 AF 射程含这三 的九面扫数／现网 0/5 等窗／HTTP 响应体等 #79）；附表保留 10-12 那批的复现原文当**负控**，⛔ 不抹。
+- **口令值卫生自查**（四份文书各跑两枚判据，只报计数不打印匹配体）：键名紧跟 16＋位十六进制 ⇒ 申请 **0**／回执 **0**／执行记录 **0**／架构说明 **0**；裸 32 位十六进制串在申请与回执里 **0**（两份记账 docs 里的 **123／27** 命中全部是**存证文件的 md5**，不是凭据——这一格区别写清，防下一个名字哨兵误判成泄漏）。
+
+**六、零落码面／不自决清单**：⛔ 不落任何口令值、⛔ 不动 `docker/` 两份 compose（并发在途）、⛔ 不动 `af_api.py`／`af_auth.py`（#79 窗）、⛔ 不改他席位产出件、⛔ 不执行 `git filter-repo`／任何历史重写、⛔ 不动 `.gates-tally.txt`／`.gates-baseline.txt`／`.atomic-write-baseline.txt` 与可观测性 §四 六行、⛔ 不跑任何门的 `--write`（在途未清）、⛔ 不执行任何 docker 命令／不开合并窗／不做远端删除、⛔ 不 push、⛔ 不改路线图与计划文档。**按路线图"常态职责"如实登记**：本批⛔ 未使任何联动腿由绿转红（盘上仍 4/5、现网仍 0/5，与 §二之一百三十九 四 同数），也⛔ 未新增红格。
+
+**七、提交态（⛔ 未 push；本格只写取法，⛔ 不钉本枚 sha／枚数）**：批前 HEAD 现读 **`22c2d16`**（已提交祖先，后续提交挪不动它；⛔ 不用 `HEAD~N`，那个 `N` 每落一枚就错一格）。取法：
+
+```
+git -C E:/NAS/AutoForge log --oneline 22c2d16..HEAD      # 本批全量枚数与摘要行
+git -C E:/NAS/AutoForge diff --name-only 22c2d16..HEAD   # 本批全量文件名（src/tests 那七份只应出现在 16f35f9 那一枚里）
+git -C E:/NAS/AutoForge show --stat HEAD                 # 最近一枚（只有这一行会随下一枚移动）
+```
+
+`git status` 现读：并发在途的 `docker/docker-compose.api.yml`、`src/autoforge/af_api.py`、`src/autoforge/af_auth.py`、`scripts/gh_ci_status.py`、`scripts/host_update.sh` 与 `docs/audit/` 那族删除（**含 三 那两份命中口令原文的件**，它们本就是未跟踪／未暂存态）**一份未暂存、一份未动**；`docs/ADM联动执行计划-AF.md` 未入本批。
