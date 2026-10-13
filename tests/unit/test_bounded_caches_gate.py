@@ -660,7 +660,13 @@ def test_real_repo_measurements_are_pinned():
     退回同步重试。不给 TTL：到点前把它抹掉等于让一次重试悄悄消失，那正是 BUG-01 那一族的反面。
     封顶不丢单腿是 `tests/unit/test_stability_r3_20261011_batch2.py::test_delayed_queue_cap_raises_without_dropping_queued_work`。
 
-    工作树里若躺着未提交的 WIP 模块，扫到数会比 131 更大而基线仍是 113——那种红的意思是
+    注册表 4 → 5、扫到 131 → 132（第四期审计 AF38-R）：`af_auth.py::AuthCodeStore._lockout_until_mono`
+    是软锁定的**进程内单调钟副本**（墙钟腿 locked_until 落盘、单调钟腿抗 NTP 阶跃）。它随"被锁过的码数"
+    开，TTL 腿就是 `LOCKOUT_S`，写侧 `record_failure` 必经 `_prune_lockout_mono` 回收（判据 E：纯写不读
+    也被回收）；不给落盘——单调钟跨进程无意义。封顶腿是
+    `tests/unit/test_af4_auth_security_fixes.py::test_lockout_mono_map_is_pruned_on_write_without_reads`。
+
+    工作树里若躺着未提交的 WIP 模块，扫到数会比 132 更大而基线仍是 113——那种红的意思是
     "新容器没登记"，不是这行数字错了，登记处置归那一批自己，不许靠挪动这里的数字把它抹平。
 
     基线 114 → 113（裁定 20261011 §3 Q3 乙）：`af_auth.py::TokenRegistry._revoked` 从基线移出，改进
@@ -672,8 +678,8 @@ def test_real_repo_measurements_are_pinned():
     bounded, fixed, errs = gate.read_registry(src)
     containers, _lines, scan_errs = gate.scan(src)
     assert errs == [] and scan_errs == []
-    assert len(bounded) == 4 and len(fixed) == 3
-    assert len(containers) == 131 and len(gate.BASELINE) == 113
+    assert len(bounded) == 5 and len(fixed) == 3
+    assert len(containers) == 132 and len(gate.BASELINE) == 113
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"

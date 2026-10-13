@@ -248,6 +248,11 @@ class TokenRegistry:
             return
         if isinstance(data, list):
             self._revoked.update(str(t) for t in data)
+        else:
+            # AF66：能解析但顶层形状不对（如 {"a":1}、标量）≠ 空名单。旧实现落到这里
+            # 什么都不做，self._revoked 只剩 env 侧那点东西 ⇒ 盘上已撤销过的令牌全部复活
+            # （fail-open）。与"读不出来"同口径：置 poisoned，authenticate() 一律拒绝。
+            self._revoked_poisoned = True
 
     def _persist_revoked(self) -> None:
         if not self._revoked_path:
@@ -362,17 +367,20 @@ class TokenRegistry:
         for tok, _info in ordered[:overflow]:
             self._tokens.pop(tok, None)
 
-    def revoke_by_subject(self, subject: str) -> int:
-        """撤销某主体名下的全部已签发令牌；返回撤销数量。"""
+    def revoke_by_subject(self, subject: str, *, except_token: str | None = None) -> int:
+        """撤销某主体名下的全部已签发令牌；返回撤销数量。
+
+        `except_token`：排除某个 token 不撤销（用于删除 agent 时保留当前用户的登录态）。
+        """
         n = 0
         with self._lock:
             for tok, info in list(self._tokens.items()):
-                if info.subject == subject:
+                if info.subject == subject and tok != except_token:
                     self._revoked.add(tok)
                     n += 1
             if self._issued_path:
                 self._persist_revoked()
-                self._rewrite_issued(subject, drop=True)
+                self._rewrite_issued(subject, drop=True, except_token=except_token)
         return n
 
     def rename_subject(self, old: str, new: str) -> int:
@@ -391,25 +399,36 @@ class TokenRegistry:
     def _load_issued_file(self) -> None:
         if not self._issued_path or not Path(self._issued_path).is_file():
             return
+        p = Path(self._issued_path)
         try:
-            data = json.loads(Path(self._issued_path).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return
-        if isinstance(data, dict):
-            now = time.time()
-            for tok, meta in data.items():
-                if tok in self._revoked:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            # AF67：与相隔约 150 行的撤销侧处置相反——旧实现读不出就静默 return，
+            # 全部已签发令牌重启后从内存消失（用户侧 = 整个 API 锁死）且零日志。
+            # 现在 fail-fast 启动即报错，与 _load_env 对坏 AUTOFORGE_TOKENS 的口径一致：
+            # 配置/名单读不出来就不许带病启动，运维一眼看到现场。
+            raise ValueError(
+                f"{p.name} 已损坏，拒绝启动以保护已签发令牌名单；"
+                f"请修复或隔离该文件后重试（{type(exc).__name__}）"
+            ) from exc
+        if not isinstance(data, dict):
+            # AF67：能解析但形状不对（如数组）同样不能静默当空——旧实现
+            # `if isinstance(data, dict)` 不成立就什么都不做，症状同上。
+            raise ValueError(f"{p.name} 形状不是对象，拒绝启动以保护已签发令牌名单")
+        now = time.time()
+        for tok, meta in data.items():
+            if tok in self._revoked:
+                continue
+            if isinstance(meta, dict) and "subject" in meta:
+                # 过期条目直接不载入：否则重启后满盘都是过期令牌（新增审计 BUG-19）
+                exp = meta.get("expires_at")
+                if isinstance(exp, (int, float)) and exp <= now:
                     continue
-                if isinstance(meta, dict) and "subject" in meta:
-                    # 过期条目直接不载入：否则重启后满盘都是过期令牌（新增审计 BUG-19）
-                    exp = meta.get("expires_at")
-                    if isinstance(exp, (int, float)) and exp <= now:
-                        continue
-                    self._tokens[tok] = TokenInfo(
-                        subject=meta["subject"],
-                        scopes=set(meta.get("scopes", ["read"])),
-                        expires_at=float(exp) if isinstance(exp, (int, float)) else None,
-                    )
+                self._tokens[tok] = TokenInfo(
+                    subject=meta["subject"],
+                    scopes=set(meta.get("scopes", ["read"])),
+                    expires_at=float(exp) if isinstance(exp, (int, float)) else None,
+                )
 
     def _persist_issued(
         self, token: str, subject: str, scopes: list[str], expires_at: float | None = None
@@ -444,15 +463,29 @@ class TokenRegistry:
         data[token] = entry
         _atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2))
 
-    def _rewrite_issued(self, subject: str, new_name: str | None = None, drop: bool = False) -> None:
+    def _rewrite_issued(self, subject: str, new_name: str | None = None, drop: bool = False, except_token: str | None = None) -> None:
         if not self._issued_path or not Path(self._issued_path).is_file():
             return
+        p = Path(self._issued_path)
         try:
-            data = json.loads(Path(self._issued_path).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            # AF50c-R：旧实现静默 return —— 调用方（revoke_by_subject/rename_subject）
+            # 内存侧已经改完并上报成功，盘上文件却原样未动 ⇒ 重启后被"删除/改名"的令牌
+            # 原样复活。与 _persist_issued 同口径：文件损坏即拒写并抛错，让 API 面明确失败，
+            # 不许"看似成功、重启复活"。
+            raise ValueError(
+                f"{p.name} 已损坏，拒绝改写已签发令牌名单；"
+                f"请修复或隔离该文件后重试（{type(exc).__name__}）"
+            ) from exc
+        if not isinstance(data, dict):
+            # AF50c-R：旧实现 `list(data.items())` 在 try 之外——形状不对时 AttributeError
+            # 直接穿出调用方。统一在形状校验处抛可读错误。
+            raise ValueError(f"{p.name} 形状不是对象，拒绝改写已签发令牌名单")
         changed = False
         for tok, meta in list(data.items()):
+            if tok == except_token:
+                continue
             if isinstance(meta, dict) and meta.get("subject") == subject:
                 if drop:
                     data.pop(tok, None)
@@ -519,13 +552,25 @@ def _refuse_when_list_file_unreadable(path: Path, label: str) -> None:
     `_persist` 是**整档由内存快照重写**——一次 `create` 就把盘上全部待发码抹掉，
     现场也没了。护栏必须紧邻落盘调用（第十轮 W30：装在调用方不走的方法上等于没装）。
 
-    文件不存在是正常首写场景，不拒。
+    文件不存在是正常首写场景，不拒；0 字节/纯空白文件也不拒——那是**空名单**，不是损坏
+    （AF53：旧实现把空文件当"已损坏"拒写，`create()` 必经此护栏 ⇒ 配对码/授权码签发锁死）。
+    放行刻意做窄：只有"0 字节或纯空白"放行，"有内容却读不出来"仍拒（AF76 的教训）。
     """
     if not path.is_file():
         return
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_text(encoding="utf-8")
     except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"{path.name} 已损坏，拒绝写入以保护已有{label}；"
+            f"请修复或隔离该文件后重试（{type(exc).__name__}）"
+        ) from exc
+    if not raw.strip():
+        # 空/纯空白文件按空名单处理，放行整档重写（见 docstring AF53）
+        return
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
         raise ValueError(
             f"{path.name} 已损坏，拒绝写入以保护已有{label}；"
             f"请修复或隔离该文件后重试（{type(exc).__name__}）"
@@ -759,8 +804,13 @@ class AuthCodeStore:
         self._lock = threading.Lock()
         self._codes: dict[str, dict[str, Any]] = {}
         # 存储级失败尝试窗口（进程内存量，不落盘）：单码计数挡不住"试不存在的码"这一族。
+        # AF38-R：窗口基准必须用单调钟——墙钟被 NTP 向前阶跃一次，窗口就被判"已过期"
+        # 清零，防爆破 fail-open。落盘字段（expires_at/locked_until）仍是墙钟（跨重启要可解析）。
         self._window_start = 0.0
         self._window_hits = 0
+        # 单码软锁定的进程内单调钟副本：盘上 locked_until 是墙钟（跨重启恢复用），
+        # 单调钟副本抗 NTP 阶跃；validate 取两者更严格者（AF38-R 双判据）。
+        self._lockout_until_mono: dict[str, float] = {}
         self._load()
 
     def _load(self) -> None:
@@ -801,6 +851,27 @@ class AuthCodeStore:
     ATTEMPT_WINDOW_S = 60.0
     #: 窗口内允许的失败尝试次数；超限后 `validate()` 对任何码都返回 False
     ATTEMPT_LIMIT = 10
+    #: `_lockout_until_mono` 的硬上限（AF38-R：单调钟软锁定副本是进程内字典，
+    #: 键空间随"被锁过的码数"开，给一条封顶腿 + `_prune_lockout_mono` 写侧回收，
+    #: 与 `RateLimiter._blocked` 的登记形状一致；TTL 腿就是 `LOCKOUT_S`）。
+    LOCKOUT_MONO_MAX = 256
+
+    def _prune_lockout_mono(self, now_mono: float | None = None) -> None:
+        """写侧回收 `_lockout_until_mono`：先丢已到期的；仍超硬上限再按到期时间最早先丢。
+
+        到期条目本就在 `validate()` 里懒清，但判据 E 不许"纯写不读也不回收"——
+        一枚被锁后再也没人来 validate 的码，它的副本要在后续 record_failure 的写入口自己退出去。
+        """
+        if not self._lockout_until_mono:
+            return
+        now_mono = time.monotonic() if now_mono is None else now_mono
+        expired = [c for c, until in self._lockout_until_mono.items() if now_mono >= until]
+        for c in expired:
+            self._lockout_until_mono.pop(c, None)
+        # 为即将写入的新条目留位：prune 在 insert 之前跑，故以 >= 为准，写完不超硬上限。
+        while len(self._lockout_until_mono) >= self.LOCKOUT_MONO_MAX:
+            oldest = min(self._lockout_until_mono, key=self._lockout_until_mono.get)
+            self._lockout_until_mono.pop(oldest, None)
 
     def create(self, kind: str, ttl_minutes: int | None = None) -> AuthCode:
         now = time.time()
@@ -889,16 +960,23 @@ class AuthCodeStore:
         """
         self._load()
         with self._lock:
-            now = time.time()
+            # AF38-R：进程内窗口基准用单调钟（NTP 阶跃不动它）
+            now_mono = time.monotonic()
             if (
-                now - self._window_start < self.ATTEMPT_WINDOW_S
+                now_mono - self._window_start < self.ATTEMPT_WINDOW_S
                 and self._window_hits >= self.ATTEMPT_LIMIT
             ):
                 return False
             rec = self._codes.get(code)
             if rec is None or rec.get("revoked") or rec.get("consumed"):
                 return False
-            # 软锁定：失败过多后短时间内拒绝对这枚码的验证
+            # 软锁定双判据（AF38-R）：单调钟副本抗阶跃 + 盘上墙钟跨重启恢复，取更严格者
+            # （任一仍在锁定期内就拒）。单调钟侧到期顺手清掉，防 _lockout_until_mono 无界增长。
+            mono_until = self._lockout_until_mono.get(code)
+            if mono_until is not None:
+                if now_mono < mono_until:
+                    return False
+                self._lockout_until_mono.pop(code, None)
             locked_until = rec.get("locked_until")
             if locked_until is not None and time.time() < locked_until:
                 return False
@@ -937,11 +1015,12 @@ class AuthCodeStore:
 
         返回：True = 本次失败使**该码**进入锁定（调用方应提示用户稍后再试）。
         """
-        now = time.time()
+        now_wall = time.time()      # 盘上 locked_until 落盘字段（跨重启可解析），保留墙钟
+        now_mono = time.monotonic()  # 进程内窗口/单调钟锁定副本（AF38-R）
         self._load()  # 写前重读，同 create（BUG-20）
         with self._lock:
-            if now - self._window_start >= self.ATTEMPT_WINDOW_S:
-                self._window_start = now
+            if now_mono - self._window_start >= self.ATTEMPT_WINDOW_S:
+                self._window_start = now_mono
                 self._window_hits = 0
             self._window_hits += 1
             rec = self._codes.get(code)
@@ -953,7 +1032,11 @@ class AuthCodeStore:
             locked = False
             if rec["failed_attempts"] >= self.FAILURE_THRESHOLD:
                 if rec.get("locked_until") is None:
-                    rec["locked_until"] = time.time() + self.LOCKOUT_S
+                    # 盘上仍写墙钟（重启后能解析），同时记一份单调钟到期（本进程内抗阶跃）。
+                    # 写前先回收：纯写不读也不许这张表跟着"被锁过的码数"无界长。
+                    self._prune_lockout_mono(now_mono)
+                    rec["locked_until"] = now_wall + self.LOCKOUT_S
+                    self._lockout_until_mono[code] = now_mono + self.LOCKOUT_S
                     locked = True
             self._persist()
             return locked
@@ -1006,7 +1089,9 @@ class RateLimiter:
         self._prune_blocked(now)
 
     def check(self, key: str) -> None:
-        now = time.time()
+        # AF38-R：_hits/_blocked 全是进程内存量（不落盘、不跨重启），基准必须用单调钟——
+        # 墙钟被 NTP 向前阶跃一次，已记录的命中全部被判过期 ⇒ 限速 fail-open。
+        now = time.monotonic()
         with self._lock:
             until = self._blocked.get(key)
             if until is not None:
@@ -1065,6 +1150,12 @@ class AdminUserStore:
         self._username: str | None = None
         self._salt: str | None = None
         self._hash: str | None = None
+        # AF13-R：admin.json 在却读不出/形状不对时置位——此时无法证明"到底有没有管理员"，
+        # 必须按"已有管理员但无法核验"fail-closed（登录一律拒、注册一律拒），绝不能当
+        # "没有管理员"fall-through：旧口径下文件一坏，/api/auth/login 的未注册兼容模式就给
+        # 任意非空凭据发 read+write+live 全权限令牌（原管理员反被 401），register 端点
+        # 也能让任何人注册成管理员并落盘（AF13b-R）。
+        self._poisoned = False
         self._load()
 
     def _load(self) -> None:
@@ -1072,14 +1163,18 @@ class AdminUserStore:
             return
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
-            self._username = data.get("username")
-            self._salt = data.get("salt")
-            self._hash = data.get("hash")
         except (OSError, ValueError):
-            # 文件损坏 = 没有用户（fail-closed：不允许登录，但允许重新注册）
-            self._username = None
-            self._salt = None
-            self._hash = None
+            # 文件损坏 ≠ 没有用户。置位 poisoned，由 has_admin/verify/register 统一 fail-closed。
+            self._poisoned = True
+            return
+        # AF13c-R：顶层不是对象（如 `[1,2,3]`）时 `data.get` 会抛 AttributeError 穿出
+        # build_app() 让服务起不来。形状不对按损坏处理（置 poisoned），不再裸奔。
+        if not isinstance(data, dict):
+            self._poisoned = True
+            return
+        self._username = data.get("username")
+        self._salt = data.get("salt")
+        self._hash = data.get("hash")
 
     def _persist(self) -> None:
         if not self._path:
@@ -1095,7 +1190,14 @@ class AdminUserStore:
 
     @property
     def has_admin(self) -> bool:
-        """是否已有管理员用户。"""
+        """是否已有管理员用户。
+
+        文件在却读不出/形状不对时（`_poisoned`）返回 True：无法证明"没有管理员"时
+        按"已有管理员"处理（AF13-R fail-closed）——拒绝一切登录与注册，直到运维修好/删掉
+        admin.json。这与旧口径（损坏=没用户=放行注册+兼容登录）相反，是有意为之。
+        """
+        if self._poisoned:
+            return True
         return bool(self._username and self._salt and self._hash)
 
     @property
@@ -1133,7 +1235,9 @@ class AdminUserStore:
 
     def verify(self, username: str, password: str) -> bool:
         """验证用户名和密码。恒定时间比较。"""
-        if not self.has_admin:
+        # AF13-R：poisoned 时 has_admin 虽为 True，凭据字段全空——显式 fail-closed 返回，
+        # 不走到下面的哈希比较分支（语义更清晰，也防未来 has_admin 口径再变）。
+        if self._poisoned or not self.has_admin:
             return False
         if not username or not password:
             return False

@@ -158,8 +158,12 @@ class PendingStore:
             try:
                 d = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
-                _logger.warning("pending list: 跳过并隔离损坏条目 %s: %s", p, exc)
-                _quarantine_corrupt(p)
+                # AF57：先动手隔离，再按结果如实记录——隔离失败不得声称"已隔离"。
+                done = _quarantine_corrupt(p)
+                if done:
+                    _logger.warning("pending list: 跳过并隔离损坏条目 %s: %s", p, exc)
+                else:
+                    _logger.warning("pending list: 损坏条目 %s 未能隔离（仍留原位，下轮重试）: %s", p, exc)
                 continue
             if agent is not None and d.get("agent") != agent:
                 continue
@@ -174,8 +178,11 @@ class PendingStore:
         try:
             return json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
-            _logger.warning("pending load: 条目损坏，隔离 %s: %s", p, exc)
-            _quarantine_corrupt(p)
+            done = _quarantine_corrupt(p)
+            if done:
+                _logger.warning("pending load: 条目损坏，已隔离 %s: %s", p, exc)
+            else:
+                _logger.warning("pending load: 损坏条目 %s 未能隔离（仍留原位）: %s", p, exc)
             return None
 
     def delete(self, op_id: str) -> bool:
@@ -198,8 +205,13 @@ class PendingStore:
                     json.loads(p.read_text(encoding="utf-8"))["submitted_at"].replace("Z", "+00:00")
                 ).timestamp()
             except (OSError, ValueError, KeyError) as exc:
-                _logger.warning("pending sweep: 损坏条目无法判定 TTL，隔离 %s: %s", p, exc)
-                _quarantine_corrupt(p)
+                done = _quarantine_corrupt(p)
+                if done:
+                    _logger.warning("pending sweep: 损坏条目无法判定 TTL，已隔离 %s: %s", p, exc)
+                else:
+                    # AF57：隔离失败时文件留在原位，下一轮 sweep 还会再撞上来；必须留痕，
+                    # 否则僵尸永久清不掉且日志里只有"已隔离"的假相。
+                    _logger.warning("pending sweep: 损坏条目无法判定 TTL 且未能隔离 %s: %s", p, exc)
                 continue
             if now - sub > max_age_s:
                 try:
@@ -223,10 +235,17 @@ def os_replace(src: Path, dst: Path) -> None:
     os.replace(src, dst)
 
 
-def _quarantine_corrupt(p: Path) -> None:
-    """把损坏的待批文件重命名为 .corrupt 隔离，避免反复静默失败、留下证据并解除僵尸。"""
+def _quarantine_corrupt(p: Path) -> bool:
+    """把损坏的待批文件重命名为 .corrupt 隔离，避免反复静默失败、留下证据并解除僵尸。
+
+    返回是否真的改成功（AF57）：重命名失败时返回 False，调用方不得声称"已隔离"——
+    否则 sweep 场景下坏文件留在原位、下一轮又 glob 到、又判坏、又"声称已隔离"，
+    僵尸永远清不掉且全程无声。
+    """
     # fixed-tmp: exempt(隔离损坏文件的重命名操作：源→.corrupt，非 tmp→正名的数据写入，同文件系统重命名是原子的)
     try:
         p.rename(p.with_suffix(".corrupt"))
-    except OSError:
-        pass
+        return True
+    except OSError as exc:
+        _logger.warning("pending quarantine: 隔离失败，文件仍留在原位 path=%s err=%s", p, exc)
+        return False

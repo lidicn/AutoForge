@@ -54,12 +54,25 @@ class JsonFireStore:
         if self._path.exists():
             try:
                 data = json.loads(self._path.read_text(encoding="utf-8"))
-                self._records = data.get("records", {})
             except (json.JSONDecodeError, OSError) as exc:
                 # AF2：冷启动成空是允许的，但**盘上那份读不出来**这件事必须让写侧知道，
                 # 否则一次 claim 就把全部当日记账抹平。护栏见 `_save`。
                 logger.warning("FIRE_LOG_UNREADABLE fire_log.json 读不出，冷启动为空：%s", exc)
                 self._records = {}
+                return
+            # AF69：json 合法但顶层不是 dict（如 `[1,2,3]`）时，下一行 `data.get` 会抛
+            # AttributeError 穿出 __init__ —— 一个坏文件让整个 Runtime 起不来，且报错不点名是
+            # 哪份文件。按"读不出"处理：留痕 + 冷启动为空；`_save` 的整档护栏会拒写，避免把这份
+            # 错形状文件抹掉（fail-closed，不静默当空库后覆盖）。
+            if not isinstance(data, dict):
+                logger.warning(
+                    "FIRE_LOG_BAD_SHAPE fire_log.json 顶层是 %s 而非 dict，冷启动为空：%s",
+                    type(data).__name__, self._path,
+                )
+                self._records = {}
+                return
+            records = data.get("records", {})
+            self._records = records if isinstance(records, dict) else {}
 
     def _save(self) -> None:
         # AF2（第二期第二轮确证）：整档由内存快照重写，落盘前先确认盘上那份还读得出来。

@@ -354,7 +354,11 @@ def list_graphs(store: GraphStore) -> dict[str, Any]:
         autos = list(graph)
         item["automation_ids"] = [a.id for a in autos]
         item["mode"] = autos[0].mode if len(autos) == 1 else "multi"
-        item["tags"] = store.get_tags(name)
+        try:
+            item["tags"] = store.get_tags(name)
+        except Exception as exc:  # AF71：tags 只是展示层附属，读不出降级为空继续，不能炸掉整个列表
+            logger.warning("LIST_GRAPHS_TAGS_FAILED name=%s err=%s —— tags 降级为空继续", name, exc)
+            item["tags"] = []
     return {"ok": True, "items": sorted(latest.values(), key=lambda x: x["name"])}
 
 
@@ -381,12 +385,17 @@ def graphs_by_tag(store: GraphStore, tag: str) -> dict[str, Any]:
             graph = store.load(name, latest_version)
         except (FileNotFoundError, IRValidationError, OSError):
             continue
+        try:
+            tags = store.get_tags(name)
+        except Exception as exc:  # AF71：标签视图不能因为 tags 读不出整体 500（带标签归档消失）
+            logger.warning("GRAPHS_BY_TAG_TAGS_FAILED name=%s err=%s —— tags 降级为空继续", name, exc)
+            tags = []
         items.append(
             {
                 "name": name,
                 "version": latest_version,
                 "automation_ids": [a.id for a in graph],
-                "tags": store.get_tags(name),
+                "tags": tags,
             }
         )
     return {"ok": True, "tag": tag, "items": sorted(items, key=lambda x: x["name"])}
@@ -405,14 +414,19 @@ def enable_by_tag(
     names = [n for n, ts in store.all_tags().items() if tag in ts]
     # 先算清影响面（不落盘），超阈值直接拒——避免"改了一半才失败"
     planned: list[tuple[str, int, Any]] = []
+    failed: list[dict[str, Any]] = []
     total = 0
     for name in names:
         try:
             version = store.latest(name)
             if version is None:
+                # AF64：有标签但连最新版本都读不出，原来被静默跳过——"要求停用的那个恰恰没停"
+                # 还照样回 ok=True。如实记为失败项。
+                failed.append({"name": name, "reason": "no_latest_version"})
                 continue
             graph = store.load(name, version)
-        except (FileNotFoundError, IRValidationError, OSError):
+        except (FileNotFoundError, IRValidationError, OSError) as exc:
+            failed.append({"name": name, "reason": f"load_failed:{type(exc).__name__}"})
             continue
         planned.append((name, int(version or 0), graph))
         total += len(list(graph))
@@ -424,21 +438,30 @@ def enable_by_tag(
         for auto in graph:
             auto.enabled = enabled
             auto.raw["enabled"] = enabled  # 序列化形态同步翻转，保证 re-save 后 round-trip 一致
-        new_version = store.save(
-            graph,
-            name,
-            note=f"v0.6.0 批量{'启用' if enabled else '禁用'}（tag={tag}）",
-            # 归属必须随版本走：store.save 的 owner 缺省是空串，不传就等于把别人建的归档
-            # 改写成"无归属"——用户视角列表按 owner 分组，一次按标签批量启停会把整批自动化
-            # 从原 agent 组里搬进「未归属/本地」，读数看起来像归档被重建过。
-            owner=_existing_owner(store, name),
-        )
+        try:
+            new_version = store.save(
+                graph,
+                name,
+                note=f"v0.6.0 批量{'启用' if enabled else '禁用'}（tag={tag}）",
+                # 归属必须随版本走：store.save 的 owner 缺省是空串，不传就等于把别人建的归档
+                # 改写成"无归属"——用户视角列表按 owner 分组，一次按标签批量启停会把整批自动化
+                # 从原 agent 组里搬进「未归属/本地」，读数看起来像归档被重建过。
+                owner=_existing_owner(store, name),
+            )
+        except Exception as exc:
+            # AF64：单条 save 失败不能让异常穿成 500、也不能让前面已落盘的条目把这次批量
+            # 掩盖成全 ok。如实记失败项，继续处理其余归档；整体 ok 由"有无失败项"决定。
+            logger.warning("enable_by_tag: 批量%s 落盘失败 name=%s err=%r",
+                           "启用" if enabled else "禁用", name, exc)
+            failed.append({"name": name, "reason": f"save_failed:{type(exc).__name__}"})
+            continue
         affected.append({"name": name, "version": new_version, "enabled": enabled})
     return {
-        "ok": True,
+        "ok": not failed,
         "tag": tag,
         "enabled": enabled,
         "affected": affected,
+        "failed": failed,
         "blast_radius": {"affected": total, "limit": blast_radius_limit()},
     }
 
@@ -896,7 +919,9 @@ def load_device_guard(store: GraphStore | None) -> DeviceGuardRegistry | None:
 
     - 文件不存在 → 返回 None（不启用分级保护，向后兼容）；
     - 每次调用**重新读盘**：规则文件改动后下次 `scan()` 自动生效（热更新，无需重启）；
-    - 读盘/解析失败 → 记日志并返回 None（不让坏策略文件把服务打挂）。
+    - 读盘/解析失败 → 记日志并返回**全拒注册表**（AF49-R，fail-closed）：
+      一切实体命中 Tier-0 必须人审。与"文件不存在"（None=不启用）刻意区分——
+      坏策略文件不再被当成"没配保护"而静默放行。
 
     P0-7 修复：注入 DeviceCatalog，让 area 类型的保护规则能正确匹配
     （之前 catalog 始终为 None，area 规则永远不命中）。
@@ -919,8 +944,13 @@ def load_device_guard(store: GraphStore | None) -> DeviceGuardRegistry | None:
             logger.error("DEVICE_GUARD_CATALOG_INJECT_FAILED err=%s", exc)
         return guard
     except (OSError, ValueError) as exc:
-        logger.error("DEVICE_ACL_LOAD_FAILED path=%s err=%s", path, exc)
-        return None
+        # AF49-R：读失败不再返回 None（=fail-open，与"没配保护"不可区分），
+        # 改为全拒注册表（fail-closed）。副作用：坏 device_acl.json 会让每次 scan 全量报
+        # Tier-0 ERROR——这是刻意取舍（错误可见度 > 可用性，与 AF16b 同口径）。
+        logger.error("DEVICE_ACL_LOAD_FAILED path=%s err=%s —— 按最严处理（全拒注册表）", path, exc)
+        return DeviceGuardRegistry.deny_all_registry(
+            f"device_acl.json 读取失败（{type(exc).__name__}: {exc}）"
+        )
 
 
 #: v2.1 契约冻结（决策 C）：build/simulate 返回必须带的 stage 契约版本标记。
@@ -2447,24 +2477,29 @@ def list_watches(store_root: str | None = None) -> dict[str, Any]:
         if not path.is_file() or str(path) in seen:
             continue
         seen.add(str(path))
+        # AF71c：遍历 watch 列表时，单个 sidecar 形态损坏（JSON 不是 dict / 指向的 IR
+        # 形状不对）绝不能让整个 /api/watch/list 500——跳过这一条并留痕，其余照常列出。
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            if not isinstance(data, dict):
+                raise ValueError(f"sidecar 不是 JSON object: {type(data).__name__}")
+            graph_path = data.get("graph", "")
+            summary = _graph_summary(graph_path) if graph_path else {}
+            watches.append({
+                "owner": data.get("owner", ""),
+                "acquired_at": data.get("acquired_at", ""),
+                "graph": graph_path,
+                "ha_url": data.get("ha_url", ""),
+                "sidecar": str(path),
+                "name": summary.get("name", ""),
+                "automation_id": summary.get("automation_id", ""),
+                "triggers": summary.get("triggers", []),
+                "actions": summary.get("actions", []),
+                "node_count": summary.get("node_count", 0),
+            })
+        except Exception as exc:  # noqa: BLE001 —— 单条坏 sidecar 不拖垮整表
+            logger.warning("list_watches: 跳过无法解析的 sidecar path=%s err=%r", path, exc)
             continue
-        graph_path = data.get("graph", "")
-        summary = _graph_summary(graph_path) if graph_path else {}
-        watches.append({
-            "owner": data.get("owner", ""),
-            "acquired_at": data.get("acquired_at", ""),
-            "graph": graph_path,
-            "ha_url": data.get("ha_url", ""),
-            "sidecar": str(path),
-            "name": summary.get("name", ""),
-            "automation_id": summary.get("automation_id", ""),
-            "triggers": summary.get("triggers", []),
-            "actions": summary.get("actions", []),
-            "node_count": summary.get("node_count", 0),
-        })
     return {"ok": True, "watches": watches, "total": len(watches)}
 
 
@@ -2841,11 +2876,26 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
     # P1-19：令牌从 credentials.json 读出，经环境变量传递（不传 --ha-token argv）
     ha_token = ""
     cred = root / "credentials.json"
+    # AF58b：凭据文件存在却读不出来时，旧实现静默带空令牌起子进程，而探测只看 sidecar
+    # 是否写出——"有令牌"与"无令牌"在返回里逐字相同。必须留痕，并把凭据状态回传。
     if cred.exists():
         try:
             ha_token = json.loads(cred.read_text(encoding="utf-8")).get("ha_token", "")
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "start_watch: 凭据文件存在但读不出 %s err=%r —— 将在无 HA 令牌下启动子进程",
+                cred, exc,
+            )
+            cred_state = "unreadable"
+        else:
+            cred_state = "loaded" if ha_token else "empty"
+            if not ha_token:
+                logger.warning(
+                    "start_watch: 凭据文件存在但 ha_token 为空 %s —— 将在无 HA 令牌下启动子进程",
+                    cred,
+                )
+    else:
+        cred_state = "absent"
     # 起 watch（不传 --ha-token，令牌走环境变量）
     cmd = [
         "forge", "watch", str(tmp),
@@ -2877,10 +2927,18 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
         return {"ok": False, "error": f"启动 watch 失败: {e}"}
     # 写 PID 文件（供 `stop_watch` 用）。内容仍是裸数字——**可信身份不在这里**，而在 sidecar 的
     # `owner`（`{hostname}-{pid}-{uuid8}`）：停之前两边必须对得上，见 `_verified_pid`。
+    # AF58：旧实现写失败直接 `pass` 且紧接着照回 `ok=True`——这个 watcher 后续无法经
+    # stop_watch 核验终止（PID 文件不存在 ⇒ refused_to_kill），等于启动了一个管理不了的
+    # 孤儿，持续占着协调锁，且全链零日志。现在：写失败留痕，并在成功返回里如实降级。
+    pid_written = True
     try:
         atomic_write_text(pid_file, str(proc.pid))
-    except OSError:
-        pass
+    except OSError as exc:
+        pid_written = False
+        logger.warning(
+            "start_watch: 写 PID 文件失败（watcher 已启动但后续无法经 stop_watch 核验终止）"
+            " pid=%s path=%s err=%r", proc.pid, pid_file, exc,
+        )
     # 等 sidecar 出现，同时做健康探测。
     # **sidecar 身份必须对得上本次这份 IR**：它是目录里唯一的一个文件，上一条 watch 的残留会被读成
     # "本次启动成功"（2026-10-09 现场实测：1.18s 就回 ok=true，带的是 9-29 另一条 watch 的 graph 路径）。
@@ -2905,8 +2963,7 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
         except (OSError, ValueError):
             data = None
         if data is not None and data.get("graph") == mine:
-            return {
-                "ok": True,
+            success_payload: dict[str, Any] = {
                 "pid": proc.pid,
                 "owner": data.get("owner", ""),
                 "graph": data.get("graph", ""),
@@ -2915,7 +2972,23 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
                 "tier": tier,
                 # 两档都不落真机：dry_live 只记意图，live_unconfirmed 被 CLI 拒启动（走不到这一格）。
                 "real_device": False,
+                "pid_file_written": pid_written,
+                "credentials": cred_state,
             }
+            if not pid_written:
+                # AF58：watcher 虽已注册，但 PID 文件写不进去 ⇒ stop_watch 将拒绝核验终止，
+                # 这是个"管理不了"的进程。不能裸 ok=True 掩盖（孤儿占锁、零日志）。
+                return {
+                    "ok": False,
+                    "reason": "pid_file_write_failed",
+                    "error": (
+                        f"watcher 已启动并注册（pid={proc.pid}），但 PID 文件 {pid_file} 写入失败，"
+                        "后续无法经 /api/watch/stop 核验终止；请按 sidecar owner 手动清理，"
+                        "或修复 PID 文件目录权限后重启。"
+                    ),
+                    **success_payload,
+                }
+            return {"ok": True, **success_payload}
         if data is not None:
             other = data
         if exited:

@@ -35,16 +35,28 @@ def secret_path(name: str) -> Path:
 def load_secret(name: str, default: str = "") -> str:
     """读取 secret：优先 secret 文件，缺失/空则回退环境变量。
 
-    返回脱尾空白的文本；文件不存在/无权限/为空时返回 default。
+    返回脱尾空白的文本；文件不存在/为空时返回 default。
+
+    AF55：文件**在**却读不出来（权限/解码失败）时**抛错**，不再静默回退 env。
+    旧实现把这一档与"文件不存在"归并——而对鉴权面（AUTOFORGE_API_TOKEN 等）而言，
+    env 多半也没配：读不出 ⇒ 静默落到空 ⇒ `TokenRegistry.enabled=False` ⇒ 整个 API
+    从"要求令牌"静默退化成"全站公开"，且与"真的没配"逐字不可区分、零日志。
+    现在这一档必须炸出来，让运维立刻看到现场。
     """
     p = secret_path(name)
     try:
         val = p.read_text(encoding="utf-8").strip()
-        if val:
-            return val
-    except (OSError, ValueError):
-        # 文件不存在、无权限、或解码失败：交给 env 回退
-        pass
+    except FileNotFoundError:
+        # 文件不存在 = 没配，正常回退 env
+        return os.environ.get(name, default)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"secret 文件 {p} 存在却读不出来（{type(exc).__name__}）；"
+            "拒绝静默回退环境变量，以免鉴权状态被静默降级。请修复文件权限/内容。"
+        ) from exc
+    if val:
+        return val
+    # 空文件 = 没配，回退 env
     return os.environ.get(name, default)
 
 

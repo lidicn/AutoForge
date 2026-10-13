@@ -41,6 +41,23 @@ _SHA256_KEY = "_sha256"
 _logger = logging.getLogger(__name__)
 
 
+def _quarantine_corrupt(p: Path) -> bool:
+    """把读不出的落盘记录重命名为 `.corrupt` 隔离，留取证现场、解除僵尸。
+
+    AF42-R / AF61：此前 records()/load() 对 JSON 解析失败是**静默 continue / 返回 None**——
+    坏文件既不留痕、又留在原位，下一次 `save(同一 instance_id)` 用 `os.replace` 把坏字节
+    整档抹成新记录，取证面归零。先重命名隔离：坏字节原样留存为 `*.corrupt`，且不再进
+    `*.json` 的 glob，下轮不再反复读坏。隔离失败返回 False（不得声称已隔离，与 af_pending 同口径）。
+    """
+    try:
+        # fixed-tmp: exempt(隔离损坏记录的重命名：源 *.json → *.corrupt，非 tmp→正名 数据写入，同文件系统重命名原子)
+        p.rename(p.with_suffix(".corrupt"))
+        return True
+    except OSError as exc:
+        _logger.warning("af_persist: 损坏记录隔离失败，仍留原位 path=%s err=%s", p, exc)
+        return False
+
+
 # ─────────────────────────────────────────────────────────────────────
 # 墙钟工具
 # ─────────────────────────────────────────────────────────────────────
@@ -220,7 +237,14 @@ class PersistStore:
             return None
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
-        except (ValueError, OSError):
+        except (ValueError, OSError) as exc:
+            # AF61/AF42-R：解析失败不能静默返回 None——留痕 + 隔离坏文件，
+            # 避免它留在原位被下次 save(同一 id) 的原子替换无声抹掉、零取证。
+            done = _quarantine_corrupt(path)
+            _logger.warning(
+                "af_persist: 落盘记录读不出，%s（%s）path=%s",
+                "已隔离为 .corrupt" if done else "隔离失败仍留原位", exc, path,
+            )
             return None
         if not _verify_record(record):
             _logger.warning("af_persist: 落盘记录校验和不匹配，拒收（%s）", path)
@@ -237,7 +261,14 @@ class PersistStore:
                 continue
             try:
                 record = json.loads(path.read_text(encoding="utf-8"))
-            except (ValueError, OSError):
+            except (ValueError, OSError) as exc:
+                # AF61：解析失败此前静默 continue——崩溃恢复时实例永久消失、坏字节还留在原位，
+                # 下一次 save(同 id) 原子替换把现场抹掉（AF42-R 零取证）。现改为留痕 + 隔离。
+                done = _quarantine_corrupt(path)
+                _logger.warning(
+                    "af_persist: 落盘记录解析失败，%s（%s）path=%s",
+                    "已隔离为 .corrupt" if done else "隔离失败仍留原位", exc, path,
+                )
                 continue
             if not _verify_record(record):
                 _logger.warning("af_persist: 落盘记录校验和不匹配，跳过（%s）", path)

@@ -83,6 +83,9 @@ class HATransport:
         self.token = cfg.get_ha_token() if cfg is not None else token
         self.timeout = float(timeout)
         self._opener = opener or _no_redirect_opener.open
+        # AF63：上一次 all_states() 的失败原因；None=成功。出参型留痕——失败与"HA 真空"
+        # 都是空 dict，光看返回值区分不了"HA 整个连不上"和"HA 真的没实体"。
+        self.last_states_error: str | None = None
 
     def _refresh_if_stale(self) -> None:
         """凭据热重载（§2.9）：connection_revision 变化即丢弃旧 token，从 cfg 取最新。"""
@@ -151,7 +154,13 @@ class HATransport:
         return str(state) if state is not None else None
 
     def all_states(self) -> dict[str, tuple[str, dict[str, Any]]]:
-        """拉取全量状态：`{entity_id: (state, attributes)}`；失败返回空 dict。"""
+        """拉取全量状态：`{entity_id: (state, attributes)}`；失败返回空 dict。
+
+        AF63：失败不再是零留痕的空 dict——失败时 `logger.warning` + 把原因写进
+        `self.last_states_error`（成功时置 None）。否则"HA 整个连不上"与"HA 真空"
+        都是空 dict，上层 `HAStateProvider.snapshot` 对每个实体抛 UnknownEntity，
+        被记成 ENTITY_DRIFT（实体漂移），诊断方向相反。
+        """
         self._refresh_if_stale()
         url = f"{self.base_url}/api/states"
         req = urllib.request.Request(
@@ -160,8 +169,13 @@ class HATransport:
         try:
             with self._opener(req, timeout=self.timeout) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
-        except Exception:
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "HA /api/states 拉取失败（按空快照返回，区别于 HA 真空）：%r", exc
+            )
+            self.last_states_error = f"{type(exc).__name__}: {exc}"
             return {}
+        self.last_states_error = None
         out: dict[str, tuple[str, dict[str, Any]]] = {}
         if isinstance(payload, list):
             for item in payload:
@@ -207,10 +221,18 @@ class HAStateProvider:
         """
         wanted = list(entity_ids)
         all_states = self.transport.all_states()
+        pull_error = getattr(self.transport, "last_states_error", None)
         values: dict[str, str] = {}
         attributes: dict[str, dict[str, Any]] = {}
         for entity_id in wanted:
             if entity_id not in all_states:
+                # AF63：仍 fail-closed（契约不许静默省略未知实体），但拉取失败时把
+                # "HA 连不上"经 __cause__ 带进异常链——否则上层只看到 UnknownEntity，
+                # 一律记成 ENTITY_DRIFT（实体漂移），把基础设施故障误判成注册表变更。
+                if pull_error:
+                    raise UnknownEntity(entity_id) from RuntimeError(
+                        f"HA 状态拉取失败（{pull_error}）：是 HA 不可达，不是该实体漂移"
+                    )
                 raise UnknownEntity(entity_id)
             state, attrs = all_states[entity_id]
             values[entity_id] = state

@@ -210,11 +210,30 @@ class DeviceGuardRegistry:
     兼容旧 `entity_acl`（`from_acl`）：`-` → tier-0（必须人审），`rw`/`r` → tier-1。
     """
 
-    def __init__(self, rules: Iterable[Any] | None = None, catalog: Any | None = None) -> None:
+    def __init__(
+        self,
+        rules: Iterable[Any] | None = None,
+        catalog: Any | None = None,
+        deny_all: bool = False,
+        reason: str = "",
+    ) -> None:
         self.rules: list[GuardRule] = [
             r if isinstance(r, GuardRule) else GuardRule(**r) for r in (rules or [])
         ]
         self.catalog = catalog
+        # AF49-R：读不出规则文件时的 fail-closed 形态——一切实体命中 Tier-0，
+        # 与「没配保护（rules 为空）」逐字可区分（后者 match_tier 返回 None=放行）。
+        self.deny_all = bool(deny_all)
+        self.reason = reason
+
+    @classmethod
+    def deny_all_registry(cls, reason: str = "") -> "DeviceGuardRegistry":
+        """全拒注册表：规则文件读不出/解析失败时返回（AF49-R，fail-closed）。
+
+        与「文件不存在（未启用保护）」不同口径：那条返回 None 表示不启用分级；
+        这条表示「保护策略不可信，按最严处理」——所有实体命中 Tier-0 必须人审。
+        """
+        return cls(rules=[], deny_all=True, reason=reason)
 
     @classmethod
     def from_acl(cls, acl: Mapping[str, str] | None) -> "DeviceGuardRegistry":
@@ -265,6 +284,8 @@ class DeviceGuardRegistry:
 
     def match_tier(self, entity_id: str) -> int | None:
         """命中规则的最严 tier（0 最严）；未命中返回 None（默认放行）。"""
+        if self.deny_all:
+            return 0
         best: int | None = None
         for rule in self.rules:
             if self._hit(rule, entity_id):
@@ -273,6 +294,8 @@ class DeviceGuardRegistry:
 
     def match_perm(self, entity_id: str) -> str | None:
         """命中规则的最严 perm（`-` 由 tier-0 表达）；未命中返回 None。"""
+        if self.deny_all:
+            return "-"
         best: tuple[int, str] | None = None
         for rule in self.rules:
             if not self._hit(rule, entity_id):
@@ -919,13 +942,20 @@ class StaticScanner:
 
         if self._guard is None:
             return
+        # AF49-R：deny_all 注册表（规则文件读不出）命中时，把"按最严处理"的原因带进
+        # 诊断消息——否则运维看到的是「实体 X 属 Tier-0 保护区」，会去查哪条规则命中了，
+        # 而实际是 device_acl.json 整个没读出来。
+        deny_reason = (
+            f"（原因：{self._guard.reason}，已按最严处理）"
+            if self._guard.deny_all and self._guard.reason else ""
+        )
         for entity_id in sorted(reads):
             if self._guard.match_tier(entity_id) == 0:
                 out.diagnostics.append(
                     Diagnostic(
                         "ENTITY_GUARD_TIER0",
                         ERROR,
-                        f"实体 {entity_id} 属 Tier-0 保护区，读取须经人工审批",
+                        f"实体 {entity_id} 属 Tier-0 保护区，读取须经人工审批{deny_reason}",
                         auto.id,
                     )
                 )
@@ -937,7 +967,7 @@ class StaticScanner:
                         Diagnostic(
                             "ENTITY_GUARD_TIER0",
                             ERROR,
-                            f"实体 {entity_id} 属 Tier-0 保护区，写入须经人工审批",
+                            f"实体 {entity_id} 属 Tier-0 保护区，写入须经人工审批{deny_reason}",
                             auto.id,
                             node.id,
                         )

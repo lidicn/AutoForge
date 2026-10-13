@@ -111,6 +111,7 @@ class _Circuit:
     open_until: float = 0.0
     half_open_successes: int = 0
     trial_inflight: bool = False
+    trial_inflight_since: float = 0.0   # AF54：试探发出时刻（单调时钟），用于孤立试探超时自愈
 
 
 def _normalize_ids(entity_ids: Any) -> list[str]:
@@ -146,6 +147,7 @@ class ConflictArbiter:
         circuit_threshold: int = 5,
         circuit_cooldown: float = 300.0,
         circuit_half_open_success: int = 2,
+        circuit_half_open_timeout: float | None = None,
         aging_rate: float = 0.01,
         aging_cap: float = 0.20,
         wait_enabled: bool = False,
@@ -165,6 +167,13 @@ class ConflictArbiter:
         self.circuit_threshold = int(circuit_threshold)
         self.circuit_cooldown = float(circuit_cooldown)
         self.circuit_half_open_success = int(circuit_half_open_success)
+        # AF54：半开试探的回执超时。默认取锁 TTL 的 2 倍——锁 TTL 到期后那次试探
+        # 必然已无主，回执再不来就是孤立试探；超过此时长仍未见 release 就判失败退回 open。
+        self.circuit_half_open_timeout = (
+            float(circuit_half_open_timeout)
+            if circuit_half_open_timeout is not None
+            else float(lock_ttl) * 2.0
+        )
         self.aging_rate = float(aging_rate)
         self.aging_cap = float(aging_cap)
         self.wait_enabled = bool(wait_enabled)
@@ -477,13 +486,33 @@ class ConflictArbiter:
             cd.status = "half_open"
             cd.half_open_successes = 0
             cd.trial_inflight = True
+            cd.trial_inflight_since = now
             self._emit(KIND_CIRCUIT_HALF_OPEN, entity_id, automation_id, None, {"trial": True})
             return None
         if cd.status == "half_open":
             if cd.trial_inflight:
+                # AF54：试探已放出但迟迟没有 release 回执（do 节点崩溃 / 锁 TTL 已过期），
+                # trial_inflight 永远置不回 False ⇒ 后续每次请求都被 half_open_busy 挡住，
+                # 该 automation 无限期拒绝且无自愈。超过回执超时仍无回执，即把这次孤立试探
+                # 判为失败、退回 open 重走冷却——有界重试，不再卡死。
+                if now - cd.trial_inflight_since > self.circuit_half_open_timeout:
+                    self._emit(
+                        KIND_CIRCUIT_OPEN, entity_id, automation_id, None,
+                        {"phase": "half_open_trial_timeout",
+                         "inflated_for": round(now - cd.trial_inflight_since, 3),
+                         "timeout": self.circuit_half_open_timeout},
+                    )
+                    self._reopen(automation_id, cd, now, "half_open_trial_timeout")
+                    self._emit(
+                        KIND_CIRCUIT_OPEN, entity_id, automation_id, None,
+                        {"phase": "block", "remaining": round(cd.open_until - now, 3),
+                         "conflicts": cd.conflict_count},
+                    )
+                    return RequestDecision.CIRCUIT_OPEN
                 self._emit(KIND_CIRCUIT_OPEN, entity_id, automation_id, None, {"phase": "half_open_busy"})
                 return RequestDecision.CIRCUIT_OPEN
             cd.trial_inflight = True
+            cd.trial_inflight_since = now
         return None
 
     def _count_conflict(self, automation_id: str, now: float) -> None:

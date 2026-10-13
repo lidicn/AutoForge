@@ -41,8 +41,22 @@ def refuse_when_shape_unreadable(path: Path | str, label: str, *, expect: str = 
     if not target.is_file():
         return
     try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+        raw = target.read_text(encoding="utf-8")
+    except OSError as exc:
+        # 文件在但读不出来（权限/IO）——按损坏处理：不能当空态放行，否则整档覆盖把现场抹掉。
+        raise ValueError(
+            f"{target.name} 已损坏，拒绝写入以保护已有{label}；"
+            f"请修复或隔离该文件后重试（{type(exc).__name__}）"
+        ) from exc
+    # AF52：0 字节 / 纯空白 = 合法空态（该站点尚未初始化），放行初始化——**不是**"已损坏"。
+    # 这一态必须窄：只在"剥掉空白后一字节都没有"时放行，绝不能把"有内容却读不出"一起放过去
+    # （那正是 AF76 补丁自伤：空文件放行把损坏文件也放行，整档覆盖抹掉读不出的那份；
+    #   AF77 要求损坏检测覆盖"能打开但 json.loads 失败"——下面的非空分支就是它的落点）。
+    if not raw.strip():
+        return
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
         raise ValueError(
             f"{target.name} 已损坏，拒绝写入以保护已有{label}；"
             f"请修复或隔离该文件后重试（{type(exc).__name__}）"

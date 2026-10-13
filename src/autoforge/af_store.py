@@ -24,7 +24,7 @@ from typing import Any, Mapping
 
 from .af_atomic import atomic_write_text
 from .af_audit import record_conflict
-from .af_conf import ConfidenceStore
+from .af_conf import AUTO_MIN, SHADOW_LOW, ConfidenceStore
 from .af_flock import FileLock, owner_id
 from .af_instance import Instance, InstanceContext
 from .af_ir import Graph, Node, load_graph
@@ -561,12 +561,20 @@ class GraphStore:
                 )
             entries.append({"name": name, "tags": self.get_tags(name), "versions": versions})
         confs: list[dict[str, Any]] = []
+        # AF70：conf 存在但读不出/解析失败的归档显式登记到 missing_confs。原来静默
+        # `continue` ⇒ bundle 少这份 conf，而 checksum 按"导出时现状"计算，侦测不到；
+        # 导入报告三条全成，a2 的 conf 却没了。现在导入侧据此报错，不再报假"全成"。
+        missing_confs: list[str] = []
         for name in self.names():
+            conf_path = self.root / f"{self._dir(name).name}.conf.json"
             try:
-                payload = json.loads(
-                    (self.root / f"{self._dir(name).name}.conf.json").read_text(encoding="utf-8")
-                )
-            except (OSError, ValueError):
+                payload = json.loads(conf_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                continue  # 该归档从未写过置信度快照——合法空缺，不是缺陷
+            except (OSError, ValueError) as exc:
+                logger.error("CONF_BACKUP_READ_FAILED path=%s err=%s —— 登记进 bundle.missing_confs",
+                             conf_path, exc)
+                missing_confs.append(name)
                 continue
             confs.append({"name": name, "payload": payload})
         bundle: dict[str, Any] = {
@@ -575,6 +583,7 @@ class GraphStore:
             "exported_at": _utc_now_iso(),
             "entries": entries,
             "confs": confs,
+            "missing_confs": missing_confs,  # AF70：导出时就缺快照的归档，随 bundle 一起走
         }
         bundle["checksum"] = _bundle_checksum(bundle)
         return bundle
@@ -896,6 +905,16 @@ class GraphStore:
             if target != cname and not self.versions(target):
                 continue
             self.save_conf_raw(target, conf.get("payload", {}))
+        # AF70：导出时就没带上 conf 的归档，导入侧不许装没事发生——报进 errors，
+        # 让"导入全成"的报告带上这条窟窿（否则用户以为 conf 跟着归档一起恢复了）。
+        for cname in bundle.get("missing_confs", []):
+            report["errors"].append({
+                "name": cname,
+                "error": (
+                    "导出时该归档的置信度快照读不出来，本 bundle 未携带这份 conf；"
+                    "导入不会凭空补写——请到导出端修复该归档的 .conf.json 后重新导出"
+                ),
+            })
         # P1-17 修复：ok 由 errors 驱动（有错误即 ok=False，之前永为 True）
         report["ok"] = not report["errors"]
         return report
@@ -917,13 +936,17 @@ class GraphStore:
         # 把它一起包进 ValueError 等于把"首次运行"读成 500（NAS 现场即此）。
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or "conf" not in payload:
+                raise ValueError(f"置信度快照格式错误 {path}: 缺少 conf 字段")
+            # AF71b：这两行原来在 try 之外——load_confidence 遇到 values 里混了档位词
+            # （'high'/'medium'/'low'）时 float() 直接炸成
+            # `could not convert string to float: 'high'`，连"读哪份快照、哪个文件"都没有。
+            # 现在收进同一道 R14-02 包装，报错带路径。
+            return load_confidence(payload["conf"])
         except FileNotFoundError:
             raise
         except (OSError, ValueError) as exc:
             raise ValueError(f"置信度快照读取失败 {path}: {exc}") from exc
-        if not isinstance(payload, dict) or "conf" not in payload:
-            raise ValueError(f"置信度快照格式错误 {path}: 缺少 conf 字段")
-        return load_confidence(payload["conf"])
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -939,12 +962,28 @@ def dump_confidence(store: ConfidenceStore) -> dict[str, Any]:
     }
 
 
+# AF71b：历史/手工 conf.json 的 values 可能写档位词（'high'/'medium'/'low'）而不是 0~1 浮点。
+# 按三档自主阈值换算（high→auto 档下界 AUTO_MIN / medium→shadow 档下界 SHADOW_LOW / low→ask 档），
+# 不再炸成 `could not convert string to float: 'high'`。真不可解析的值仍走原 float() 报错
+# （由 load_conf 统一包成"置信度快照读取失败"，带路径）。
+_BAND_STR_TO_FLOAT = {"high": AUTO_MIN, "medium": SHADOW_LOW, "low": 0.30}
+
+
+def _conf_float(v: Any) -> float:
+    if isinstance(v, (int, float)):
+        return float(v)
+    mapped = _BAND_STR_TO_FLOAT.get(str(v).strip().lower())
+    if mapped is not None:
+        return mapped
+    return float(v)
+
+
 def load_confidence(data: Mapping[str, Any]) -> ConfidenceStore:
     """dict → ConfidenceStore（samples 还原为 tuple）。"""
-    values = {str(k): float(v) for k, v in (data.get("values") or {}).items()}
+    values = {str(k): _conf_float(v) for k, v in (data.get("values") or {}).items()}
     samples: dict[str, list[tuple[str, float]]] = {}
     for key, items in (data.get("samples") or {}).items():
-        samples[str(key)] = [(str(kind), float(value)) for kind, value in items]
+        samples[str(key)] = [(str(kind), _conf_float(value)) for kind, value in items]
     return ConfidenceStore(values=values, samples=samples)
 
 

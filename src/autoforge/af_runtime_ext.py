@@ -117,11 +117,27 @@ class ConfGrading:
                 self.restore_corrupt.append(name)
                 return default
 
-        self.shadow.log.load(_read("shadow_log.json", []))
-        self.recorder.load(_read("feedback.json", {}).get("events", []))
-        self.canary.load(_read("canary_state.json", {}))
-        self.proposals.load(_read("proposals.json", {}))
-
+        # AF62：逐模块降级。原来这四个 load() 顺次裸跑——某个文件 JSON 能解析但字段
+        # 形状脏（如 feedback.json 是个 list，`.get` 直接 AttributeError；或 canary.load
+        # 收到脏结构抛 TypeError），异常会穿出 restore() ⇒ install() 整个挂掉，五个模块
+        # 一个都不挂载，而 restore_corrupt 账本还是空的（_read 只兜"解析失败"，兜不住
+        # "解析成功但 load() 炸"）。现在每个模块独立 try：坏的那个按『该模块无历史』跳过
+        # 并记账，其余模块照常恢复。
+        targets: tuple[tuple[str, Callable[[], None]], ...] = (
+            ("shadow_log.json", lambda: self.shadow.log.load(_read("shadow_log.json", []))),
+            ("feedback.json", lambda: self.recorder.load(_read("feedback.json", {}).get("events", []))),
+            ("canary_state.json", lambda: self.canary.load(_read("canary_state.json", {}))),
+            ("proposals.json", lambda: self.proposals.load(_read("proposals.json", {}))),
+        )
+        for name, step in targets:
+            try:
+                step()
+            except Exception as exc:  # noqa: BLE001 - 逐模块降级：一个模块脏不拖垮其余模块挂载
+                logger.warning(
+                    "%s 恢复失败，按『该模块无历史』继续挂载其余模块：%r（记入 restore_corrupt）",
+                    name, exc,
+                )
+                self.restore_corrupt.append(name)
 
 def install(
     runtime: Any,

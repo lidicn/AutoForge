@@ -49,6 +49,10 @@ class Config:
         #: 读得出快照时不置位——那种情况下整档重写恰好是把好数据写回盘上的修复动作（R19-01 口径）。
         self._creds_unreadable = False
         self._creds = self._load_credentials()
+        #: AF79：revision.json **文件在、却读不出/形状不对** ⇒ 置位后 bump 拒写。
+        #: 理由：盘上代数未知（可能已是几十上百），读失败若归 0，下一次 bump 就把它整档抹回 1，
+        #: 下游代数比对整体回退。文件不存在是合法首建空态，不置位。
+        self._revision_unreadable = False
         self.connection_revision = self._load_revision()
 
     # ── 路径 ─────────────────────────────────────────────────────────
@@ -86,19 +90,44 @@ class Config:
         return data
 
     def _load_revision(self) -> int:
-        try:
-            body = json.loads(self._revision_path().read_text(encoding="utf-8"))
-            if not isinstance(body, dict):
-                # 与 _load_credentials 同一条失败方向：`null` / `42` / `[]` 都是合法 JSON，
-                # 但对它们调 `.get` 会当场 AttributeError 抛穿到 get_config()——启动炸、运行中炸。
-                _logger.warning(
-                    "CONFIG_REVISION_BAD_SHAPE revision.json 形状不是对象，按读不出来处理: type=%s",
-                    type(body).__name__,
-                )
-                return 0
-            return int(body.get("revision", 0) or 0)
-        except (OSError, ValueError, TypeError):
+        path = self._revision_path()
+        if not path.is_file():
+            # 文件不存在 = 合法首建空态：清标志，代数从 0 开始（首建 bump 到 1 无盘上值可抹）。
+            self._revision_unreadable = False
             return 0
+        try:
+            body = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            # AF79：文件在却读不出——不能归 0。盘上代数未知（可能已是几十上百），
+            # 归 0 后下一次 bump 会把它整档抹回 1。置位让 bump 拒写；返回当前内存值（首建无内存时为 0）。
+            _logger.warning(
+                "CONFIG_REVISION_UNREADABLE revision.json 读不出: %s —— bump 将拒写以保护盘上代数",
+                exc,
+            )
+            self._revision_unreadable = True
+            return int(getattr(self, "connection_revision", 0) or 0)
+        if not isinstance(body, dict):
+            # 与 _load_credentials 同一条失败方向：`null` / `42` / `[]` 都是合法 JSON，
+            # 但对它们调 `.get` 会当场 AttributeError 抛穿到 get_config()——启动炸、运行中炸。
+            # AF79：形状不对同样按"读不出"处理，不把盘上代数归 0。
+            _logger.warning(
+                "CONFIG_REVISION_BAD_SHAPE revision.json 形状不是对象，按读不出来处理: type=%s",
+                type(body).__name__,
+            )
+            self._revision_unreadable = True
+            return int(getattr(self, "connection_revision", 0) or 0)
+        rev_val = body.get("revision", 0)
+        if not isinstance(rev_val, (int, float, str)):
+            # AF79 补：revision 值是错误标量类型（如 list/dict），不能 int() 炸穿，
+            # 也不能归 0 抹掉盘上代数。按"读不出"处理：置位让 bump 拒写。
+            _logger.warning(
+                "CONFIG_REVISION_BAD_SCALAR revision 值类型不可解析: type=%s —— bump 将拒写",
+                type(rev_val).__name__,
+            )
+            self._revision_unreadable = True
+            return int(getattr(self, "connection_revision", 0) or 0)
+        self._revision_unreadable = False
+        return int(rev_val or 0)
 
     def get_ha_token(self) -> str:
         """HA 长期访问令牌：credentials.json 文件优先，缺省回退 secret 文件/环境变量。
@@ -186,6 +215,13 @@ class Config:
             return self._bump_revision_locked()
 
     def _bump_revision_locked(self) -> int:
+        # AF79：盘上 revision.json 读不出/形状不对时拒写——此时本进程不知道盘上是几，
+        # 归 0 再 +1 写成 1 会把盘上可能已很大的代数整档抹小。fail-closed，等人工修复/删档。
+        if self._revision_unreadable:
+            raise ValueError(
+                "revision.json 已损坏且本进程未能读出盘上代数；拒绝 bump 以免把盘上代数"
+                "整档抹回小数字。请修复或删除 revision.json 后重试"
+            )
         self.connection_revision += 1
         self._atomic_write(self._revision_path(), {"revision": self.connection_revision})
         return self.connection_revision

@@ -56,7 +56,11 @@ def test_validate_is_query_only_then_consume_invalidates(acs):
 
 
 def test_per_code_lockout_after_threshold_and_expires(acs, monkeypatch):
-    """审计回归项 3/4：同一枚真实码连错 10 次 → 软锁；锁过期 → 恢复。"""
+    """审计回归项 3/4：同一枚真实码连错 10 次 → 软锁；锁过期 → 恢复。
+
+    AF38-R 后软锁定是**双判据**（单调钟副本抗阶跃 + 盘上墙钟跨重启恢复，取更严格者）：
+    模拟"锁定窗口已过"必须把两条腿都抬起来——只推墙钟，单调钟副本还在锁定期内，仍拒。
+    """
     code = acs.create("long").code
     for _ in range(acs.FAILURE_THRESHOLD - 1):
         assert acs.record_failure(code) is False
@@ -64,6 +68,10 @@ def test_per_code_lockout_after_threshold_and_expires(acs, monkeypatch):
     assert acs.validate(code) is False
     rec = acs._codes[code]
     monkeypatch.setattr(time, "time", lambda: rec["locked_until"] + 1)
+    acs._lockout_until_mono.pop(code, None)          # 单调钟腿也越过窗口（AF38-R）
+    # AF38-R：存储级窗口基准也改单调钟——真实时间没过 60s，窗口还满着；
+    # 300s 真流逝里窗口早滚完了，这里等价于"窗口已过"。
+    acs._window_hits = 0
     assert acs.validate(code) is True
 
 

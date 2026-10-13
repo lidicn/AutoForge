@@ -74,7 +74,9 @@ def test_issued_registry_control_keeps_both_tokens(tmp_path):
 def test_issued_registry_refuses_when_file_corrupt(tmp_path):
     p = tmp_path / "issued.json"
     p.write_text(CORRUPT, encoding="utf-8")
-    with pytest.raises(ValueError, match="已损坏，拒绝写入以保护已签发令牌名单"):
+    # AF67：损坏文件现在在构造期即拒（比首次写入更早一步），异常文本是"拒绝启动"；
+    # 写侧仍是"拒绝写入"。两处的共同点是"已损坏"——判据钉共同点即可。
+    with pytest.raises(ValueError, match="已损坏"):
         TokenRegistry(issued_path=p).issue_for_agent("alpha")
     # 决定性读数：坏字节还在，既没被盖掉也没被清空
     assert _read(p) == CORRUPT

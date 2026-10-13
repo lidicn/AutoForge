@@ -55,6 +55,7 @@ _ENV_FLOATS = {
     "aging_rate": "AUTOFORGE_CONFLICT_AGING_RATE",
     "aging_cap": "AUTOFORGE_CONFLICT_AGING_CAP",
     "max_pending_wait": "AUTOFORGE_CONFLICT_MAX_PENDING_WAIT",
+    "circuit_half_open_timeout": "AUTOFORGE_CONFLICT_HALF_OPEN_TIMEOUT",
 }
 _ENV_INTS = {
     "flicker_threshold": "AUTOFORGE_CONFLICT_FLICKER_THRESHOLD",
@@ -95,6 +96,7 @@ class ConflictSettings:
     circuit_threshold: int = 5
     circuit_cooldown: float = 300.0
     circuit_half_open_success: int = 2
+    circuit_half_open_timeout: float | None = None   # AF54：None=按 lock_ttl*2 推导
     aging_rate: float = 0.01
     aging_cap: float = 0.20
     max_pending_wait: float = 60.0
@@ -232,6 +234,7 @@ class ConflictService:
             circuit_threshold=self.settings.circuit_threshold,
             circuit_cooldown=self.settings.circuit_cooldown,
             circuit_half_open_success=self.settings.circuit_half_open_success,
+            circuit_half_open_timeout=self.settings.circuit_half_open_timeout,
             aging_rate=self.settings.aging_rate,
             aging_cap=self.settings.aging_cap,
             wait_enabled=self.settings.wait_enabled,

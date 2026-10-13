@@ -10,8 +10,11 @@ JSONL 追加写，每行一个 ConflictEvent；启动时自动回放恢复（持
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any, Callable, Iterable
+
+logger = logging.getLogger(__name__)
 
 try:  # 包内加载 / 单文件加载两种方式都可用
     from .af_conflict import ConflictEvent, ResourceLock
@@ -172,7 +175,11 @@ class ConflictAuditor:
                 try:
                     self.events.append(event_from_dict(json.loads(line)))
                     loaded += 1
-                except Exception:
+                except Exception as exc:
+                    # AF59：坏行不能静默跳过——否则崩溃恢复时哪条审计丢了无从知晓。
+                    logger.warning(
+                        "af_conflict_audit reload: 跳过无法解析的坏行 path=%s err=%r", path, exc
+                    )
                     continue
         if len(self.events) > self.max_memory:
             self.events = self.events[-self.max_memory:]
@@ -197,5 +204,10 @@ class ConflictAuditor:
             with open(path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(event_to_dict(event), ensure_ascii=False, sort_keys=True))
                 fh.write("\n")
-        except Exception:
-            pass    # 落盘失败不影响内存审计
+        except Exception as exc:
+            # AF59：落盘失败不能静默——否则"内存里有、盘上没有"这种历史静默缩短
+            # 无从发现。不抛出（记账失败不影响主流程），但必须留痕。
+            logger.warning(
+                "af_conflict_audit _persist: 落盘失败（仍保留在内存）path=%s err=%r",
+                path, exc, exc_info=True,
+            )

@@ -121,7 +121,8 @@ def test_lock_holds_after_the_window_rolls():
     assert limiter._hits.get("ip:1.2.3.4", []) == []  # 锁定时窗口里的旧命中即刻作废
     with pytest.raises(RateLimitExceeded):
         limiter.check("ip:1.2.3.4")  # 窗口早就滚过了，挡它的必须是那把锁
-    limiter._blocked["ip:1.2.3.4"] = time.time() - 1
+    # AF38-R：_blocked 是进程内量，check() 已改走单调钟——解锁也必须按单调钟刻度
+    limiter._blocked["ip:1.2.3.4"] = time.monotonic() - 1
     limiter.check("ip:1.2.3.4")  # 解锁后才放行
 
 

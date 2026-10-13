@@ -585,18 +585,29 @@ class PreferenceModel:
             return
         path = Path(self._path(PREFERENCES_FILE))
         if path.is_file():
-            # 读入量受上限约束：整档只可能比留存多出 _compact_slack 行
-            rows = read_jsonl_bounded(path, self._max_records + self._compact_slack())
-            if not rows and _jsonl_has_content(path):
-                # F13（第九轮实测 data_lost 的那处）：盘上有内容却一行都读不出来。
-                # `_records` 这时是空的，任何整档压缩都会把明细抹平且连坏字节的现场一起没。
+            # AF78：先显式读一次原文——read_jsonl_bounded / _jsonl_has_content 都会把 OSError
+            # 吞成"空"，那样"文件在却因权限/IO 读不出"会被当成空库，整档压缩把盘上明细抹光且零留痕。
+            try:
+                raw_text = path.read_text(encoding="utf-8")
+            except OSError as exc:
                 self._records_unreadable = True
                 _logger.error(
-                    "PREFERENCES_UNREADABLE path=%s —— 整档压缩已拒写，坏文件原样保留", path
+                    "PREFERENCES_IO_ERROR path=%s err=%s —— 整档压缩已拒写，坏文件原样保留", path, exc,
                 )
+                raw = []
             else:
-                self._records_unreadable = False
-            raw = [r for r in (self._record_from_row(row) for row in rows) if r is not None]
+                # 读入量受上限约束：整档只可能比留存多出 _compact_slack 行
+                rows = read_jsonl_bounded(path, self._max_records + self._compact_slack())
+                if not rows and raw_text.strip():
+                    # F13（第九轮实测 data_lost 的那处）：盘上有内容却一行都读不出来。
+                    # `_records` 这时是空的，任何整档压缩都会把明细抹平且连坏字节的现场一起没。
+                    self._records_unreadable = True
+                    _logger.error(
+                        "PREFERENCES_UNREADABLE path=%s —— 整档压缩已拒写，坏文件原样保留", path
+                    )
+                else:
+                    self._records_unreadable = False
+                raw = [r for r in (self._record_from_row(row) for row in rows) if r is not None]
         else:
             raw = self._migrate_legacy()
         dropped = max(0, len(raw) - self._max_records)

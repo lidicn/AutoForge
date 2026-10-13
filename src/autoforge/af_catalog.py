@@ -268,6 +268,10 @@ class DeviceCatalog:
         #: R16-01：aliases.json 损坏毒化标志——置位后 set_alias/remove_alias 拒写，
         #: 避免一次正常操作抹掉全部已有别名（RMW-on-silent-empty 第 3 次出现）。
         self._aliases_broken = False
+        #: AF39-R：catalog.json 损坏毒化标志——置位后 refresh() 三条路径一律拒写。
+        #: 旧护栏只挡 full=True 且无 domain/area，增量(full=False)与收窄(full=True+domain/area)
+        #: 两条绕过，用空 old 整档覆盖坏文件。读侧一旦判损坏就置位，写侧见旗即停。
+        self._catalog_poisoned = False
 
     # ── 路径与读盘（带 mtime/size 缓存）────────────────────────────────
     @property
@@ -276,11 +280,13 @@ class DeviceCatalog:
         return self.root / ".catalog" / "catalog.json"
 
     def _load(self) -> dict[str, Any]:
-        """读目录（带缓存）。文件不存在/损坏 → 空目录（不抛）。"""
+        """读目录（带缓存）。文件不存在 → 空目录（合法空态，不抛）；损坏 → 毒化标志置位。"""
         path = self.catalog_path
         try:
             stat = path.stat()
         except OSError:
+            # 文件不存在 = 合法首建空态：毒化标志必须清掉，否则首建也被拒写锁死。
+            self._catalog_poisoned = False
             self._cache = None
             return {"version": CATALOG_VERSION, "freshness": "", "entities": {}}
         cached = self._cache
@@ -293,13 +299,26 @@ class DeviceCatalog:
         except (OSError, ValueError) as exc:
             # R16-02：损坏时不能静默返回空——收窄刷新依赖 old 做"保留未匹配条目"，
             # old 为空会让保护失效，一次正常的"只刷书房"把全屋清空。
-            logger.error("CATALOG_LOAD_FAILED path=%s err=%s —— 收窄刷新将强制全量，避免 RMW 丢实体",
+            # AF39-R：同时置毒化标志，refresh() 三条路径一律拒写，不再用空 old 覆盖坏文件。
+            logger.error("CATALOG_LOAD_FAILED path=%s err=%s —— 目录已毒化，刷新将拒写以保护现场",
                          path, exc)
+            self._catalog_poisoned = True
             return {"version": CATALOG_VERSION, "freshness": "", "entities": {}}
         if not isinstance(parsed, dict):
-            logger.error("CATALOG_BAD_SHAPE path=%s type=%s —— 收窄刷新将强制全量",
+            logger.error("CATALOG_BAD_SHAPE path=%s type=%s —— 目录已毒化，刷新将拒写以保护现场",
                          path, type(parsed).__name__)
+            self._catalog_poisoned = True
             return {"version": CATALOG_VERSION, "freshness": "", "entities": {}}
+        self._catalog_poisoned = False
+        # AF73：写侧写 version，读侧必须校验。`setdefault` 会把"缺 version 字段"伪装成"当前版本"，
+        # 这对 v1 首建是合理默认；但若盘上显式写了一个**未知/更新的版本号**，不能悄悄按当前版本接着用。
+        raw_version = parsed.get("version")
+        if raw_version is not None and raw_version != CATALOG_VERSION:
+            logger.warning(
+                "CATALOG_VERSION_MISMATCH path=%s on_disk=%r current=%r —— 无法确认目录版本，"
+                "请人工核对/迁移后再写",
+                path, raw_version, CATALOG_VERSION,
+            )
         parsed.setdefault("version", CATALOG_VERSION)
         parsed.setdefault("freshness", "")
         parsed.setdefault("entities", {})
@@ -370,6 +389,21 @@ class DeviceCatalog:
             }
 
         old = self._load().get("entities", {})
+        # AF39-R：catalog 一旦判损坏（_load 读不出/形状不对），**三条刷新路径一律拒写**。
+        # 旧护栏 `poisoned and full and not (domain/area)` 只挡"无收窄全量"，增量(full=False)
+        # 与收窄(full=True+domain/area)两条绕过——前者拿空 old 当"已存实体"全量覆盖，
+        # 后者触发 R16-02 强制全量，都把坏文件抹成新的空目录。护栏收窄为 `if poisoned`。
+        if getattr(self, "_catalog_poisoned", False):
+            logger.error(
+                "CATALOG_POISONED_REFRESH_BLOCKED path=%s —— catalog.json 已损坏，"
+                "拒绝刷新以免整档覆盖现场；请修复或隔离该文件后重试",
+                self.catalog_path,
+            )
+            return {
+                "ok": False,
+                "error": "catalog.json 已损坏，拒绝刷新以保护现场；请修复或隔离该文件后重试",
+                "hint": "删除或隔离 .catalog/catalog.json 后再刷新（会以空目录重建）。",
+            }
         #: 收窄过滤（domain/area 非空）时**保留未匹配的旧条目**，避免「只刷书房」把全屋清空
         narrow = bool(domain or area)
         # R16-02：收窄模式下若 old 为空但 catalog 文件存在，说明文件可能损坏（_load 静默返回空），

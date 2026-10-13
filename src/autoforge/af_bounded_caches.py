@@ -95,6 +95,17 @@ BOUNDED_CACHES: list[dict[str, str]] = [
         "trim": "_trim_alert_dedupe",
         "test": "tests/unit/test_owner_alert.py::test_dedupe_is_capped_and_expires_without_reads",
     },
+    {
+        # 第四期审计 AF38-R：授权码软锁定的**进程内单调钟副本**。墙钟腿落盘（locked_until），
+        # 单调钟腿只活在本进程抗 NTP 阶跃——它随"被锁过的码数"开，TTL 腿就是 LOCKOUT_S，
+        # 写侧 record_failure 必经 `_prune_lockout_mono` 回收（判据 E：纯写不读也被回收）。
+        "module": "af_auth",
+        "attr": "AuthCodeStore._lockout_until_mono",
+        "cap": "LOCKOUT_MONO_MAX",
+        "ttl": "LOCKOUT_S",
+        "trim": "_prune_lockout_mono",
+        "test": "tests/unit/test_af4_auth_security_fixes.py::test_lockout_mono_map_is_pruned_on_write_without_reads",
+    },
 ]
 
 FIXED_KEY_CACHES: list[dict[str, str]] = [
