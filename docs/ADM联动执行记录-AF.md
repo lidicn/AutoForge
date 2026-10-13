@@ -12014,3 +12014,36 @@ git -C E:/NAS/AutoForge show --stat HEAD                 # 最近一枚（只有
 **六、门禁一遍**：`GATES_PYTHON=python bash gates.sh` ⇒ **`C_RC=1`、35715 B**、md5 `151424003debaf68207b084033037f7f`、CR **151**、✓**21**／✗**3**（信任边界 7／进程模型 22／可观测性 71，三枚归属逐字未变，仍属另一席位存量），`cmp E:\tmp\rl149_gates_c.txt E:\tmp\rl151_gates_a.txt` ⇒ **`CMP_RC=0`（与 §二之一百四十七 那两遍、§二之一百四十八 遍 c 逐字节同一，同一枚 md5 第三次复现）**。判据同 §二之一百四十八 六（本枚⛔ 动 `src/`、⛔ 新增文件 ⇒ 入库面计数⛔ 变 ⇒ 判定行⛔ 变）。另加一条本枚特有的用途：上一枚首遍塌在机器的瞬时 `ENOSPC`（`C_RC=2`），本遍同时是**"机器侧已恢复、那道门能读回真源"的复测**——同一条 `check_trust_boundary` 腿从 ✗1（射程塌）回到 ✗7（判红存量，归属另一席位），⇒ 读数的档位差⛔ 混用：`exit 2` 那一遍⛔ 计入任何一格的读数。⚠️ 顺序如实同 §一百三十九 十一、§一百四十一 五、§一百四十二 二：本行记录晚于该遍 ⇒ ⛔ 冒充"提交后终局"。
 
 **七、不自决与归属**：① 契约表 `:175`（GET 半边）与 `:176`（工具实名）两行 ⇒ **DCD 落笔**；② Q3 的"落盘留痕够不够"⇒ **DCD 定档**；③ DB 侧四项（write 令牌／镜像测试／结构化实发／5s 节奏达标）⇒ **DB 席位**，本席⛔ 代答；④ 403／200 与 INBOX_KEY 的**现网**读数 ⇒ **出资人窗口**（窗 B）。**未出境**取法＝`git fetch origin master && git rev-list --count origin/master..HEAD`（⛔ 自抄枚数；⛔ 不 push）。**存证**：`E:\tmp\rl149_gates_c.txt`。
+
+---
+
+## §二之一百五十 · 零落码台账枚（第三枚）：补 20261013《「盘上」取材范围 ＋ 逐仓发布分支》裁定的《执行回填》——现读复测时抓到**裁甲被同日另一份裁定违反了一次**（任务 #138 第三格）
+
+**一、这枚是什么**：`decisions/20261013-ADM-盘上取材范围与逐仓发布分支-裁定.md`（L3＋L2，裁"尺子的取材面"本身）自 2026-10-13 14:32 落盘起**没有《执行回填》**（落笔前取法 `grep -c "执行回填" <该文件>` ⇒ **0**）。铁律＝"没有回填的裁定，与没执行的裁定在台账上长得一模一样"。本枚⛔ 新落码，只做一件事：把该裁定 §〇／§一／§二.1／§二.2／§二.3／§四／§五 逐格按**它自己刚裁的口径**（盘上＝HEAD 树／入库面）复跑一遍，回填进裁定书本体。同批前两枚＝§二之一百四十八（20261006 L3 路线图）、§二之一百四十九（20260929 DB→AF ASK 六开放点）。
+
+**二、复测对撞表（裁定 §〇 那五行"现读事实"逐条，⛔ 整批当过期数据采信）**：
+
+| 裁定那一行（14:3x 读数） | 本枚复测（10-14 02:3x） | 取法（命令原文） | 判定 |
+|---|---|---|---|
+| 事实 1：`af_adapters/ma.py` 在工作树但**不在任何提交**（`cat-file -e` ⇒ NO／`?? `） | **已漂**：HEAD 里有，status 面干净 | `git cat-file -e HEAD:src/autoforge/af_adapters/ma.py` ⇒ RC=0；`git status --porcelain -- <path>` ⇒ 空；`git log --diff-filter=A --format='%h %ci %s'` ⇒ 那枚 `feat(G-AF-01 #142)`（2026-10-13 15:04） | 现读钉回；⛔ 抹原文（留着当负控） |
+| 事实 2：尺子那条 `af_ma_query_adapter` 因未跟踪文件而**恒绿** | 该"恒绿通道"**已随上列提交关闭**；按裁甲重跑仍绿，但绿因换成"提交里有" | 同事实 1 ＋ `E:\NAS\homesdk\scripts\verify_adm_linkage.py` 的盘上腿本就以 `取材=HEAD树` 出数（§二之一百四十三 原样复现） | 已闭合（AF 侧） |
+| 事实 3：AF 工作分支 `master`；`origin/master` 与 HEAD 差 **0/0** | 前半仍成立；后半**已漂** ⇒ 落笔时 `0  21`（对 `origin/main` ⇒ `0  32`） | `git rev-list --left-right --count origin/master...HEAD`（⛔ 抄值：本席每落一枚即 +1） | 现读钉回，并**据此请 DCD 重钉 §2.2 那一格的依据** |
+| 事实 4：DB 的 GitHub latest 本轮取不到（`fetch` rc=128 网络段） | **⛔ 本席射程**（不代跑他仓网络、⛔ 代答 DB 席位） | — | 归属链主／DB，回填里如实留空 |
+| 事实 5：homesdk ⛔ 任何远端 | **已漂**：homesdk 现有 `nas` 一枚远端（`git -C /e/NAS/homesdk remote -v` ⇒ `nas ssh://…/homesdk.git`），仍⛔ GitHub 侧远端；本地分支现读 `main` | 同左 | 名册 homesdk 那一格＝「有 NAS 侧、无 GitHub 侧」，比"无远端"更准；归属出资人（§四待办 2） |
+
+**三、★ 本枚挖出的最要紧一格：裁甲被**同日另一份裁定**违反了一次**。`decisions/20261013-DB历史凭据泄露与部署树复原与AF-MA口径-裁定.md:75`：「**AF 的自更新源脚本 5 处全读 `origin/master`，与发布线同一条** ⇒ 本席 §2.3 对 AF 的推定不成立，AF 盘上半边**本来就绿**」——那一句取的正是本件 §一 **裁定⛔ 用它作交付判定**的那个面（工作树）。同一批载体**两面各数一遍**（这才是本件 §四 判例要的形制）：
+
+| 面 | 载体字面（本枚现读） | 取法 |
+|---|---|---|
+| **工作树**（在途，登录线⛔ `git add`） | `af_api.py:1152 branch = (body.branch or "master")`；`host_update.sh:73` 一枚之内两处 `'master'` ⇒ **与该句相符** | `grep -n "body.branch or" src/autoforge/af_api.py`；`grep -n "^REF=" scripts/host_update.sh` |
+| **入库面／HEAD 树**（裁甲指定的那一面） | HEAD `af_api.py:1151 … or "main"`；HEAD `host_update.sh:62` 两枚 `'main'`；`verify_ui_nas_deploy.py:300` ⇒ `origin/main`（status 空＝两面同一）；HEAD `ci.yml:5 branches: [main, master, dev]` ⇒ 门读**5 枚站点全等于发布线 `main`** | `git show HEAD:<f> \| grep -n …` 逐条；门 `GATES_PYTHON=python python scripts/check_release_line.py` ⇒ **`RL_RC=0`** |
+
+⇒ 两个方向必须一起登记：**(a)** 该句"本来就绿"的**路**是工作树读数（按裁甲⛔ 成立作交付判定）；**(b)** 若同时按本件 §2.2 名册把 `master` 当发布线，则按裁甲重跑，入库面那三枚 `main` 载体**当场该判红**（红因正是 §二.3 指定的"源分支与发布线不一致"）⇒ 一处口径分歧给出**相反的绿／红**。⛔ 本席择一、⛔ 改他席位文档一字节；四条偏差（含"名册 AF 行 vs 同日『裁：AF 归一 `main`』（`20261013-DB部署路径…-裁定.md:103`）相反口径"）已写进回填 §二，**逐条显式请追认**。
+
+**四、§二.3 那一格（"发布线与自更新源判定分支同一条"）在 AF 已成立**：门 `scripts/check_release_line.py`（A–E 五腿、判据 C 逐枚对撞字面、CI 那枚按「发布线 ∈ 触发名单」判）＋清单 `docs/发布线清单.md` §三（5 行角色登记）＋ `tests/unit/test_release_line_gate.py`（取法 `grep -c "^def test_"` ⇒ **28**）＋ `gates.sh:357` 跑门、`:602` exit-2 七种射程形状、`:606` exit-1 五条修法。★ 台账归位一格：这枚门的**立项依据写在另一份裁定**（`20261013-DB历史凭据泄露…-裁定.md` §三 末行「要不要立一枚"分支一致门"：**立**」），而它**判的内容正是本件 §二.3**（任务 #146）⇒ 回填里请 DCD 把它并到本件名下，⛔ 让下一格再靠"另一份裁定"才指得到路。另三条已落成：裁甲＝`scripts/af_face.py:45 INDEX="index"`／`:9`／`:15` ＋ `check_release_line.py:445 require_index()`（读不出索引即 exit 2，⛔ 磁盘降级）；**取材面标注**长在门自己的结论行尾部（`af_face.py:49` 那句「入库面（git 索引；CI 上索引即 HEAD，两边同源）」）＝§一.1「读数⛔ 无口径」的正解；**未跟踪＝不算交付也不算违规**落成观察行（`:59 UNTRACKED_HINTS`／`:293`），⛔ 缺省绿。
+
+**五、名册 AF 那一格本席⛔ 认，且现读把它从"二选一"扩成"三选一"（出资人待办 #1）**：`git ls-remote --heads origin` ⇒ RC=0、**GitHub 上 `refs/heads/main` 与 `refs/heads/master` 两枚并列**；`git reflog show origin/master` ⇒ 两次 `update by push`（现读 tips：`main`＝10-12、`master`＝10-13 11:08，后者是 HEAD 的祖先）；`git symbolic-ref refs/remotes/origin/HEAD` ⇒ `refs/remotes/origin/main`。⇒ 候选甲＝按 `20261013-DB部署路径…-裁定.md:103` 归一 `main`（并处置 GitHub 那枚游离 `master`）；乙＝发布线认 `master`（则入库面三枚 `main` 载体当场违规，门 C 判红，本席需申请抬口径）；丙＝维持现状（两枚 head 并存，门只吃登记格，但每一个读名册的人都会对错那一格）。⛔ 本席定，⛔ 在归一执行前偷改清单 §二。
+
+**六、门禁一遍**：`GATES_PYTHON=python bash gates.sh` ⇒ **`A_RC=1`、35715 B**、md5 `151424003debaf68207b084033037f7f`、CR **151**、✓**21**／✗**3**（信任边界 7／进程模型 22／可观测性 71，三枚归属逐字未变，仍属另一席位存量）；`cmp E:\tmp\rl150_gates_a.txt E:\tmp\rl149_gates_c.txt` ⇒ **`CMP_RC=0`（同一枚 md5 第四次复现）**。判据同 §一百四十八／一百四十九 六：本枚⛔ 动 `src/`、⛔ 新增文件 ⇒ 入库面计数⛔ 变 ⇒ 判定行⛔ 变。⚠️ 顺序如实：本行记录晚于该遍 ⇒ ⛔ 冒充"提交后终局"。
+
+**七、改动面／不自决／存证**：改动面＝`decisions/20261013-ADM-盘上取材范围与逐仓发布分支-裁定.md` 尾部追加《执行回填（AF 席位，2026-10-14 补交）》一节（**落笔时现读** 8472 B→**21198 B**／123→**181 行**／**CR=0**；取法＝`wc -c`＋`wc -l`＋`tr -dc '\r' | wc -c` 现跑；⚠️ 该文件在 DCD 手里，会随下一次追加或改名再漂）＋本记录本节＋架构说明 §十九 一行。⛔ 未动 `src/`、⛔ 未动清单 AUTO 段、⛔ 未跑门 `--write`（`af_api.py`／`af_auth.py`／`host_update.sh`／`scripts/gh_ci_status.py` 落笔时现读仍 ` M` 在途）、⛔ 未动路线图与 `E:\NAS\ADM链主\探针证据\` 那棵树、⛔ 未执行 docker、⛔ 未 push。**不自决清单**：① 名册 AF 那一格的口径（发布线 vs 本地线）＝**DCD**；② 那句"5 处全读 `origin/master`／本来就绿"的取材面订正＝**DCD**（本席⛔ 改）；③ 归一 `main` 的执行＝**AF 席位＋owner 点头**（发布动作，⛔ 混进门禁批次）；④ `body.branch` 取值域＝**#79 窗**；⑤ 两枚未跟踪同名件＝**已递 DCD**（`inbox/20261013-AF-口令原文在册与发布线一致性-决策申请【已受理】.md` 附二）；⑥ `G-AF-08` 现网半边（脏树拒执负控 0 命中）＝**#145**，天然写向；⑦ DB `update_gate.py` 与名册那一格的关系＝**DB 席位＋DCD**。**未出境**取法＝`git fetch origin master && git rev-list --count origin/master..HEAD`（⛔ 自抄枚数）。**存证**：`E:\tmp\rl150_gates_a.txt`。
