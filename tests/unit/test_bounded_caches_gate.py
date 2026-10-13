@@ -666,8 +666,14 @@ def test_real_repo_measurements_are_pinned():
     也被回收）；不给落盘——单调钟跨进程无意义。封顶腿是
     `tests/unit/test_af4_auth_security_fixes.py::test_lockout_mono_map_is_pruned_on_write_without_reads`。
 
-    工作树里若躺着未提交的 WIP 模块，扫到数会比 132 更大而基线仍是 113——那种红的意思是
+    工作树里若躺着未提交的 WIP 模块，扫到数会比 133 更大而基线仍是 113——那种红的意思是
     "新容器没登记"，不是这行数字错了，登记处置归那一批自己，不许靠挪动这里的数字把它抹平。
+
+    扫到 132 → 133（路线图 G-AF-01／AF-01 R1）：新增 `af_adapters/ma.py::MaAdapter.intents`，
+    与 `InboxAdapter.intents`／`HTTPAdapter.intents` 同一形状——dry_run 意图环形清单，唯一写入口
+    `call()` 按 `INTENTS_MAX` 裁头，那一行带就地豁免标记（⛔ 不进注册表：它不落盘、不给 TTL，
+    记的是"本会发什么"，到点抹掉等于把一次未下发的意图悄悄藏起来）。封顶与不丢单读侧的腿是
+    `tests/unit/test_ma_query_adapter.py::test_intent_ring_is_bounded`。
 
     基线 114 → 113（裁定 20261011 §3 Q3 乙）：`af_auth.py::TokenRegistry._revoked` 从基线移出，改进
     `MONOTONIC_PERSISTENT_SETS`。挪走的不是数字，是**性质**——基线冻的是"这一枚先当作有界的存量"，
@@ -679,7 +685,7 @@ def test_real_repo_measurements_are_pinned():
     containers, _lines, scan_errs = gate.scan(src)
     assert errs == [] and scan_errs == []
     assert len(bounded) == 5 and len(fixed) == 3
-    assert len(containers) == 132 and len(gate.BASELINE) == 113
+    assert len(containers) == 133 and len(gate.BASELINE) == 113
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"

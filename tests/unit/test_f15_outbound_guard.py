@@ -52,8 +52,9 @@ def test_real_src_is_clean_and_reports_the_range():
     proc = _run(SRC)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "出站护栏门禁干净" in proc.stdout
-    # 四个旁路站 + HTTPAdapter 自己都已收口（5 处），自建 opener 2 处（收口点 + ha.py 的拒跟随）
-    assert "走 guarded_open 收口 5 处" in proc.stdout
+    # 四个旁路站 + HTTPAdapter + `af_adapters/ma.py`（MA 取数）都已收口（6 处），
+    # 自建 opener 2 处（收口点 + ha.py 的拒跟随）
+    assert "走 guarded_open 收口 6 处" in proc.stdout
     assert "裸 urlopen 0 处" in proc.stdout
 
 

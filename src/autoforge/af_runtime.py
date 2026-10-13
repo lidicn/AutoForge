@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from .af_adapters import HAAdapter, HTTPAdapter, InboxAdapter, MockAdapter, AdapterRegistry
+from .af_adapters import HAAdapter, HTTPAdapter, InboxAdapter, MaAdapter, MockAdapter, AdapterRegistry
 from .af_audit import (
     INSTANCE_LEASE_HELD,
     INSTANCE_RESTORE_DROPPED,
@@ -275,6 +275,8 @@ def build_runtime(
     clock: TimeSource | None = None,
     dry_run: bool = True,
     http_allowed_hosts: tuple[str, ...] = (),
+    ma_endpoint: str = "",
+    ma_token: str = "",
     quota: Quota | None = None,
     conf: ConfidenceStore | None = None,
     persist_dir: str | None = None,
@@ -294,6 +296,10 @@ def build_runtime(
     # 收件箱投递：`build_runtime` 是唯一的适配器收口点，仿真 / `_replay` / `/api/live/run` 都从这里拿，
     # 所以注册在这里 = 四面（CLI/HTTP/MCP/仿真）同一份能力，没有"某一面接不到 DB"的分裂。
     registry.register(InboxAdapter(dry_run=dry_run))
+    # MA 取数：计划 §七 卡2 那格在卡片语言里叫 `ma_query`，落形是 `adapter: ma` + 四条只读 action
+    # （AF 的 kind 词表封闭，出向动作只有 `do`+`adapter`+`action` 这一种形态，见 af_adapters/ma.py 头部）。
+    # 与 inbox 同一收口点：四面（CLI/HTTP/MCP/仿真）都从这里拿，没有"某一面接不到 MA"的分裂。
+    registry.register(MaAdapter(endpoint=ma_endpoint, token=ma_token, dry_run=dry_run))
 
     return Runtime(
         graph=graph,

@@ -60,8 +60,9 @@ _L1_DOMAINS = frozenset(
 )
 #: `inbox`（AF 投 DB 公共收件箱）落 L0：它不动家中任何执行器，只是"请 DB 说话/推送/上屏"，
 #: 播不播仍由 DB 侧 Sentinel 闸门判（契约 §1.3），与 HA 的 `notify` 同形。
+#: `ma`（AF 向 memory-agent 取数）同样落 L0：四条动作全是只读取数，一个执行器都不碰。
 #: 留在未知档会被保守判成 L2 ⇒ 每条播报都要配 canary，`do inbox inbox.speak` 连编译都过不去。
-_L0_DOMAINS = frozenset({"notify", "persistent_notification", "logbook", "inbox"})
+_L0_DOMAINS = frozenset({"notify", "persistent_notification", "logbook", "inbox", "ma"})
 
 _DESTRUCTIVE_KEYWORDS = ("delete", "remove", "purge", "wipe", "format", "reset", "drop")
 
