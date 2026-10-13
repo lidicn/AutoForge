@@ -401,7 +401,7 @@ def _t_test_submit(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
         channel = get_test_channel()
         return channel.submit_batch(intents, batch_id=batch_id)
     except TestError as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "code": e.code, "error": str(e)}
 
 
 def _t_test_report(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
@@ -412,7 +412,7 @@ def _t_test_report(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
         channel = get_test_channel()
         return channel.get_report(batch_id)
     except TestError as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "code": e.code, "error": str(e)}
 
 
 def _t_test_clear(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:

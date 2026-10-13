@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from homesdk.adm.errors import ADM_ERR_INTERNAL, ADM_ERR_PAYLOAD_INVALID
+
 from .af_atomic import atomic_write_text
 from .af_draft import draft_intent, DraftError
 from .af_apply import apply
@@ -39,15 +41,24 @@ GUARD_ERR_COVERS_PRODUCTION = "TEST_ROOT_COVERS_PRODUCTION"
 
 
 class TestError(Exception):
-    """测试通道错误。"""
+    """测试通道错误。
+
+    带具名 `code`（裁定 20261006 §二.2「凡是联动失败，必须带码」）：`af_test_submit`／`af_test_report`
+    这两站过去只回 `{"ok": False, "error": str(e)}`，对端拿到一句自由文本，分不出"入参不合法"与
+    "内部没做成"——⛔ 新造码，缺省吃 homesdk 目录里的兜底档 `ADM_ERR_INTERNAL`；入参校验那一族
+    就地给 `ADM_ERR_PAYLOAD_INVALID`，守卫子类（`TestGuardError`）继续带自己的两枚具名码。
+    """
+
+    def __init__(self, message: str, code: str = ADM_ERR_INTERNAL) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class TestGuardError(TestError):
     """删除守卫拒判：测试区的形状不可信。带具名 `code` 给调用方如实回（不许塌成 `ok: True`）。"""
 
     def __init__(self, code: str, message: str) -> None:
-        super().__init__(f"{code}: {message}")
-        self.code = code
+        super().__init__(f"{code}: {message}", code=code)
 
 
 def _count_entries(root: Path) -> int:
@@ -136,9 +147,9 @@ class TestChannel:
             测试报告摘要
         """
         if not intents:
-            raise TestError("intents 不能为空")
+            raise TestError("intents 不能为空", ADM_ERR_PAYLOAD_INVALID)
         if len(intents) > MAX_BATCH_SIZE:
-            raise TestError(f"单批次上限 {MAX_BATCH_SIZE} 条，当前 {len(intents)} 条")
+            raise TestError(f"单批次上限 {MAX_BATCH_SIZE} 条，当前 {len(intents)} 条", ADM_ERR_PAYLOAD_INVALID)
 
         batch_id = batch_id or f"batch-{int(time.time())}"
         results: list[dict[str, Any]] = []

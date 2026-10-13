@@ -12063,3 +12063,66 @@ git -C E:/NAS/AutoForge show --stat HEAD                 # 最近一枚（只有
 **五、门禁一遍**：`GATES_PYTHON=python bash gates.sh` ⇒ **`A_RC=1`、35715 B**、md5 `151424003debaf68207b084033037f7f`、CR **151**、✓**21**／✗**3**（信任边界 7／进程模型 22／可观测性 71，三枚归属逐字未变，仍属另一席位存量）；`cmp E:\tmp\rl151_gates_a.txt E:\tmp\rl150_gates_a.txt` ⇒ **`CMP_RC=0`（与 §一百四十七～一百五十 那四遍逐字节同一，同一枚 md5 第五次复现）**；判据同 §一百四十八～一百五十：本枚零落码、⛔ 新增文件 ⇒ 入库面计数⛔ 变。**遍 b**（本文件与架构说明 §十九 两行都写完之后再跑一遍，取"终局面⛔ 等于落笔前"）：`A_RC=1`、**35715 B**、CR **151**、✓**21**／✗**3**，`cmp E:\tmp\rl151_gates_b.txt E:\tmp\rl151_gates_a.txt` ⇒ **`CMP_RC=0`（改文档前后两遍逐字节同一）**，⇒ 本枚那两处"记录晚于该遍"的顺序差⛔ 影响任何读数。⚠️ 顺序如实：本行记录晚于该遍 ⇒ ⛔ 冒充"提交后终局"。
 
 **六、改动面／不自决／存证**：改动面＝`decisions/20261013-DB部署路径三条历史与铁律执行权-裁定.md` 尾部追加《执行回填（AF 席位，2026-10-14 补交｜射程＝§五 第 4 件 ＋ §六 旁证）》＋本记录本节＋架构说明 §十九 一行。⛔ 未动 `src/`、⛔ 未动清单 AUTO 段、⛔ 未跑门 `--write`、⛔ 未动路线图与链主那两棵树、⛔ 未执行 docker、⛔ 未 push、⛔ 未动任何远端 head。**不自决清单**：① 归一 `main` 的执行＝**AF 席位＋owner 点头**（三件见本节 二）；② §五 代价列补一格＝**DCD**；③ 准则① 的 CI 精度＝**DCD**（偏差 ②）；④ DB 三条历史／34 份脏改动／bootstrap 甲乙＝**DB 席位＋出资人**；⑤ 规则 12 授权执行人条款＝**DCD＋出资人**；⑥ 断 MA 那一格的**报方主语**＝**DCD**。**未出境**取法＝`git fetch origin master && git rev-list --count origin/master..HEAD`（⛔ 自抄枚数）。**存证**：`E:\tmp\rl151_gates_a.txt`。
+
+## §二之一百五十二 · 落码枚：收 20261006 §二.2「凡是联动失败，必须带码」在 AF 的那 **2 站破口**（＝上一枚台账《执行回填》偏差 ① 欠的账）＋一道新判据腿——★ 第一条判据腿把**我自己手抄的射程下限**判了红（任务 #152）
+
+**一、复测对撞表（每条都现跑，⛔ 抄上一枚的字面）**
+
+| # | 论断（出处＝`decisions/20261006-ADM下一阶段联动路线图-裁定.md` 偏差 ①） | 现读（两面分开写） | 取法 |
+|---|---|---|---|
+| 1 | `af_mcp.py:404`／`:415` 捕 `TestError` 只回 `{"ok": False, "error": str(e)}` 而⛔ 带 `code` | **HEAD 面＝真**（同一把尺扫出 `missing_code_lines=[404, 415]`）；工作树面＝**已补**（`missing=[]`） | `GATES_PYTHON=python python E:\tmp\mut152.py`（腿 M1／M2 原文见四） |
+| 2 | 根子在 `af_test.py:41 class TestError` 没有 `.code` | **HEAD 面＝真**（类体⛔ `__init__`）；工作树面＝该类现为 `:43-54` 且自带 `code`，缺省吃 homesdk 目录的兜底档 | 同上，腿 M3：`head=False worktree=True` |
+| 3 | 子记 `TestGuardError` 原已带两枚具名码 | **真，且逐字未动**：第三站 `af_mcp.py:430`（`clear` 的守卫拒判）本批⛔ 改一个字符；消息前缀 `{code}: ` 保持不变（既有 17 条腿吃它，见五） | `grep -n '"code": e.code' src/autoforge/af_mcp.py` ⇒ 现读 **3** 枚（`:404`／`:415`／`:430`） |
+| 4 | 「28 道门里点名 `af_mcp` 的 5 道⛔ 判这一格」 | **仍为 28 道／5 道**——本枚**没有**新增 `check_*.py`，判据落在 `tests/unit`（见四的偏差登记） | `ls scripts/check_*.py \| wc -l` ⇒ 28；`grep -rl "af_mcp" scripts/check_*.py \| wc -l` ⇒ 5 |
+| 5 | 查重：这一格是不是已有尺管着（防重复造） | ⛔ 重复造。既有 `tests/unit/test_dcd_20261007_mcp_failure_envelope.py` 钉的是 `dispatch()` 的**外层信封**（`{ok,code,message}`、唯一写者 `_failure_payload`）；本枚钉的是**handler 返回体**的 `error` 脸。两张脸⛔ 共用一把尺、也⛔ 互相顶替——该边界已写进新文件 docstring | `grep -n "_failure_payload" src/autoforge/af_mcp.py \| head -3`；两份测试文件并读 |
+
+**二、落码（三面，⛔ 新造 `ADM_ERR_*` 一枚）**
+
+- `src/autoforge/af_test.py`（`git diff --numstat` ⇒ **16 增／5 删**）：`TestError` 加 `code`（`:43-54`，缺省 `ADM_ERR_INTERNAL`）；`TestGuardError.__init__`（`:57-61`）把 `code` 透传给父类、消息前缀逐字节不变；入参校验两站（`:150` 空 `intents`／`:152` 超 `MAX_BATCH_SIZE`）就地给 `ADM_ERR_PAYLOAD_INVALID`；报告不存在那一站（`:286`）吃缺省 `ADM_ERR_INTERNAL`。两枚码全部 `from homesdk.adm.errors import`（`:24`），⛔ 本地另立字面量。
+- `src/autoforge/af_mcp.py`（**2 增／2 删**）：`:404`／`:415` 两站返回体补 `"code": e.code`。行数⛔ 变 ⇒ 本文件所有既有行号锚点仍有效（这也是先做两面复测再动刀的理由）。
+- `tests/unit/test_mcp_failure_code.py`（**新文件，138 行／9 条腿**）：真仓 AST 腿（逐枚要求 `except` 句里的 `ok:False` 带 `code`）＋**射程下限腿**＋合成树反例腿＋异常码腿＋守卫前缀腿＋`submit_batch` 参数化两腿＋`get_report` 腿＋两枚 handler 返回体腿。
+- 架构说明 §十 的锚点**整批重钉**（`af_test.py` 净 +11 行 ⇒ 表内 9 处行号全部按现读改：`:109`→`:120`、`:111-117`→`:122-128`、`:139-141`→`:150-152`、`:155-230`→`:166-241`、`:186-189`→`:197-200`、`:240-251`→`:252-262`、`:253-261`→`:264-272`、`:264-269`→`:275-280`、`:271-277`→`:282-288`、`:279-296`→`:290-307`、`:298-328`→`:309-339`、`:71-97`→`:82-108`、`:33`→`:35`、`:35`→`:37`、`:335`→`:346`），并按现读逐枚核过 `_submit_one=166`／`_gen_report=243-273`／`_save_report=275-280`／`get_test_channel=346` 的符号边界（AST `end_lineno`，⛔ 拿 +11 一路推）。同节新增第 3 条，写清"三张失败脸都带码"与两张尺的射程边界。
+
+**三、★ 本枚自纠：第一条红是**我自己写的假期望****
+
+判据腿初稿把 `MIN_SITE_FLOOR` 手抄成 **5**，真仓腿当场把它自己判红，原文照贴：
+
+```
+AssertionError: 射程塌：在 `af_mcp.py` 的 except 句里只扫出 4 枚 `ok:False` 返回站（下限 5）——文件改名／整块搬走／扫描退化都会读到这个形状，⛔ 报『干净』。
+```
+
+现读真数＝**4**（`:378` DraftError／`:404`／`:415`／`:430`）。修法⛔ 是"把数字改成 4 就完事"：下限那一行现在写的是**取法**（跑该文件、读失败消息里的枚数）＋落笔时现读值＋四枚站点的点名，注释第一句就是「⛔ 手抄别处的数，本文件第一条腿就是被它打回来的」。**为什么留着下限腿而⛔ 干脆删掉**：它防的是"扫不到站点 ⇒ 用零命中冒充零违规"——`af_mcp.py` 改名、那块 `try/except` 整段搬走、或扫描器退化，都会让真仓那条腿永远绿。同一教训（「期望值当场量」）这次撞在**判据自己的射程下限**上，位置比常规计数更隐蔽，因为它的红看起来像"门在报警"而不是"期望写错了"。
+
+**四、变异自证（同一把尺量两面；驱动 `E:\tmp\mut152.py`，⛔ 碰工作树）**
+
+| 腿 | 内容 | 读数 | 判定 |
+|---|---|---|---|
+| M1 | HEAD 面 `af_mcp.py` ⇒ 修前形状 | `head_mcp_sites=4 missing_code_lines=[404, 415]` | 修前形状**必须**被扫出 ✓ |
+| M2 | 工作树面 | `worktree_sites=4 missing=[]`；且断言两面站点数相同 | 违规清零、⛔ 删站／移站 ✓ |
+| M3 | HEAD 面 `TestError` 类体有无 `__init__` | `head=False worktree=True` | 根子归因成立 ✓ |
+| M4 | 注入未生效护栏 | `head_mcp != wt_mcp` 且两份 `af_test.py` 逐字节不同 | 上面三条⛔ 建立在同一份内容上 ✓ |
+
+结论行 `RC=0`、`M_RC=0`。**偏差登记（显式请追认）**：本枚**没跑** `git archive` 副本树的那套 M0／MZ99 腿——工序里那套是给"上 `gates.sh` 的 `check_*.py` 门"准备的，本枚的新尺是 `tests/unit` 里的 pytest 腿，它的反空集已由**合成树腿**（临时目录种回修前形状、必须扫出 `[5]`）与 **M1**（真 HEAD 面被扫出 `[404, 415]`）两面机械判定；`gates.sh` 的 `check_*.py` 计数⛔ 变（28→28，见一·4），所以覆盖门与豁免表都⛔ 动。⚠️ 若 DCD 要求"任何新判据都要副本树全腿"，本格属**按形状分类的偏离**，⛔ 沉默。
+
+**五、回归取数（分段；整树单进程会在 3–4.5 分钟处被截断报 `RC=127`）**
+
+- `tests/unit` 全段 ⇒ **`13 failed, 3644 passed, 46 skipped in 675.89s`**。**失败集与批前相同**（同名记录此前多次为 `13 failed`），`passed` 由 3635 → 3644＝**＋9＝本枚新文件的 9 条腿**。⇒ 本批**零新失败**。
+- ⚠️ 一条取数自纠：第一段命令我接了 `| tail -6`，把 13 枚失败名里的 8 枚吃掉了——⛔ 用"计数没变"糊过去，改用**爆炸半径逐文件**补证：凡 `import af_mcp` 的 17 份测试文件 ⇒ **`195 passed`**；凡碰 `af_test` 面的 5 份 ⇒ **`123 passed`**；其余 5 份（`tool_names`／`v1_1_catalog`／`v1_4_pending`／`v1_5_wiring`／`v1_6_decide`）⇒ **`48 passed, 22 skipped`**。三面全绿。
+- 既有删除守卫那族（吃 `TestGuardError` 消息前缀的那 17 条腿）⇒ `17 passed`，前缀逐字节未改的断言见新文件 `test_guard_error_keeps_its_own_named_code_and_message_prefix`。
+- ⚠️ 顺序如实：五（回归）跑在六（门禁）之**前**，属"改后、暂存前"的工作树面。
+
+**六、门禁两遍**
+
+- 遍 a＝`E:\tmp\rl152_gates_a.txt`、遍 b＝`E:\tmp\rl152_gates_b.txt`：两遍均 `C_RC=1`、**35715 B**、CR **151**、✓**21**／✗**3**；`cmp a b` ⇒ **`CMP_RC=0`**（本批两遍逐字节相同）。
+- 遍 c＝`E:\tmp\rl152_gates_c.txt`，落在本节与架构说明 §十九 那两行**改完之后**：`C_RC=1`、35715 B、`cmp a c` ⇒ **`CMP_RC=0`** ⇒ "两份记账 docs ⛔ 在任何 `check_*.py` 射程内"拿到**第六次**实跑证据（本批的差别是它**同时**动了 `src/`，所以这一遍证的是"文档改动静音"而⛔ 是"本批整体静音"）。
+- **与上一批存证 `rl151_gates_b.txt` 的差值＝1 行**（`diff` 原文照贴）：`✓ undefined-name 门禁干净（扫描 242 个文件）` → `… 243 个文件`。**逐行解释**：新增的 `tests/unit/test_mcp_failure_code.py` 进了那把尺的射程（它扫 `tests/` 全部 `.py`），该腿仍 ✓ 干净；总字节数⛔ 变（两个数字等长），其余各行⛔ 漂移。⇒ 这是"纯 docs 批次动不了读数"那族证据的**反向正控制**：动 `src/` ＋新增测试文件时，差值确实出现、且只出现在该出现的那一行。
+- 三枚 ✗ 计数与归属**逐字未变**（信任边界 7／进程模型 22／可观测性 71），⛔ 一枚因本批转绿、⛔ 抬任何上限、⛔ 动 `.gates-tally.txt`／`.gates-baseline.txt`／`.atomic-write-baseline.txt` 一个数字。
+- 可观测性门一侧的口径核对（它数的是**留痕站点**＝logging 调用带 `code=`，与本批改的 **MCP 返回体**⛔ 同一族）：`grep -c "logger\.\|logging\." src/autoforge/af_test.py` ⇒ 工作树 **0**／HEAD 面 **0**（两面相同 ⇒ 该门射程内⛔ 新增⛔ 删除站点）。
+
+**七、改动面／不自决／存证**
+
+**改动面（6 份）**：`src/autoforge/af_test.py`、`src/autoforge/af_mcp.py`、`tests/unit/test_mcp_failure_code.py`（新）＋两份记账 docs（本记录本节、架构说明 §十 重钉与 §十九 一行）＋`decisions/20261006-ADM下一阶段联动路线图-裁定.md` 尾部一段《执行回填补记（2026-10-14）》（⛔ 改写上一条回填的原字，只把偏差 ① 的状态推到"落码＋有判据"，取法＝`wc -l` 现跑）。⛔ 未动 `af_api.py`／`af_auth.py`／`docker/` 两份 compose／`ui-user-mimo/` 全树；⛔ 未跑门 `--write`（在途件未清）；⛔ 未动路线图、链主那两棵树与 `投递/` 台账；⛔ 未执行 docker；⛔ 未 push、⛔ 未动任何远端 head。
+
+**不自决清单**：① 「这两站算 §二.2 射程内的欠账，还是 §二.2 只管跨仓联动、test 通道在射程外」＝**DCD**（本枚按本席倾向落了码，那一问在补记里明写"⛔ 因落码而视为已答"）；② 三枚 ✗ 的收口＝**另一席位存量／登录线在途**；③ 归一 `main` 与远端游离 head＝**owner＋DCD**（§一百五十一）；④ 契约表 `:176` 命名行＝**DCD／homesdk**。
+
+**存证**：`E:\tmp\rl152_gates_a.txt`、`E:\tmp\rl152_gates_b.txt`、`E:\tmp\mut152.py`（⛔ 入仓，仓内⛔ 留未跟踪件）。**未出境**取法＝`git fetch origin master && git rev-list --count origin/master..HEAD`（⛔ 自抄枚数）。
