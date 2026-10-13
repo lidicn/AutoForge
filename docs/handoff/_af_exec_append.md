@@ -4,11 +4,11 @@
 
 ### 6.1 MA 重签令牌（第三版）
 
-AF 旧令牌 `svc_-xd8ZTmbld1bRur9Ya4KipJFu_7I5Bb0Dnf9L2kWUhM` 因 MA 侧 config 对象与运行态不同步、某次 `save()` 覆盖 `service_tokens` 而丢失 → AF 调用返回 401 `{"ok":false,"error":"未登录"}`。MA 已修复并重签第三版：
+AF 旧令牌 `svc_⛔已打码（原文属已作废的旧令牌，处置靠轮换⛔抹历史，见裁定20261013《凭据泄露处置路径》§〇）` 因 MA 侧 config 对象与运行态不同步、某次 `save()` 覆盖 `service_tokens` 而丢失 → AF 调用返回 401 `{"ok":false,"error":"未登录"}`。MA 已修复并重签第三版：
 
 | 消费方 | 令牌名 | scope | 明文（第三版） |
 |---|---|---|---|
-| AF (AutoForge) | `autoforge` | 13 条（butler，含 `POST:/api/metrics/ingest`） | `svc_bBOOEsC7qcXcGFctr3wxz35pBM-FuNTVYAVrtMjToes` |
+| AF (AutoForge) | `autoforge` | 13 条（butler，含 `POST:/api/metrics/ingest`） | `svc_⛔已打码（原文属已作废的旧令牌，处置靠轮换⛔抹历史，见裁定20261013《凭据泄露处置路径》§〇）` |
 
 旧令牌已失效。
 
@@ -20,7 +20,7 @@ AF 旧令牌 `svc_-xd8ZTmbld1bRur9Ya4KipJFu_7I5Bb0Dnf9L2kWUhM` 因 MA 侧 config
 
 ### 6.3 验证结果（✅ 已闭环）
 
-MA v4 重签令牌 + **重启容器**后，AF 复测通过（第四版令牌 `svc_-LY8PW7OCk01gLMoyDO-0gsaD1OiNm0r01Ang1I-T3E`）：
+MA v4 重签令牌 + **重启容器**后，AF 复测通过（第四版令牌 `svc_⛔已打码（原文属已作废的旧令牌，处置靠轮换⛔抹历史，见裁定20261013《凭据泄露处置路径》§〇）`）：
 
 - 宿主 `curl -X POST http://192.168.2.200:8086/api/metrics/ingest -H "Authorization: Bearer <v4>" -d '{}'` → **400 `missing automation_id`**（**鉴权通过**，仅业务字段缺失，非 401）
 - 容器内 `docker exec autoforge-api python -m autoforge.af_cli metrics push case01_day_light.json --ma-url http://192.168.2.200:8086 --token <v4>` → **`sent=1 / buffered=0`**，MA 接受入库（ok=true）
@@ -34,6 +34,6 @@ AF→MA 指标回灌链路已通（MA 端点接受 `svc_` 令牌 → `dedupe_key
 
 ### 6.5 7 天观察期
 
-第四版令牌已生效，进入旧令牌（butler-env / 第三版 `svc_bBOOEsC7qcXcGFctr3wxz35pBM-FuNTVYAVrtMjToes`）零使用观察期；7 天后由 MA 吊销旧令牌。cron 现已 `ok=true`，无积压。
+第四版令牌已生效，进入旧令牌（butler-env / 第三版 `svc_⛔已打码（原文属已作废的旧令牌，处置靠轮换⛔抹历史，见裁定20261013《凭据泄露处置路径》§〇）`）零使用观察期；7 天后由 MA 吊销旧令牌。cron 现已 `ok=true`，无积压。
 
 —— AF 开发组 · 2026-10-06 晚（v4 令牌复测 ok=true 更新）
