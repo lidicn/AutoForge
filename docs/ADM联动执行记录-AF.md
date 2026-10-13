@@ -11820,3 +11820,45 @@ git -C E:/NAS/AutoForge show --stat HEAD                 # 最近一枚（只有
 - **⚠️ 复跑约束面读数时撞到一条测量口径坑（本格新登记，与 §二之一百四十一 那族"名字哨兵罩散文"同源，只是这次的散文是路线图自己的观测面正文）**：链主 rev 9 用来报"0 处"的那把尺 `grep -c G-AF-09 roadmaps\*.md` **在 rev 9 把格名写进正文的那一刻就自毁了**——本席 18:4x 重跑 ⇒ 「分支一致」3 命中／「`af_api.py:1098`」2 命中／「依赖面变化必须重建」1 命中，**全部落在 `:174`／`:193`／链主件 `:148` 的巡检叙述里**，约束面（`### G-AF-09　` 那一格与 `G-AF-08` 的 `:16`／`:135` 交付物行）现读仍是 **0 处**。⇒ 回执里的取法命令一律**分尺**（先只算约束面形状，再单独报观测面命中行号），⛔ 不沿用整文件 `grep -c`，否则"登记了待做"会把"待做还没做"这件事本身测没。
 - **本格落码面**：仅本行本节 ＋ 仓外那两份（回执件＋裁定书回填块）；⛔ 零代码改动、⛔ 未动 `.gates-tally.txt`／`.gates-baseline.txt` 一个数字、⛔ 未 push。
 - **遍 e（文档改完之后的门禁遍，`GATES_PYTHON=python bash gates.sh`）**：`E_RC=1`、输出体 `35715 B`／CR=151、`✓21／✗3`，且与遍 d **逐字节相同**（`md5sum rl142_gates_e.txt rl142_gates_d.txt` ⇒ 两枚同为 `339195831c8bc8bc7b2ab04215aa93d4`，`cmp` ⇒ RC=0）。⛔ 这不是"没跑到"——三枚 ✗ 逐枚现读仍是信任边界 7 处／进程模型 22 处／可观测性 71 处那三张存量红单。**为什么一个字都不变**：本门（连同链上其余读 `git ls-files -s` ＋ `cat-file --batch` 的门）吃的是**入库面**，本节新写的散文还没进索引 ⇒ 不在射程内；这恰好是回执 D2 那条口径的正面演示（同一份文档在盘上改了 12 行、门禁输出不动）。⚠️ 中途一次遍 e 被我主动 kill（`TaskStop`）：那次是"文档还在改、门已经在飞"，按本仓既有纪律「门在飞时工作树独占」，就地停手重跑，没有采信半途输出。存证 `E:\tmp\rl142_gates_e.txt`（＋退出码单文件 `rl142_gates_e.rc`，避免把标记行烤进输出体）。
+
+## §二之一百四十三 · 把路线图 G-AF-01 的「盘上半边」逐条复现给链主与 DCD，并交出四格现网点名的命令包（⛔ 本席不是执行者）——附带本席自认的一格缺陷：入向计数**有数、无脸**（零落码）
+
+**⛔ 路线图对 AF 只读**（`roadmaps/AF-联动路线图.md:6`「本文件只允许 DCD 与 ADM 链主 修改」）⇒ 本枚不改那棵树一行，落点全部走 `inbox/`。
+
+**投递件**：`E:\NAS\关键决策部\inbox\20261013-AF-路线图rev9四格盘上复现与现网点名命令包-登记.md`（`validate-application.ps1` 硬门全过：命名 ✓／证据 ✓（路径 39 处、读数 43 处）／可裁问项 ✓／file:line ✓ 21 处／维持现状档 ✓／背景 ✓／疑问句 ✓；工具的建议项「写清不等裁定就已成立的部分」已按提示补一节。件号 ⛔ 不起新名，后续落码回补进同一件）。
+
+**为什么这一枚不是"把已裁的事再问一遍"**：查重现读——`decisions/20261013-凭据面复验与容器腿执行面与MA回执-裁定.md` **§二 问 1** 已裁「容器腿执行面＝出资人（原则甲）＋有界例外 乙′（只读取数型可由出资人**逐次点名**的执行人；机械自证＝`docker inspect … {{.State.StartedAt}}` 前后同值＋被读文件 `mtime` 前后不变，任一行变动按写向论处）」、**§二 问 2** 已裁「『缺执行面』≠『缺读数』，且不计入 `G-链主-07` 分子分母」。⇒ 本件 ⛔ 不重问归谁，只做甲 要求本席做的那一半（交**命令原文＋判据形制＋落盘位置**），并单独提一件裁没罩到的事：**G-AF-01 出口条件那句「`_src` 腿 `af_ma_query_adapter` 转绿」按整腿读、还是按分列读**（现读尺子：盘下列已绿，整腿因现网列缺 4 字段而 `RC=1`）。候选四档：甲＝分列读（与本席 §二之一百三十九 那格「盘上 4/5」同形）／乙＝整腿读（字面最稳，代价是代码已落这件事在台账上不存在）／丙＝甲＋把出口条件拆条、每格只挂一种读法（与 `G-链主-07` 那条"一格只许挂一种读法"同源）／C＝维持现状。⛔ 本席不自决。
+
+**复测对撞表（10 格，全为现读，时刻 2026-10-13 19:0x＋08:00，作用域＝盘上除 E10）**
+
+| # | 主张 | 命令原文 | 现读 | 处置 |
+|---|---|---|---|---|
+| E1 | `ma.py` 在 HEAD 树且工作树干净 | `git cat-file -s HEAD:src/autoforge/af_adapters/ma.py`／`git status --porcelain -- <同路径>` | **23175**／空 | 铁律第一跳已发生（对照 §二之一百四十 那次「未跟踪」） |
+| E2 | 出口条件第一条字面满足 | `grep -rn "ma_query" src/autoforge --include='*.py'` | **3 命中**，`rc=0`（`ma.py:3`、`:4`、`af_runtime.py:299`） | 成立 |
+| E3 | ★ 那 3 处**全在散文** | `grep -rn "MaAdapter" src/autoforge --include='*.py'` | 6 命中：`ma.py:50`/`:172`、`__init__.py:20`/`:45`、`af_runtime.py:16`、**`:302`** | 如实上报：判据的字面被 **docstring＋注释**满足，代码面真名是 `MaAdapter`／`adapter: ma`。⚠️ 与既有同族坑（名字哨兵罩散文）**反向**再撞一次：这次是**靠散文凑够绿灯**，不是被散文判红——同一把尺的两种误读方向都登记过才算钉住 |
+| E4 | 四条只读 action 在册 | `grep -n "MA_ACTIONS" src/autoforge/af_adapters/ma.py` | `:48` 导出、`:76` 定义、名单外动作 `:207` 抛 `ADM_ERR_PAYLOAD_INVALID` | ⛔ 未新造 `ADM_ERR_*` |
+| E5 | 静默空值判据腿绿 | `python -m pytest tests/unit/test_ma_query_adapter.py -q` | **32 passed in 4.34s**（19:1x 现读；腿在 `:65` 喂 `{"ok":True}`、`:73` 三块全空 ⇒ 断言 `ADM_ERR_PAYLOAD_INVALID`） | 路线图点名的判据两条齐 |
+| E6 | 尺子按 HEAD 树读到盘上形状绿 | `python -u E:\NAS\homesdk\scripts\verify_adm_linkage.py --af-ma`（跑前核过它只有读 `open` ＋ `git show HEAD:`，⛔ 无写、无 docker、无 socket） | **RC=1**；`legs.af_ma_query_adapter` 的 `盘上`＝`AutoForge/src/autoforge/af_adapters/ma.py 命中 1 形状｜取材=HEAD树`，`现网`＝`现网点名缺字段 ['verdict','ts','source','cmd']`；总结行 `两列全绿 0/5｜盘上 4/5｜现网 0/5` | 存证 `E:\tmp\rl147_afma_disk.txt`（1835 B、CR=3） |
+| E7 | G-AF-08 交付物在本仓的路径写错 | `ls src/autoforge/api/`；`grep -n "system/update" src/autoforge/af_api.py` | 前者 ⇒ `No such file or directory`；后者 ⇒ **`af_api.py:1098`（GET /check）／`:1123`（POST /update）／`:1174`（GET /status）**。⚠️ DCD 16:55 裁定 §三 承诺的这条路径更正，rev 9 观测面现读仍**约束面 0 处** | 只登记落点，⛔ 本席不改约束面 |
+| E8 | 三条在册绿格复现（链主原标「采信未复现」） | `git show HEAD:<f> \| grep -c …` 逐条，与工作树面对撞 | `INSIGHTS_TOPIC = "ma/insights"` ⇒ HEAD **1**＝工作树 **1**（`af_mqtt_bridge.py:81`）；`insight_proposals` ⇒ HEAD **2**＝工作树 **2**（`af_api.py:876`，另 `:868` 注释）；`"channel_error"` ⇒ HEAD **2**＝工作树 **2**（`af_api.py:957`/`:961`） | ★ `af_api.py` 现读在途 ` M` ⇒ 按**两面各数一遍**报，两面同值才敢引用（§二之一百四十二 的入库面口径在这里同样适用） |
+| E9 | G-AF-06 的冻结确实合理 | `grep -c PublishRefused src/autoforge/af_mqtt_bridge.py`；`ls -t /e/NAS/homesdk/dist/ \| grep -c 0.3.3`；`grep -n "^version" /e/NAS/homesdk/pyproject.toml`；`grep -c LINKAGE_PAUSED /e/NAS/homesdk/src/homesdk/adm/errors.py` | **3**（`:61`/`:363`/`:377`，出口条件要求只余 1）／**0**（dist 最大 `homesdk-0.3.2-…whl`）／`version = "0.3.2"`（`:7`）／**0 命中（输出空）**；`errors.py` 现读 **7 枚**（第八枚未进树）；`ADM_ERR_BROKER_UNREACHABLE` 全仓 **6 处**、集中 `af_mqtt_bridge.py`（`:36`/`:370`/`:448`/`:512`/`:627`/`:633`，其中 `:370`/`:448` 为 docstring 散文） | 冻结正确，⛔ 本席不动消费侧；G-AF-07 执行人＝DCD/NAS |
+| E10 | 未出境（作用域＝盘上↔GitHub） | `git fetch origin master` ⇒ rc=0；`git rev-list --count origin/master..HEAD`；`git rev-list --count HEAD..origin/master` | **ahead=11｜behind=0**，HEAD＝`230454c`，工作线 `master` | ⚠️ 链主 rev 9（17:3x）读的是 8，差 3 ＝本席其后落的 3 枚（门与两份记账）⇒ 铁律第二跳对 AF **更**未合。⛔ 本席不 push（外发动作，要 owner 逐次点头）；本格按纪律**只写取法**，那三枚的 sha 由命令现读 |
+
+**★ 本席自认的一格缺陷（不推给别人，登记并认领）**：写 §五 命令包时发现 **`ma/insights` 的入向读数在仓里"有计数、没有脸"**。
+- 计数在册：`af_mqtt_bridge.py:805` 命中 ⇒ `counts["insights_in"] += 1`；`:813` 拒收 ⇒ `counts["insights_rejected"] += 1`；容器定义在 `:567`；`stats()` 在 `:990-993` 把 `counts` 整份带出；
+- 但对外那一层取不到：`linkage_status()`（`:1049`，经 `af_service.py:206-208` 进 `/api/health`）只报 `presence_in`／`device_health_in`／`rejected`，而 `inbound.subscribed` 那行是 `list(LINKAGE_TOPICS)`（`:1074`）——**`LINKAGE_TOPICS` 现读＝`(PRESENCE_TOPIC, DEVICE_HEALTH_TOPIC)`（`:90`），不含 `ma/insights`**；
+- ⇒ 后果说白：路线图 `af_subscribes_insights` 这一格的现网半边**今天没有任何一条只读命令能给出逐字 `PASS`**。要么本席先把已在册的两枚计数接进 `linkage_status` 的 `inbound` 块（同族补两键，⛔ 不新造对外面、⛔ 不动 `state`/`degraded` 语义——那条面的形制由裁定 20261007 §二 丁A 定过），要么执行人改用 broker 侧第三方订阅位读数（形制同 MA 那件 `探针证据\ma-insights-publish-gate.md`）。**这一格挂为新任务，本枚不落码**（本枚是零落码的登记枚；落码时要按八步走：判据腿＋合成树腿＋门禁多遍逐字节对撞，⛔ 不 `--write` 压在途文件）。
+
+**四格命令包的形制约束（照抄名册，⛔ 本席不发明）**：`探针证据\现网点名表.md` §二 定死一条腿一块、块首 `LIVE: <腿名>`＋`verdict`／`ts`／`source`／`cmd` 四字段，`source` 必须指到 `探针证据\` 下一枚真读数件且那件要过证据尺（`READ:` ＋ `VERDICT: PASS` ＋ ≥80 B）；名册自己写了两条禁令——⛔ 不把盘上读数填进现网列、⛔ 不给等窗口的腿预先写 `PASS`。本席照此逐格交命令，并如实标出**其中两枚天然写向**：`af_emits_channel_error` 要产读数就得 POST 应答投递路（`af_api.py:957`/`:961`，触发条件是容器内 `AUTOFORGE_INBOX_KEY` 缺），G-AF-08 的"脏树拒执负控"要往部署树放未收编改动 ⇒ 这两条 乙′ 罩不住，按裁定 §二 问 1 甲 留在出资人本人手里。
+
+**读数纪律两条（本枚踩点自证）**：① 引用路线图 `rev` 用**取法**（`grep -n "路线图版本" roadmaps/AF-联动路线图.md | head -1`），⛔ 不抄 sha／不抄别日的号；② 想写「`grep -c G-AF-09 roadmaps\*.md` ⇒ 0 处」时现读被 rev 9 正文自毁 ⇒ **约束面与叙述面分开取**（与 §二之一百四十二 回执 R8 同一条修法，第二次撞上，已把"量『某格未立＝0 处』的尺必须分面"沉淀进本席长期记忆）。
+
+**门禁遍 h／i**：本枚零落码、零清单改动，改动面＝两份记账 docs＋外部一件 ⇒ 门读的是**入库面**，docs 那两份不在任何 `check_*.py` 射程内。⛔ 依「门在飞时工作树独占」，两份 docs 全部落笔之后才 fire。
+
+- **第一次 fire 塌在 preflight（照实登记，不算判红也不算判绿）**：`bash gates.sh`（不带 `GATES_PYTHON`）⇒ **RC=2**，输出体 **182 B**，全文只有两行：`homesdk 未安装。先执行：` ＋ 一条 `pip install …homesdk-0.1.0-py3-none-any.whl` 的提示（存证 `E:\tmp\rl143_gates_preflight.txt`，182 B）。根因是本机有多条 Python 而 `gates.sh:23` 的默认档 `PYTHON="${GATES_PYTHON:-python3}"` 落到了没装 homesdk 的那条；修法按既有纪律用**环境变量**指解释器，⛔ 不改 `gates.sh`、⛔ 不 `pip install`。⇒ 这一跳是「射程塌」不是「判红」，两档不许混。
+- **遍 h／i 现读**：`GATES_PYTHON=python bash gates.sh` ⇒ **H_RC=1｜I_RC=1**；两遍输出体均 **35715 B**、md5 均为 `339195831c8bc8bc7b2ab04215aa93d4`、`cmp rl143_gates_h.txt rl143_gates_i.txt` ⇒ **RC=0**（逐字节相同）。
+- **与上一批遍 d／e 对撞**：`cmp rl143_gates_h.txt rl142_gates_e.txt` ⇒ **RC=0**，三枚文件 md5 全等（`339195831c8bc8bc7b2ab04215aa93d4`）、字节数全等（35715）、按 `tr -dc '\r' | wc -c` 量得 CR 全等（**151**）。⇒ **差值 0 行，无需逐行解释**；这条正是「门读入库面 ⇒ 纯 docs 批次动不了任何读数」的正面自证（同一形制先在 §二之一百四十二 回执 D2 里作为偏差登记过，本枚拿到实跑证据）。
+- **红腿归属（⛔ 不因本枚转绿而抬上限）**：`grep -c "^✓"` ⇒ **21**、`grep -c "^✗"` ⇒ **3**；三条红均在另一席位的存量面——信任边界 **7 处**（@输出行 `:81`）、进程模型 **22 处**（`:92`）、可观测性 **71 处**（`:118`）。本枚零落码 ⇒ 既不可能消掉它们，也不受它们的读数影响。
+- **单测腿复测**：`python -m pytest tests/unit/test_ma_query_adapter.py -q` ⇒ **32 passed in 4.34s**（与 E5 同判据；本枚未改测试）。
+- **取数命令（⛔ 不写值）**：字节数 `wc -c < E:\tmp\rl143_gates_h.txt`；逐字节 `cmp` 三对；CR `tr -dc '\r' < 文件 | wc -c`；判定行 `grep -c "^✓"`／`grep -c "^✗"`。
+- **遍 j（本枚最后一次，两份 docs 的全部文字含 ⑦ 那格落笔之后 fire）**：`GATES_PYTHON=python bash gates.sh` ⇒ **J_RC=1**、**35715 B**、md5 `339195831c8bc8bc7b2ab04215aa93d4`、`cmp rl143_gates_j.txt rl143_gates_h.txt` ⇒ **RC=0**，CR=151、`^✓`=21、`^✗`=3。⚠️ 登记一句诚实话：**记录遍 j 的这一段本身写在 fire 之后**——按「门读**入库面**、docs 未暂存 ⇒ 不在射程」这一既有判据（并由 h／i／j 与上一批 d／e 四枚逐字节全等实证），这一步不可能改动任何读数；⛔ 因此不停手重跑第 5 遍。
