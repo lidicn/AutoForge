@@ -12656,3 +12656,12 @@ Q2 甲末句「映射表在 AF 仓内一份都不留」——在 AF 面 grep 新
 ### 七、不自决清单
 
 ⛔ 动 `af_live.py`／`af_metrics.py`／`af_registry.py`／`af_catalog.py` 任一字节（出站换封装＝本枚判⛔ 值，等收益测量或 DCD 指名窗口）；⛔ 给 AF 造 `CHANGELOG.md` 或改 `pyproject.toml:7`（版本编号双轨已裁，⛔ 重开）；⛔ 改裁定原字（矩阵两行过期的订正归 DCD／链主）；⛔ 抬 tally／写 baseline；⛔ push。
+
+### 补（2026-10-14，本枚收口：门禁两遍＋★ 跨批六遍逐字节全等＋提交面自证＋一处编译期自纠）
+
+- **门禁两遍**：`GATES_PYTHON=python bash gates.sh` ⇒ `E:\tmp\rl162_gates_a.txt`／`rl162_gates_b.txt`，各 **218 行／35715 B／md5 `dcd72915faff0105883dd926e576389d`／CR=151／`^✓`=21／`^✗`=3**，`GATES_RC=1`；`cmp` ⇒ **`CMP_ab_RC=0`**（本枚两遍逐字节相同）。解释器射程照旧：`gates.sh:23` 缺省取 `python3` 而本机无它 ⇒ ⛔ 用裸 `bash gates.sh` 的 3 行输出冒充"跑过"（§二之一百六十 补 八 那条纪律，本枚首跑即按 `GATES_PYTHON=python` 起，未再踩）。
+- **★ 跨批六遍全等**：本枚两遍与 §二之一百六十 的 a／b／c／d 四遍共 **六枚逐字节全等**（`cmp rl162_gates_a.txt rl161_gates_d.txt` ⇒ `CMP_a_prevd_RC=0`；`cmp rl162_gates_b.txt rl161_gates_a.txt` ⇒ `CMP_b_preva_RC=0`）。意义：上一枚立的"改两份记账 docs ⛔ 挪门读数"由**批内推断**升级为**跨批实测**。本枚⛔ 跑第三遍——第六枚全等之后第七枚不会新增任何信息；自披露：最后一次实测在提交前，其后的笔全在 docs 记账面（⛔ 门在飞时改工作树）。
+- **三枚 ✗ 的逐枚归属**：⛔ 在此重抄第二份归属表（会漂）——同一批对象、同一枚 md5，逐枚归属见 §二之一百六十 补 八。要点复述一句：三族全是「清单 AUTO 自动段 vs 工作树现读」的漂移（信任边界 7／进程模型 22／可观测性 71），根源是仍在途的 `af_api.py`／`af_service.py`（#79 登录线窗、#136、#118）；本枚零落码 ⇒ ⛔ 让任何一枚转绿，也⛔ 新增红；⛔ 因在途未清就跑任何门的 `--write`。
+- **提交面自证**（⛔ 自抄将被下一枚作废的读数）：取法＝`git show --stat HEAD`（第二枚之前现读）⇒ 第一枚实提交 **2 份／37 增／0 删**（ledger 36 增＋架构说明 §十九 1 增），与"改动面只有两份记账 docs"自洽；本枚（第二枚）自己那格按同法现读，⛔ 本格写死。`git status` 复核：在途文件（`src/autoforge/af_api.py`、两份 compose、`scripts/host_update.sh`、`docs/audit/` 删除族）全部⛔ 入本批。**⛔ push、⛔ amend。**
+- **一处编译期自纠（工序级，值得在册）**：写入脚本 `E:\tmp\jz161_apply.py` 首次运行抛 `SyntaxError: bytes can only contain ASCII literal characters`——起因是 `b'…'` 里放了中文。这类失败发生在**编译期**，故两文件当时⛔ 被改（实测 ledger 仍 12622 行、arch 仍 724 行、`grep -c '二之一百六十一'`=0），不是半截写；修法＝中文锚点一律 `'…'.encode('utf-8')`，与 与「文本模式重写会让 diff 整份重排 LF→CRLF」那条老坑同族的新坑，本枚起在含中文锚点的写入脚本里⛔ 出现非 ASCII bytes 字面量。
+- **存证（`E:\tmp`，⛔ 入仓）**：`rl162_af.txt`／`rl162_dedup.txt`／`rl162_g.txt`／`rl162_debt.txt`（欠账尺 `TOTAL=44 CLOSED=41 OPEN=3`）／`rl162_gates_a.txt`／`rl162_gates_b.txt`；取数脚本 `rl162.sh`；记账稿 `jz161.md`；写入脚本 `jz161_apply.py`。回执面读数（87 行／13875 B／CR=0／`VALIDATE_RC=0`）与 §四 全部命令**同批**生成，⛔ 事后补跑冒充原字。
