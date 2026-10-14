@@ -65,7 +65,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from af_face import Face, FaceError, Snapshot  # noqa: E402
+from af_face import HEAD, Face, FaceError, Snapshot  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 DOC_REL = "docs/进程模型清单.md"
@@ -127,14 +127,14 @@ _SNAPS: dict[Path, "Snapshot"] = {}
 
 
 def _snap(root: Path) -> Snapshot:
-    """本门唯一的取数入口：`src/` 的**入库面**快照；读不出 git 索引时退回磁盘面并如实标注。
+    """本门唯一的取数入口：`src/` 的**提交面（HEAD 树）**快照；读不出 HEAD 树时退回磁盘面并如实标注。
 
     为什么是快照而不是逐份 `git show`：本机实测逐份读 103 份要 11.50s，一次 `git checkout-index`
     只要 0.35s——取数面能不能改掉，卡的就是这个差量。按 root 缓存，临时目录随进程退出释放。
     """
     key = Path(root).resolve()
     if key not in _SNAPS:
-        _SNAPS[key] = Face.open(key).snapshot(SRC_REL)
+        _SNAPS[key] = Face.open(key, HEAD).snapshot(SRC_REL)
     return _SNAPS[key]
 
 

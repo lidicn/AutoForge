@@ -72,24 +72,24 @@ BUILTIN_PATHS = ("/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc")
 APP_LEVEL_DEP = "_rate_limit_dep"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from af_face import Face, FaceError, Snapshot  # noqa: E402
+from af_face import HEAD, Face, FaceError, Snapshot  # noqa: E402
 
 _SRC_REL = "src"
 _SNAPS: dict[Path, "Snapshot"] = {}
 
 
 def _snap(root: Path) -> Snapshot:
-    """本门唯一的取数入口：`src/` 的**入库面**快照；读不出 git 索引时退回磁盘面并如实标注。
+    """本门唯一的取数入口：`src/` 的**提交面（HEAD 树）**快照；读不出 HEAD 树时退回磁盘面并如实标注。
 
     信任边界门判的是**运行期路由表**（`build_app()`），所以它比另两枚 AST 门多一步：
     要把索引面的 `src/` 真导出成一份临时树再 `import`。⚠️ 本机有一条
     `__editable__.autoforge-0.1.0.pth` 指向**工作树**，导入面会优先走 editable 的 meta_path finder，
     因此这里同时做三件事：临时摘掉 editable finder、清 `sys.modules` 里已有的 `autoforge.*`、
-    导入后**探针自证** `__file__` 落在快照里——落不进去就报射程塌，⛔ 不用工作树的读数冒充入库面。
+    导入后**探针自证** `__file__` 落在快照里——落不进去就报射程塌，⛔ 不用工作树的读数冒充提交面（HEAD 树）。
     """
     key = Path(root).resolve()
     if key not in _SNAPS:
-        _SNAPS[key] = Face.open(key).snapshot(_SRC_REL)
+        _SNAPS[key] = Face.open(key, HEAD).snapshot(_SRC_REL)
     return _SNAPS[key]
 
 REGISTER_RE = re.compile(
@@ -134,12 +134,12 @@ def _tier(labels: tuple[str, ...]) -> str:
 
 
 def _af_api_from_face(root: Path):
-    """在**入库面快照**里导入 `autoforge.af_api` 并 `build_app()`，返回 `(app, 快照根)`；塌了就抛 FaceError。
+    """在**提交面（HEAD 树）快照**里导入 `autoforge.af_api` 并 `build_app()`，返回 `(app, 快照根)`；塌了就抛 FaceError。
 
     为什么要三件套（摘 meta_path 的 editable finder ／ 清 `sys.modules` 的 `autoforge.*` ／ 导入后探针自证）：
     本机 Python313 装了一条指向**工作树**的 `__editable__.autoforge-0.1.0.pth`，它会抢在 `sys.path` 之前
     把 `import autoforge` 带回在途代码；而 pytest 的 conftest 早已把工作树那份模块放进 `sys.modules`，
-    不清就是拿到缓存的在途面。探针失败一律按射程塌处理——读到在途代码却标注成入库面，是比红更坏的结果。
+    不清就是拿到缓存的在途面。探针失败一律按射程塌处理——读到在途代码却标注成提交面（HEAD 树），是比红更坏的结果。
     """
     snap = _snap(root)
     src = (snap.base / _SRC_REL).resolve()
@@ -162,7 +162,7 @@ def _af_api_from_face(root: Path):
         )
         if stray:
             raise FaceError(
-                f"探针失败：入库面快照是 {src}，却有 {len(stray)} 个 `autoforge.*` 模块从别处加载："
+                f"探针失败：提交面（HEAD 树）快照是 {src}，却有 {len(stray)} 个 `autoforge.*` 模块从别处加载："
                 + "、".join(stray[:3]) + "（editable 安装面把导入抢回了工作树，此刻读到的是在途代码）"
             )
         from fastapi.routing import APIRoute  # noqa: PLC0415,F401  # 第三方，不受 editable 影响，先在这里验一次
@@ -174,7 +174,7 @@ def _af_api_from_face(root: Path):
             raise FaceError(f"`build_app()` 构造失败：{type(exc).__name__}: {exc}") from exc
         return app, src
     except ImportError as exc:
-        raise FaceError(f"从入库面快照导入失败：{type(exc).__name__}: {exc}") from exc
+        raise FaceError(f"从提交面（HEAD 树）快照导入失败：{type(exc).__name__}: {exc}") from exc
     finally:
         for name in [k for k in sys.modules if k == "autoforge" or k.startswith("autoforge.")]:
             del sys.modules[name]

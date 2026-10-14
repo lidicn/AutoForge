@@ -33,6 +33,13 @@ CI 那份 checkout 仍是 LF ⇒ 在本模块内部又造出一族「两边不�
 会向上找父目录的 `.git`，而合成树落在 `AppData\\Local\\Temp\\pytest-*`，祖先里只要躺着一枚仓库就会把
 「假想的小树」读成别人的索引，那才是本模块能造出的最坏假绿。
 
+**HEAD 面（裁定 20261014-AF台账机械前置 §一 Q2 新增，台账生成器用它）**：索引面挡得住「没 `git add` 的在途改动」，
+挡不住**已经 `git add` 却还没提交**的——那一档照样是他席位的形状，会让 `--write` 生成的清单变成「半 HEAD 半工作树」
+的第三态（正是本模块存在的理由要消灭的那个形状，也是本仓「两棵树、一把尺，绿的必然是假绿」那条判例）。
+把名单来源从 `ls-files` 换成 `ls-tree HEAD` 之后，**工作树脏不脏与台账无关** ⇒ 「谁有权在脏树上跑 `--write`」
+这一问整个消失：⛔ 不需要授权，也⛔ 造不出第三态。HEAD 读不出时**刻意不**退回索引面（那等于悄悄换口径），
+直接 `FaceError` 交调用方按射程塌处理。
+
 纯标准库。只读；`snapshot()` 只往系统临时目录落一份索引面副本，由调用方 `close()` 删除。
 """
 from __future__ import annotations
@@ -43,12 +50,18 @@ import tempfile
 from pathlib import Path
 
 INDEX = "index"  #: 入库面：名单与内容都来自 git 索引
+HEAD = "head"    #: 提交面：名单与内容都来自 HEAD 树（≠ 索引面：他席位 `git add` 过的形状进不了这一面）
 DISK = "disk"    #: 磁盘面：读不出 git 索引时的降级档，与 CI 口径不同源
 
 LABEL = {
     INDEX: "入库面（git 索引；CI 上索引即 HEAD，两边同源）",
+    HEAD: "HEAD 树（`git ls-tree HEAD`；工作树脏不脏与台账无关，裁定 20261014 §一 Q2）",
     DISK: "磁盘面（⚠️ 读不出 git 索引的降级档，与 CI 口径不同源）",
 }
+
+
+#: 报错文案里的名单来源，跟着面走——「索引点名」写在 HEAD 面的红消息上就是一句假归因。
+FACE_NOUN = {INDEX: "索引", HEAD: "HEAD 树", DISK: "磁盘"}
 
 
 class FaceError(Exception):
@@ -94,6 +107,35 @@ def _specs(root: Path, rel_dir: str) -> tuple[list[tuple[str, str, str]], list[s
             continue
         specs.append((mode, oid, name))
     return specs, unmerged
+
+
+def _head_specs(root: Path, rel_dir: str) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """`git ls-tree -r -z HEAD` → `([（模式, 对象名, 路径）], [非 blob 条目])`。
+
+    与 `_specs` 同形（第三条目都交给 `_batch` 落裸 blob），差别只在**名单来自提交而不是索引**：
+    他席位刚 `git add` 却没提交的形状进不了这一面 ⇒ 台账生成器再也不会把在途改动烤进已提交清单
+    （裁定 20261014 §一 Q2：把「谁有权在脏树上跑」这一问整个消掉）。
+    头部形状是 `<模式> <类型> <对象名>\t<路径>`；类型不是 blob（子模块=`commit`）单列出来交调用方判塌。
+    """
+    out = _run(["git", "ls-tree", "-r", "-z", "HEAD", "--", rel_dir], root)
+    specs: list[tuple[str, str, str]] = []
+    nonblob: list[str] = []
+    for rec in out.split(b"\0"):
+        if not rec:
+            continue
+        head, sep, path = rec.partition(b"\t")
+        if not sep:
+            raise FaceError(f"`git ls-tree -r -z` 的条目形状变了（没有 TAB）：{rec[:80]!r}")
+        parts = head.split(b" ")
+        if len(parts) != 3:
+            raise FaceError(f"`git ls-tree -r` 的头部形状变了（期望 `<模式> <类型> <对象名>`）：{head[:80]!r}")
+        mode, kind, oid = (x.decode("ascii", "replace") for x in parts)
+        name = path.decode("utf-8", "replace")
+        if kind != "blob":
+            nonblob.append(f"{name}（类型 {kind}）")
+            continue
+        specs.append((mode, oid, name))
+    return specs, nonblob
 
 
 def _batch(root: Path, specs: list[tuple[str, str, str]], tmp: Path) -> list[str]:
@@ -204,30 +246,44 @@ class Face:
         self.tracked = tracked
 
     @classmethod
-    def open(cls, root: Path) -> "Face":
+    def open(cls, root: Path, want: str = INDEX) -> "Face":
+        """按想要的取数面开门。`want` 只认 INDEX／HEAD；两者都不是 git 顶 ⇒ 退回磁盘面并如实标注。
+
+        ⚠️ 刻意**不**做「HEAD 读不出就自动退到索引」这种降级：那会让清单生成器在悄悄改变取材面，
+        正是本模块要消灭的那一族的反向形态。读不出 HEAD（仓里一枚提交都没有／git 不可用）就抛
+        `FaceError`，由门按自己的射程塌处理（`exit 2`）。
+        """
         root = Path(root).resolve()
         if not root.is_dir():
             raise FaceError(f"取数根不存在：{root}")
+        if want not in (INDEX, HEAD):
+            raise FaceError(f"不认识的面 `{want}`（只认 {INDEX}／{HEAD}）")
         try:
             top = Path(_run(["git", "rev-parse", "--show-toplevel"], root)
                        .decode("utf-8", "replace").strip()).resolve()
-            mode = INDEX if top == root else DISK
+            mode = want if top == root else DISK
         except FaceError:
             mode = DISK
         if mode == DISK:
             return cls(root, DISK)
-        raw = _run(["git", "ls-files", "-z"], root)
+        if want == HEAD:
+            _run(["git", "rev-parse", "--verify", "HEAD"], root)
+            raw = _run(["git", "ls-tree", "-r", "--name-only", "-z", "HEAD"], root)
+            empty_msg = "HEAD 树读出 0 份文件——本门无从判定，报「干净」就是假绿"
+        else:
+            raw = _run(["git", "ls-files", "-z"], root)
+            empty_msg = "git 索引读出 0 份文件——本门无从判定，报「干净」就是假绿"
         tracked = tuple(n for n in raw.decode("utf-8", "replace").split("\0") if n)
         if not tracked:
-            raise FaceError("git 索引读出 0 份文件——本门无从判定，报「干净」就是假绿")
-        return cls(root, INDEX, tracked)
+            raise FaceError(empty_msg)
+        return cls(root, mode, tracked)
 
     @property
     def label(self) -> str:
         return LABEL[self.mode]
 
     def snapshot(self, rel_dir: str) -> Snapshot:
-        """把 `rel_dir` 下的**入库面**内容逐字节落到临时目录；磁盘面直接指向原树（零复制）。
+        """把 `rel_dir` 下的**入库面／HEAD 树**内容逐字节落到临时目录；磁盘面直接指向原树（零复制）。
 
         ⚠️ 刻意**不用** `git checkout-index --prefix`：那一条会跑过滤器，本机 `core.autocrlf=true`
         或将来加 `.gitattributes` 之后，本地副本与 CI 的 checkout 就在行尾上分家——本模块的存在理由
@@ -238,18 +294,29 @@ class Face:
             return Snapshot(self.root, DISK, None)
         tmp = Path(tempfile.mkdtemp(prefix="af-face-"))
         try:
-            specs, unmerged = _specs(self.root, rel_dir)
-            if unmerged:
-                raise FaceError(
-                    f"`{rel_dir}/` 下有 {len(unmerged)} 份未合并（stage≠0）条目，索引面读不出唯一内容："
-                    + "、".join(unmerged[:5])
-                )
+            if self.mode == HEAD:
+                specs, nonblob = _head_specs(self.root, rel_dir)
+                if nonblob:
+                    raise FaceError(
+                        f"HEAD 树里 `{rel_dir}/` 下有 {len(nonblob)} 份条目不是 blob，取不出唯一内容："
+                        + "、".join(nonblob[:5])
+                    )
+            else:
+                specs, unmerged = _specs(self.root, rel_dir)
+                if unmerged:
+                    raise FaceError(
+                        f"`{rel_dir}/` 下有 {len(unmerged)} 份未合并（stage≠0）条目，索引面读不出唯一内容："
+                        + "、".join(unmerged[:5])
+                    )
             if not specs:
-                raise FaceError(f"索引里 `{rel_dir}/` 下读出 0 份文件——射程塌，不许读成「没有违规」")
+                raise FaceError(
+                    f"{FACE_NOUN[self.mode]} `{rel_dir}/` 下读出 0 份文件——射程塌，不许读成「没有违规」"
+                )
             missing = _batch(self.root, specs, tmp)
             if missing:
                 raise FaceError(
-                    f"索引点名 {len(specs)} 份，`cat-file` 说库里缺失 {len(missing)} 份：" + "、".join(missing[:5])
+                    f"{FACE_NOUN[self.mode]}点名 {len(specs)} 份，`cat-file` 说库里缺失 {len(missing)} 份："
+                    + "、".join(missing[:5])
                 )
             absent = [name for _m, _o, name in specs if not (tmp / name).is_file()]
             if absent:
@@ -259,4 +326,4 @@ class Face:
         except BaseException:
             shutil.rmtree(tmp, ignore_errors=True)
             raise
-        return Snapshot(tmp, INDEX, tmp)
+        return Snapshot(tmp, self.mode, tmp)

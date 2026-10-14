@@ -14,7 +14,7 @@
 set -uo pipefail
 
 # 配置
-REPO_DIR="/vol1/1000/AutoForge"
+REPO_DIR="/vol1/1000/docker/autoforge"
 DATA_DIR="/vol1/1000/docker/autoforge-store"
 DOCKER_DIR="/vol1/1000/docker/autoforge"
 CONTAINER="autoforge-api"
@@ -35,18 +35,29 @@ write_result() {
     export _UR_FROM_TAG="$FROM_TAG"
     export _UR_TO="$TO_SHA"
     export _UR_TO_TAG="$TO_TAG"
-    export _UR_CHANGELOG="$CHANGELOG"
     export _UR_RESULT="$RESULT"
     python3 << 'PYEOF' >> "$LOG" 2>&1
-import json, time, os
+import json, time, os, subprocess
+
+# 直接从 git log 生成 changelog，避免 shell 变量转义问题
+changelog = []
+from_sha = os.environ.get("_UR_FROM", "unknown")
+to_sha = os.environ.get("_UR_TO", "unknown")
+if from_sha != "unknown" and to_sha != "unknown" and from_sha != to_sha:
+    out = subprocess.run(
+        ["git", "log", "--oneline", f"{from_sha}..{to_sha}", "--no-merges"],
+        capture_output=True, text=True
+    ).stdout.strip()
+    changelog = [l.strip() for l in out.split("\n") if l.strip()][:20]
+
 r = {
     "ok": os.environ.get("_UR_OK", "False") == "True",
-    "from": os.environ.get("_UR_FROM", "unknown"),
+    "from": from_sha,
     "from_tag": os.environ.get("_UR_FROM_TAG", "unknown"),
-    "to": os.environ.get("_UR_TO", "unknown"),
+    "to": to_sha,
     "to_tag": os.environ.get("_UR_TO_TAG", "unknown"),
     "error": os.environ.get("_UR_ERR", ""),
-    "changelog": json.loads(os.environ.get("_UR_CHANGELOG", "[]")),
+    "changelog": changelog,
     "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
 }
 with open(os.environ["_UR_RESULT"], "w") as f:
@@ -58,8 +69,8 @@ PYEOF
 [ ! -f "$MARKER" ] && exit 0
 log "=== 收到更新请求 ==="
 
-# 读取目标分支
-REF=$(python3 -c "import json; print(json.load(open('$MARKER')).get('ref','main'))" 2>/dev/null || echo "main")
+# 读取目标分支（默认 master）
+REF=$(python3 -c "import json; print(json.load(open('$MARKER')).get('ref','master'))" 2>/dev/null || echo "master")
 log "目标 ref: $REF"
 
 cd "$REPO_DIR" || { log "ERROR: 无法进入 $REPO_DIR"; exit 1; }

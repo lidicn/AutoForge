@@ -1,0 +1,100 @@
+proposal_id: 20261011-round005-triage
+title: "round-005 triage：6 条规则系统性误报 + 1 条新规则候选（读写对称性缺口）"
+date: 2026-10-11
+author: "Claude Code 审计 agent（AutoForge round-005）"
+target_repo: lidicn/ADM-auditkit
+type: rules_improvement
+severity_note: >
+  本提案来自对 AutoForge round-005（547 条机器候选）的逐条人工 triage。
+  high+medium 124 条确证 0 条真 bug（全误报），low 423 条抽样确证 3 条真吞。
+  triage 过程发现 6 条规则的系统性误报根因，并提炼出 1 条新规则候选。
+
+rule_improvements:
+  - rule: "py.except_return_failopen"
+    root_cause: "只看 return True 的布尔值，未区分 True 的语义方向（告警 vs 放行）"
+    false_positives: 2
+    evidence:
+      - "af_canary.py:103 except UnknownEntity: return True —— True 语义=有漂移/告警，是 fail-closed"
+      - "af_flock.py:132 except (BlockingIOError,OSError): return True —— True 语义=锁被占用/有竞争，是 fail-closed"
+    action: "增加语义判据：当函数名/上下文表明 True=告警方向（canary/drift/held/occupied/conflict），不判 fail-open；只判 True=放行/通过/健康方向"
+
+  - rule: "py.outbound_call_no_timeout"
+    root_cause: "把内存 dict 查找误识别为外部调用"
+    false_positives: 1
+    evidence:
+      - "af_orchestrator.py:2323 session.ir.get('id') —— ir 是内存 IR dict，.get() 是 dict 查找无需 timeout"
+    action: "排除 .get(...)/[...] 等已知 dict/映射访问形态；只认真正的网络/进程调用"
+
+  - rule: "py.outbound_call_no_timeout"
+    root_cause: "把 subprocess.Popen 构造器（非阻塞）当作需 timeout 的调用"
+    false_positives: 1
+    evidence:
+      - "af_service.py:2448 subprocess.Popen(...) —— 构造器本身非阻塞、不接受 timeout；timeout 只适用于 .wait()/.communicate()"
+    action: "区分 Popen 构造（非阻塞，排除）与 .wait()/.communicate()/.poll()（阻塞，需 timeout）"
+
+  - rule: "py.unbounded_container"
+    root_cause: "漏识别整体替换型 dict 写入（非累加）和键集受图规模封顶的 dict/set"
+    false_positives: 35
+    evidence:
+      - "af_vhass/device_sm.py:68 self.attributes.update(new_attributes) + reset() 整体替换 —— 是替换非累加(P14)"
+      - "af_vhass/high_fidelity.py:126 self._attributes[entity_id] = dict(new_attributes) —— 按键整体替换"
+      - "af_conflict._circuits/af_health.extra_ids/af_intervention.managed —— 键集=automation_id，图内有限集封顶"
+    action: "增加'整体替换'识别（self.X[k]=dict/list 覆写非 append）；键集为有限 entity_id/automation_id 的 dict/set 降级"
+
+  - rule: "py.json_parse_unguarded"
+    root_cause: "把 for 循环可迭代表达式的一次性解析当作循环体内逐条解析"
+    false_positives: 1
+    evidence:
+      - "af_cli.py:1062 for item in json.loads(file.read_text()): —— json.loads 是可迭代表达式，循环开始前一次性解析"
+    action: "区分 'for x in json.loads(...)'（一次性解析，前兆）与 'for x in items: json.loads(...)'（逐条解析，真 bug）"
+
+  - rule: "TS-03-unhandled-promise"
+    root_cause: "把 localStorage/Map/Array/Vue 同步 API 误判为未 await 的 Promise"
+    false_positives: 33
+    evidence:
+      - "localStorage.setItem/removeItem（同步）被判漏 await"
+      - "Map.set/get、Array.push/unshift（同步）被判漏 await"
+      - "Vue app.use/mount（同步）被判漏 await"
+    action: "增加同步 API 白名单：localStorage/sessionStorage/Map/Set/Array 方法、Vue app.use/mount、void 返回的辅助函数"
+
+new_rule_candidates:
+  - id: "py.read_write_asymmetry"
+    name: "读写对称性缺口：写侧有留痕、读侧静默吞"
+    severity: medium
+    mode: static_ast
+    description: >
+      检测同一 sidecar/状态文件在写侧（写入/持久化）有 logger 留痕，
+      但读侧（读取/反序列化）的 except 块无留痕且返回空/默认值。
+      危害：文件损坏时读失败被当"无数据"，导致数据静默丢失，
+      而写侧的留痕无法触发（因为写没失败）——读写两侧的防护不对称。
+    evidence:
+      - "BUG-L1: af_api.py:676 pending_asks 读失败 except 返回 {ok:True,asks:[]} 无 logger；对照写侧 af_live.py:457 有 logger.warning + R14 注释"
+    status: draft
+    note: >
+      需跨文件 join（写侧在某文件、读侧在另一文件），现有 5 判据无法表达。
+      建议作为跨语句 join 判据（同 workflow-iteration-proposal 建议四）。
+
+confirmed_bugs:
+  - id: BUG-L1
+    severity: medium
+    file: src/autoforge/af_api.py
+    line: 676
+    title: "pending_asks 读失败静默吞，提问被丢失"
+    detail: >
+      /api/asks/pending 端点读 pending_asks.json，except Exception 返回 {ok:True,asks:[]}
+      无 logger。文件损坏时调用方认为"无待答"，提问静默丢失。写侧有留痕、读侧无——
+      读写对称性缺口。
+    fix: "except 加 logger.warning(exc_info=True)，返回 {ok:False,asks:[],error:'read_failed'} 区分读失败与无待答"
+  - id: BUG-L2
+    severity: low
+    file: src/autoforge/af_runtime_plugins.py
+    line: 331
+    title: "API 端点注册失败静默吞（两个实例 :331/:340）"
+    detail: "conf 分级引擎/冲突仲裁器 API 端点注册 except:pass 无 logger，缺失端点排障困难"
+    fix: "两处 except 加 logger.warning(exc_info=True) 保留诊断痕迹"
+
+notes_for_maintainer: >
+  本提案在 Claude Code 会话内生成（非沙箱），通过 SSH 到 NAS 容器读源码核验。
+  547 条候选全量 triage（high+medium 全核、low 抽样 100 条），6 个并行 agent 逐条读源码。
+  规则改进建议均有源码行号证据可直接复核。新规则候选 py.read_write_asymmetry 需跨文件 join，
+  作为判据增补建议提交（同 workflow-iteration-proposal.md §4.3 的跨语句 join 需求）。

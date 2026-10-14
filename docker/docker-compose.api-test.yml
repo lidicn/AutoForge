@@ -1,0 +1,31 @@
+# AutoForge 测试环境（FFL 测试专用）
+# 端口 8788，数据目录 /vol1/1000/docker/autoforge-store/test
+# 与生产环境（8787）完全隔离
+
+services:
+  autoforge-api-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+    image: autoforge-api-test:local
+    container_name: autoforge-api-test
+    ports:
+      - "8788:8787"
+    command: ["forge", "serve", "--host", "0.0.0.0", "--port", "8787", "--store-root", "/data", "--examples", "/app/examples/ir", "--ui-dir", "/ui", "--ui-user-dir", "/mimo"]
+    volumes:
+      - /vol1/1000/docker/autoforge-store/test:/data
+      - /vol1/1000/docker/autoforge/ui/dist:/ui
+      - /vol1/1000/docker/autoforge/ui-user-mimo/dist:/mimo
+    environment:
+      - AUTOFORGE_LIVE_ENABLED=0
+      - AUTOFORGE_HA_URL=
+      - AUTOFORGE_SESSION_TTL_S=3600
+      - AUTOFORGE_INBOX_KEY=
+      - AUTOFORGE_MQTT=0
+      - MQTT_HOST=
+      - MQTT_PORT=
+      - MQTT_KEEPALIVE=
+      - MQTT_USER=
+      - MQTT_PASSWORD=
+      - AUTOFORGE_TOKENS=
+    restart: unless-stopped

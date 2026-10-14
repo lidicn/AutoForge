@@ -49,7 +49,10 @@ def _get(path: str, token: str) -> object:
         headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json",
                  "User-Agent": "autoforge-ci-reader"},
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    # AF44-R：原来这里是裸 `urllib.request.urlopen(req)`——默认 opener 跟随 3xx 并**继续带**
+    # Authorization，一旦 api.github.com 对本路径返回跨域 302（如重定向到日志/资产域），
+    # token 就被原样发给外域。改用「跟随重定向但跨域摘 Authorization」的 opener。
+    with _safe_redirect_opener.open(req, timeout=60) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -59,6 +62,27 @@ class _NoRedirects(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
         return None
+
+
+class _StripAuthOnCrossRedirect(urllib.request.HTTPRedirectHandler):
+    """跟随重定向，但 **host 变化（跨域）时摘掉 Authorization**（AF44-R）。
+
+    与 `_NoRedirects` 的分工：`_get_log` 本来就期望拿到 302（签名日志地址在 Location 里），
+    所以停跳是对的；`_get` 打的是普通 API JSON——仓库重命名/转移时的**同域** 301 必须正常
+    跟随（照抄 `_NoRedirects` 会把它变成 HTTPError 回归），只有跳到**外域**才摘头。
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is None:
+            return None
+        from urllib.parse import urlparse
+        if urlparse(req.full_url).netloc != urlparse(newurl).netloc:
+            new.remove_header("Authorization")
+        return new
+
+
+_safe_redirect_opener = urllib.request.build_opener(_StripAuthOnCrossRedirect)
 
 
 def _get_log(job_id: str, token: str) -> str:

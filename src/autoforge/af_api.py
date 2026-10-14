@@ -131,6 +131,11 @@ class PendingRejectBody(BaseModel):
     reason: str = ""
 
 
+class UpdateBody(BaseModel):
+    confirm_version: str = ""
+    branch: str | None = None
+
+
 class CredentialsUpdateBody(BaseModel):
     ha_token: str | None = None
     api_token: str | None = None
@@ -1115,10 +1120,6 @@ def build_app(
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    class UpdateBody(BaseModel):
-        confirm_version: str = ""
-        branch: str | None = None
-
     @app.post("/api/system/update", dependencies=[Depends(_write)])
     def api_system_update(body: UpdateBody, info: TokenInfo | None = Depends(authenticated())) -> dict[str, Any]:
         """提交更新请求（admin + 版本号二次确认）。
@@ -1148,7 +1149,7 @@ def build_app(
                 "error": "已有更新请求进行中，请等待宿主脚本执行完成",
             }, 409
 
-        branch = (body.branch or "main").strip()
+        branch = (body.branch or "master").strip()
         marker = {
             "ref": branch,
             "requested_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),

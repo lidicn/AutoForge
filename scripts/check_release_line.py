@@ -5,14 +5,14 @@
 最后一行——「要不要立一枚"分支一致门"：**立**。因为**当前没有任何门守着它**——将来有人把脚本改掉字面，
 **没有门会红**（这正是"永远绿的闸"的孪生形态）。落码归 AF 席位（`scripts/` 在它职权内）」。
 
-为什么判**入库面**（git 索引）而不是磁盘：本门要防的是「进了库、被推上发布线之后，NAS 那棵树会被喂哪一条线」，
+为什么判**提交面（HEAD 树）**（git 索引）而不是磁盘：本门要防的是「进了库、被推上发布线之后，NAS 那棵树会被喂哪一条线」，
 不是「手边草稿」。同一口径的先例是 `scripts/af_face.py`＋`scripts/check_process_model.py`。由此得到一条
 **必须写明的代价**：在途未 `git add` 的改动不进判据（工作树此刻可能是另一套字面，见 `docs/发布线清单.md` §五），
 未跟踪的同名载体既不算交付也不算违规——那三格都在结论行与清单里如实标注，⛔ 不伪装成"一致"。
-所以本门**拒绝磁盘降级**：读不出 git 索引就是 `exit 2`，⛔ 不用"读不出"冒充"没有违规"。
+所以本门**拒绝磁盘降级**：读不出 HEAD 树就是 `exit 2`，⛔ 不用"读不出"冒充"没有违规"。
 
 五条判据（各自单独可红）：
-  A「自动段逐行对撞」：`docs/发布线清单.md` 的 AUTO 段必须等于现读入库面的站点集合（路径／行号／角色／字面
+  A「自动段逐行对撞」：`docs/发布线清单.md` 的 AUTO 段必须等于现读提交面（HEAD 树）的站点集合（路径／行号／角色／字面
     任一漂移即红）。载体改名、把 `REF=` 挪个位置、清单被手改，三种都能被这条咬住。
   B「默认拒绝登记」：① 现读站点（角色 × 载体文件）在 §三 角色登记表里没有对应行 ⇒ 红——新增一枚分支字面载体
     必须先显式认领；② 登记表里有行、现读却数不出该站 ⇒ 过期登记红；③ 「这一格失守会怎样」或「认领」是空／占位词 ⇒ 红。
@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from af_face import Face, FaceError, Snapshot  # noqa: E402
+from af_face import HEAD, Face, FaceError, Snapshot  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 DOC_REL = "docs/发布线清单.md"
@@ -55,7 +55,7 @@ SCANNED = (
 SITE_CAP = 5
 HOST_SH = "scripts/host_update.sh"
 API_PY = "src/autoforge/af_api.py"
-#: 未跟踪的同名载体只报观察行：入库面读不出它们，按裁甲「未进任何提交 ⇒ 不算交付」。
+#: 未跟踪的同名载体只报观察行：提交面（HEAD 树）读不出它们，按裁甲「未进任何提交 ⇒ 不算交付」。
 UNTRACKED_HINTS = ("scripts/host_check_update.sh", "scripts/host_update_nas.sh")
 PLACEHOLDERS = {"", "-", "—", "–", "?", "待补", "TODO", "TBD", "n/a", "N/A", "无"}
 
@@ -126,15 +126,15 @@ class Site:
 
 
 def _snaps(root: Path) -> dict[str, Snapshot]:
-    """三枚入库面子树快照；调用方负责 `close()`。"""
+    """三枚提交面（HEAD 树）子树快照；调用方负责 `close()`。"""
     out: dict[str, Snapshot] = {}
     for rel_dir, _exts in SCANNED:
-        out[rel_dir] = Face.open(root).snapshot(rel_dir)
+        out[rel_dir] = Face.open(root, HEAD).snapshot(rel_dir)
     return out
 
 
 def scan_sites(snaps: dict[str, Snapshot]) -> list[Site]:
-    """现读入库面，按角色提取每一枚分支字面站点。"""
+    """现读提交面（HEAD 树），按角色提取每一枚分支字面站点。"""
     sites: list[Site] = []
     for rel_dir, exts in SCANNED:
         snap = snaps[rel_dir]
@@ -257,10 +257,10 @@ def check(root: Path) -> tuple[list[str], dict[str, object]]:
     snaps: dict[str, Snapshot] = {}
     try:
         for rel_dir, _exts in SCANNED:
-            snaps[rel_dir] = Face.open(root).snapshot(rel_dir)
+            snaps[rel_dir] = Face.open(root, HEAD).snapshot(rel_dir)
         face_label = snaps[SCANNED[0][0]].label
     except FaceError as e:
-        return [f"[射程] 入库面读不出：{e}"], {"label": "读不出"}
+        return [f"[射程] 提交面（HEAD 树）读不出：{e}"], {"label": "读不出"}
     try:
         state = doc_state(root)
         if isinstance(state, str):
@@ -294,7 +294,7 @@ def check(root: Path) -> tuple[list[str], dict[str, object]]:
         }
         if not sites:
             return [
-                "[射程] 入库面读不出任何一枚分支字面站点——四条链的载体同时消失不是「没有违规」，"
+                "[射程] 提交面（HEAD 树）读不出任何一枚分支字面站点——四条链的载体同时消失不是「没有违规」，"
                 "是射程断了（载体改名／整块搬走／后缀口径变了）"
             ], info
 
@@ -328,7 +328,7 @@ def check(root: Path) -> tuple[list[str], dict[str, object]]:
         seen_pairs = {(s.role, s.path) for s in sites}
         for role, path in sorted(registered):
             if (role, path) not in seen_pairs:
-                findings.append(f"B §三登记了「{role}」× `{path}`，现读入库面却数不出这一站——过期登记要删")
+                findings.append(f"B §三登记了「{role}」× `{path}`，现读提交面（HEAD 树）却数不出这一站——过期登记要删")
         for cells in rows:
             for idx, col in ((2, "这一格失守会怎样"), (3, "认领")):
                 if len(cells) <= idx or cells[idx] in PLACEHOLDERS:
@@ -414,7 +414,7 @@ def write_doc(root: Path) -> int:
     snaps: dict[str, Snapshot] = {}
     try:
         for rel_dir, _exts in SCANNED:
-            snaps[rel_dir] = Face.open(root).snapshot(rel_dir)
+            snaps[rel_dir] = Face.open(root, HEAD).snapshot(rel_dir)
         sites = scan_sites(snaps)
         if not sites:
             print("✗ 现读 0 枚站点，拒绝用空集改写自动段（那会把射程塌伪装成干净）")
@@ -435,7 +435,7 @@ def write_doc(root: Path) -> int:
         print(f"✓ 已重新生成 `{DOC_REL}` 自动段（站点 {len(sites)} 枚；手工段未动）")
         return 0
     except FaceError as e:
-        print(f"✗ 入库面读不出，拒绝改写：{e}")
+        print(f"✗ 提交面（HEAD 树）读不出，拒绝改写：{e}")
         return 2
     finally:
         for snap in snaps.values():
@@ -443,7 +443,7 @@ def write_doc(root: Path) -> int:
 
 
 def require_index(root: Path) -> str | None:
-    """本门拒绝磁盘降级：读不出 git 索引就没有口径（理由见 docstring 第三段）。"""
+    """本门拒绝磁盘降级：读不出 HEAD 树就没有口径（理由见 docstring 第三段）。"""
     try:
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"], cwd=str(root), capture_output=True, check=True
@@ -463,13 +463,13 @@ def main(argv: list[str]) -> int:
     if "--write" in argv:
         bad = require_index(root)
         if bad:
-            print(f"✗ 发布线门禁拒绝改写自动段：{bad}——自动段是按**入库面**生成的，"
+            print(f"✗ 发布线门禁拒绝改写自动段：{bad}——自动段是按**提交面（HEAD 树）**生成的，"
                   "用磁盘面改写会把在途字面烤进清单（#118 那族两边不同源就是这么来的）")
             return 2
         return write_doc(root)
     bad = require_index(root)
     if bad:
-        print(f"✗ 发布线门禁读不出射程：{bad}——本门判**入库面**，⛔ 不许改用磁盘读数冒充结论")
+        print(f"✗ 发布线门禁读不出射程：{bad}——本门判**提交面（HEAD 树）**，⛔ 不许改用磁盘读数冒充结论")
         print(
             "  修法：在本仓工作树里跑（`python scripts/check_release_line.py`）；"
             "副本树要先 `git init` ＋ `git add` 才有索引面可读。"
@@ -479,9 +479,9 @@ def main(argv: list[str]) -> int:
     if findings and all(f.startswith("[射程]") for f in findings):
         print(f"✗ 发布线门禁读不出射程：{findings[0][len('[射程] '):]}")
         print(
-            "  七种形状：① `docs/发布线清单.md` 不在盘上；② 读不出 git 索引或取数根不等于工作树根——本门判**入库面**，"
+            "  七种形状：① `docs/发布线清单.md` 不在盘上；② 读不出 HEAD 树或取数根不等于工作树根——本门判**提交面（HEAD 树）**，"
             "⛔ 不许改用磁盘读数冒充结论；③ 自动段那对标记被改写或被清空；④ §二「发布线（远端）」或「取值域」那一格"
-            "改名／留空；⑤ §三 那张表除表头外一行都没有；⑥ 四条链的载体在入库面同时读不出；⑦ 快照导出缺文件。"
+            "改名／留空；⑤ §三 那张表除表头外一行都没有；⑥ 四条链的载体在提交面（HEAD 树）同时读不出；⑦ 快照导出缺文件。"
             "七种都不许报「干净」。"
         )
         return 2
@@ -503,7 +503,7 @@ def main(argv: list[str]) -> int:
         f"§三 {info['rows']} 行角色登记与站点互相闭合；上限 {info['cap']}；"
         f"`body.branch` 取值域现读与登记同为「{info['domain']}」；"
         + (
-            f"⚠️ 观察：{len(untracked)} 枚同名件未进任何提交 ⇒ 入库面射程外（不算交付也不算违规）；"
+            f"⚠️ 观察：{len(untracked)} 枚同名件未进任何提交 ⇒ 提交面（HEAD 树）射程外（不算交付也不算违规）；"
             if untracked else ""
         )
         + f"{info['label']}）"

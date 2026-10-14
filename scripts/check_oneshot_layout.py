@@ -5,16 +5,16 @@
 与 `KICKOFF.md`、`pyproject.toml` 平级 ⇒ 缺的是"一次性脚本该放哪"的约定」）与同批对账文档登记的残余
 （「`scripts/oneshot/` 约定 ＋ 对根目录 `_*` 的机械拒绝」要配套存量名单）。
 
-**为什么判索引而不是判磁盘**：`.gitignore:91` 的 `_*.py` 已经把盘面上的临时件挡在库外（那一格审计自己
-记成"成立·已有防线"）。真漏的是入库面——`git add -f` 穿得过 ignore，而"根目录躺着一份已入库的一次性脚本"
+**为什么判提交面（HEAD）而不是判磁盘**：`.gitignore:91` 的 `_*.py` 已经把盘面上的临时件挡在库外（那一格审计自己
+记成"成立·已有防线"）。真漏的是提交面——`git add -f` 穿得过 ignore，而"根目录躺着一份已入库的一次性脚本"
 ignore 根本管不着。同口径先例：`scripts/check_pkg_markers.py`（§二之四十四 实测：判磁盘检不出
-"盘上有、索引里没有"那一半）。所以 git 读不出索引时本门 `exit 2`，⛔ 不用"盘上没有"冒充"库里没有"。
+"盘上有、索引里没有"那一半）。所以 git 读不出 HEAD 树时本门 `exit 2`，⛔ 不用"盘上没有"冒充"库里没有"。
 
 五条判据（各自单独可红）：
-  A「自动段逐行对撞」：`docs/仓库卫生清单.md` 的 AUTO 段必须等于现读的入库面（根目录 `.py` 名单／
+  A「自动段逐行对撞」：`docs/仓库卫生清单.md` 的 AUTO 段必须等于现读的提交面（HEAD 树）（根目录 `.py` 名单／
     单下划线脚本名单／`scripts/oneshot/` 名单／登记数与上限）。往约定目录加一份脚本而不重生成登记，
     清单就变成会过期的副本——那正是本仓 fight 的那一族。
-  B「默认拒绝」：① 根目录新增入库 `.py` 而登记面上没有它 ⇒ 红；② 入库面任何**单**下划线前缀的
+  B「默认拒绝」：① 根目录新增入库 `.py` 而登记面上没有它 ⇒ 红；② 提交面任何**单**下划线前缀的
     `.py`／`.sh`／`.conf` ⇒ 红（那枚名字本被 ignore 挡着，能进来只可能是 `git add -f`）。
     双下划线的包标记（`__init__.py`）刻意排除在外，那是另一族，由判据 D 钉。
   C「棘轮只减不增」：存量登记条目数 > `LEGACY_CAP` ⇒ 红（⛔ 这张表不是豁免通道，加一行不会让 B 变绿）；
@@ -52,10 +52,12 @@ NONE_ROW = "无"
 
 
 def tracked_paths(repo: Path) -> list[str] | None:
-    """git 索引里的相对路径；git 不可用／这里不是仓库 ⇒ None（由调用方判射程塌）。"""
+    """HEAD 树里的相对路径（裁定 20261014 §一 Q2：清单生成器吃**提交面**，⛔ 吃索引、⛔ 吃工作树）；
+    git 不可用／这里不是仓库／仓里一枚提交都没有 ⇒ None（由调用方判射程塌）。"""
     try:
         out = subprocess.run(
-            ["git", "ls-files", "-z"], cwd=str(repo), capture_output=True, text=True, check=True
+            ["git", "ls-tree", "-r", "--name-only", "-z", "HEAD"],
+            cwd=str(repo), capture_output=True, text=True, check=True
         ).stdout
     except (OSError, subprocess.CalledProcessError):
         return None
@@ -194,15 +196,15 @@ def _auto_block(text: list[str]) -> tuple[list[str] | None, str | None]:
 
 
 def check(repo: Path, tracked: list[str] | None = None) -> tuple[list[str], list[str], dict[str, object]]:
-    """返回 `(红, 射程塌, 读数)`。`tracked` 为 None 时自己去读 git 索引（判据的口径是入库面）。"""
+    """返回 `(红, 射程塌, 读数)`。`tracked` 为 None 时自己去读 HEAD 树（判据的口径是提交面）。"""
     red: list[str] = []
     errs: list[str] = []
 
     if tracked is None:
         tracked = tracked_paths(repo)
         if tracked is None:
-            errs.append(f"在 {repo} 读不出 git 索引（git 不可用或这里不是仓库）：本门判的是**入库面**，"
-                        "没有索引就没有口径——不许改用磁盘读数冒充结论")
+            errs.append(f"在 {repo} 读不出 HEAD 树（git 不可用／这里不是仓库／仓里一枚提交都没有）：本门判的是**提交面**，"
+                        "没有提交就没有口径——不许改用磁盘读数冒充结论")
             return red, errs, {}
 
     doc = repo / DOC_REL
@@ -218,8 +220,8 @@ def check(repo: Path, tracked: list[str] | None = None) -> tuple[list[str], list
 
     state = read_state(repo, tracked)
     if state["py_total"] == 0:
-        errs.append(f"索引读得出却一个入库 `.py` 都没有（盘上却不可能为 0）：路径口径断了，"
-                    "本门此刻数到的「根目录 0 个」是空索引给的假干净")
+        errs.append(f"HEAD 树读得出却一个入库 `.py` 都没有（盘上却不可能为 0）：路径口径断了，"
+                    "本门此刻数到的「根目录 0 个」是空提交面给的假干净")
         return red, errs, {}
 
     entries, legacy_reds, legacy_errs, explicit_none = parse_legacy(text)
@@ -257,8 +259,8 @@ def check(repo: Path, tracked: list[str] | None = None) -> tuple[list[str], list
                 f" ⇒ 一次性脚本请放 `{ONESHOT_DIR}/`，要留在根目录得先申请裁定把 `LEGACY_CAP` 抬上去")
     for path in state["underscore"]:
         red.append(
-            f"B：入库面有单下划线前缀的脚本 `{path}`——`.gitignore` 的 `_*.py`／`_*.sh`／`_*.conf` 本来挡着它，"
-            "现在它在索引里只可能是 `git add -f` 穿过来的。要么改名，要么把它从库里撤走"
+            f"B：提交面（HEAD 树）有单下划线前缀的脚本 `{path}`——`.gitignore` 的 `_*.py`／`_*.sh`／`_*.conf` 本来挡着它，"
+            "现在它已进了提交面，只可能是 `git add -f` 穿过 ignore 又提交掉的。要么改名，要么把它从库里撤走"
             "（双下划线包标记不在此列，那一族由判据 D 看）")
 
     # ── 判据 C：棘轮只减不增 ─────────────────────────────────────
@@ -268,7 +270,7 @@ def check(repo: Path, tracked: list[str] | None = None) -> tuple[list[str], list
                    f"（整条链仍然绿不了）；真要抬上限得改代码里的 `LEGACY_CAP` 常量并先申请裁定")
     for e in entries:
         if e["file"] not in state["root_py"]:
-            red.append(f"C：登记 `{e['file']}` 已不在根目录入库面（过期登记）——存量棘轮只减不增，"
+            red.append(f"C：登记 `{e['file']}` 已不在根目录提交面（过期登记）——存量棘轮只减不增，"
                        "文件没了就把那一行删掉，挂着会让下一个人以为根目录还有它")
     if entries and explicit_none:
         red.append(f"C：`{SECTION_LEGACY}` 同时写了显式「{NONE_ROW}」和 {len(entries)} 条真实条目：两种口径不能并存")
@@ -289,9 +291,9 @@ def check(repo: Path, tracked: list[str] | None = None) -> tuple[list[str], list
                    "「一次性脚本放哪」又变回一句口头约定，本门的落点没有实物")
     for m in migration:
         if m["new"] not in tracked:
-            red.append(f"E：迁移记录说 `{m['old']}` 已搬到 `{m['new']}`，可索引里没有后者——登记比事实乐观")
+            red.append(f"E：迁移记录说 `{m['old']}` 已搬到 `{m['new']}`，可 HEAD 树里没有后者——登记比事实乐观")
         if m["old"] in state["root_py"]:
-            red.append(f"E：迁移记录说 `{m['old']}` 已搬走，根目录入库面却还有它——复制而非移动，"
+            red.append(f"E：迁移记录说 `{m['old']}` 已搬走，根目录提交面却还有它——复制而非移动，"
                        "同一份残骸现在有两处")
 
     info = dict(state)
@@ -309,7 +311,7 @@ def write_doc(repo: Path, tracked: list[str] | None = None) -> int:
     if tracked is None:
         tracked = tracked_paths(repo)
         if tracked is None:
-            print(f"射程自证：读不出 git 索引，自动段该写什么无从判定（本门口径＝入库面）")
+            print(f"射程自证：读不出 HEAD 树，自动段该写什么无从判定（本门口径＝提交面）")
             return 2
     text = doc.read_text(encoding="utf-8").splitlines()
     entries, _reds, _errs, _none = parse_legacy(text)
@@ -332,7 +334,7 @@ def write_doc(repo: Path, tracked: list[str] | None = None) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("repo", nargs="?", default=str(REPO), help="仓根（默认脚本所在仓的上一级）")
-    ap.add_argument("--write", action="store_true", help="用现读入库面重生成清单的自动段")
+    ap.add_argument("--write", action="store_true", help="用现读提交面（HEAD 树）重生成清单的自动段")
     args = ap.parse_args(argv)
     repo = Path(args.repo).resolve()
     if args.write:
@@ -342,14 +344,14 @@ def main(argv: list[str] | None = None) -> int:
         for e in errs:
             print(f"射程自证：{e}")
         return 2
-    print(f"读数：入库面 {info['tracked_total']} 个文件／根目录 `.py` {len(info['root_py'])} 个／"
+    print(f"读数：提交面（HEAD 树）{info['tracked_total']} 个文件／根目录 `.py` {len(info['root_py'])} 个／"
           f"单下划线脚本 {len(info['underscore'])} 枚／`{ONESHOT_DIR}/` {len(info['oneshot'])} 个／"
           f"存量登记 {info['legacy_entries']} 条（上限 {info['cap']}）／迁移记录 {info['migration_rows']} 行")
     if red:
         for r in red:
             print(f"红：{r}")
         return 1
-    print(f"✓ 仓库根没有一次性脚本，一次性件在 `{ONESHOT_DIR}/`，登记面与入库面逐行对上")
+    print(f"✓ 仓库根没有一次性脚本，一次性件在 `{ONESHOT_DIR}/`，登记面与提交面逐行对上")
     return 0
 
 

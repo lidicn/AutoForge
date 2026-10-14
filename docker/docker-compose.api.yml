@@ -77,7 +77,8 @@ services:
       # 注入得再认真也只是喂给一个没人读的空位，鉴权照旧失败且不留原因（NAS 现场手补即为此）。
       # 这条键名同源由 `tests/unit/test_compose_env_key_source.py` 当场核对。
       - AUTOFORGE_TOKENS=${AUTOFORGE_TOKENS:-}
-      # - AUTOFORGE_HA_TOKEN=${AUTOFORGE_HA_TOKEN:-}
+      - AUTOFORGE_HA_TOKEN=${AUTOFORGE_HA_TOKEN:-}
+      - AF_ALLOW_NOAUTH=${AF_ALLOW_NOAUTH:-}
     restart: unless-stopped
 
 # 顶层 secret 定义（docker secrets 风格；默认全注释——启用前先在宿主机创建对应文件）：
