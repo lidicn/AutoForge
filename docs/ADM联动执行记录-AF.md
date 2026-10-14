@@ -12665,3 +12665,32 @@ Q2 甲末句「映射表在 AF 仓内一份都不留」——在 AF 面 grep 新
 - **提交面自证**（⛔ 自抄将被下一枚作废的读数）：取法＝`git show --stat HEAD`（第二枚之前现读）⇒ 第一枚实提交 **2 份／37 增／0 删**（ledger 36 增＋架构说明 §十九 1 增），与"改动面只有两份记账 docs"自洽；本枚（第二枚）自己那格按同法现读，⛔ 本格写死。`git status` 复核：在途文件（`src/autoforge/af_api.py`、两份 compose、`scripts/host_update.sh`、`docs/audit/` 删除族）全部⛔ 入本批。**⛔ push、⛔ amend。**
 - **一处编译期自纠（工序级，值得在册）**：写入脚本 `E:\tmp\jz161_apply.py` 首次运行抛 `SyntaxError: bytes can only contain ASCII literal characters`——起因是 `b'…'` 里放了中文。这类失败发生在**编译期**，故两文件当时⛔ 被改（实测 ledger 仍 12622 行、arch 仍 724 行、`grep -c '二之一百六十一'`=0），不是半截写；修法＝中文锚点一律 `'…'.encode('utf-8')`，与 与「文本模式重写会让 diff 整份重排 LF→CRLF」那条老坑同族的新坑，本枚起在含中文锚点的写入脚本里⛔ 出现非 ASCII bytes 字面量。
 - **存证（`E:\tmp`，⛔ 入仓）**：`rl162_af.txt`／`rl162_dedup.txt`／`rl162_g.txt`／`rl162_debt.txt`（欠账尺 `TOTAL=44 CLOSED=41 OPEN=3`）／`rl162_gates_a.txt`／`rl162_gates_b.txt`；取数脚本 `rl162.sh`；记账稿 `jz161.md`；写入脚本 `jz161_apply.py`。回执面读数（87 行／13875 B／CR=0／`VALIDATE_RC=0`）与 §四 全部命令**同批**生成，⛔ 事后补跑冒充原字。
+
+
+## 二之一百六十二、#138 第八份回执（裁定 20260929《ADM 协议选型 MCP 与 ACP》）——★ AF 今天已经站在 MCP 客户端那一侧（AF→MA 走 `/mcp` 的 `tools/call`），而裁定把 AF 只画成提供方；两行形状读数过期（`@mcp.tool` 括号／"基础暴露"）
+
+> 交件：`receipts/20261014-AF-20260929ADM协议选型MCP与ACP-回执.md`（依据裁定 `decisions/20260929-ADM协议选型MCP与ACP-裁定.md` §〇 三行、§二 三条、§三 四护栏＋反面清单、§四 分层图＋主题域补充裁定、§五 四条、§六）；`validate-receipt.ps1` 六项全 ✓／`VALIDATE_RC=0`；面 94 行／18712 B／CR=0
+> 本枚性质：**零落码回执枚**；取数与存证**同批**（`rl163.sh` → `rl163_af.txt` 在前，写文书在后）
+
+### 一、结论三格
+
+1. **AF 名下四格今日全部成立**：MCP server 面 **31 枚工具**（AST 现读 `TOOLS` 表，`af_mcp.py:471`；scope 20 无／10 `write`／1 `live`）＋两道机械锁（`check_tool_names.py`／`check_mcp_arg_schemas.py`）；ACP 面 **src 0 命中**（⛔ 委派客户端，`autoflow` 8 命中全在散文）；机制层 homesdk 六面已消费（11 处／7 文件）；发布面主题全在 `check_topic_whitelist.py` 的 `REGISTERED` 名单内。
+2. **★ 裁定射程外的一条 AF 事实**（本枚最大贡献）：§二.1「收敛客户端」原文只派给 DB，但 **AF→MA 已经是 MCP 客户端**——`af_adapters/ma.py:322`（注释点名 MA `app.py::_mcp_dispatcher`）／`:325 base = f"{base}/mcp"`／`:355 mcp-session-id`／`:401/:436 jsonrpc`／`:438 tools/call`／`:455` result→业务 dict。**协议层已收敛，机制层⛔ homesdk**（同一条链自写 `urllib.request`，`:33`）⇒ 分层图（§四）把 AF 画成纯提供方，下一枚读图的人会照抄这个过期形状。
+3. **两行形状读数过期**：§〇 括号「AF（`af_mcp.py`，MCPServer + `@mcp.tool`）」——`grep -cE '@mcp\.tool|@server\.tool|add_tool|register_tool'` ⇒ **0**，真形＝手工 JSON-RPC over stdin（`:1086`、手工分派 `:1103 initialize`／`:1112 tools/list`／`:1114 tools/call`／`:1121 ping`）；§二.2「AF＝基础暴露」——31 枚＋参数面已封透传（`af_mcp.py:962-963` "声明即契约：未声明的顶层键一律拒"）。两句的**结论面仍真**（AF 是 MCP server；AF 的 MCP 面是核心功能），⛔ 判成"结论被推翻"，请 DCD 追认这一格定性。
+
+### 二、★ 新开的一格请裁（`butler/inbox/*` 的主题域口径）
+
+裁定 §四 补充裁定的字面是「各仓只发布自己域名的主题」，被点名的反例是 MA 直推 `butler/trigger/*`。AF 现读的发布面有六枚字面量：`:79 af/automation/fired`、`:80 af/automation/failed`、`:98 adm/{presence}/status`（＝自家域 `adm/autoforge/status`）、`:103 INBOX_PREFIX = "butler/inbox/"`＋`:453 topic = INBOX_PREFIX + str(kind)`（**投递进 DB 命名空间**）、入向 `:81/:86/:87`（订 MA 三族）。AF 读出的差别三条：① inbox 通道由 **DB 设计**；② 真源在**库侧**白名单——`python -c "from homesdk import presence as p; print(sorted(p.INBOX_TOPICS))"` ⇒ `['butler/inbox/notify','butler/inbox/speak','butler/inbox/tv']`，AF ⛔ 自带第二份；③ `inbox_publish` 三道 fail-closed ＋ `topic not in _presence.INBOX_TOPICS` 当场拒，且 `:106-108 FORBIDDEN_SUBSCRIPTIONS` 显式禁订自己投递的那族（防自环）。⇒ **请裁**：这一族算"约定的事件主题"（则建议契约表显式登记：谁能发／谁能订／真源枚名）还是算越权（则 AF 投递线 #73 要改道，属落码格，裁前⛔ 动）。本枚⛔ 自决"我们算不算越权"。
+
+### 三、查重与三面对撞（⛔ 重投）
+
+`grep -rl -F '20260929-ADM协议选型MCP与ACP-裁定.md' receipts/ inbox/ archive/` ⇒ `receipts/` 交件前 **0 命中**；唯一命中＝`inbox/20261013-MA-路线图rev9三格读数过期与rev10更正包及一条共享凭据事实-登记【已受理】.md`（**MA 席位登记件**，件名⛔ 含"回执/回填"⇒ face③ 不认，那格归 MA 闭）；`find . -name '*协议选型MCP*'` 只出裁定书自身 ⇒ **本裁定无独立申请件**（偏差甲）。交件后欠账尺（取法原文＝§二之一百五十八 §六）：**`TOTAL=44 CLOSED=42 OPEN=2`**，`receipts/` 36 份，本裁定 face② 0→1；仍欠 `20261002-homesdk记账与AF-DB-DPP六件`、`20261010-AF与DB与DPP十件`。
+- ★ **尺的射程本枚塌过一次，就地登记**：第一次图省事遍历 `decisions/*.md` 全量 ⇒ `TOTAL=103 CLOSED=65 OPEN=38`——那是**另一把尺**（全生态面，含 DPP／MA／DB 与诊断报告件），与 #138 名册射程（`decisions/*AF*.md` ∪ `*ADM*.md`，自证口 `ls … | wc -l` ⇒ **44**）不同轴。两口径同批在册⛔ 混用。⇒ 纪律：**换一把尺就重报读数，并先问"这把我数的是哪个名册"**（与 §二之一百五十八 三"同一格换尺要重报"同源）。
+
+### 四、偏差（四条，全部显式请追认）
+
+甲＝无申请件可引的"无申请件回执"写法；乙＝席位切分（§一 两节失误论、§二.1 发起方、§三 适用面、§五 四条落地顺序均⛔ AF 射程，⛔ 代他席认领）；丙＝**本枚开了一格裁定里没有的问**（§二 那格 inbox 主题域），成因是裁定字面与 AF 已交付面（#73）相撞，⛔ AF 自决——请追认开问正当性，或与既有"契约表补登"族并案；丁＝零落码，三条理由（四格全成立且带机械锁／§二.2「补工具」收益未量且 31 枚已覆盖意图→编译→验证→回滚链／那格等裁前⛔ 改道）。`homesdk.http`/`auth` 半边⛔ 第三次开问（与《七问》偏差丁同格，条件沿用其原字）。
+
+### 五、本枚未落的（⛔ 沉默）
+
+`butler/inbox/*` 主题域口径（DCD 裁）；§〇／§二.2 两处形状订正（DCD／链主）；分层图补"AF 亦为 MCP 消费者"一笔；`homesdk.http`/`auth` 消费半边（AF，条件型）；DB→MA 四路收敛、`acp-integration.md` 四护栏文档化、`butler/trigger/*` 清理（DB／MA 席位）。**§十八 ⛔ 加条目**：本枚是"复测一枚 L3 战略裁定的前提＋自查主题域"，AF 名下四格今日成立，挂一条不存在的残余缺陷＝伪造欠债（与 §二之一百六十一 同条纪律）。
