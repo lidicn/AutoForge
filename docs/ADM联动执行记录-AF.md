@@ -12620,3 +12620,39 @@ Q2 甲末句「映射表在 AF 仓内一份都不留」——在 AF 面 grep 新
 - **欠账尺现跑**（三面对撞，取法原文在 §二之一百五十八 §六，存证 `rl161_debt.txt`）：⇒ **`TOTAL=44 CLOSED=40 OPEN=4`**，`receipts/` 现读 **34 份**（交件前 33）。本裁定的 face② 由 0 命中变 1 命中（`grep -rl -F "20261010-AF拆码与MA自更新四问-裁定.md" receipts/` ⇒ 只指回本枚那一件）。仍欠的 4 件逐枚在册：`20260929-ADM三仓联动七问`、`20260929-ADM协议选型MCP与ACP`（两枚都要逐格判 AF 射程）、`20261002-homesdk记账与AF-DB-DPP六件`（六件里 AF 只占一格，余格他席）、`20261010-AF与DB与DPP十件`（32 KB 多席位，需按席位切分）。**下一枚候选取第 1 件**（单件最小、先把"AF 射程认领"这把尺立起来，⛔ 以"件大"为由跳过）。
 - **提交面自证**（取法＝`git show --stat HEAD`，⛔ 本格自抄将被下一枚作废的 sha）：第一枚 **2 份／53 增**（`docs/ADM联动执行记录-AF.md` 52 ＋ `docs/architecture/AF完整架构与运行时说明.md` 1）⇒ 与本节和 §十九 那一行的实际改动面一致；⛔ push。两份 docs 改完 CR＝**0**（`tr -dc '\r' | wc -c`）。
 - **存证（`E:\tmp`，⛔ 入仓）**：`rl161_gates_exit2.txt`（首跑射程塌现场）／`rl161_gates_a.txt`／`rl161_gates_b.txt`／`rl161_gates_c.txt`／`rl161_gates_d.txt`（四遍，同一枚 md5）／`rl161_debt.txt`（欠账尺 44/40/4）＋ §八 那三枚读数件。**⛔ 沿用 `rl160_*`**（那是 §二之一百五十九 那批的两遍）。
+
+
+## 二之一百六十一、#138 第七份回执（裁定 20260929《ADM 三仓联动七问》）——★ 一枚 L3 裁定的两行承重前提今日已过期：AF⛔ 是纯被动服务端、homesdk ⛔ 无真实消费方
+
+> 交件：`receipts/20261014-AF-20260929ADM三仓联动七问-回执.md`（依据裁定 `decisions/20260929-ADM三仓联动七问-裁定.md` §〇 矩阵、问题 1—7、附页）；`validate-receipt.ps1` 六项全 ✓／`VALIDATE_RC=0`；回执面 87 行／13875 B／CR=0
+> 本枚性质：**零落码回执枚**；取数与存证**同批**（先跑 `rl162.sh` 落 `rl162_af.txt`，再据文件写文书——§二之一百六十 补 八 立的那条自我约束在本枚兑现，⛔ 让存证文件名冒充事后重跑）
+
+### 一、结论三格
+
+1. **AF 名下六格今日已成立**，且都有可指的脸：契约测试进 CI（`tests/contract`＝6 份，`ci.yml:48 run: pytest tests/contract -v` 是**独立 job**，`:45-46` 注释点名 DB→AF 与 AF→MA 两份通道）；ask 提供方面四枚端点在册（`af_api.py:661/:671/:695/:918`）；`trace_id` 透传 32 处（26 在 `af_mqtt_bridge.py`）；⛔ 造 acp 中枢、⛔ 建重量级日志平台两条否定项 AF 侧 0 违反。
+2. **两处过期是方向性的**（回执 §三）：矩阵第 3 行「AF→MA/DB 无任何出站调用」被四处 `urllib.request`（`af_catalog.py:500`／`af_live.py:24,276`／`af_metrics.py:191,193`／`af_registry.py:36,319`）与 `af_cli.py` 里的 `8086|8095` 证伪；矩阵第 5 行「homesdk `auth/http/mqtt` 无真实消费方」的 **mqtt 半边被 AF 自己终结**（`grep -rn "from homesdk" src/autoforge/*.py`＝**11 处／7 文件**：mqtt／presence／adm.errors／adm.status／config／consent／time）。⇒ 提请注意：任何后续裁定若把"AF 纯被动／AF 侧无出站攻击面"当前提，现在站在过期前提上。
+3. **一处真缺口 ＋ 一处口径冲突**：Q2 授权的机制层里 `homesdk.http`／`homesdk.auth` **至今无人消费**（AF 出站自带 `urllib`）——这恰好是 Q2／Q5 #2 要治的"接入方式碎片化"那一层，本枚⛔ 落（取舍理由与两条约束在回执 §二／§五 偏差丁，请追认）。Q7 给 AF 的门槛写「v2.3.0 之后」，而版本面现读三枚全指不到它：`pyproject.toml:7 version = "0.1.0"`、**CHANGELOG.md 不存在**、`git tag` 仅 1 枚 `pre-g2-dod` ⇒ 按字面读会把**已完成的第一档加固误判成越前**；双轨口径已裁（`decisions/20261001-DB目标模式与AF三题-裁定.md` 双轨映射表，`20261011-AF发布面与镜像可追溯-裁定.md:62` 已对齐）⇒ ⛔ 重开版本编号，只请 DCD 裁"门槛取哪个可核信号面"（偏差丙）。
+
+### 二、查重与三面对撞（⛔ 重投）
+
+`grep -rl -F "20260929-ADM三仓联动七问-裁定.md" receipts/ inbox/ archive/` ⇒ `receipts/` **0 命中**（交件前）；唯一命中是 `inbox/20261013-MA-路线图rev9三格读数过期与rev10更正包及一条共享凭据事实-登记【已受理】.md`——**MA 席位的登记件**，件名⛔ 含"回执/回填"⇒ 欠账尺 face③ 不认它，那格归 MA 自己闭。全盘 `find . -name '*三仓联动七问*'` 只出裁定书自身 ⇒ **本裁定无独立申请件**（登记为偏差甲：按模板该写申请件路径，本枚⛔ 造路径，改按裁定本体回填）。
+
+### 三、读数（命令原文在回执 §四；存证 `rl162_af.txt`／`rl162_dedup.txt`／`rl162_g.txt`，脚本 `rl162.sh`）
+
+七问逐问读数全部同批落盘，其中三条值得在账里复述：`grep -rn "trace_id" src/autoforge/*.py | wc -l`＝**32**；`ls tests/contract | wc -l`＝**6**；MQTT 主题面出向 `:79 fired`／`:80 failed`／`:98 adm/{presence}/status`，入向 `:81 ma/insights`／`:86 ma/presence`／`:87 ma/device-health` ⇒ **AF↔MA 双向通道已在**，矩阵当年只记 MA→DB 单向。
+
+### 四、偏差（四条，全部显式请追认）
+
+甲＝无申请件可引的"无申请件回执"写法；乙＝按席位切分（Q5 #2/#3、Q6 落点、矩阵重绘⛔ AF 射程，与 §一百六十 偏差甲同条，⛔ 重复开问）；丙＝Q7 门槛行⛔ 机械可核，请裁取哪个可核信号面＋第一档加固是否受门槛约束（裁定自己 Q1 说"值得现在做"、Q7 又设 v2.3.0 门，字面打架）；丁＝零落码，`http`/`auth` 半边等"AF 出现第二条非 MA 出向目标"或 #79 窗清空 `af_live.py`／`af_metrics.py`。
+
+### 五、欠账尺（三面对撞，同批存证 `rl162_debt.txt`）
+
+⇒ **`TOTAL=44 CLOSED=41 OPEN=3`**，`receipts/` 现读 **35 份**（交件前 34）；本裁定 face② 由 0→1 命中（`grep -rl -F … receipts/` ⇒ 只指回本枚那一件）。仍欠 3 件：`20260929-ADM协议选型MCP与ACP`（8125 B，下一枚候选）、`20261002-homesdk记账与AF-DB-DPP六件`（11655 B，AF 只占一格）、`20261010-AF与DB与DPP十件`（32566 B，多席位需切分）。
+
+### 六、本枚未落的（⛔ 沉默）
+
+`homesdk.http`/`auth` 消费半边（AF，条件型触发）；§〇 矩阵重绘（链主／DCD）；Q7 门槛可核信号口径（DCD）；DB／MA 席位各格。**§十八 ⛔ 加条目**：这格从未在 §十八 挂过号，本枚是"复测一枚 L3 裁定的前提"，把它写成 AF 残余缺陷＝伪造一条不存在的欠债。
+
+### 七、不自决清单
+
+⛔ 动 `af_live.py`／`af_metrics.py`／`af_registry.py`／`af_catalog.py` 任一字节（出站换封装＝本枚判⛔ 值，等收益测量或 DCD 指名窗口）；⛔ 给 AF 造 `CHANGELOG.md` 或改 `pyproject.toml:7`（版本编号双轨已裁，⛔ 重开）；⛔ 改裁定原字（矩阵两行过期的订正归 DCD／链主）；⛔ 抬 tally／写 baseline；⛔ push。
