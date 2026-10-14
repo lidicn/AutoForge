@@ -12703,3 +12703,46 @@ Q2 甲末句「映射表在 AF 仓内一份都不留」——在 AF 面 grep 新
 - **提交面自证**（取法＝`git show --stat HEAD`，⛔ 本格自抄将被下一枚作废）：第一枚实提交 **2 files changed, 30 insertions(+)**（ledger 节 ＋ §十九 行），与"改动面只有两份记账 docs"自洽；本枚第二枚只含 ledger 这一节补。`git status` 复核：`src/autoforge/af_api.py`、`docker/` 两份 compose、`scripts/host_update.sh`、`docs/audit/` 删除族全部⛔ 入本批。**⛔ push、⛔ amend。**
 - **尺与件面读数**：欠账尺 **`TOTAL=44 CLOSED=42 OPEN=2`**（存证 `rl163_debt.txt`，与 §三 同批）；`receipts/` 36 份；回执面 94 行／18712 B／CR=0／`VALIDATE_RC=0`。★ 尺面射程塌一次已就地登记（`103/65/38` 为全量口径，⛔ 与本席名册 44 混用）。
 - **存证（`E:\tmp`，⛔ 入仓）**：`rl163_af.txt`（§四 全部读数，111 行，先于文书生成）／`rl163_debt.txt`／`rl163_gates_a.txt`／`rl163_gates_b.txt`／取数脚本 `rl163.sh`（★ 首版第 13 行未闭合引号 ⇒ `RL_RC=2` 当场停，⛔ 把缺的 5—11 节冒充"跑过"，修脚本重跑才出数）／回执补记稿 `jz163_bu.md`／记账稿 `jz162.md`、`jz162_bu.md`。
+
+## 二之一百六十三、#138 第九份回执（裁定 20261002《homesdk 记账 + DB 主题 + AF 两件 + DPP 两件》）——★ 条件型欠账要交「可核信号」⛔ 交散文：`git log -S'_refresh_snapshot'` 最新命中 `f0d7f41 2026-09-19` 早于裁定日 2026-10-02 ⇒ §四 B 未到期；另 ★ 自纠「浅列目录假 0 命中」，本枚偏差甲作废
+
+> 交件：`receipts/20261014-AF-20261002homesdk记账与AF-DB-DPP六件-回执.md`（依据裁定 `decisions/20261002-homesdk记账与AF-DB-DPP六件-裁定.md` §〇／§一／§三 ①②③④／§四 A＋B／§五—§六／§七 汇总／§八 跟办／判例两条）；`validate-receipt.ps1` ⇒ `grep -c '✓'`＝**7**（六项逐条＋尾行）／`VALIDATE_RC=0`；回执面 **95 行／16042 B／CR=0**
+> 本枚性质：**零落码回执枚**；取数与存证**同批**（先 `rl164.sh` 落 `rl164_af.txt`（100 行）再据文件写文书，沿用 §二之一百六十 补 八 那条自我约束）
+
+### 一、结论三格
+
+1. **AF 名下两节四格今日全部成立且都能指到脸**：§三① 工具面「以 AF 现名为准」＝`af_apply.py:30 APPLY_STAGES=("check","simulate","dry_run","save")`、`:36 _ALLOWED_STAGES`、`:75` 缺省 `save`、`:103` 旧名归一、`:104` `dry_run` 判据，且**未知 stage 已拒**（`:93-100`，注释原文「打错一个字母＝部署」）；MCP 面同源 `af_mcp.py:493 "af_apply"`＋`:389 from .af_apply import apply`。§三② `ref`＝实例 id 实现未动（`af_mcp.py:390/:498/:501`），契约表定义**已在册**（`homesdk/doc/ADM联动主题注册表与消息契约.md:86`「因果链靠 `ref`（实例级）」）。§三③ `channel_error` 布尔两档（`af_api.py:957 True`／`:961 False`）＋腿 `tests/contract/test_af_ask_contract.py`，src+tests 面 **8 处**。§三④ 洞察队列先持久化、approve 后才进 `af_pending`（#74／#148 两批）。§四 A（StateProvider 统一 fail-closed）由第七轮审计收口，`af_canary.py:91` 注释即证。
+2. **★ 本枚唯一增量＝把散文型启动条件钉成机械信号**：§四 B 原文「下一次被真实改动时（或 AF v2.6 窗口）」在台账上永远读成「在排队」。现读口＝`git log --date=short --format='%h %ad %s' -S'_refresh_snapshot' -- src/autoforge/` ⇒ **2 枚命中，最新 `f0d7f41 2026-09-19`、次 `0b3c624 2026-09-17`，全部早于裁定日 2026-10-02** ⇒ **条件自裁定以来未到期**；现读站点 `af_instance.py:271/:298/:343/:405`＋`af_runtime.py:129`（注释面）。三件套齐（触发条件＝命中集出现晚于 2026-10-02 的改动／复核人＝AF 席位每批开工／复核动作＝同一条 `git log -S` 命令原文）。
+3. **一格⛔ 机械可核 ＋ 一格卡在别人手里**：`instance_id` 双写的删除时点绑「AF v2.6」，而版本号在本仓版本面指不到对象（`pyproject.toml:7 version="0.1.0"`、CHANGELOG 不存在、`git tag` 仅 1 枚 `pre-g2-dod`；站点现读 **152 处**）⇒ 与《七问》偏差丙**同一格**，⛔ 重开版本编号双轨（那半 20261001·G 已裁），只请 DCD 给可核信号面。§一 窗后验收四件套（`compose ps`＋`/health` 200＋`mosquitto_sub` 抓含家庭墙钟 `ts` 的 `af/automation/fired`＋`adm/autoforge/*`）执行面在 owner／部署窗，AF ⛔ 执行任何 docker 命令；⛔ 用「配置正确只是没抓包」过账——那句是裁定原文写的**否决口径**，本枚原样钉进工单⛔ 自证替代。
+
+### 二、★ 本枚自纠：「浅列目录假 0 命中」⇒ 偏差甲作废
+
+回执 §前言与 §五 偏差甲那句「抬头 `:6` 三枚 AF 件名 `ls inbox/ archive/ | grep -F` ⇒ 各 **0 命中**」是**尺面塌**：`ls archive/` ⛔ 递归，只出顶层目录名。同批改用递归口现跑（本枚落账前再复核一次，原文在案）——
+- `find . \( -name '*第4步契约面四问*' -o -name '*StateProvider统一fail-closed*' -o -name '*homesdk0.3.1记账缺口*' \)` ⇒ **3 命中**，三枚全在 `archive/inbox-元日前-20261005前/`：`20261002-AF-第4步契约面四问-决策申请【已受理】.md`／`20261002-homesdk0.3.1记账缺口与AF镜像重烤合并窗-决策申请【已受理】.md`／`20261002-AF-StateProvider统一fail-closed的方向与代价-决策申请.md`
+- 反面对撞（同批）：`ls archive/ | grep -cF '第4步契约面四问'` ⇒ **0**
+⇒ **原申请件存在，抬头引用⛔ 是死链；偏差甲作废**，回执里已按「⛔ 改原字、另开 §八 补记宣布」处理（〔已受理〕件是不可变快照，订正走补记＋双向指路）。**教训（登记为本节，⛔ 只留在回执里）**：**判存在性一律用 `find`；件名匹配用前缀⛔ 整名**——末枚件名实际带后缀「的方向与代价」，抬头只写前缀，整名匹配必 miss（与 `ls-files` 八进制转义吃中文路径同族：假 0 命中⛔ 等于不存在，先问「这把我数的是哪一层」）。
+
+### 三、★ 节号订正（回执内一处指路滑笔，落账时按本句为准）
+
+回执 §八 补记写「教训登记在执行记录 **§二之一百六十四**」——滑笔。本席下一个可用节号按现读＝**§二之一百六十三**（取法：`grep -n '^## 二之' docs/ADM联动执行记录-AF.md | tail -1` ⇒ 上一枚为 §二之一百六十二）。教训本体已落在本节 §二；回执那一句**⛔ 改原字**（该件已交），订正以本节指路为准。⇒ 与「⛔ 自抄将被下一步作废」同族纪律：**跨文书引用节号前先现读最大号**，⛔ 靠"我猜下一枚是几号"。
+
+### 四、读数（命令原文全在 `E:\tmp\rl164_af.txt`，100 行，先于文书生成）
+
+- B 的启动条件：`git log --date=short --format='%h %ad %s' -S'_refresh_snapshot' -- src/autoforge/` ⇒ `f0d7f41 2026-09-19`／`0b3c624 2026-09-17`；`grep -n '_refresh_snapshot' src/autoforge/*.py` ⇒ 站点 4＋注释 1
+- stage／工具名面：`grep -n -A3 'STAGES' src/autoforge/af_apply.py`；`grep -n 'af_apply' src/autoforge/af_mcp.py`（`:389`／`:493`）
+- `instance_id`：`grep -rn 'instance_id' src/autoforge/*.py | wc -l` ⇒ **152**
+- `channel_error`：`grep -rn 'channel_error' src/autoforge/*.py tests/ | wc -l` ⇒ **8**；`grep -rln 'channel_error' tests/` ⇒ 契约腿 1 枚（另两枚 `__pycache__` 面⛔ 算腿）
+- AF 消费面三枚：`pyproject.toml:70 "homesdk>=0.3.2"`／`docker/homesdk/homesdk-0.3.2-py3-none-any.whl`（49374 B，2026-10-07 02:01）／本机 `import homesdk` ⇒ `VER=0.3.2` ⇒ 用它**否决**「照裁定 §〇 那枚 0.3.1 sha 回退 pin」（判例 1「投递产物必须与源码同账」）
+- 在途自证：`git status --porcelain | grep -cE '^ M|^ D|^\?\?'` ⇒ **26**（含 `af_api.py`、`docker/` 两份 compose、`docs/audit/` 删除族、`scripts/host_update.sh`）⇒ 本枚全部⛔ 入批⛔ 触碰；`af_api.py` 那格**只读取证**
+
+### 五、欠账尺（三面对撞，取法原文＝§二之一百五十八 §六；存证 `E:\tmp\rl164_debt.txt`）
+
+⇒ **`TOTAL=44 CLOSED=43 OPEN=1 RECEIPTS=37`**（交件前 36）；本裁定 face② 由 0→1。**#138 只剩一份**：`20261010-AF与DB与DPP十件-裁定.md`（32566 B，多席位需逐格切分）。名册自证口 `ls decisions/*AF*.md decisions/*ADM*.md | wc -l` ⇒ 44；全量口径（`decisions/*.md` ⇒ 103）是**另一把尺**，⛔ 与本席名册混用（见 §二之一百六十二 三）。序列在册：38/6 → 39/5 → 40/4 → 41/3 → 42/2 → **43/1**。
+
+### 六、本枚未落的（⛔ 沉默）
+
+§四 B 统一改动（AF，条件未到期，触发口见 §一.2）；§三② `instance_id` 删除（AF，时点等裁）；§一 窗后验收四件套（owner／部署窗，#76／#130／#131 同批）；§三③ DB 侧见 `channel_error` 告警并停止标已答（**DB 席位**）；§二 DB `tv_notify`、§五／§六 DPP 两件、§〇 0.3.3 wheel（⛔ AF 射程）。**§十八 ⛔ 加条目**：AF 名下四格今日成立、B 那格条件未到期且已有可核口，挂一条不存在的残余缺陷＝伪造欠债（与 §二之一百六十一／一百六十二 同条纪律）。
+
+### 七、不自决清单
+
+⛔ 动 `af_apply.py`／`af_mcp.py`／`af_instance.py`／`af_api.py`／`af_canary.py` 任一字节（四格已落且带判据，本枚是复测枚）；⛔ 执行任何 docker 命令／开合并窗／`mosquitto_sub` 长驻；⛔ 回退 `pyproject.toml:70` 的 homesdk pin（0.3.1→0.3.2 已超越，判例 1 为证）；⛔ 重开版本编号双轨（20261001·G 已裁）；⛔ 改裁定原字；⛔ 动 `docs/ADM联动执行计划-AF.md`（standing 指令：不读不改不入批，故登记为偏差乙）；⛔ 代 DB／DPP 席位认领；⛔ 抬 tally／写 baseline；⛔ push；⛔ amend。
