@@ -12556,3 +12556,55 @@ done
 - ★ **本枚自纠一处行号笔误**：§四 与回执 §三 原写「HEAD `af_api.py:1019/:1029/:1034` 三面皆然」——现场重读 `git show HEAD:src/autoforge/af_api.py | grep -n 'issue_for_agent'` ⇒ 三处签发实际在 **`:1010/:1029/:1039`**，而 `:1019` 是 `def api_auth_login` 那一行（把定义行当成签发站点引，正是本仓「锚点引用前现场读」要拦的形状）。两份文书均已就地订正并写进取法。
 - **副本树时效自证**（本节第四条教训的当场执行）：`grep -n 'issue_for_agent' /e/tmp/head159/src/autoforge/af_api.py` 现读＝`:1010/:1029/…`，与今日 HEAD 面同值 ⇒ 本枚引的 HEAD 读数没过期；`git status --short -- src/autoforge/af_auth.py` 现读为空（该文件最近一次提交 `22c2d16 2026-10-13`），在途面只剩 `af_api.py` 与 `docker/`——上一批「af_auth 三枚 hunk 落在 TokenRegistry」那句是当时快照，⛔ 回改，此处只作指路。
 - **下一枚（§二之一百六十）**：#138 仍欠 5 份——`20260929-ADM三仓联动七问`、`20260929-ADM协议选型MCP与ACP`（需逐格判 AF 射程）、`20261002-homesdk记账与AF-DB-DPP六件`、`20261010-AF与DB与DPP十件`（32 KB 多席位需切分）、`20261010-AF拆码与MA自更新四问`（AF 半边等 homesdk 0.3.3 发版窗，可写「未落＋窗次归属」）。欠账尺复现取法见 §二之一百五十八 补 八（三面对撞，⛔ 单面 basename 子串匹配）。
+
+
+## 二之一百六十、#138 第六份回执（裁定 20261010《AF 拆码 + MA 四问》）——库侧已落 `37fc7aa`，AF 消费半边卡在 0.3.3 未发版（三枚消费面独立读数）；零落码枚
+
+> 交件：`receipts/20261014-AF-20261010拆码与MA自更新四问-回执.md`（依据裁定 `decisions/20261010-AF拆码与MA自更新四问-裁定.md` §一 Q1—Q3、§二 Q1—Q4、§三、§四）
+
+### 一、结论
+
+裁定 §一 三格（Q1 甲拆一枚 `ADM_ERR_PUBLISH_REFUSED`／Q2 甲翻译归库侧／Q3 甲仍 degraded 但 reasons 指真因）的**库侧半边全部已落盘**：`homesdk/src/homesdk/adm/errors.py:17`（常量）＋`:28/:45`（进目录名单）、`mqtt.py:200 classify_publish_rc`／`:185 PublishRefused`／`:218 PublishResult`／`:253 publish() -> PublishResult`，契约表 `:239` 加行并把真源点名成 `classify_publish_rc`（「调用方不许自带第二份 rc→码 表」），`:250` 另写「别把它读成"ACL 已生效"」的观测面；落枚 `git -C /e/NAS/homesdk log --oneline -1 37fc7aa` 现读存在。**AF 的消费半边一行没动**，且 ⛔ 本批动不了——三枚互相独立的消费面读数全指回 0.3.2：homesdk 仓 `pyproject.toml:7 version = "0.3.2"`、`dist/` 最新 `homesdk-0.3.2-py3-none-any.whl`、AF 随附的 `docker/homesdk/homesdk-0.3.2-py3-none-any.whl`（2026-10-07 02:01），第四枚更硬：本机 `python -c "from homesdk.adm import errors as e; print(getattr(e,'ADM_ERR_PUBLISH_REFUSED','MISSING'))"` ⇒ **`MISSING`**。**源码在盘上 ≠ 消费面拿得到**——这一条是本枚要钉的形状。
+
+### 二、AF 面现状（裁定那句"三处 `_raise_if_refused`"逐枚在册）
+
+`src/autoforge/af_mqtt_bridge.py`：定义 `:374`，调用点 **`:427`／`:609`／`:650` 恰三枚**（工作树与 `git show HEAD:` 两面同数）⇒ 裁定"三处"的字面数字**复核通过**，⛔ 靠猜。今天 AF 的压码形状是 `:36 import` ＋ `:370` docstring 逐字「rc 的语义不在 AF 猜……所以码统一给 `ADM_ERR_BROKER_UNREACHABLE`，原值进 message」＋硬编码 `:512`／`:627`／`:633` 六处引用；`grep -rn 'ADM_ERR_PUBLISH_REFUSED' src/` ⇒ **0 行**。Q3 甲前半（仍算 degraded）已成立：`:564-565 self.degraded`（环形清单、唯一写入口 `mark_degraded()`、⛔ TTL 腿）＋ `:595-606 publish_degraded()` 交 `degraded=True, reasons=list(self.degraded)`；后半（reasons 指向真因）与消费面同窗。
+
+### 三、★ 一句按字面读会误判的话（偏差乙，请 DCD 追认定性）
+
+Q2 甲末句「映射表在 AF 仓内一份都不留」——在 AF 面 grep 新码 ⇒ 0 命中，**看起来已经达成**。AF 实际的形状不是"自带第二份表"，而是**自带"只有一枚码"这个决定**（`:370` 那句散文就是它的落点）。所以窗内要做的不是删表，而是**改选码来源**（接库侧具名异常／读 `PublishResult` 的码）＋ docstring 同批改（哨兵罩散文，⛔ 改码不改注释）＋ 新增**两档分形判据**（ACL 拒 vs 掉线必须给不同码；反例腿＝把选码来源写死成一枚常量必须被扫出），否则 Q3 甲那半句会停在"只有计数没有判据"。逐字目标形状写在回执 §三。
+
+### 四、§二（MA 四问）按席位切分，AF ⛔ 认领
+
+裁定把 AF／MA 两份申请合进一枚文号，台账上会读成"AF 没交齐"。本枚按席位切分：§二 Q1（B＝宿主侧 sidecar）只作**同形指路**——本仓 `scripts/host_update.sh` ＋ `117f4dd`（WebUI 一键升级，宿主侧模式）与那格同形状；Q2（SQLite 保持现状）／Q3（启动自检非阻塞）／Q4（admin JWT＋二次确认）⛔ AF 侧接口。裁定 §四 判例「安全红线不因'另一个项目这么干'而放宽」本枚当**否决先例**用：AF ⛔ 以"本仓 sidecar 已这么干"替 MA 论证放宽。
+
+### 五、推迟型交付的三件套（⛔ 只留"等发版"三个字）
+
+触发条件＝**条件型**（裁定的 §一／§五 ⛔ 给日历到期日，AF ⛔ 替 DCD 排期 ⇒ 请指定节律，登记为偏差丙）：`git -C /e/NAS/homesdk grep -n '^version' pyproject.toml` 读到 `0.3.3` **且** `ls /e/NAS/homesdk/dist | tail -1` 出 0.3.3 wheel **且** AF `docker/homesdk/` 那枚同步换掉——三件齐才开窗。复核人＝AF 席位每批开工时。开窗后与 **#80**（`publish_degraded()` → `advertise(degraded=/reasons=)`）**同批**落，免得 `af_mqtt_bridge.py` 连开两次在途面。
+
+### 六、读数（命令原文）
+
+| 命令 | 现读 |
+|---|---|
+| `grep -n '_raise_if_refused' src/autoforge/af_mqtt_bridge.py` | 定义 `:374` ＋ 调用 `:427`／`:609`／`:650`（HEAD 面同数） |
+| `grep -rn 'ADM_ERR_PUBLISH_REFUSED' src/` | **0 行** |
+| `grep -n 'BROKER_UNREACHABLE' src/autoforge/af_mqtt_bridge.py` | `:36/:370/:448/:512/:627/:633` |
+| `grep -n '^version' /e/NAS/homesdk/pyproject.toml`；`ls /e/NAS/homesdk/dist \| tail -5`；`ls -l docker/homesdk/` | `0.3.2`／最新 wheel `homesdk-0.3.2-…whl`／AF 随附仅 `0.3.2`（2026-10-07） |
+| `python -c "from homesdk.adm import errors as e; print(getattr(e,'ADM_ERR_PUBLISH_REFUSED','MISSING'))"` | **`MISSING`** |
+| `git -C /e/NAS/homesdk log --oneline -1 37fc7aa` | `37fc7aa feat(拆码): ADM_ERR_PUBLISH_REFUSED 进目录 + mqtt 侧 rc→语义的唯一翻译面` |
+| `python -m pytest tests/unit/test_af_mqtt_bridge.py tests/unit/test_mqtt_writers_gate.py tests/unit/test_mqtt_subscriptions_gate.py tests/unit/test_mqtt_runtime_dep_gate.py tests/unit/test_mqtt_compose_env.py -q` | **`125 passed`／`MQTT_RC=0`**（现状绿，本枚 ⛔ 动码面；首跑 14.14s、09:30 复跑 7.84s ⇒ **秒数随冷热漂，⛔ 当判据**，引用只取条数＋RC） |
+| `grep -rl '20261010-AF拆码与MA自更新四问-裁定' receipts/ archive/` | 交件前 **0 命中**（`receipts/` 现读 33 份）⇒ 非重投；两份原申请件今日仍实在 `inbox/`（带【已受理】） |
+
+### 七、本枚未落的（⛔ 沉默）
+
+- AF 消费半边（回执 §三 五条逐字形状）：等 0.3.3，同 #80／#93 窗；
+- §二 四问：归 MA 席位；
+- 偏差甲（跨席位合文号按席位切分）／乙（"一份都不留"的字面陷阱）／丙（条件型触发 ⛔ 日历日，请指定节律）：待 DCD 追认；
+- 架构说明 §十八 本枚 ⛔ 加条目：该格已由 #80／#93 在册且判据面还没落，写第二份＝手抄。
+
+### 八、存证（`E:\tmp`，⛔ 入仓）
+
+`rl161_af.txt`／`rl161_hs.txt`／`rl161_mqtt_rc.txt`；本枚门禁两遍存证命名 `rl161_gates_a.txt`／`rl161_gates_b.txt`（⛔ 沿用上批 `rl160_*` 的名字——那是 §二之一百五十九 那批的两遍）。
+
+- **⚠ 存证与取证⛔ 同批**：三枚读数文件由 **2026-10-14 09:29—09:30 的一次完整重跑**生成（回执先写、存证后补）。重跑逐字复现：三处调用点 `:427/:609/:650`（HEAD 面同数）、新码 0 命中（`RC=1`）、`BROKER_UNREACHABLE` 六处、homesdk `0.3.2`、`dist/` 最新 0.3.2、AF 随附仅 0.3.2、本机 `MISSING`、`37fc7aa` 存在；唯一不复现的是耗时（见 §六 末行）。这一格已同步写在回执 §七 补记里，登记为**本枚自我约束**：存证文件名一旦进文书，落盘时刻必须与取证时刻同一次运行；做不到就写在原地，⛔ 让"存证"两个字冒充同步取证。
+
