@@ -12746,3 +12746,13 @@ Q2 甲末句「映射表在 AF 仓内一份都不留」——在 AF 面 grep 新
 ### 七、不自决清单
 
 ⛔ 动 `af_apply.py`／`af_mcp.py`／`af_instance.py`／`af_api.py`／`af_canary.py` 任一字节（四格已落且带判据，本枚是复测枚）；⛔ 执行任何 docker 命令／开合并窗／`mosquitto_sub` 长驻；⛔ 回退 `pyproject.toml:70` 的 homesdk pin（0.3.1→0.3.2 已超越，判例 1 为证）；⛔ 重开版本编号双轨（20261001·G 已裁）；⛔ 改裁定原字；⛔ 动 `docs/ADM联动执行计划-AF.md`（standing 指令：不读不改不入批，故登记为偏差乙）；⛔ 代 DB／DPP 席位认领；⛔ 抬 tally／写 baseline；⛔ push；⛔ amend。
+
+### 补（2026-10-14，本枚收口：门禁两遍＋★ 跨批十二遍逐字节全等＋一次「批量 cmp 靶名拼接炸」的登记）
+
+- **门禁两遍**（`GATES_PYTHON=python bash gates.sh`）：`E:\tmp\rl164_gates_a.txt`（两份 docs 已改、第一枚提交之前）与 `rl164_gates_b.txt`（同面第二遍），各 **218 行／35715 B／md5 `dcd72915faff0105883dd926e576389d`／CR=151／`^✓`=21／`^✗`=3**，`GATES_RC=1`（两枚同一档）；`cmp rl164_gates_a.txt rl164_gates_b.txt` ⇒ **`CMP_ab_RC=0`**。
+- **★ 跨批十二遍全等**：本枚遍 b 与 §二之一百六十 的 a／b／c／d、§二之一百六十一 的 a／b、§二之一百六十二 的 a／b 共 **十枚旧遍**逐一对撞 ⇒ **十条 `cmp` 全 `RC=0`**（靶名枚举：`rl160_gates_a`／`rl160_gates_b`／`rl161_gates_a`／`rl161_gates_b`／`rl161_gates_c`／`rl161_gates_d`／`rl162_gates_a`／`rl162_gates_b`／`rl163_gates_a`／`rl163_gates_b`，均 `.txt`）。"改两份记账 docs ⛔ 挪门读数"的证据面至此由批内推断（四遍）→跨批（六遍）→跨批（八遍）→**跨批十二遍**。自披露：本枚⛔ 跑第十三遍（第十二枚全等之后不会新增信息；最后实测为遍 b＝第一枚提交之前，其后的笔只有本节）。
+- ★ **一次对撞写法本身炸过，登记以免复用**：第一次批量 `cmp` 用 shell 变量拼靶名（`${p%%_*}`／`${p##*_}` 之类）⇒ 十枚全报 `cmp: rl160_a_gates_a.txt: No such file`、`CMP_*_RC=2`。那**⛔ 是十枚读数**，是我拼出来的文件名根本不存在。⇒ 纪律：**批量 `cmp` 的靶名逐个写死（或先 `ls` 核存在性再比）**；`RC=2`（文件没找到＝射程塌）与 `RC=1`（找到了但内容不同）两档⛔ 混记成"这一遍不一样"——与门自己的 exit-2 分档同源，尺面塌⛔ 等于读数。
+- **三枚 ✗ 的逐枚归属**：⛔ 重抄第二份归属表（会漂）——同一批对象、同一枚 md5，逐枚归属见 §二之一百六十 补 八（要点：三族全是「清单 AUTO 段 vs 工作树现读」漂移，根源在仍在途的 `af_api.py`／`af_service.py`，归 #79／#136／#118）。本枚零落码 ⇒ ⛔ 让任一枚转绿也⛔ 新增红；⛔ 在途未清就跑任何门的 `--write`。
+- **提交面自证**（取法＝`git show --stat HEAD`，⛔ 本格自抄将被下一枚作废）：第一枚实提交 **2 files changed, 44 insertions(+)**（ledger 本节 43 行＋架构说明 §十九 那 1 行），与"改动面只有两份记账 docs"自洽；本枚第二枚只含 ledger 这一节补。`git status` 复核：在途 26 面（`src/autoforge/af_api.py`、`docker/` 两份 compose、`scripts/host_update.sh`、`scripts/gh_ci_status.py`、`docs/audit/` 删除族与归档族、`issued_tokens_clean.json` 等）全部⛔ 入本批⛔ 触碰。**⛔ push、⛔ amend。**
+- **尺与件面读数**：欠账尺 **`TOTAL=44 CLOSED=43 OPEN=1 RECEIPTS=37`**（存证 `rl164_debt.txt`，与回执 §八 同批）；回执面 **95 行／16042 B／CR=0**／`validate-receipt.ps1` ⇒ `grep -c '✓'`＝**7**。#138 只剩 `20261010-AF与DB与DPP十件-裁定.md`（32566 B，多席位需逐格切分）。
+- **存证（`E:\tmp`，⛔ 入仓）**：`rl164_af.txt`（§四 全部命令原文＋输出，100 行，**先于文书生成**）／`rl164_debt.txt`／`rl164_gates_a.txt`／`rl164_gates_b.txt`／取数脚本 `rl164.sh`／架构说明那行的稿件 `jz165_row.md`／本节补记稿 `jz165_bu.md`。
