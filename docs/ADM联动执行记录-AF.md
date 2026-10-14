@@ -12694,3 +12694,12 @@ Q2 甲末句「映射表在 AF 仓内一份都不留」——在 AF 面 grep 新
 ### 五、本枚未落的（⛔ 沉默）
 
 `butler/inbox/*` 主题域口径（DCD 裁）；§〇／§二.2 两处形状订正（DCD／链主）；分层图补"AF 亦为 MCP 消费者"一笔；`homesdk.http`/`auth` 消费半边（AF，条件型）；DB→MA 四路收敛、`acp-integration.md` 四护栏文档化、`butler/trigger/*` 清理（DB／MA 席位）。**§十八 ⛔ 加条目**：本枚是"复测一枚 L3 战略裁定的前提＋自查主题域"，AF 名下四格今日成立，挂一条不存在的残余缺陷＝伪造欠债（与 §二之一百六十一 同条纪律）。
+
+### 补（2026-10-14，本枚收口：门禁两遍＋★ 跨批八遍逐字节全等＋提交面自证）
+
+- **门禁两遍**（`GATES_PYTHON=python bash gates.sh`）：`E:\tmp\rl163_gates_a.txt`（docs 已改、第一枚提交之前）与 `rl163_gates_b.txt`（同面第二遍）各 **218 行／35715 B／md5 `dcd72915faff0105883dd926e576389d`／CR=151／`^✓`=21／`^✗`=3**，`GATES_RC=1`；`cmp` ⇒ **`CMP_ab_RC=0`**、`cmp rl163_gates_b.txt rl162_gates_b.txt` ⇒ **`CMP_b_prevb_RC=0`**。
+- **★ 跨批八遍全等**：本枚两遍与 §二之一百六十 的 a／b／c／d、§二之一百六十一 的 a／b 共 **八枚逐字节全等**（`cmp` 六条全 `=0`，输出在册 `rl163_gates_a.txt` 同批）。"改两份记账 docs ⛔ 挪门读数"至此由批内推断（四遍）→跨批（六遍）→**跨批八遍**；本枚⛔ 跑第九遍（第八枚全等之后不会新增信息；自披露：最后实测为遍 b＝提交前，其后的笔在 docs 记账面）。
+- **三枚 ✗ 的逐枚归属**：⛔ 重抄第二份归属表（会漂）——同一批对象、同一枚 md5，逐枚归属见 §二之一百六十 补 八；要点：三族全是「清单 AUTO 段 vs 工作树现读」漂移（信任边界 7／进程模型 22／可观测性 71），根源在仍在途的 `af_api.py`／`af_service.py`（#79／#136／#118），本枚零落码 ⇒ ⛔ 让任一枚转绿也⛔ 新增红；⛔ 在途未清就跑任何门的 `--write`。
+- **提交面自证**（取法＝`git show --stat HEAD`，⛔ 本格自抄将被下一枚作废）：第一枚实提交 **2 files changed, 30 insertions(+)**（ledger 节 ＋ §十九 行），与"改动面只有两份记账 docs"自洽；本枚第二枚只含 ledger 这一节补。`git status` 复核：`src/autoforge/af_api.py`、`docker/` 两份 compose、`scripts/host_update.sh`、`docs/audit/` 删除族全部⛔ 入本批。**⛔ push、⛔ amend。**
+- **尺与件面读数**：欠账尺 **`TOTAL=44 CLOSED=42 OPEN=2`**（存证 `rl163_debt.txt`，与 §三 同批）；`receipts/` 36 份；回执面 94 行／18712 B／CR=0／`VALIDATE_RC=0`。★ 尺面射程塌一次已就地登记（`103/65/38` 为全量口径，⛔ 与本席名册 44 混用）。
+- **存证（`E:\tmp`，⛔ 入仓）**：`rl163_af.txt`（§四 全部读数，111 行，先于文书生成）／`rl163_debt.txt`／`rl163_gates_a.txt`／`rl163_gates_b.txt`／取数脚本 `rl163.sh`（★ 首版第 13 行未闭合引号 ⇒ `RL_RC=2` 当场停，⛔ 把缺的 5—11 节冒充"跑过"，修脚本重跑才出数）／回执补记稿 `jz163_bu.md`／记账稿 `jz162.md`、`jz162_bu.md`。
