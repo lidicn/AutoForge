@@ -12505,7 +12505,7 @@ done
 | `117f4dd` | `cd /e/tmp/t117post && 同命令` | **`2 failed, 31 passed`／`POST_RC=1`**（同名两条） |
 | 今日 HEAD | `cd /e/tmp/head159 && python -m pytest … -q -k "owner_face_still or legacy_shared"` | **`1 failed, 1 passed`／`RC2=1`**；`legacy_shared`（subject 仍 `shared`）**绿** ⇒ 单根因，⛔ 多点成因 |
 
-**根因**：`117f4dd`（2026-10-11「WebUI 一键升级到 GitHub 最新版」）把登录签发从 `registry.issue_for_agent("owner", …)` 改成 `registry.issue_for_agent(body.username, …)`（HEAD `:1019/:1029/:1034` 三面皆然），判定侧 `:262` 还拿旧字面量比 ⇒ owner 面被降级成掩码。同枚 `:258` docstring 仍写「登录签发的 JWT 主体（`issue_for_agent("owner", …)`）」——**注释与码面矛盾**，佐证是非本意漂移而非设计变更。
+**根因**：`117f4dd`（2026-10-11「WebUI 一键升级到 GitHub 最新版」）把登录签发从 `registry.issue_for_agent("owner", …)` 改成 `registry.issue_for_agent(body.username, …)`（HEAD `:1010、:1029、:1039` 三面皆然（`:1019` 是 `def api_auth_login` 本身，⛔ 当签发站点引）），判定侧 `:262` 还拿旧字面量比 ⇒ owner 面被降级成掩码。同枚 `:258` docstring 仍写「登录签发的 JWT 主体（`issue_for_agent("owner", …)`）」——**注释与码面矛盾**，佐证是非本意漂移而非设计变更。
 
 **两张影响脸**：① 可用性——owner 创建长期码后再也读不回明文，而撤销一枚码要求手里真有那枚码（`af_auth.py:905-938 list(reveal=…)` 的口径）；② 越权面——HEAD `:1310` 的 `not in ("shared","unknown","owner")` 是 `_OWNER_SUBJECTS` 之外的第二份名单，登录令牌（subject＝用户名）不再被排除，会以「agent」身份出现在 `/api/user/agents` 并被 `:1316 DELETE /api/user/agents/{agent_id}` 按主体名整族撤销（该端点无「调用方主体 ↔ 路径主体」绑定）。② 这格**不是新发现**：裁定 20261011 §3 Q1 丙 立的 `scripts/check_owner_subject.py`（只判不写）现读就是三条红——`OWNER_GATE_RC=1`（A 腿 `:1310` 字面量名单；B 腿 `:1316`／`:1323` 缺主体绑定），且该门取数面＝**入库面**（`_snap()` 走 `Face.open(...).snapshot(SRC_REL)`），所以这三条红 ⛔ 能用"在途工作树"解释。
 
@@ -12545,3 +12545,14 @@ done
 
 本枚挖到的 F-3 回归**没有**写进架构说明 §十八 已知残余清单：那一节的格子按"残余归属 AF 可自决"登记，而本格修复要动并发在途的鉴权文件、归属 #79 窗，且 `check_owner_subject.py` 已经把它钉成**门面上的三条红**（`gates.sh` 链上每天自己报）。写进 §十八 会变成同一事实的第二份手抄。本节（执行记录 §二之一百五十九）＋回执 §三 是它的唯一登记面。
 
+
+### 补 八（2026-10-14，本枚收口：遍 a／遍 b 逐字节对撞＋提交面自证＋一处行号自纠）
+
+- **遍 a（提交前）**：`GATES_PYTHON=python bash gates.sh > /e/tmp/rl160_gates_a.txt 2>&1; echo A_RC=$?` ⇒ **`A_RC=1`**，输出体 **218 行／35715 B**。
+- **遍 b（取在 `git commit` 之后）**：同法落 `/e/tmp/rl160_gates_b.txt` ⇒ **`B_RC=1`**，同 **218 行／35715 B**；`cmp -s rl160_gates_a.txt rl160_gates_b.txt` ⇒ **`CMP_ab_RC=0`**，`cmp -s /e/tmp/rl159_gates_b.txt /e/tmp/rl160_gates_b.txt` ⇒ **`CMP_prev_b_RC=0`**（三条读数存证 `/e/tmp/rl160_b_rc.txt`）。⇒ 本枚（纯记账＋外仓文书）**动不了任何一扇门的读数**，与前几枚同一形状。
+- md5 与逐字节面：取法 `md5sum /e/tmp/rl160_gates_a.txt /e/tmp/rl160_gates_b.txt`。本节 ⛔ 写死「第 N 次复现」这类序数——上一节那样写过，事后发现序数没法自证，手抄计数正是本仓要消的那族假读数。
+- **红源逐条归属（与上一批一字未变）**：AST 门禁两枚 `fake-ok-const`（登录线在途）＋ `check_owner_subject.py` 三枚按设计红（本枚 §四 把它从「第二真源的形制风险」升级为「已在 HEAD 上发作」）＋ 计数棘轮存量。本批 ⛔ 抬上限、⛔ 写基线、⛔ 跑任何门的 `--write`（`af_api.py` 仍在途）。
+- **提交面自证**（取法：`git show --stat HEAD`，现读于补记前）：第一枚 `4e4dd90`＝**2 份／84 增**（本执行记录 83 增＋架构说明 §十九 1 行），本枚补记为第二枚；⛔ push，⛔ amend。
+- ★ **本枚自纠一处行号笔误**：§四 与回执 §三 原写「HEAD `af_api.py:1019/:1029/:1034` 三面皆然」——现场重读 `git show HEAD:src/autoforge/af_api.py | grep -n 'issue_for_agent'` ⇒ 三处签发实际在 **`:1010/:1029/:1039`**，而 `:1019` 是 `def api_auth_login` 那一行（把定义行当成签发站点引，正是本仓「锚点引用前现场读」要拦的形状）。两份文书均已就地订正并写进取法。
+- **副本树时效自证**（本节第四条教训的当场执行）：`grep -n 'issue_for_agent' /e/tmp/head159/src/autoforge/af_api.py` 现读＝`:1010/:1029/…`，与今日 HEAD 面同值 ⇒ 本枚引的 HEAD 读数没过期；`git status --short -- src/autoforge/af_auth.py` 现读为空（该文件最近一次提交 `22c2d16 2026-10-13`），在途面只剩 `af_api.py` 与 `docker/`——上一批「af_auth 三枚 hunk 落在 TokenRegistry」那句是当时快照，⛔ 回改，此处只作指路。
+- **下一枚（§二之一百六十）**：#138 仍欠 5 份——`20260929-ADM三仓联动七问`、`20260929-ADM协议选型MCP与ACP`（需逐格判 AF 射程）、`20261002-homesdk记账与AF-DB-DPP六件`、`20261010-AF与DB与DPP十件`（32 KB 多席位需切分）、`20261010-AF拆码与MA自更新四问`（AF 半边等 homesdk 0.3.3 发版窗，可写「未落＋窗次归属」）。欠账尺复现取法见 §二之一百五十八 补 八（三面对撞，⛔ 单面 basename 子串匹配）。
