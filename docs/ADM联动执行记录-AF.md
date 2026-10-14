@@ -12462,3 +12462,86 @@ done
 - **★ 欠账尺的正控复现**（本枚 §六 那句"落盘后自动闭"由这条坐实，⛔ 停在口头）：回执落盘后把 §六 那条三面对撞命令原样重跑 ⇒ **`TOTAL=44 CLOSED=38 OPEN=6`**，且现读 6 件名单与本枚 §六 表里那 6 行**逐一对上**（`20261002-homesdk记账与AF-DB-DPP六件`／`20261004-AF落地回执与write域含read前提差`／`20261010-AF与DB与DPP十件`／`20261010-AF拆码与MA自更新四问`／`20260929-ADM三仓联动七问`／`20260929-ADM协议选型MCP与ACP`）。⇒ 订正后的尺**方向可预期、数值可复现**；与之对照，旧单面尺给的是"24 份欠账"这种⛔ 复现的读数。
 - **本枚回执自补一格**（`receipts/20261014-AF-20261010测试区删除面守卫与政策口-回执.md` 末尾追加，原字⛔ 改，件由 52 行／10632 B 增至 **56 行／11330 B**、CR=0，`validate-receipt.ps1` 重跑 ⇒ **6/6 ✓、无 `W`**）：§三 偏差甲 那句"裁定抬头申请件路径因受理后缀成死链"**只说对了一半**。现读 `find /e/NAS/关键决策部 -name '*20261004*' -type f` ⇒ 原申请件**在盘**，落在 `archive/inbox-元日前-20261005前/20261004-AF-裁定落地回执与write域含read前提差-决策申请【已受理】.md`。⇒ 死链由**两个动作**叠加：① 受理时加 `【已受理】` 后缀改名；② 收件箱按日期**批量归档**到 `archive/`。取证口径随之收紧一档：引「申请来源」前要 `find` 全树（含 `archive/`），⛔ 只看 `inbox/` 就断"件⛔ 存在"——这一格是判例 3 反向同族的**第二种成因**，本枚第一次只报了第二种里的第一层。
 - **下一枚（§一百五十九＝#138 第五份，裁定 20261004《AF 落地回执 + write 域含 read 前提差 + 门禁升硬》）取证已开工**，两处要紧读数先记在这里免得重取：① §二"授权面落盘升硬门"的**启动条件已到且门已落**——`scripts/check_atomic_write_sites.py:29` D 腿自述「DCD 裁定 20261004 §二，本批启动条件已到」（`:276` 起判据 D，⛔ 吃基线也⛔ 吃豁免），`.atomic-write-baseline.txt` 现读非注释行 **0 条**（9 站由 `523d0cd` 收完），af_auth／af_premiere 自 2026-10-04 起分别有 10／4 枚提交；② **§一（a）那一格在 DCD 侧仍未落**——homesdk 契约表 `:175` 今日仍写「ask 通道（**POST 需 write 域令牌 + INBOX_KEY 启用**）」，`GET` 的 read 要求⛔ 进那行，裁定那句「DCD 落笔」盘上没兑现 ⇒ AF ⛔ 改 homesdk 一字节，回执里显式请 DCD 复核补登。另两处口径先立此：`af_api.py` 的 `GET /api/asks/pending` 挂 `Depends(_read)` 两面各数一遍（HEAD `:666`／工作树 `:671`，登录线在途）；裁定 §五 那句「49 处 `dispatch(` 调用点」与本枚现读不符（`grep -c 'dispatch(' src/autoforge/af_mcp.py` ⇒ **3**，整个 `src/autoforge/` ⇒ 14 行），差额⛔ 由下枚解释、按「口径待复核」登记，⛔ 冒充"49 处已逐条显式化"。
+
+
+## 二之一百五十九、#138 第五份回执（裁定 20261004）——D 腿启动条件已到且门已落；★ F-3 的 owner 明文面在 HEAD 上已发作，红点钉到 `117f4dd`（零落码枚）
+
+> 交件：`receipts/20261014-AF-20261004落地回执与write域含read前提差-回执.md`（依据裁定 `decisions/20261004-AF落地回执与write域含read前提差-裁定.md`，逐节 §一—§六）
+> 本枚性质：**零落码回执枚**——仓内只动两份 docs，⛔ 动一字节 `af_api.py`／`af_auth.py`（登录线在途），⛔ 抬 `tally`／写 `baseline`，⛔ push。
+
+### 一、结论（先说落在谁头上）
+
+1. **§二 那格已经不再是"等启动条件"**：授权面落盘 D 腿的启动条件（基线 9 站按已钉顺序收完）**已到**，并且门**已经落下**——现读 `python scripts/check_atomic_write_sites.py` ⇒ `AW_RC=0`，D 腿结论行自报「授权面腿射程函数 68 个、其中落盘 9 个（必经助手 8 个、自带 mkstemp 1 个、**裸写 0 个**——这一腿不接受基线与豁免）」。`scripts/check_atomic_write_sites.py:29` 的文案里逐字写着「DCD 裁定 20261004 §二，本批启动条件已到」。
+2. **§一（a）那一格在 DCD 侧仍未落**：homesdk 契约表 `E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md:175` 今日现读仍只写「**POST 需 write 域令牌 + INBOX_KEY 启用**」，`GET /api/asks/pending` 的鉴权要求那一半句缺失。裁定明写这格「**DCD 落笔**」⇒ AF ⛔ 代写 homesdk 一字节，只报不落。
+3. **★ 新挖的一格（本枚最要紧的输出）**：裁定 §五 排到"下一批"的 **F-3**（`auth-codes` 收紧 + owner／非 owner 明文掩码分层）码面 2026-10-05 就交了（`ccf2fde`），但它今天在 **HEAD 上已经发作**：`tests/unit/test_dcd_20261004_auth_limits.py` 两条 owner 明文腿红（`test_owner_face_still_sees_plaintext` :463／`test_third_party_write_token_gets_the_mask_not_the_code` :484，同一断言 `assert '04723616' in {'********'}`）。归属 **#79 登录线窗**，本批 ⛔ 修。
+
+### 二、三面对撞与查重（免得这是第二次投同一件）
+
+| 面 | 取法 | 现读 |
+|---|---|---|
+| 裁定本体有无《执行回填》 | `grep -c '执行回填' decisions/20261004-AF落地回执与write域含read前提差-裁定.md` | 0（裁定本体内 ⛔ 回填区，本席按主人standing指令把回执落 `receipts/`，⛔ 追加进裁定书原字） |
+| `receipts/` 有无件引用本裁定文件名 | `grep -rl '20261004-AF落地回执与write域含read前提差-裁定' receipts/ archive/` | **0 命中** ⇒ 本件非重投 |
+| 同族同日回执是否撞名 | `ls receipts/ \| grep -i 20261004` | 32 份里同族只一枚 `20261004-AF-裁定四件落地回执与有界缓存存量口径更正【已受理】.md`，其依据裁定＝`decisions/20261004-AF四件与DB一件与MA五件-裁定.md`（⛔ 同一件）⇒ 件名可用 |
+| 原申请件位置 | `find /e/NAS/关键决策部 -name '20261004-AF-裁定落地回执*'` | 实在 `archive/inbox-元日前-20261005前/…【已受理】.md`（2026-10-05 那次元日前批量归档移走）⇒ 裁定抬头「申请来源：`inbox/…`」今日是死链，成因与前两枚记的两层一致 |
+
+### 三、逐格落点（回执 §二 的仓内摘要，只列有变动的）
+
+| 裁定条目 | 仓内落点（现读行号以 HEAD 面为准） | 结果 |
+|---|---|---|
+| §一（b）（c）单向蕴含、只 `read` 一门 | `af_api.py:251 _SCOPE_SATISFIED_BY = {"read": ("read", "write")}`、判定行 `:255`；反例腿 `tests/unit/test_dcd_20261004_auth_limits.py:193 test_read_domain_does_not_imply_write` | 已交付 |
+| §三 F-1 `Depends(_read)` | HEAD `af_api.py:666 @app.get("/api/asks/pending", dependencies=[Depends(_read)])`（工作树面 `:671`，登录线在途让行号漂 +5） | 已交付 |
+| §三 Q1／F-2／Q2／insight_id | `af_auth.py:57 LONGCODE_TTL_DAYS_DEFAULT = 180.0`；判据 `:389 test_plaintext_sample…`（射程＝`src/autoforge/*.py` 全集）；`pyproject.toml:51 "paho-mqtt>=1.6,<2.1"`；`af_mqtt_bridge.py:305/:315/:853` | 已交付 |
+| §五 MCP 默认拒绝 | `af_mcp.py:98-118 _guard`（docstring 逐字引「裁定 20261004 §一 Q2=B」；`current is None` ⇒ 除 `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1` 一律 `ServiceError`），落枚 `c4bb5b5`；判据文件绿 | 已交付 |
+| §五 F-3 | `af_api.py:262 _OWNER_SUBJECTS = frozenset({"owner", "shared"})`、`:1284-1295 api_auth_code_list` | 码面已交付 ⇒ **今日 HEAD 上回归**，见第四节 |
+| §四 gitignore 探测 | `find src -name '*.py' \| wc -l`＝104；`git ls-files src \| grep -c '\.py$'`＝104；`git ls-files --others --ignored --exclude-standard src \| grep -c '\.py$'`＝**0** | 结论仍成立 |
+
+### 四、★ F-3 回归：红点时序、根因与一次归因订正
+
+**红点用两枚副本树钉死**（`git archive` 导树，⛔ 碰工作树；存证 `/e/tmp/t117pre`、`/e/tmp/t117post`）：
+
+| 树 | 命令 | 读数 |
+|---|---|---|
+| `117f4dd^` | `cd /e/tmp/t117pre && python -m pytest tests/unit/test_dcd_20261004_auth_limits.py -q` | **`33 passed`／`PRE_RC=0`** |
+| `117f4dd` | `cd /e/tmp/t117post && 同命令` | **`2 failed, 31 passed`／`POST_RC=1`**（同名两条） |
+| 今日 HEAD | `cd /e/tmp/head159 && python -m pytest … -q -k "owner_face_still or legacy_shared"` | **`1 failed, 1 passed`／`RC2=1`**；`legacy_shared`（subject 仍 `shared`）**绿** ⇒ 单根因，⛔ 多点成因 |
+
+**根因**：`117f4dd`（2026-10-11「WebUI 一键升级到 GitHub 最新版」）把登录签发从 `registry.issue_for_agent("owner", …)` 改成 `registry.issue_for_agent(body.username, …)`（HEAD `:1019/:1029/:1034` 三面皆然），判定侧 `:262` 还拿旧字面量比 ⇒ owner 面被降级成掩码。同枚 `:258` docstring 仍写「登录签发的 JWT 主体（`issue_for_agent("owner", …)`）」——**注释与码面矛盾**，佐证是非本意漂移而非设计变更。
+
+**两张影响脸**：① 可用性——owner 创建长期码后再也读不回明文，而撤销一枚码要求手里真有那枚码（`af_auth.py:905-938 list(reveal=…)` 的口径）；② 越权面——HEAD `:1310` 的 `not in ("shared","unknown","owner")` 是 `_OWNER_SUBJECTS` 之外的第二份名单，登录令牌（subject＝用户名）不再被排除，会以「agent」身份出现在 `/api/user/agents` 并被 `:1316 DELETE /api/user/agents/{agent_id}` 按主体名整族撤销（该端点无「调用方主体 ↔ 路径主体」绑定）。② 这格**不是新发现**：裁定 20261011 §3 Q1 丙 立的 `scripts/check_owner_subject.py`（只判不写）现读就是三条红——`OWNER_GATE_RC=1`（A 腿 `:1310` 字面量名单；B 腿 `:1316`／`:1323` 缺主体绑定），且该门取数面＝**入库面**（`_snap()` 走 `Face.open(...).snapshot(SRC_REL)`），所以这三条红 ⛔ 能用"在途工作树"解释。
+
+**归因订正（本节要办的一笔账）**：§二之一百二十三／一百二十八 登记过**同名两条红**，结论写的是「红来自在途工作树，不来自已提交面」，证据是纯 HEAD 副本树 `E:\tmp\af124_head` 上 `33 passed`。本枚现读：那枚 `33 passed` 与 `117f4dd^` 树上的读数**逐字相同**；而 §二之一百二十八 的落盘日是 **2026-10-12**（`git log -S '二之一百二十八' --format='%h %ad' --date=short docs/ADM联动执行记录-AF.md` ⇒ `af64e06 2026-10-12`），**晚于** `117f4dd` 的 2026-10-11 ⇒ 那句归因在被写下的当天就已经过期（它复用的是一份旧 HEAD 树的读数）。按本仓纪律：历史快照 ⛔ 回改，订正只做在现状面与本节。
+
+**教训（沉淀成本节的一条判据级纪律）**：拿"纯 HEAD 副本树跑绿"当"红必来自在途"的证据时，**副本树要当场重导**。副本树一经落地就停止跟随 HEAD，它的绿只证明"导它那一刻的 HEAD 是绿的"——存证文件名（`af124_head`）恰恰会冒充"今天的 HEAD"。
+
+### 五、偏差登记（回执 §五 全文，此处摘要）
+
+- **甲**：裁定 §三 的 `2978 passed, 52 skipped`／`GATES_RC=0` 是 2026-10-05 快照 ⇒ 本回执 ⛔ 当现状引用，改引今日同族四文件合跑读数，并登记整树 127 截断的分段取法。请追认。
+- **乙**：裁定 §五 那句「49 处 `dispatch(` 调用点」按可复现口径 `git grep -n 'dispatch(' <树> -- tests \| wc -l` 在三枚时代面读成 **46（`ccf2fde`）／52（`c4bb5b5`）／67（HEAD）**，49 复现不出来 ⇒ 登记为**口径待复核**，⛔ 由 AF 单方面替裁定重钉那个数，也 ⛔ 拿它冒充"49 处已逐条显式化"；MCP 那件的验收按行为面（`_guard` 现读＋判据腿绿）。请追认。
+- **丙**：F-3 的「含浏览器验证」半边顺延——本机无视口，且今日 HEAD 上 owner 明文腿已红，主体真源修好前重跑浏览器面只会读到掩码 ⇒ 请追认顺延到 #79 窗后、与第四节那格同批。
+
+### 六、读数（命令原文，现读时刻 2026-10-14）
+
+| 命令 | 读数 |
+|---|---|
+| `python -m pytest tests/unit/test_dcd_20261004_mcp_default_deny.py tests/unit/test_dcd_20261004_atomic_write_nine_sites.py tests/unit/test_atomic_write_gate.py tests/contract/test_af_ask_contract.py -q` | **`74 passed, 1 skipped`／`L1_RC=0`**（不含 `auth_limits.py`，那文件的两条红见第四节） |
+| `python -m pytest tests/unit/test_dcd_20261004_{mcp_default_deny,auth_limits,atomic_write_nine_sites}.py tests/unit/test_atomic_write_gate.py -q` | **`2 failed, 87 passed, 1 skipped`／`RC1=1`**（两枚红逐字在第四节） |
+| `python scripts/check_atomic_write_sites.py` | `AW_RC=0`（全文存证 `/e/tmp/rl160_aw.txt`） |
+| `python scripts/check_owner_subject.py` | `OWNER_GATE_RC=1`，A 腿 1 枚＋B 腿 2 枚（逐字存证 `/e/tmp/rl160_owner_gate.txt`） |
+| `git log --format='%h %ad' --date=short -1 <c>` | `ccf2fde 2026-10-05`／`117f4dd 2026-10-11`／`c4bb5b5`（MCP 默认拒绝落枚） |
+
+### 七、存证（`E:\tmp`，⛔ 入仓）
+
+`rl160_evid.txt`（判据腿＋门＋`dispatch(` 三面口径）／`rl160_evid2.txt`（gitignore 三面）／`rl160_aw.txt`／`rl160_owner_gate.txt`／`rl160_leg2.txt`（HEAD 树定点复现）／`rl160_rc1.txt`／副本树 `/e/tmp/head159`、`/e/tmp/t117pre`、`/e/tmp/t117post`。
+
+### 八、不自决清单（递 DCD 或等他席）
+
+1. §一（a）契约表那半句归 **DCD 落笔**（裁定自派），AF ⛔ 代写 homesdk；
+2. F-3 owner 明文回归＋`check_owner_subject.py` 三条红的转绿归 **#79 登录线窗**（要动 `af_api.py`／`af_auth.py`）；
+3. 偏差甲／乙／丙 请追认（尤其"49"这个数⛔ 由 AF 重钉）；
+4. 裁定抬头「申请来源」成死链的两层成因，已随前两枚回执登记，此处只作指路 ⛔ 重复开问；
+5. 回执落点规范冲突（`receipts/` vs 裁定书本体）沿用既有待裁项，⛔ 新开。
+
+### 九、§十八 本枚未加条目（自报，⛔ 沉默）
+
+本枚挖到的 F-3 回归**没有**写进架构说明 §十八 已知残余清单：那一节的格子按"残余归属 AF 可自决"登记，而本格修复要动并发在途的鉴权文件、归属 #79 窗，且 `check_owner_subject.py` 已经把它钉成**门面上的三条红**（`gates.sh` 链上每天自己报）。写进 §十八 会变成同一事实的第二份手抄。本节（执行记录 §二之一百五十九）＋回执 §三 是它的唯一登记面。
+
