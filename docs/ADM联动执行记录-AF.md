@@ -12756,3 +12756,41 @@ Q2 甲末句「映射表在 AF 仓内一份都不留」——在 AF 面 grep 新
 - **提交面自证**（取法＝`git show --stat HEAD`，⛔ 本格自抄将被下一枚作废）：第一枚实提交 **2 files changed, 44 insertions(+)**（ledger 本节 43 行＋架构说明 §十九 那 1 行），与"改动面只有两份记账 docs"自洽；本枚第二枚只含 ledger 这一节补。`git status` 复核：在途 26 面（`src/autoforge/af_api.py`、`docker/` 两份 compose、`scripts/host_update.sh`、`scripts/gh_ci_status.py`、`docs/audit/` 删除族与归档族、`issued_tokens_clean.json` 等）全部⛔ 入本批⛔ 触碰。**⛔ push、⛔ amend。**
 - **尺与件面读数**：欠账尺 **`TOTAL=44 CLOSED=43 OPEN=1 RECEIPTS=37`**（存证 `rl164_debt.txt`，与回执 §八 同批）；回执面 **95 行／16042 B／CR=0**／`validate-receipt.ps1` ⇒ `grep -c '✓'`＝**7**。#138 只剩 `20261010-AF与DB与DPP十件-裁定.md`（32566 B，多席位需逐格切分）。
 - **存证（`E:\tmp`，⛔ 入仓）**：`rl164_af.txt`（§四 全部命令原文＋输出，100 行，**先于文书生成**）／`rl164_debt.txt`／`rl164_gates_a.txt`／`rl164_gates_b.txt`／取数脚本 `rl164.sh`／架构说明那行的稿件 `jz165_row.md`／本节补记稿 `jz165_bu.md`。
+
+## 二之一百六十四、#138 第十份＝最后一份回执（裁定 20261010《AF 与 DB 与 DPP 十件》）——★ 一张"等 0.3.3"的错觉把 §二 Q3 交接卡押了四天：它的前置是**语义**不是**字节**；另 ★ 自纠欠账尺 face② 的**自引用假绿**（尺把自己的输出读成闭证）
+
+### 一、结论（一格本枚落码／三格今日成立／两格带窗／一格拆三态请追认）
+
+- **回执**：`E:\NAS\关键决策部\receipts\20261014-AF-20261010AF与DB与DPP十件-回执.md`（139 行／CR=0；`validate-receipt.ps1` ⇒ 六道全 ✓、三道硬门通过）。
+- **★ 本枚唯一落码＝§二 Q3 甲的交接卡**：`docs/handoff/交接卡_ADM发布失败拆码PUBLISH_REFUSED_给DB_20261014.md`（70 行／CR=0）。这格被混进"§二 拆码三问都等 0.3.3 wheel"那一串里，于是⛔ 被单独执行过；拆开看它的前置是**语义**（`PUBLISH_REFUSED` 的处置方向和 `BROKER_UNREACHABLE` **相反**：一个查 ACL／topic 白名单，一个去重启），⛔ 依赖新码已经上线。现读证据：已装 wheel 面 `0.3.2` 里 `ADM_ERR_PUBLISH_REFUSED` **0 命中** ⇒ AF 今天发不出新码，卡就把这一句写在"现读面"，状态行 🔨 预告卡，并给 DB"现在别做（改早了＝静默失效）／现在可做（按码集合判、只把提示语分叉）"两档＋三条可机械复核的上线判据。交件前后同两条命令的对照见 §四。
+- **三格今日成立**：§五 **附裁 poisoned 已在 HEAD**（`git show HEAD:src/autoforge/af_auth.py | grep -c poisoned` ⇒ **16**；两族站点见回执 §二；判据腿 `tests/unit/test_af4_auth_security_fixes.py:55/:89/:123` 双向 fail-closed ＋ `tests/unit/test_dcd_20261004_auth_limits.py:278` 反向腿）——2026-10-11 复判把它从"配套"升为**主要交付项**，那一格今天是有脸的；§六 Q1／Q2 已结案（任务 #96／#97）且 Q3 立口径被架构文档三处引用（`:129`／`:493`／`:507`）＋名字哨兵 `tests/unit/test_watch_lifecycle_r6_audit.py`；§二 Q1 枚数按裁定钉的 `len(ADM_ERRORS)` 现读对上（7 枚，`LINKAGE_PAUSED` 源码面 0＝第 8 待进树）。
+- **两格⛔ 未落、都带窗内逐字形状**：§五 Q1 删兼容档（HEAD `af_api.py:1028` 那一枝仍在，归 #79 登录线，裁定 Q2 丙自己写明同窗）；§二 Q2 AF 消费半边（等 0.3.3 wheel，见交接卡 §5 三件套）。
+- **★ 一格拆三态请追认**（§五 Q3 追加的 `/api/credentials` 补充裁定）：① 裁定"返回明文"的前提在 AF 仓内字节面复现不出来——HTTP 面走 `describe()`，两枚 token 全过 `_mask()`（`af_config.py:33-37`⇒`****len=N`、`:244-248`），`_mask` 在本仓首次命中是 `0b3c624 2026-09-17`（**早于裁定日**）；裁定现读的 `:132-133` 是 getter，⛔ 是响应面。② 裁定字面要的 **owner／非 owner 分层确实没落地**：HEAD `af_api.py:524` `api_credentials_show()` ⛔ `info` 参数（同文件 `:262`／`:1295` 有现成形状没用）。③ 硬判据"非 owner 拿不到明文"**按字面成立**且钉在 `tests/unit/test_credentials_face_no_plaintext.py`（4 腿，`:54` 是"摘掉掩码必须被抓到"的自证腿），docstring 已点名本裁定、并把"owner 面要不要开明文"记为不自决（执行记录 §二之一百零二）。⇒ 请 DCD 裁：以"⛔ 任何面出现明文＋判据在位"作 PASS（今天成立），还是仍要补分层（那是**放宽 owner 面**的新语义，且落点在在途文件 ⇒ #79 窗）。AF 两档⛔ 自决，也⛔ 宣布收口。
+
+### 二、★ 尺面自纠：face② 的两种反向错，本枚都实测到了
+
+判"某裁定还欠回执吗"的三面对撞里，face②（`receipts/` 正文引用裁定文件名）上一批⛔ 复核过取材逻辑（那次 `grep -n 'face|receipts' /e/tmp/rl164.sh` 空输出——因为 `rl164.sh` 根本不是尺，是取证脚本；**尺一直在 shell 里现跑、⛔ 落盘**，这本身就是上一批留下的空格）。本枚把尺写成 `E:\tmp\rl166.sh` 并**两口径并列**跑：
+
+- **loose**（`grep -rlF "<裁定stem>" receipts/`）⇒ 交件**前**就报 `TOTAL=44 CLOSED=44 OPEN=0`。唯一命中来自我自己第 9 份回执 `receipts/20261014-AF-20261002homesdk记账与AF-DB-DPP六件-回执.md:95`——那一行为了记账把"**仍欠名单**"逐字列了出来。⇒ **尺把自己写的名单当成闭证**，欠账越少命中越多，最终永远读成零欠。这是"全绿假读数"的一个新成因（不是下标写错、⛔ 是射程逻辑）。
+- **strict**（face② 换成"抬头 `依据裁定` 行配对"，`grep -rl "依据裁定.*<stem>" receipts/`）⇒ 交件前 `36/8`、交件后 `39/5`。**多出的 3 枚是 face③（inbox＋archive 内件名含"回执/回填"）与《执行回填》face① 的并集贡献，⛔ 是 face② 变严的功劳**；而剩下的 5 枚逐枚抽查全是**假欠**：`20261002-AF锁文件源与MA载荷键名`→`receipts/20261002-AF-锁文件源裁定落法补正与判例2旁证更正-回执.md`、`20261006-AF诊断型与DB简单规则与DPP三件`→`receipts/20261006-DB-裁A′落码回执…`、`20261007-DB凭据与AF降级面`→`receipts/20261014-AF-20261006配对与段间封顶两件执行回执.md`（＋`inbox/20261010-AF-拆码库侧…`）、`20261009-DB一件与AF两件`→`receipts/20261009-AF-入向事件平键落地回执…`、`20261010-DB与AF六件`→`receipts/20261010-DB-契约护栏3消费侧…`——五枚**都有回执件引用**，只是那些回执的抬头用"日期＋《主题》"或引用的是**同日另一份裁定**（本仓 20261006／20261009／20261010 各有多份同日前缀件）。
+⇒ **两档单独都⛔ 作数**（loose 虚报已闭／strict 虚报欠账）。本枚只主张可证的那一格：`20261010-AF与DB与DPP十件-裁定` 现在 **loose=2／strict=1**，即两个口径同时读作已闭，且闭它的正是本枚那行 `> 依据裁定：decisions/20261010-AF与DB与DPP十件-裁定.md`。⇒ **AF 席位在 #138 上的欠账＝0**；名册级"总欠账"要 DCD 定一把口径尺（建议：座位码分派 × 三 face 取并集，"仍欠名单"与总数同批对），AF ⛔ 另立台账口径。
+⇒ 教训入库：⛔ 现跑的尺要落盘成脚本；⛔ 一把尺的输入面里含它自己的产出（记账名单⛔ 与闭证判据同词面）；换口径要**重报全部读数**，旧那串 `38/6…43/1` 是 loose 口径、方向上没漏欠账，但⛔ 直接沿用。
+
+### 三、本枚读数（命令原文，现读 2026-10-14）
+
+- 尺（存证 `E:\tmp\rl166_debt.txt`＝交件前、`rl166_debt_after.txt`＝交件后）：`ROSTER=44`／交件前 `LOOSE 44/0`、`STRICT 36/8`／交件后 `LOOSE 44/0`、`STRICT 39/5`、`RECEIPTS=38`（交件前 37）。名册自证口 `ls decisions/*AF*.md decisions/*ADM*.md | wc -l`＝44；⛔ 与全量口径（`decisions/*.md`＝103）混用。
+- 交接卡前后：`ls docs/handoff/交接卡_*.md | wc -l` 29⇒**30**；`grep -rln PUBLISH_REFUSED docs/` 两份记账文档⇒**三份**（第三命中即本枚那张卡）。
+- 库侧／wheel／AF 消费面：`grep -c "ADM_ERR_[A-Z_]*: Final" /e/NAS/homesdk/src/homesdk/adm/errors.py`＝**7**；`python -c "...t.count('ADM_ERR_PUBLISH_REFUSED')"`＝**0.3.2 0**；`grep -n "mark_degraded(ADM_ERR\|\"code\": ADM_ERR_" src/autoforge/af_mqtt_bridge.py`＝`:512`／`:627`／`:633` 三枚全旧码（⇒ 裁定 §二 Q2 乙写的"一处取码 `:627/:633`"按现读是**三枚**，登记为偏差乙）。
+- HEAD 面在途核对：`git diff --stat src/autoforge/af_auth.py`＝空（工作树干净 ⇒ poisoned 那 16 枚是 HEAD 面）；`git status` 现读 `src/autoforge/af_api.py` 仍带 ` M`（登录线在途，本枚⛔ 动）。
+
+### 四、本枚未落的（⛔ 沉默）
+
+§五 Q1 删兼容档（#79 窗，窗内逐字形状与两条硬验收写在回执 §六 1：第二条已由 poisoned 成立，只剩"无 admin＋任意非空凭据 ⇒ 409 且无令牌"那一条）；§二 Q2 AF 消费半边（0.3.3 wheel，回执 §六 2 给三枚站点＋docstring 改口＋判据/变异）；§五 Q3 之"8787 限可信 LAN"（只有 owner 能做，AF 这台机器读不到 NAS 现场⇒明写"读不到"）；§七 7.1 与 §十 落笔 8 条（归 DCD 本体，AF 已供第 2／7／8 条读数）；★ 名册级总欠账口径（请 DCD 定尺，本枚交两口径并列证据＋逐枚假欠名单）。
+
+### 五、不自决清单
+
+⛔ 宣布 `/api/credentials` 收口（三态只主张字节面，PASS 口径请裁）；⛔ 把 owner 面明文分层当成缺陷修掉、也⛔ 当成按设计；⛔ 动 `af_api.py`／`af_auth.py`／两份 compose／`ui-user-mimo/` 一字节；⛔ 新造 `ADM_ERR_*`、⛔ 动 homesdk 仓一字节、⛔ 本机装包；⛔ 让 DB 现在就换判别（卡里明写"现在别做"）；⛔ 替 DB／DPP／MA 席位代交回执；⛔ 自定名册级欠账口径；⛔ 抬 `.gates-tally.txt`／`.gates-baseline.txt`；⛔ push、⛔ amend；⛔ 读改计划文档（standing 指令，登记为偏差戊）。
+
+### 六、存证（`E:\tmp`，⛔ 入仓）
+
+`rl165_af.txt`（183 行，§二／§五 逐格取证）、`rl165b_af.txt`（132 行，工作树面与 HEAD 面对撞）、`rl166.sh`＋`rl166_debt.txt`＋`rl166_debt_after.txt`（尺 v2 两口径，交件前后各一遍）、`rl167_gates_a.txt`（219 行，本枚门禁遍 a：`✓=21`／`✗=3`／`GATES_RC=1`）。
