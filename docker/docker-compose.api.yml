@@ -72,6 +72,9 @@ services:
       - MQTT_KEEPALIVE=${MQTT_KEEPALIVE:-}
       - MQTT_USER=${MQTT_USER:-}
       - MQTT_PASSWORD=${MQTT_PASSWORD:-}
+      # 同机 AF/MA 都用 homesdk、容器 PID 都是 1 时 default_client_id 撞成同一个 ⇒ broker 互踢。
+      # 部署侧给 AF 一个独占 client_id（如 homesdk-autoforge-af）；缺省留空走 default。
+      - MQTT_CLIENT_ID=${MQTT_CLIENT_ID:-}
       # 令牌面的键名真源是 `af_auth.py` 的 `load_secret(...)`：多令牌主体用这枚键（JSON 对象，
       # 每条自报 subject + scopes）。旧文案把它写成了复数，而代码里没有复数那枚读数——宿主机的值
       # 注入得再认真也只是喂给一个没人读的空位，鉴权照旧失败且不留原因（NAS 现场手补即为此）。
