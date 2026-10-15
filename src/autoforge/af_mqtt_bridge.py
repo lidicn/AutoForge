@@ -164,9 +164,13 @@ def make_client(
 ) -> Any:
     """按部署环境构造并**连接** client。缺配置/缺 paho 一律抛，不返回"半成品桥"。"""
     host, port, keepalive = preflight(peer=peer, allow_anonymous=allow_anonymous)
+    # 同机多容器共存（AF / MA 都用 homesdk、PID 都是 1）时，default_client_id 会撞成同一个
+    # `homesdk-autoforge-1`，broker 按 client_id 踢旧连接 ⇒ 两边互踢重连、订阅永远不稳定。
+    # 部署侧可经 MQTT_CLIENT_ID env 给 AF 一个独占 client_id；缺省仍用 default。
+    client_id = os.environ.get("MQTT_CLIENT_ID") or _mqtt.default_client_id(peer)
     try:
         client = _mqtt.get_client(
-            _mqtt.default_client_id(peer), peer=peer, allow_anonymous=allow_anonymous, qos=qos
+            client_id, peer=peer, allow_anonymous=allow_anonymous, qos=qos
         )
     except _mqtt.MqttUnavailable as exc:
         raise BridgeUnavailable(
