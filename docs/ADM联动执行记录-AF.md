@@ -12853,3 +12853,44 @@ Q2 甲末句「映射表在 AF 仓内一份都不留」——在 AF 面 grep 新
 - **⛔ 动**：`af_api.py`／`af_auth.py`／两份 compose／`ui-user-mimo/` 全树／`scripts/host_update.sh`／`scripts/gh_ci_status.py`（本枚⛔ 改，只调用取读数）／homesdk 一字节／docker 任何命令／装包／跑任何 `--write`／抬 §四 上限／amend／push（本补节那枚提交⛔ 自行再推，要推由出资人逐次点头）；计划文档 `docs/ADM联动执行计划-AF.md` ⛔ 读⛔ 改⛔ 入批（standing 指令，登记为偏差，同 §补 一 偏差乙）。
 - **补 五 收口确认（本枚真跑，两遍取在提交的两侧）**：遍 f（`E:\tmp\rl169_gates_f.txt`＝`GATES_PYTHON=python bash gates.sh` 全部输出，218 行／体面 md5 `97dffb5bd654`）取在**本补节提交之前**，与上一批定下的提交后基准（遍 c/d/e，`rl167_body_c.txt`／`rl168_body_e.txt`）**逐字节全等** ⇒ `CMP_fc_RC=0`；提交一枚（`git show --stat` 现读＝2 份文件／23 增）后复跑遍 g（`E:\tmp\rl169_gates_g.txt`）与遍 f 全等 ⇒ `CMP_fg_RC=0`，`RC_f=RC_g=1`（红项归属逐条见上：`UpdateBody`／台账过期族／测试先于源／mimo 一枚，⛔ 一项由本补节引入）。索引面 `git ls-files | wc -l`＝**821 未变** ⇒ 与 §补 二／§补 四 自纠那条纪律自洽（本批⛔ 新增入库文件）。
 - ★ **顺带订正一处"体面"定义（本枚自己踩的，⛔ 沿用于下批）**：上一批的存证文件里那 219 行＝**门输出 218 行＋驱动自加的 `GATES_RC=1` 尾标**，所以当时要 `head -n -1` 削掉尾标才是体面。本枚只重定向 `gates.sh` 本体、⛔ 再拼尾标，若照抄"削一行"就把门的**结论行**削进了体面（第一次对撞就是这么读出 `217 行／差一行`＋`CMP_RC=1` 的假差）。⇒ **体面＝`gates.sh` 的输出本体，削不削尾行取决于存证文件里有没有那一行尾标**，取法要写"这份存证带不带驱动尾标"，⛔ 把 `head -n -1` 当无条件动作。
+
+## 二之一百六十五、#158 收口头子（裁定 20261014《台账机械前置与 MA 本地装闸与回执落点根因》§一 Q1＋Q2）——★ 新门 `check_ledger_same_batch.py` 接进 `gates.sh`＋单测腿落盘；★ 源码面被别席位 `779b9ed` 一起提交并推送，本席实际入批的只有接线＋单测＋记账＋回执
+
+### 一、结论（四件欠账本枚闭其三，剩 DCD 回执）
+
+- 依据：`E:\NAS\关键决策部\decisions\20261014-AF台账机械前置与MA本地装闸与回执落点根因-裁定.md` §一 Q1（立机械前置）／§一 Q2（驳回三档脏树 `--write` 授权，改动取材面＝HEAD 树）／§三 判例 2（先清面后装闸）。
+- 本枚实际入批的：① 把新门接进 `gates.sh`（调用块＋两档结论块）；② `tests/unit/test_ledger_same_batch_gate.py` 两族腿落盘；③ 本节记账；④ 架构说明 §十八／§十九 各一行。源码面（`scripts/af_face.py` 三档取数面、四枚清单门换面、`check_oneshot_layout.py` 换面、新门本体）早在 `779b9ed` 那笔 `fix(webui-update)` 里被别席位 `git add` 时吞进去并推送——取证 `git -c core.quotepath=false show --stat 779b9ed`。后果两面都如实说：裁定要的"源码与清单同一笔"在那一笔里**意外成立**（它同时带走了源码与清单），但提交说明与本批无关 ⇒ 本枚记账节号自己指路到 `779b9ed`。
+- 工作树里两份本席 15:58 `--write` 重生成的清单（`docs/发布线清单.md`／`docs/可观测性清单.md`）与本枚接线＋单测同批提交——正好是裁定 Q1 要堵的形状（新门已在 `--rev 779b9ed` 上咬到第一枚真违规）。⛔ 碰 `scripts/host_update.sh`／`host_check_update.sh`（别席位在途）。
+
+### 二、六枚门复测对撞表（取法＝逐枚 `\.venv314\Scripts\python.exe scripts/<门>.py > E:\NAS\tmp\rl165_post_<门>.txt 2>&1; echo $LASTEXITCODE`；⛔ 用系统 python——它没装 fastapi/homesdk 会把射程塌读成 RC=2）
+
+| 门 | RC | 处数 | 归属 |
+|---|---|---|---|
+| check_trust_boundary | 0 | — | 94 条路由逐条对撞一致；#136 可结案 |
+| check_oneshot_layout | 0 | — | 提交面 N 份文件／根目录 `.py` 0／`scripts/oneshot/` 5（N 取法＝`git ls-tree -r --name-only HEAD \| wc -l`） |
+| check_gates_coverage | **1→0** | 1→0 | ★ 接线前「漏跑 check_ledger_same_batch.py」；接线后干净（盘上 29 枚 check_*.py、gates.sh 覆盖 28、工作流覆盖 1、独立作业豁免 1；echo 文案无未转义反引号） |
+| check_ledger_same_batch --rev 779b9ed | 1 | 1 | ★ 永久坐在那笔上：它改了 `scripts/host_update.sh`（在册 2 枚锚点、最大行号 62）却没带 `docs/发布线清单.md`。⛔ 默认 `--rev HEAD` 在本交接单那笔之后读成 0 ⇒ ⛔ 因此以为没违规 |
+| check_observability | 1 | 55 | B 54＝具名码登记面缺席（手写面工作）；C 1＝棘轮（WARNING 无码站点现读超 §四 上限），⛔ 自抬 |
+| check_process_model | 1 | 6 | B 3 新站点未登记（`af_service.py` 的 `os.kill`／`Popen`）＋B 3 过期登记行号漂（出处是 `779b9ed` 改了 `af_service.py` 上方行数） |
+| check_release_line | 1 | 12 | B 5 未登记新载体（10-14 那批新增的 `host_*.sh`）＋C 6 分支字面 `master` vs §二 登记 `main`（归自更新线／DCD，⛔ 就地改字面）＋E 1＝棘轮（站点现读超上限），⛔ 自抬 |
+
+### 三、本枚读数（命令原文）
+
+- 接线验证：`bash -n gates.sh` ⇒ RC=0；`tr -dc '\r' < gates.sh \| wc -c` ⇒ 0（工作树与 HEAD 两面都量）；`python scripts/check_gates_coverage.py` ⇒ RC=0（接线前 RC=1）。
+- 单测腿：`\.venv314\Scripts\python.exe -m pytest tests/unit/test_ledger_same_batch_gate.py -q` ⇒ **21 passed**（合成树腿 16＋真仓腿 5；M0 绿／A 同批红+同批绿／假绿腿／B 分两笔／D 删／R 改名／C 未认领清单／窄判据 toplevel_py／Q2 负控两连／D exit2 五种／反空集护栏／真仓 RC∈{0,1}／ROSTER 每枚 doc+gate 在 HEAD 且锚点>0／C 腿全清单在册／红因逐字「清单与源码不同批」／gates.sh 接线哨兵）。
+- 真仓面：`python scripts/check_ledger_same_batch.py`（默认 --rev HEAD）⇒ RC=0（HEAD 是交接单那笔 docs-only 提交，不动锚点）；`--rev 779b9ed` ⇒ RC=1（第一枚真违规，红因逐字「清单与源码不同批」）。
+
+### 四、未落项（⛔ 沉默）
+
+- DCD 执行回执（落点 `E:\NAS\关键决策部\receipts\20261015-AF-台账机械前置与取材面HEAD-回执.md`）——本枚写完本节即投。
+- §三 手工登记面补齐：可观测性 54 枚具名码＋进程模型 3 枚新站点＋发布线 5 枚新载体＋3 处过期登记行号——整批内容工作，建议单开一编号批次，⛔ 混进 #158。
+- 棘轮三格（obs C／rl E／process_model 上限）⛔ 本席抬；rl C 那 6 处 `master`/`main` 不同源归自更新线／DCD 定发布线究竟是哪条。
+- 历史红率全量补跑（交接单 §11 留的：新门在 `git rev-list -40 HEAD` 上的红率，写就时取到 32 枚中 31 绿/1 红）——单枚约 20s，可先用 `git grep -l AUTO-BEGIN HEAD -- docs` 一次性取 C 腿候选再逐枚验；本枚未跑，下一批补。
+
+### 五、不自决清单
+
+⛔ 抬 `.gates-tally.txt`／`.gates-baseline.txt`／各清单 §四／§三 上限数字；⛔ 动 `src/autoforge/af_api.py`／`af_auth.py`／两份 compose／`ui-user-mimo/` 全树／`scripts/host_update*.sh`／`host_check_update*.sh`／`scripts/gh_ci_status.py`／`docs/audit/` 删除族（并发在途）；⛔ 碰 NAS 容器（docker build/up/restart/stop/start／exec／远端删除一律禁止）；⛔ 改路线图／homesdk 一字节；⛔ 新造 `ADM_ERR_*`；⛔ push、⛔ amend、⛔ `--no-verify`、⛔ 装包；⛔ 读改 `docs/ADM联动执行计划-AF.md`（standing 指令）；跨席技术指令走 `关键决策部\inbox\` 让 DCD 协调，⛔ 请出资人代转。
+
+### 六、存证（`E:\NAS\tmp\`，⛔ 入仓）
+
+`rl165_post_trust_boundary.txt`／`rl165_post_oneshot_layout.txt`／`rl165_post_observability.txt`／`rl165_post_process_model.txt`／`rl165_post_release_line.txt`（清面后逐枚门原文）、`rl165_post_check_gates_coverage.txt`（接线前漏跑原文）＋`rl165_cov_after.txt`（接线后干净原文）、`rl165_sambatch_779b9ed.txt`（新门判定那笔的红原文）、`rl165_sambatch_head.txt`（判定 HEAD 的绿原文）。
