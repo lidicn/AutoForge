@@ -24,7 +24,7 @@ services:
     volumes:
       - /vol1/1000/docker/autoforge-store:/data
       - /vol1/1000/docker/autoforge/ui/dist:/ui
-      - /vol1/1000/docker/autoforge/ui-user-mimo/dist:/mimo
+      # /mimo 已烘进镜像（Dockerfile.api multi-stage build），不再外挂 volume
       # 基线收口（v2.0.1/0.1-d）：镜像已烘入 src（Dockerfile.api COPY src），运行时不再挂宿主源码，
       # 避免「镜像基线」与「实际运行」分叉。后端变更须经 `docker compose build` 重烘镜像。
       # 仅本地热改后端免重建时，可临时取消下行注释（开发期，勿入生产）：
