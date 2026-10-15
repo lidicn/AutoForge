@@ -830,6 +830,15 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
     result["pending"] = op_id
     if self_check:
         result["self_check"] = self_check  # ADM B-11
+    # approve 后自动起 watch（真机常驻监听）
+    try:
+        ir = payload.get("ir")
+        if ir:
+            watch_res = start_watch(ir=ir, store_root=str(store.root), dry_live=False)
+            result["watch"] = watch_res
+    except Exception as e:
+        logger.warning("approve_pending: 自动起 watch 失败（不影响落盘）: %r", e)
+        result["watch_error"] = str(e)
     return result
 
 
@@ -2904,6 +2913,23 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
     ]
     if dry_live:
         cmd.append("--dry-live")
+    else:
+        # 真机常驻监听必须 --confirm + --live-allow（白名单）
+        cmd.append("--confirm")
+        # 从 IR 提取所有实体作为白名单
+        entities: set[str] = set()
+        for auto in ir.get("automations", []):
+            for node in auto.get("nodes", []):
+                trig = node.get("trigger", {})
+                eid = trig.get("entity_id") or trig.get("entity")
+                if eid:
+                    entities.add(eid)
+                params = node.get("params", {})
+                eid = params.get("entity_id")
+                if eid:
+                    entities.add(eid)
+        if entities:
+            cmd.extend(["--live-allow", ",".join(sorted(entities))])
     # P1-19：构造子进程环境，注入 AUTOFORGE_HA_TOKEN
     child_env = dict(os.environ)
     if ha_token:

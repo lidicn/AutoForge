@@ -15,6 +15,14 @@ RUN npm ci
 COPY ui-user-mimo/ .
 RUN npm run build
 
+# 管理端 UI build
+FROM node:20-alpine AS frontend-admin
+WORKDIR /web-admin
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci
+COPY ui/ .
+RUN npm run build
+
 # ── Stage 2: Python 服务 ──────────────────────────────────────────
 FROM python:3.14-slim
 # 基线对齐（v2.0.1/0.1-d）：与 Dockerfile.test 共用同一基础镜像 + 同一 homesdk wheel，
@@ -33,6 +41,8 @@ COPY examples ./examples
 COPY scripts ./scripts
 # 用户视角 UI（ui-user-mimo）build 产物烘进镜像，/mimo 不再外挂 volume
 COPY --from=frontend /web/dist /mimo
+# 管理端 UI build 产物烘进镜像，/ui 不再外挂 volume
+COPY --from=frontend-admin /web-admin/dist /ui
 # WO-AF-004 打回 5：homesdk 0.3.2 烘进镜像，文件名钉死（不通配，避免多 wheel 静默装错）
 COPY docker/homesdk/homesdk-0.3.2-py3-none-any.whl /tmp/homesdk/
 RUN pip install --no-cache-dir /tmp/homesdk/homesdk-0.3.2-py3-none-any.whl
@@ -47,7 +57,7 @@ RUN pip install --no-cache-dir -e ".[api,ha,mqtt]"
 # P1-21 修复：非 root 用户运行，防止容器内 RCE 持久化到宿主
 # uid=1000/gid=1001 匹配 NAS 宿主 lidicn:Users，确保挂载的 /data  store 目录可写
 RUN groupadd --gid 1001 autoforge && useradd --uid 1000 --gid 1001 --home /app --shell /usr/sbin/nologin autoforge
-RUN mkdir -p /data && chown -R 1000:1001 /data /app /mimo
+RUN mkdir -p /data && chown -R 1000:1001 /data /app /mimo /ui
 USER autoforge
 
 EXPOSE 8787

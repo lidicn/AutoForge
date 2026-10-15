@@ -89,7 +89,7 @@ TO_TAG=""
 CHANGELOG="[]"
 
 # fetch
-if ! git fetch --force origin "$REF" >> "$LOG" 2>&1; then
+if ! git fetch --force github "$REF" >> "$LOG" 2>&1; then
     log "ERROR: git fetch 失败"
     TO_SHA="$FROM_SHA"; TO_TAG="$FROM_TAG"
     write_result False "git fetch 失败，请检查网络或 SSH 密钥"
@@ -98,8 +98,8 @@ if ! git fetch --force origin "$REF" >> "$LOG" 2>&1; then
 fi
 log "fetch 成功"
 
-# reset to origin/$REF
-if ! git reset --hard "origin/$REF" >> "$LOG" 2>&1; then
+# reset to github/$REF
+if ! git reset --hard "github/$REF" >> "$LOG" 2>&1; then
     log "ERROR: git reset 失败"
     TO_SHA="$FROM_SHA"; TO_TAG="$FROM_TAG"
     write_result False "git reset 失败，代码可能有冲突"

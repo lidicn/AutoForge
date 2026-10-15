@@ -20,8 +20,8 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
 
 cd "$REPO_DIR" || { log "ERROR: 无法进入 $REPO_DIR"; exit 1; }
 
-# fetch
-if ! git fetch --force origin master >> "$LOG" 2>&1; then
+# fetch from GitHub (not local bare repo)
+if ! git fetch --force github master >> "$LOG" 2>&1; then
     log "WARN: git fetch 失败"
     if [ ! -f "$PREVIEW" ]; then
         export _AU_PREVIEW="$PREVIEW"
@@ -55,8 +55,8 @@ def git(*args):
 
 local_sha = git("rev-parse", "HEAD")
 local_tag = git("describe", "--tags", "--always")
-remote_sha = git("rev-parse", "origin/master")
-remote_tag = git("describe", "--tags", "--always", "origin/master")
+remote_sha = git("rev-parse", "github/master")
+remote_tag = git("describe", "--tags", "--always", "github/master")
 
 has_update = local_sha != remote_sha and remote_sha != "unknown"
 
