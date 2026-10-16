@@ -810,7 +810,11 @@ def _build_merged_ir(store: GraphStore) -> dict[str, Any] | None:
             graph = store.load(name, ver)
             autos = getattr(graph, "automations", None) or list(graph)
             for auto in autos:
-                all_autos.append(auto.to_dict() if hasattr(auto, "to_dict") else dict(auto))
+                d = getattr(auto, "raw", None) or getattr(auto, "model_dump", None)
+                if callable(d): d = d()
+                if d is None:
+                    d = dict(auto) if hasattr(auto, "__dict__") else {}
+                all_autos.append(d)
         except Exception as e:
             logger.warning("_build_merged_ir: 跳过 graph %s@%s: %r", name, ver, e)
     if not all_autos:
