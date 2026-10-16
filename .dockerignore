@@ -11,8 +11,7 @@ env/
 .env
 .env.*
 node_modules/
-ui/
-ui-user/
+# ui/ 和 ui-user-mimo/ 现在烘进镜像（multi-stage build），不能排除
 dist/
 build/
 .pytest_cache/
