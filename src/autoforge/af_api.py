@@ -709,7 +709,7 @@ def build_app(
         except Exception:
             # BUG-L1 修复：读失败不得静默返回 asks:[]，否则调用方把"读失败"当"无待答"，提问被静默丢失。
             # 写侧 af_live.py 已有 logger.warning，读侧补对等留痕 + ok=False 让调用方能区分。
-            logger.warning("pending_asks 读失败，返回 ok=False 而非空列表", exc_info=True)
+            logger.warning("API_PENDING_ASKS_READ_FAILED pending_asks 读失败，返回 ok=False 而非空列表", exc_info=True)
             return {"ok": False, "asks": [], "error": "read_failed"}
 
     # 暴露 ask 节点的原生控件元数据（供前端渲染下拉/滑杆/时间轴等）
