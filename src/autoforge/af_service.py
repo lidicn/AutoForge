@@ -808,7 +808,7 @@ def _build_merged_ir(store: GraphStore) -> dict[str, Any] | None:
     for name, ver in latest.items():
         try:
             graph = store.load(name, ver)
-            for auto in graph:
+            for auto in list(graph):
                 all_autos.append(auto.to_dict() if hasattr(auto, "to_dict") else dict(auto))
         except Exception as e:
             logger.warning("_build_merged_ir: 跳过 graph %s@%s: %r", name, ver, e)
