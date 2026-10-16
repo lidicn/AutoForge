@@ -1476,6 +1476,18 @@ def serve(
                 err=True,
             )
     bridge = _start_linkage_bridge(store_root=store_root)
+    # 容器重启后自动恢复 watch：如果有已部署自动化，自动合并并起 watch
+    try:
+        from .af_service import _build_merged_ir, start_watch
+        from .af_store import GraphStore
+        _store = GraphStore(store_root)
+        _merged = _build_merged_ir(_store)
+        if _merged and _merged.get("automations"):
+            typer.echo(f"· 恢复 watch：检测到 {len(_merged['automations'])} 条已部署自动化，自动起 watch")
+            _wr = start_watch(ir=_merged, store_root=store_root, dry_live=False)
+            typer.echo(f"· watch 恢复结果: ok={_wr.get('ok')}")
+    except Exception as _e:
+        typer.echo(f"⚠️ watch 自动恢复失败（不影响 API）: {_e!r}", err=True)
     install_access_log_token_mask()
     import atexit
     # 裁定 20261011 §3 Q7.2 的第二条腿。SIGTERM 这一档**不在这里装处理器**，原因不是「装了不生效」：
