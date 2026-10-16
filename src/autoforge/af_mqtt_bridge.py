@@ -627,7 +627,7 @@ class AfMqttBridge:
         """
         self.counts["publish_errors"] += 1
         self._keep(self.errors, f"{topic}: {type(exc).__name__}: {exc}")
-        logger.warning("[mqtt] 发布 %s 失败（已计入 publish_errors）：%r", topic, exc)
+        logger.warning("MQTT_PUBLISH_FAILED [mqtt] 发布 %s 失败（已计入 publish_errors）：%r", topic, exc)
         self.mark_degraded(ADM_ERR_BROKER_UNREACHABLE)
         self.publish_degraded()
         return {
@@ -872,7 +872,7 @@ class AfMqttBridge:
                 draft = af_draft.draft_intent(dict(intent), session_id=f"mqtt:{hypothesis_id}")
             except Exception as exc:  # noqa: BLE001 —— 候选编译失败就退回纯 NL 提案，但必须留痕
                 self._keep(self.errors, f"draft_intent: {exc!r}")
-                logger.warning("[mqtt] intent 编译失败，退回无 IR 提案：%r", exc)
+                logger.warning("MQTT_INTENT_COMPILE_FAILED [mqtt] intent 编译失败，退回无 IR 提案：%r", exc)
             else:
                 summary = str(draft.get("summary") or natural_language)
                 staged = af_draft.get_staged(draft["ref"])
@@ -988,7 +988,7 @@ class AfMqttBridge:
         """
         self.counts["linkage_rejected"] += 1
         self._keep(self.rejected, {"topic": topic, "reason": reason, "detail": detail, "code": code})
-        logger.warning("[mqtt] 丢弃 %s：%s %s（code=%s）", topic, reason, detail, code)
+        logger.warning("MQTT_LINKAGE_DROP [mqtt] 丢弃 %s：%s %s（code=%s）", topic, reason, detail, code)
         return {"handled": False, "topic": topic, "reason": reason, "detail": detail, "code": code}
 
     def stats(self) -> dict[str, Any]:

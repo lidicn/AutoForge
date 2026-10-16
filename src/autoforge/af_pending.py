@@ -180,7 +180,7 @@ class PendingStore:
         except (OSError, ValueError) as exc:
             done = _quarantine_corrupt(p)
             if done:
-                _logger.warning("pending load: 条目损坏，已隔离 %s: %s", p, exc)
+                _logger.warning("PENDING_CORRUPT_QUARANTINED pending load: 条目损坏，已隔离 %s: %s", p, exc)
             else:
                 _logger.warning("pending load: 损坏条目 %s 未能隔离（仍留原位）: %s", p, exc)
             return None
@@ -247,5 +247,5 @@ def _quarantine_corrupt(p: Path) -> bool:
         p.rename(p.with_suffix(".corrupt"))
         return True
     except OSError as exc:
-        _logger.warning("pending quarantine: 隔离失败，文件仍留在原位 path=%s err=%s", p, exc)
+        _logger.warning("PENDING_QUARANTINE_FAILED pending quarantine: 隔离失败，文件仍留在原位 path=%s err=%s", p, exc)
         return False

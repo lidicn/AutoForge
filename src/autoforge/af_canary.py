@@ -126,12 +126,12 @@ class CanaryResult:
             call = restore_call(entity_id, snap)
             if call is None:
                 logger.warning(
-                    "canary 回滚跳过 %s：无法映射恢复动作（fail-closed）", entity_id,
+                    "CANARY_ROLLBACK_NO_MAPPING canary 回滚跳过 %s：无法映射恢复动作（fail-closed）", entity_id,
                 )
                 continue
             if call.gaps:
                 logger.warning(
-                    "canary 回滚 %s 部分恢复：%s 读不出、未回放", entity_id, "/".join(call.gaps)
+                    "CANARY_ROLLBACK_PARTIAL canary 回滚 %s 部分恢复：%s 读不出、未回放", entity_id, "/".join(call.gaps)
                 )
             out.append(adapter.call(call.action, call.params))
         return out

@@ -471,7 +471,7 @@ class ConflictService:
             )
         except Exception as exc:  # noqa: BLE001
             logging.getLogger("autoforge.conflict").warning(
-                "af_watch 聚合冲突证据失败（不影响下发）：%r", exc
+                "WATCH_CONFLICT_AGG_FAILED af_watch 聚合冲突证据失败（不影响下发）：%r", exc
             )
 
     def _notify_guard_blind(self, automation_id: str, phase: str, exc: BaseException,
@@ -514,7 +514,7 @@ class ConflictService:
         bridge = af_mqtt_bridge.current_bridge()
         if bridge is None:
             logging.getLogger("autoforge.conflict").warning(
-                "冲突守卫失明但联动桥未接线：degraded 出向通知发不出去（拒判照旧）"
+                "GUARD_BLIND_NO_BRIDGE 冲突守卫失明但联动桥未接线：degraded 出向通知发不出去（拒判照旧）"
             )
             return
         try:
@@ -522,7 +522,7 @@ class ConflictService:
             bridge.publish_degraded()
         except Exception as bridge_exc:  # noqa: BLE001
             logging.getLogger("autoforge.conflict").warning(
-                "冲突守卫失明的 degraded 快照发布失败（拒判照旧）：%r", bridge_exc
+                "GUARD_BLIND_DEGRADED_PUBLISH_FAILED 冲突守卫失明的 degraded 快照发布失败（拒判照旧）：%r", bridge_exc
             )
 
     def _safe_band(self, automation_id: str) -> str | None:

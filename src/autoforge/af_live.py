@@ -456,7 +456,7 @@ def start_ticker(
             )
         except Exception as exc:
             # R14-01/R14-03 修复：写失败不得静默吞掉，否则 butler 永远读不到待答而静默丢失提问
-            logger.warning("pending_asks 原子写入失败（已落原子临时文件，下次 tick 会重试）: %s", exc)
+            logger.warning("PENDING_ASKS_WRITE_FAILED pending_asks 原子写入失败（已落原子临时文件，下次 tick 会重试）: %s", exc)
 
     # mimo TickSupervisor: fault classification + backoff + health + SAFE HALT
     global _tick_supervisor
@@ -550,7 +550,7 @@ def read_answer_inbox(runtime: Any, inbox_dir: Optional[str] = None) -> None:
                 sig = str(data.get("sig", "") or "")
                 if not key or not hmac.compare_digest(sig, _expect_sig(ask_id, text, room, answer_json)):
                     logger.warning(
-                        "inbox reject: 签名缺失或不符，未动作（保留证据文件）: %s ask_id=%r",
+                        "INBOX_REJECT_BAD_SIGNATURE inbox reject: 签名缺失或不符，未动作（保留证据文件）: %s ask_id=%r",
                         f.name, ask_id,
                     )
                     continue
@@ -563,7 +563,7 @@ def read_answer_inbox(runtime: Any, inbox_dir: Optional[str] = None) -> None:
                     f.unlink(missing_ok=True)  # 成功消费后才清理
                     logger.warning("answer consumed: ask_id=%s room=%s → inst=%s", ask_id, room, result.instance_id)
                 else:
-                    logger.warning("answer not consumed (保留证据文件): ask_id=%s room=%s", ask_id, room)
+                    logger.warning("ANSWER_NOT_CONSUMED answer not consumed (保留证据文件): ask_id=%s room=%s", ask_id, room)
             except Exception:
                 logger.exception("answer processing failed (保留证据文件): %s", f.name)
                 # 不删除文件，保留审批证据链

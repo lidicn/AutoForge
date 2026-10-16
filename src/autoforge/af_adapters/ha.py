@@ -171,7 +171,7 @@ class HATransport:
                 payload = json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
             logging.getLogger(__name__).warning(
-                "HA /api/states 拉取失败（按空快照返回，区别于 HA 真空）：%r", exc
+                "HA_STATES_FETCH_FAILED HA /api/states 拉取失败（按空快照返回，区别于 HA 真空）：%r", exc
             )
             self.last_states_error = f"{type(exc).__name__}: {exc}"
             return {}
@@ -295,7 +295,7 @@ class HAAdapter:
                     self.undo_recorder(action, params, pre)
             except Exception:  # 快照捕获异常绝不阻断真实下发
                 logging.getLogger("autoforge.adapter").warning(
-                    "undo 快照捕获异常（已忽略，继续下发；本次动作无回滚把手）", exc_info=True
+                    "HA_UNDO_SNAPSHOT_CAPTURE_FAILED undo 快照捕获异常（已忽略，继续下发；本次动作无回滚把手）", exc_info=True
                 )
         return self.transport(action, params)
 

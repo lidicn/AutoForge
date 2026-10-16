@@ -360,7 +360,7 @@ class NodeExecutor:
             if ask_id:
                 logger.warning("answer: ask_id=%r 不匹配任何挂起 ask，拒绝 fallback", ask_id)
             else:
-                logger.warning("answer: room=%r 无挂起 ask", room)
+                logger.warning("ANSWER_NO_PENDING_ASK answer: room=%r 无挂起 ask", room)
             return None
         instance = self.instances.get(session.instance_id)
         if instance is None:
@@ -596,7 +596,7 @@ class NodeExecutor:
                 value = evaluate(node.expr or {}, self._resolver(instance))
                 logger.debug("[IF] %s expr=%s → value=%r", node.id, node.expr, value)
             except (UnknownEntity, ExprError, KeyError, ValueError) as exc:
-                logger.warning("[IF] %s ERROR: %r", node.id, exc)
+                logger.warning("IF_NODE_EXEC_ERROR [IF] %s ERROR: %r", node.id, exc)
                 return self._soft_fail(instance, node, exc)
             return {"then"} if value else {"no", "default"}
 
@@ -694,7 +694,7 @@ class NodeExecutor:
                         # BUG-02 修复：canary 观察窗口配置解析失败不得静默降级，否则
                         # 无观察期保护直接下发危险动作且不留痕；记录告警后按无观察期处理。
                         _logger.warning(
-                            "canary.duration 解析失败，按无观察期处理（node=%s.%s, dur=%r）: %s",
+                            "CANARY_DURATION_PARSE_FAILED canary.duration 解析失败，按无观察期处理（node=%s.%s, dur=%r）: %s",
                             instance.automation.id, node.id, dur_str, exc,
                         )
             if canary_duration and canary_duration > 0:

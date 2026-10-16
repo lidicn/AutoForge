@@ -178,7 +178,7 @@ class ConflictAuditor:
                 except Exception as exc:
                     # AF59：坏行不能静默跳过——否则崩溃恢复时哪条审计丢了无从知晓。
                     logger.warning(
-                        "af_conflict_audit reload: 跳过无法解析的坏行 path=%s err=%r", path, exc
+                        "CONFLICT_AUDIT_BAD_LINE af_conflict_audit reload: 跳过无法解析的坏行 path=%s err=%r", path, exc
                     )
                     continue
         if len(self.events) > self.max_memory:
@@ -208,6 +208,6 @@ class ConflictAuditor:
             # AF59：落盘失败不能静默——否则"内存里有、盘上没有"这种历史静默缩短
             # 无从发现。不抛出（记账失败不影响主流程），但必须留痕。
             logger.warning(
-                "af_conflict_audit _persist: 落盘失败（仍保留在内存）path=%s err=%r",
+                "CONFLICT_AUDIT_PERSIST_FAILED af_conflict_audit _persist: 落盘失败（仍保留在内存）path=%s err=%r",
                 path, exc, exc_info=True,
             )

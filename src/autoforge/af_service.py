@@ -3081,7 +3081,7 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
             ha_token = json.loads(cred.read_text(encoding="utf-8")).get("ha_token", "")
         except (OSError, ValueError) as exc:
             logger.warning(
-                "start_watch: 凭据文件存在但读不出 %s err=%r —— 将在无 HA 令牌下启动子进程",
+                "START_WATCH_UNREADABLE_CREDENTIALS start_watch: 凭据文件存在但读不出 %s err=%r —— 将在无 HA 令牌下启动子进程",
                 cred, exc,
             )
             cred_state = "unreadable"
@@ -3089,7 +3089,7 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
             cred_state = "loaded" if ha_token else "empty"
             if not ha_token:
                 logger.warning(
-                    "start_watch: 凭据文件存在但 ha_token 为空 %s —— 将在无 HA 令牌下启动子进程",
+                    "START_WATCH_EMPTY_TOKEN start_watch: 凭据文件存在但 ha_token 为空 %s —— 将在无 HA 令牌下启动子进程",
                     cred,
                 )
     else:

@@ -247,7 +247,7 @@ class PersistStore:
             )
             return None
         if not _verify_record(record):
-            _logger.warning("af_persist: 落盘记录校验和不匹配，拒收（%s）", path)
+            _logger.warning("PERSIST_CHECKSUM_REJECT af_persist: 落盘记录校验和不匹配，拒收（%s）", path)
             return None
         return record
 
@@ -271,7 +271,7 @@ class PersistStore:
                 )
                 continue
             if not _verify_record(record):
-                _logger.warning("af_persist: 落盘记录校验和不匹配，跳过（%s）", path)
+                _logger.warning("PERSIST_RECORDS_CHECKSUM_SKIP af_persist: 落盘记录校验和不匹配，跳过（%s）", path)
                 continue
             out.append(record)
         return out

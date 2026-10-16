@@ -361,7 +361,7 @@ class Predictor:
                 at = _event_datetime(_event_time_value(raw))
             except (TypeError, ValueError) as exc:
                 dropped += 1
-                logger.warning("丢弃脏触发事件（%s）：%r", exc, raw)
+                logger.warning("PREDICT_DIRTY_EVENT_DROP 丢弃脏触发事件（%s）：%r", exc, raw)
                 continue
             is_predicted = bool(raw.get("predicted", False))
             if is_predicted and not include_predicted:
@@ -848,7 +848,7 @@ class Predictor:
                 json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             )
         except OSError as exc:  # fail-open：写盘失败不打断运行，内存模型继续生效
-            logger.warning("预测模型持久化失败（%s），继续使用内存模型", exc)
+            logger.warning("PREDICT_MODEL_PERSIST_FAILED 预测模型持久化失败（%s），继续使用内存模型", exc)
 
     def _load(self) -> None:
         path = self.predictions_path
@@ -858,7 +858,7 @@ class Predictor:
             with open(path, encoding="utf-8") as fh:
                 payload = json.load(fh)
         except (OSError, ValueError) as exc:
-            logger.warning("预测模型文件损坏（%s）→ 隔离并冷启动", exc)
+            logger.warning("PREDICT_MODEL_CORRUPT 预测模型文件损坏（%s）→ 隔离并冷启动", exc)
             self._quarantine(path)
             return
         if not isinstance(payload, Mapping) or payload.get("version") != MODEL_VERSION:

@@ -74,14 +74,14 @@ class Config:
                 return {}
             # R9-01/R13-02/R19-01：凭据文件损坏**不能静默清空**，否则 HOME_ASSISTANT_TOKEN 等
             # 回退默认 host；保留内存中现有凭据并告警（首次加载无内存凭据时退化为空）。
-            _logger.warning("credentials.json 损坏，保留内存凭据: %s", exc)
+            _logger.warning("CREDENTIALS_FILE_CORRUPT credentials.json 损坏，保留内存凭据: %s", exc)
             kept = dict(getattr(self, "_creds", {}) or {})
             self._creds_unreadable = not kept  # 手上没快照 ⇒ 落盘只会抹掉盘上其余凭据
             return kept
         if not isinstance(data, dict):
             # 形状不对与读不出来同一条失败方向：`_creds.get` 会当场 AttributeError
             _logger.warning(
-                "credentials.json 形状不是对象，按读不出来处理: type=%s", type(data).__name__
+                "CREDENTIALS_SHAPE_INVALID credentials.json 形状不是对象，按读不出来处理: type=%s", type(data).__name__
             )
             kept = dict(getattr(self, "_creds", {}) or {})
             self._creds_unreadable = not kept
