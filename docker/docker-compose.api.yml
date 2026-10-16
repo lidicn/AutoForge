@@ -20,7 +20,7 @@ services:
     # 用户视角 UI（ui-user-mimo，DCD 20261005 §一 交付面认定 B）挂 /mimo：其 vite base 必须与
     # `af_api.UI_USER_PREFIX` 同值，否则 dist 里的资源绝对路径 /mimo/assets/* 与挂载前缀对不上，
     # 页面会 200 但白屏。这条同源由 tests/unit/test_ui_user_mount.py 当场核对。
-    command: ["forge", "serve", "--host", "0.0.0.0", "--port", "8787", "--store-root", "/data", "--examples", "/app/examples/ir", "--ui-dir", "/ui", "--ui-user-dir", "/mimo"]
+    command: ["bash", "/app/docker/entrypoint.sh"]
     volumes:
       - /vol1/1000/docker/autoforge-store:/data
       # /ui 和 /mimo 都已烘进镜像（Dockerfile.api multi-stage build），不再外挂 volume

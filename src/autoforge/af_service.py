@@ -790,47 +790,43 @@ def list_pending(store: GraphStore, agent: str | None = None) -> dict[str, Any]:
 
 
 def _build_merged_ir(store: GraphStore) -> dict[str, Any] | None:
-    """把所有已部署 graph 的最新版本合并成一个 IR，供 watch 一次性挂全部自动化。
-
-    - 遍历 history 取每个 graph 名的最新版本
-    - 把所有 automations 拼到一起
-    - 对写同一实体的自动化自动分配递增 priority（避免 ENTITY_WRITE_CONFLICT）
-    """
-    # 1. 取每个 graph 名的最新版本，跳过 bootstrap examples
+    """把所有用户部署的 graph 最新版本合并成一个 IR，供 watch 一次性挂全部自动化。"""
+    # 1. 取每个 graph 名的最新版本，跳过 bootstrap examples（note 字段标记）
     latest: dict[str, int] = {}
     for record in store.history():
         name = str(record.get("name", ""))
         ver = int(record.get("version") or 0)
-        tags = record.get("tags") or []
-        if "bootstrap" in tags or "examples" in tags:
+        note = str(record.get("note") or "")
+        if note.startswith("bootstrap"):
             continue
         if name not in latest or ver > latest[name]:
             latest[name] = ver
-    # 2. 加载所有 automations
+    # 2. 加载所有 automations（用 auto.raw，nodes/edges/meta 都在顶层）
     all_autos: list[dict] = []
     for name, ver in latest.items():
         try:
             graph = store.load(name, ver)
-            autos = getattr(graph, "automations", None) or list(graph)
-            for auto in autos:
-                d = getattr(auto, "raw", None) or getattr(auto, "model_dump", None)
-                if callable(d): d = d()
-                if d is None:
-                    d = dict(auto) if hasattr(auto, "__dict__") else {}
-                all_autos.append(d)
+            for auto in getattr(graph, "automations", []) or []:
+                d = getattr(auto, "raw", None)
+                if d:
+                    all_autos.append(d)
         except Exception as e:
             logger.warning("_build_merged_ir: 跳过 graph %s@%s: %r", name, ver, e)
     if not all_autos:
         return None
-    # 3. 给写同一实体的自动化分配递增 priority
-    write_count: dict[str, int] = {}
+    # 3. 收集 entity → [auto_id]，再统一分配递增 priority（避免遍历 do 节点时反复覆盖）
+    writers: dict[str, list[dict]] = {}
     for auto in all_autos:
         for node in auto.get("nodes", []):
             if node.get("kind") == "do":
                 eid = node.get("params", {}).get("entity_id", "")
                 if eid:
-                    write_count[eid] = write_count.get(eid, 0) + 1
-                    auto.setdefault("meta", {})["priority"] = write_count[eid]
+                    writers.setdefault(eid, []).append(auto)
+    for eid, autos in writers.items():
+        if len(autos) < 2:
+            continue
+        for i, auto in enumerate(autos, start=1):
+            auto.setdefault("meta", {})["priority"] = i
     return {"version": 1, "automations": all_autos}
 
 

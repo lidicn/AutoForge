@@ -39,6 +39,8 @@ COPY examples ./examples
 # 窗后验收与门禁脚本随镜像走：`docker compose exec autoforge python scripts/verify_adm_window.py`
 # 是停机窗当天的验收入口，它必须和被测服务在同一台机器上可执行。
 COPY scripts ./scripts
+# entrypoint.sh（管 serve + watch 生命周期）
+COPY docker/entrypoint.sh ./docker/entrypoint.sh
 # 用户视角 UI（ui-user-mimo）build 产物烘进镜像，/mimo 不再外挂 volume
 COPY --from=frontend /web/dist /mimo
 # 管理端 UI build 产物烘进镜像，/ui 不再外挂 volume
