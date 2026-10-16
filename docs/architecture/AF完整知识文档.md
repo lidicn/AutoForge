@@ -1,9 +1,9 @@
 # AutoForge 完整知识文档
 
 > **更新时间**：2026-10-09　**鲜度基准**：`master` HEAD `e5b3fd5`
-> **本文是"面与清单"**：IR 语言、31 个 MCP 工具、90 条 HTTP 路由、18 个 CLI 命令、43 项安全闸、测试通道与预演怎么用、两棵 WebUI 怎么用、部署与排障。
+> **本文是"面与清单"**：IR 语言、31 个 MCP 工具、90 条 HTTP 路由、18 个 CLI 命令、44 项安全闸、测试通道与预演怎么用、两棵 WebUI 怎么用、部署与排障。
 > **机制与不变量在**《AF完整架构与运行时说明.md》（同一份代码、同一个基准；那里讲"为什么这档不碰真机"，这里讲"这档怎么调"）。
-> **清单不是手抄**：工具表来自 `len(af_mcp.TOOLS)=31` 的注册表、路由表来自 `build_app().routes`（90 条含 methods）、CLI 表来自 `typer` 命令注册表、检查项来自 `af_scanner.CHECKS`（43 项）、枚举来自 `af_ir/schema/ir.schema.json`。这四份都是**系统自己的信号**，改代码后重取即可，别信任何一处散文副本。
+> **清单不是手抄**：工具表来自 `len(af_mcp.TOOLS)=31` 的注册表、路由表来自 `build_app().routes`（90 条含 methods）、CLI 表来自 `typer` 命令注册表、检查项来自 `af_scanner.CHECKS`（44 项）、枚举来自 `af_ir/schema/ir.schema.json`。这四份都是**系统自己的信号**，改代码后重取即可，别信任何一处散文副本。
 
 ---
 
@@ -14,7 +14,7 @@
 核心能力（现状，非计划）：
 
 - 自然语言 → 意图 JSON → IR（`af_draft`，服务端解析中文设备名）
-- 编译期安全闸 **43 项**（`af_scanner.CHECKS`）
+- 编译期安全闸 **44 项**（`af_scanner.CHECKS`）
 - 双轨仿真 + 后置条件断言（`simulate` / `simulate_track`，`expect`）
 - **预演档 `dry_run`**：校验 + 仿真，零写入（§八）
 - **测试通道 `af_test_*`**：批量跑题、自动放行、与正式区隔离（§九）
@@ -230,13 +230,13 @@
 
 ---
 
-## 七、安全闸：`af_scanner.CHECKS` **43 项**（唯一真源 `af_scanner.py:39`）
+## 七、安全闸：`af_scanner.CHECKS` **44 项**（唯一真源 `af_scanner.py:39`）
 
 按族分组（括号里是注册表原话的短版）：
 
 | 族 | 检查项 |
 |---|---|
-| 结构与依赖 | `ENTITY_DEP_CYCLE`、`CROSS_DEP_CYCLE`、`STATIC_LOOP`、`EMIT_SELF_LOOP`、`EMIT_STORM_LIMIT`、`DUPLICATE_EDGE_PRIORITY`、`RESERVED_NOT_IMPLEMENTED` |
+| 结构与依赖 | `ENTITY_DEP_CYCLE`、`CROSS_DEP_CYCLE`、`STATIC_LOOP`、`EMIT_SELF_LOOP`、`EMIT_STORM_LIMIT`、`DUPLICATE_EDGE_PRIORITY`、`NO_ENTRY_NODE`、`RESERVED_NOT_IMPLEMENTED` |
 | 实体与目录 | `ENTITY_NOT_FOUND`、`ENTITY_OFFLINE_NOW`、`ENTITY_WRITE_CONFLICT`、`ENTITY_ACL_DENIED`、`ENTITY_GUARD_TIER0` |
 | 风险分级 | `L3_ACTION`、`L2_NEEDS_CONFIRM`、`L2_NEEDS_CANARY`、`HIGH_RISK_AFTER_SUSPEND`、`LOW_CONF_WRITES_DEVICE`、`SHADOW_WRITES_DEVICE` |
 | 中断与挂起 | `MISSING_TIMEOUT_OR_DEFAULT`、`CANCEL_SPAWNS_INSTANCE`、`NESTED_SUSPEND_IN_CANCEL`、`ASK_AT_RUNTIME`、`DO_WITHOUT_ON_ERROR`、`CONFIRM_WITHOUT_DENY_PATH` |
@@ -254,6 +254,8 @@
 43 项里唯一一枚"由裁定新增、而不是由缺陷新增"的诊断是 **`CONFIRM_WITHOUT_DENY_PATH`**（裁定 20261009（第二份）§二 2.2）：节点标了 `requires_confirm` 却没有 `no`/`on_timeout`/`default` 任一出口时出**告警**。级别必须是 WARN——被拒后照既有边纪律落 `done` 是 **Q2 裁的甲**（与 `ask` 答"不要"同一条路），不是缺陷，所以这条诊断**不拦发布**（`ScanResult.ok` 只看 errors）。它要挪走的只是"作者没写拒绝出口 ⇒ 那条走向只在运行期静默发生、图里读不出来"。落点：检查方法 `af_scanner.py:509-527`（`Diagnostic` 字面量 `:520`）、调用点 `:369`（紧跟 `_check_suspension`）、`CHECKS :56`、`CODE_HINT :99-100`；判据 `tests/unit/test_confirm_exit_diagnostic.py` 十一条腿（含"三枚出口名 = 执行器拒绝分支词汇"那条同源腿）。
 
 第 43 枚 **`INBOX_PARAM_TOO_LONG`**（执行记录 §十八 残余 B.9 的后半格）管的是**收件箱载荷超长**：`adapter: inbox` 的 `do` 节点里 `text`/`title`/`body`/`content` 任何一枚超过库侧上限 ⇒ **ERROR、拦发布**。级别与上一条相反的理由是契约 §1.3 已经写明 DB 侧对超长载荷 fail-closed **丢弃**：这条动作发出去也必死，让它进库、进演练台账、跑到执行才红，等于把"必然失败"伪装成"已配置好"（与 `L2_NEEDS_CANARY` 同族）。**上限一个数字都不写在 AF 里**：`af_adapters/inbox.py:57` 的 `INBOX_LEN_LIMITS` 格子里放的**就是** `from homesdk.presence import INBOX_MAX_TEXT/INBOX_MAX_TITLE/INBOX_MAX_BODY` 那三枚常量本身，`inbox_overlong_fields()` `:74` 是唯一判定入口。这里刻意不走按名派发：对 `homesdk.presence` 成员的 `getattr` 访问在 `af_adapters` 里是 `scripts/check_mqtt_writers.py` D 判据的射程（机制层入口只许在桥内），而直接 import 让"库侧改名"变成 AF 的 **import 期** `ImportError`，比运行期才炸响亮；扫描器 `af_scanner.py:709-728`（字面量 `:720`、调用点 `:379`）里连一个整数字面量都不许出现——那条"判超长的数＝拒超长的数"由 `tests/unit/test_inbox_param_length_diagnostic.py` 用 AST 解析库侧源码自证（三个 builder 里 `_len_bounded(arg, CONST, "field")` 的字段名单必须与该表逐 kind 相等，且每格的值等于 `getattr(_presence, CONST)` 的现读值；另有两条腿钉住"本文件零 `getattr` 派发、零整模块 import"与"表里的值就是库侧那枚常量对象"）。满射程的依据：执行器把 `node.params` 原样交给适配器（`af_executor.py:741`，运行期不做插值），编译期量的就是运行期那份长度；同一份超长载荷在两端的读数由两条腿同时钉（扫描器 ERROR + 适配器 `ADM_ERR_PAYLOAD_INVALID`）。
+
+第 44 枚 **`NO_ENTRY_NODE`**（2026-10-17 基础设施敲打 N02）管的是**自动化根本没有触发入口**：一条自动化若一个 `kind=on` 的触发节点（state/sun/time/event/group）都没有，它永远不会被触发，属结构死图。检查方法 `_check_entry`（`af_scanner.py:720-731`，字面量 `:724`）对每个 `Automation` 调 `entry_nodes()`，为空即出 **ERROR、拦发布**（与 `EXPR_INVALID` 同族的"结构错误必须在编译期拦死、不许 build 之后 500"）。此前这格只在 `_load_ir` 深表达式异常或渲染期才炸，坏图能进库；本枚让"无触发节点"在扫描期就得到结构化判红。
 
 另外：`ENTITY_DEP_CYCLE`/`CROSS_DEP_CYCLE`/`EMIT_SELF_LOOP` 走变量传码（`af_scanner.py:1147-1158`），`LIVE_*` 四项走模块级字符串常量（`:1287-1290`）——只按 `Diagnostic("字面量", …)` 的 AST 扫这七项会误判成"注册了却从不发出"。
 

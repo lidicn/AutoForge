@@ -532,7 +532,7 @@ def main(argv: list[str]) -> int:
         f"✓ 信任边界门禁干净（现读 {info['rows']} 条路由：第一方端点逐条对撞清单一致；"
         f"{info['ungated']} 条非鉴权档端点全部在册且处理器/依据/理由都核得过、无过期登记；"
         f"{len(info['found_installers'])} 个挂端点的机制全部登记为未挂载并现读复核过没有调用者；"
-        f"{_snap(root).label}）"
+        f"取数面＝{_snap(root).label}）"
     )
     return 0
 

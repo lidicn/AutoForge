@@ -853,7 +853,7 @@ def main(argv: list[str]) -> int:
     print(
         f"✓ 可观测性门禁干净（现读留痕 {info['sites']} 站点逐行对撞一致；具名码 {info['codes']} 枚／"
         f"{info['coded']} 站点全部在册且认领可读；关联 id 面 信封 {info['env']} 枚／HTTP {info['req']} 枚"
-        f" 与 §五 账面对撞一致；访问日志掩码锚点在位；{_snap(root).label}）"
+        f" 与 §五 账面对撞一致；访问日志掩码锚点在位；取数面＝{_snap(root).label}）"
     )
     return 0
 

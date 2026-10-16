@@ -271,7 +271,9 @@ def test_real_repo_is_green_and_has_range():
     assert red == [], f"真仓被判红：{red}"
     assert info["root_py"] == [], f"根目录又出现入库 .py：{info['root_py']}"
     assert len(info["oneshot"]) >= 5, f"`scripts/oneshot/` 只剩 {len(info['oneshot'])} 个：本批搬进来的四份没了"
-    assert info["migration_rows"] == 4, f"迁移记录读到 {info['migration_rows']} 行，不是现读的 4 行"
+    # 迁移记录：历史 4 行（analyze_failures/clear_pending/export_ir/fix_ir）＋ 2026-10-17 止血
+    # 搬入 8 行（debug2/debug3/debug_store/resync/step0/step0b/step0c/step0d）＝ 12 行。
+    assert info["migration_rows"] == 12, f"迁移记录读到 {info['migration_rows']} 行，不是现读的 12 行"
     assert info["py_total"] > 100, f"索引内 .py 只有 {info['py_total']} 枚：口径断了"
 
 

@@ -203,7 +203,7 @@ def check(repo: Path, tracked: list[str] | None = None) -> tuple[list[str], list
     if tracked is None:
         tracked = tracked_paths(repo)
         if tracked is None:
-            errs.append(f"在 {repo} 读不出 HEAD 树（git 不可用／这里不是仓库／仓里一枚提交都没有）：本门判的是**提交面**，"
+            errs.append(f"在 {repo} 读不出 git 索引（HEAD 树）（git 不可用／这里不是仓库／仓里一枚提交都没有）：本门判的是**入库面（提交面）**，"
                         "没有提交就没有口径——不许改用磁盘读数冒充结论")
             return red, errs, {}
 
@@ -344,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
         for e in errs:
             print(f"射程自证：{e}")
         return 2
-    print(f"读数：提交面（HEAD 树）{info['tracked_total']} 个文件／根目录 `.py` {len(info['root_py'])} 个／"
+    print(f"读数：入库面（取数面＝提交面 HEAD 树，`git ls-tree HEAD`）{info['tracked_total']} 个文件／根目录 `.py` {len(info['root_py'])} 个／"
           f"单下划线脚本 {len(info['underscore'])} 枚／`{ONESHOT_DIR}/` {len(info['oneshot'])} 个／"
           f"存量登记 {info['legacy_entries']} 条（上限 {info['cap']}）／迁移记录 {info['migration_rows']} 行")
     if red:

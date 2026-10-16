@@ -351,7 +351,10 @@ def test_real_repo_is_green_and_pinned():
     assert mod.anchor_ok(ROOT) is None
     findings, info = mod.check(ROOT)
     assert findings == [], findings[:3]
-    assert info["rows"] == 90
+    # 读数：2026-10-17 对账 90→94（watch 生命周期 start/stop/list、insights 审批/待批 3 读
+    # 4 写显式挂 read/write；DELETE/PATCH /api/user/agents 加 owner 鉴权）。新增均落在显式
+    # scope 档，anon 仍 10、ungated 全登记 14，无裸奔。
+    assert info["rows"] == 94
     assert info["ungated"] == 14
     assert info["register"] == 14
     assert info["found_installers"] == [
@@ -367,7 +370,7 @@ def test_real_repo_tier_counts_are_the_batch_reading():
     for x in rows:
         counts[x["tier"]] = counts.get(x["tier"], 0) + 1
     assert counts == {
-        "scope:write": 39, "scope:read": 30, "scope:live": 3,
+        "scope:write": 40, "scope:read": 33, "scope:live": 3,
         "anon": 10, "optional": 2, "bearer-in-handler": 2, "builtin": 4,
     }
 
@@ -382,9 +385,9 @@ def test_the_four_anonymous_posts_are_the_substance_of_the_batch():
 
 
 def test_two_reports_counts_reconciled_in_inventory_doc():
-    """执行记录要引这张表：read 30／write 39／live 3 与第三轮报告逐条对上，"无鉴权"那一档本门读成 14。"""
+    """执行记录要引这张表：read 33／write 40／live 3 与第三轮报告逐条对上，"无鉴权"那一档本门读成 14。"""
     text = (ROOT / mod.DOC_REL).read_text(encoding="utf-8")
-    assert "scope:read=30" in text and "scope:write=39" in text and "scope:live=3" in text
+    assert "scope:read=33" in text and "scope:write=40" in text and "scope:live=3" in text
     assert "anon=10" in text and "optional=2" in text and "bearer-in-handler=2" in text
     assert "非鉴权档第一方端点 **14 条**" in text
 

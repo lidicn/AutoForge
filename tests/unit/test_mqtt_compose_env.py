@@ -51,6 +51,23 @@ def _wheel_mqtt_keys() -> set[str]:
     return {t.rstrip("_") for t in tokens}
 
 
+def _bridge_mqtt_keys() -> set[str]:
+    """AF 桥 `af_mqtt_bridge.py` 自己（不经 wheel）读的 MQTT_* 键。
+
+    `MQTT_CLIENT_ID` 是 AF 侧概念：wheel 的 `homesdk/mqtt.py` 只在 `connect(client_id=...)`
+    参数位收 client_id、不读环境变量；AF 桥 `os.environ.get("MQTT_CLIENT_ID")` 自己读了再传进去，
+    解决同机 AF/MA 容器 default_client_id 撞名互踢。这个键 wheel 不读但桥真读，仍属合法来源，
+    不能被"wheel 不读 = 手抄键"那一刀误杀。同样用 AST 形状现取，不建第二份人工名单。
+    """
+    bridge = (ROOT / "src" / "autoforge" / "af_mqtt_bridge.py").read_text(encoding="utf-8")
+    read_calls = re.findall(
+        r"os\.environ\.get\(\s*[\"'](MQTT_[A-Z0-9_]+)[\"']"
+        r"|os\.getenv\(\s*[\"'](MQTT_[A-Z0-9_]+)[\"']",
+        bridge,
+    )
+    return {a or b for a, b in read_calls}
+
+
 def _compose_env() -> dict[str, str]:
     """`services.autoforge-api.environment` 里**会执行**的条目（注释行整行跳过——§二之四十六
     那条"注释不算覆盖"的同族：注释里出现一个键名不等于容器里有这个环境变量）。
@@ -81,9 +98,11 @@ def test_compose_mqtt_keys_are_all_read_by_the_vendored_wheel():
     assert len(keys) >= 5, f"compose 里 MQTT_* 引用少于 5 条，本批要钉的『补齐引用』没做到：{sorted(keys)}"
     wheel_keys = _wheel_mqtt_keys()
     assert wheel_keys, "wheel 的 mqtt 模块里一个 MQTT_* 都没数到"
-    invented = sorted(keys - wheel_keys)
+    # 合法来源 = wheel mqtt.py 读的 ∪ AF 桥自己读的（如 MQTT_CLIENT_ID，见 _bridge_mqtt_keys）
+    readable = wheel_keys | _bridge_mqtt_keys()
+    invented = sorted(keys - readable)
     assert not invented, (
-        f"compose 引用了 wheel 不读的键：{invented}——桥会静默连不上而 compose 照样起（键名手抄的形状）"
+        f"compose 引用了 wheel 与 AF 桥都不读的键：{invented}——桥会静默连不上而 compose 照样起（键名手抄的形状）"
     )
 
 

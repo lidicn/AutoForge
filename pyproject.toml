@@ -11,6 +11,11 @@ requires-python = ">=3.11"
 dependencies = [
     "jsonschema>=4.20",
     "typer>=0.12",
+    # IANA 时区库：`af_time.load_tz` 用 `zoneinfo.ZoneInfo(name)` 按名解析（sun 日出日落／time
+    # 触发／DST 都靠它）。Windows 与 python-slim 镜像都没有系统 tzdata，缺它时 ZoneInfo 抛
+    # ZoneInfoNotFoundError，load_tz 静默退化成固定 +08:00「CST」——传 Asia/Tokyo 也返回 CST，
+    # 跨时区时间线整体失效。这是内核（CLI/API/仿真都用），放主依赖而非 extras。
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

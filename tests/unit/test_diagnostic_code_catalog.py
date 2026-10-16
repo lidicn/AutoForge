@@ -170,6 +170,6 @@ def test_confirm_and_canary_are_two_distinct_branches():
 
 
 def test_catalog_size_reading_is_pinned():
-    """目录枚数现读（文档里那句"43 项"的对账位）：漂了就红，逼记账同步。"""
-    assert len(CHECKS) == 43, f"CHECKS 现读 {len(CHECKS)} 枚，两份架构文档那句读数要跟着改"
+    """目录枚数现读（文档里那句"44 项"的对账位）：漂了就红，逼记账同步。"""
+    assert len(CHECKS) == 44, f"CHECKS 现读 {len(CHECKS)} 枚，两份架构文档那句读数要跟着改"
     assert set(CHECKS) == set(CODE_HINT), "两份目录的键集要同源：只进一份就是半张脸"

@@ -707,7 +707,7 @@ def main(argv: list[str]) -> int:
         f"✓ 进程模型门禁干净（现读生命周期 {info['sites']} 枚全部在册且认领可读；"
         f"同步原语 {info['prims']} 枚、模块级共享名 {info['shared']} 枚逐行对撞一致；"
         "serve 收尾／watch SIGTERM／serve 退出兜底三条形状锚点都在；"
-        f"{_snap(root).label}）"
+        f"取数面＝{_snap(root).label}）"
     )
     return 0
 

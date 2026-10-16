@@ -247,17 +247,55 @@ def test_vite_base_matches_the_server_prefix():
         assert value == f"/{UI_USER_PREFIX}/", f"{key}={value!r} 与服务端前缀不一致"
 
 
+def _deployed_user_mount() -> tuple[str, str]:
+    """解析生产部署里用户端 dist 的（启动参数目标, dist 落位目标），两值都得 == UI_USER_PREFIX。
+
+    认两种部署形态，反例两种都拦：
+      (A) 卷挂旧形态：compose 内联 `"--ui-user-dir", "/mimo"` + 卷 `ui-user-mimo/dist:/mimo`。
+      (B) 烘进镜像形态（2026-10-17 起，防镜像基线与运行分叉）：compose `command` 指向
+          `entrypoint.sh`，由它传 `--ui-user-dir /mimo`，dist 由 Dockerfile multi-stage
+          `COPY --from=frontend /web/dist /mimo` 烘入，不再外挂卷。
+    任何一种形态都必须能同时解析出"启动参数指向 /mimo"和"dist 真的落到 /mimo"。
+    """
+    compose = (REPO_ROOT / "docker" / "docker-compose.api.yml").read_text(encoding="utf-8")
+
+    # 1) 启动参数 --ui-user-dir 的值：compose 内联优先；否则顺着 command 找 entrypoint.sh
+    inline = re.search(r'"--ui-user-dir",\s*"([^"]+)"', compose)
+    if inline:
+        flag_target = inline.group(1)
+    else:
+        ep_ref = re.search(r"bash\"\s*,\s*\"([^\"]*entrypoint\.sh)\"", compose)
+        assert ep_ref, "compose 既没内联 --ui-user-dir，也没引用 entrypoint.sh ⇒ 部署没传用户端目录"
+        # 容器内 /app/docker/entrypoint.sh 由 Dockerfile `COPY docker/entrypoint.sh` 烘入
+        ep_name = Path(ep_ref.group(1)).name
+        ep_text = (REPO_ROOT / "docker" / ep_name).read_text(encoding="utf-8")
+        in_ep = re.search(r"--ui-user-dir\s+(/\S+)", ep_text)
+        assert in_ep, f"{ep_name} 引用了但没传 --ui-user-dir ⇒ /mimo 不被服务"
+        flag_target = in_ep.group(1)
+
+    # 2) dist 落位：卷挂（旧）或 Dockerfile 烘入（新），目标都得是 /mimo
+    vol = re.search(r"-\s*(\S*ui-user-mimo/dist):(\S+)", compose)
+    if vol:
+        dist_target = vol.group(2)
+    else:
+        dockerfile = (REPO_ROOT / "docker" / "Dockerfile.api").read_text(encoding="utf-8")
+        baked = re.search(r"COPY\s+--from=frontend\s+\S+\s+(/\S+)", dockerfile)
+        assert baked, "没有卷挂也没在 Dockerfile 烘入用户端 dist ⇒ /mimo 在容器里是空的"
+        # 烘进 /mimo 的那个 stage 必须确实由 ui-user-mimo 构建（防错把管理端烘进 /mimo）
+        assert re.search(r"COPY\s+ui-user-mimo/", dockerfile), \
+            "frontend 构建阶段不是 ui-user-mimo ⇒ 烘进 /mimo 的树错了"
+        dist_target = baked.group(1)
+
+    return flag_target, dist_target
+
+
 def test_compose_mounts_the_user_dist_at_the_same_prefix():
-    text = (REPO_ROOT / "docker" / "docker-compose.api.yml").read_text(encoding="utf-8")
-    assert "--ui-user-dir" in text, "compose 没传用户端目录 ⇒ 线上 /mimo 只会是假绿或 404"
-    flag_value = re.search(r'"--ui-user-dir",\s*"([^"]+)"', text)
-    assert flag_value, "compose 里 --ui-user-dir 后面没跟值"
-    target = flag_value.group(1).strip("/")
-    assert target == UI_USER_PREFIX, f"容器内挂载点 {target!r} ≠ 前缀 {UI_USER_PREFIX!r}"
-    # 卷的目标路径必须与 --ui-user-dir 那个值同一枚，否则参数指向空目录、读 503。
-    volume = re.search(r"-\s*(\S*ui-user-mimo/dist):(\S+)", text)
-    assert volume, "compose 没有 ui-user-mimo/dist 的卷"
-    assert volume.group(2).strip("/") == target, volume.group(2)
+    flag_target, dist_target = _deployed_user_mount()
+    # 启动参数指向的容器内路径必须 == 服务端前缀
+    assert flag_target.strip("/") == UI_USER_PREFIX, f"启动参数 {flag_target!r} ≠ 前缀 {UI_USER_PREFIX!r}"
+    # dist 真正落到的路径必须与启动参数同一枚，否则参数指向空目录、读 503
+    assert dist_target.strip("/") == UI_USER_PREFIX, \
+        f"dist 落位 {dist_target!r} ≠ 启动参数 {flag_target!r}"
 
 
 def test_mimo_router_history_carries_the_vite_base():
