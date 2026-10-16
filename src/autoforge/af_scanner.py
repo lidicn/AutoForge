@@ -63,6 +63,7 @@ CHECKS: dict[str, str] = {
     # IR §8.2 补充项
     "DUPLICATE_EDGE_PRIORITY": "⑭ 同节点同优先级边重复定义",
     "NON_IDEMPOTENT_CONCURRENT": "⑪ 非幂等动作 + restart/parallel",
+    "NO_ENTRY_NODE": "自动化没有任何触发节点（kind=on）：永远不会被触发，build 直接判红",
     "RESERVED_NOT_IMPLEMENTED": "G1 保留字段未实现（fn）",
     # ── v1.0.0 表达力收口 ──
     "EXPR_INVALID": "表达式校验失败（未知算子/函数、参数个数、深度/节点上限）",
@@ -122,6 +123,8 @@ CODE_HINT: dict[str, str] = {
                           "别让一个僵尸传感器写进自动化。",
     "DUPLICATE_EDGE_PRIORITY": "同一节点同一优先级只允许一条边，删掉重复定义。",
     "NON_IDEMPOTENT_CONCURRENT": "非幂等动作不要配 `restart`/`parallel`（会重复执行）。",
+    "NO_ENTRY_NODE": "至少添加一个 kind=on 的触发节点（state/sun/time/event/group），"
+                     "并把它用 then 边接到首个动作；一条没有入口的自动化永远不会运行。",
     "RESERVED_NOT_IMPLEMENTED": "`fn` 仍为保留位；把自定义逻辑改写成内置表达式或拆成多个节点。",
     "EXPR_INVALID": "检查算子名/函数名拼写、参数个数，以及嵌套深度（上限 32）/节点数（上限 256）。",
     "TRIGGER_INVALID": "把 group 触发源改平（一层 `or`/`and` 列出全部条件），别让 group 套 group，也别自引用。",
@@ -410,6 +413,7 @@ class StaticScanner:
         self._check_snapshot(auto, out)
         self._check_shadow(auto, out)
         self._check_low_confidence(auto, out)
+        self._check_entry(auto, out)
         self._check_entities(auto, out)
         self._check_static_loop(auto, out)
         self._check_emit(auto, out)
@@ -709,6 +713,20 @@ class StaticScanner:
                     f"触发源校验失败：{exc}",
                     auto.id,
                     node.id,
+                )
+            )
+
+    # 入口节点：一条自动化必须能被触发（2026-10-17 敲打 N02）
+    def _check_entry(self, auto: Automation, out: ScanResult) -> None:
+        if not auto.entry_nodes():
+            out.diagnostics.append(
+                Diagnostic(
+                    "NO_ENTRY_NODE",
+                    ERROR,
+                    f"自动化 `{auto.id}` 没有任何 kind=on 的触发节点（state/sun/time/event/group），"
+                    "它永远不会被触发。",
+                    auto.id,
+                    None,
                 )
             )
 

@@ -1028,19 +1028,49 @@ def build(
         if ids:
             known = ids
             catalog_used = True
-    graph = _load_ir(ir)
+    # 反序列化/Schema/整篇深度这一关本身可能抛 IRValidationError（含 IRDepthError）。
+    # 旧实现让它冒泡成 500，调用方拿不到结构化错误（2026-10-17 敲打 N04：100 层嵌套在
+    # load_graph 即被 128 深度上限拒收，但对外是 500 而不是 build 回执里的 ok=false）。
+    try:
+        graph = _load_ir(ir)
+    except IRValidationError as exc:
+        out = {
+            "ok": False,
+            "errors": [{"code": "IR_SCHEMA_INVALID", "message": str(exc)}],
+            "warnings": [],
+            "diagnostics": [{"code": "IR_SCHEMA_INVALID", "severity": "error", "message": str(exc)}],
+            "nl": "（IR 结构非法，未生成自然语言预览）",
+            "entity_check": "catalog" if catalog_used else ("provided" if known is not None else "skipped"),
+            "schema": STAGE_SCHEMA,
+        }
+        return attach_telemetry(out, tool="build", root=(store.root if store is not None else None),
+                                ok=False, message=str(exc))
     result = StaticScanner(
         graph,
         known_entities=known,
         device_guard=load_device_guard(store),
         entity_health=load_entity_health(store),
     ).scan()
+    # NL 渲染必须对坏图兜底（2026-10-17 敲打 N04 真根因）：扫描判红后，旧实现仍无条件
+    # render_graph，而渲染器会重新走表达式/图结构——40 层嵌套表达式在 nl._expr_text 直接抛
+    # ExprError，把整个 build 打成未受控 500，扫描本已给出的 EXPR_INVALID 反而被异常吞掉。
+    # 规则：有 ERROR 不渲染（给降级文案）；无 ERROR 时渲染也包 try，渲染器任何异常都不得反噬
+    # 第一道闸的结论。
+    nl_text = ""
+    if result.ok:
+        try:
+            nl_text = render_graph(graph).text
+        except Exception as exc:  # noqa: BLE001 - 渲染只是展示层，不能盖掉扫描结论
+            logger.warning("BUILD_NL_RENDER_FAILED NL 渲染失败（不影响扫描结论）err=%r", exc)
+            nl_text = f"（自然语言预览生成失败：{type(exc).__name__}: {exc}）"
+    else:
+        nl_text = "（图存在错误，未生成自然语言预览，请先修复下方 errors）"
     out = {
         "ok": result.ok,
         "errors": [_diag(d) for d in result.errors],
         "warnings": [_diag(d) for d in result.warnings],
         "diagnostics": _diagnostics(result),
-        "nl": render_graph(graph).text,
+        "nl": nl_text,
         "entity_check": "catalog" if catalog_used else ("provided" if known is not None else "skipped"),
         "schema": STAGE_SCHEMA,
     }
@@ -1081,9 +1111,27 @@ def _replay(runtime: Runtime, states: Any, events: Sequence[Mapping[str, Any]]) 
             continue
         entity_id = item.get("entity_id")
         if entity_id:
-            state = str(item.get("state", ""))
-            states.set(str(entity_id), state)
-            runtime.emit(str(entity_id), state, last_changed=item.get("last_changed"))
+            # 与 CLI 版（af_cli._replay）对齐：`to` 可代替 `state`（新状态），`from` 注入为
+            # old_state（trigger.from 校验需要）。旧版只认 `state`，导致调用方按触发词汇写
+            # `to` 时事件状态恒为空串，Scheduler 永远不匹配 → 仿真"跑过了"其实是空跑
+            #（2026-10-17 敲打 S01 实测 af_service 与 af_cli 未同步）。
+            new_state = str(item.get("state", item.get("to", "")))
+            payload = {
+                k: v
+                for k, v in item.items()
+                if k not in {
+                    "entity_id", "state", "to", "from", "last_changed", "advance_s", "answer"
+                }
+            }
+            if "from" in item and "old_state" not in payload:
+                payload["old_state"] = item["from"]
+            states.set(str(entity_id), new_state)
+            runtime.emit(
+                str(entity_id),
+                new_state,
+                last_changed=item.get("last_changed"),
+                **payload,
+            )
         elif advance is None:
             runtime.tick()
 
@@ -2579,6 +2627,70 @@ def _owner_pid_from_sidecar(owner: str) -> "tuple[str, int] | None":
     return host, int(pid_str)
 
 
+def _process_alive(pid: int) -> bool:
+    """进程 PID 现在是否**真正存活**（僵尸不算存活）。
+
+    孤儿锁判定的关键：watch 被 SIGKILL 后，若父进程（serve）没有 wait，它会变成
+    僵尸（state=Z）——此时 ``/proc/<pid>`` 仍在、``os.kill(pid,0)`` 也成功，但它已经
+    不持任何资源（flock 随 fd 关闭早已释放）。旧逻辑只看 ``/proc`` 存在与否，会把
+    僵尸误判成"持有者还活着"，导致孤儿锁永远无法回收（2026-10-17 实测 PID 36=Z）。
+
+    - POSIX：``/proc/<pid>/stat`` 第 3 字段是进程状态，``Z`` 即僵尸 → 视为不存活；
+      ``/proc`` 不存在 → 不存活。
+    - Windows：没有 /proc，保守地用 ``os.kill(pid,0)`` 探活（无法区分僵尸，Windows
+      上 watch 生命周期本就不完整，见 stop_watch docstring）。
+    """
+    if pid <= 0:
+        return False
+    stat_path = Path(f"/proc/{pid}/stat")
+    if stat_path.exists():
+        try:
+            data = stat_path.read_text(encoding="utf-8")
+            # comm 字段含括号且可能含空格，要从最后一个 ')' 之后切；状态是其后第一个 token
+            after = data[data.rfind(")") + 1:].split()
+            state = after[0] if after else "?"
+            return state != "Z"
+        except (OSError, IndexError):
+            # 读不到状态时保守判定为存活（交给后续的内核锁真值裁决）
+            return True
+    if os.name == "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError):
+            return False
+    return False
+
+
+def _orphan_lock_recoverable(holder: Mapping[str, Any], lock: Path) -> "tuple[bool, str]":
+    """判定当前锁是否为**本机孤儿锁**（持有者已死 + 内核锁已空闲），可在 force 下安全回收。
+
+    与 ``_verified_pid`` 的拒杀保护互补：那条保护针对"PID 对不上、可能误杀活进程"；
+    本函数针对的是**没有任何活进程可杀**的故障态——watch 崩溃/被杀后诊断件残留。
+
+    安全口径（必须同时满足，缺一不可）：
+    - sidecar owner 能解析出身份；
+    - 持有者主机 == 本机（跨主机的 PID 在本机 /proc 里查不到，无权对它的死活下结论）；
+    - sidecar owner 里的 PID 已不存活（含僵尸 Z）；
+    - 协调锁内核真值为空（``_lock_is_free``，flock 已随持有者 fd 关闭而释放）。
+
+    锁若仍被某个活进程持有（PID 复用/fd 被孙进程继承），哪怕 sidecar 的 PID 死了也绝不回收。
+    本函数只做"能不能安全回收"的**判定**，真正执行回收需要调用方显式 ``force``（见
+    ``stop_watch``）：默认档位维持审计 BUG-06 的保守口径，PID 对不上不自动删任何文件。
+    """
+    identity = _owner_pid_from_sidecar(str(holder.get("owner", "")))
+    if identity is None:
+        return False, "sidecar_identity_missing"
+    host, owner_pid = identity
+    if host != socket.gethostname():
+        return False, f"pid_belongs_to_another_host(sidecar_host={host},this_host={socket.gethostname()})"
+    if _process_alive(owner_pid):
+        return False, f"holder_alive(pid={owner_pid})"
+    if not _lock_is_free(lock):
+        return False, "kernel_lock_still_held"
+    return True, f"orphan(holder_pid={owner_pid}_dead_or_zombie,lock_free)"
+
+
 def _verified_pid(pid_file: Path, holder: Mapping[str, Any]) -> "tuple[int | None, str]":
     """读 PID 文件并核验它现在指向的**就是** sidecar 记录的那个 watcher。
 
@@ -2640,7 +2752,12 @@ def _lock_is_free(lock: Path) -> bool:
     return not FileLock(lock, timeout=0.0).held_by_other()
 
 
-def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[str, Any]:
+def stop_watch(
+    owner: str | None = None,
+    store_root: str | None = None,
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
     """停止正在跑的 watch 进程：先核验身份 → 发 SIGTERM → 等协调锁真的空闲 → 才清诊断件。
 
     第六轮审计 BUG-04／BUG-06 两格都收在这里，口径如下：
@@ -2686,12 +2803,40 @@ def stop_watch(owner: str | None = None, store_root: str | None = None) -> dict[
 
     pid, identity = _verified_pid(pid_file, holder)
     if pid is None:
-        # 没核验过就不动刀，也一个文件都不删：现场留着才读得懂为什么没停成。
+        # 孤儿锁回收（2026-10-17 敲打实测的 P0 死锁）：watch 崩溃/被杀后，pid_file 与 sidecar
+        # 对不上（失败的 start_watch 污染了 pid_file）或只剩僵尸，默认档位仍按审计 BUG-06 口径
+        # **一个文件都不删、一个信号都不发**（PID 对不上时无法保证没有活进程，这是测试钉死的
+        # 安全线，连探活用的 os.kill(0) 都不发）。
+        # 仅在调用方显式 ``force=True`` 时，才做孤儿判定（此时才探活）：身份在本机、持有者已死
+        # （含僵尸）、内核锁空闲三条同时成立，才回收 sidecar/PID 诊断件。**协调锁文件本身从不删**
+        #（flock 挂在 inode 上，空锁文件保留不影响新 watcher 重新拿锁，与 BUG-04 口径一致）。
+        if force:
+            orphan, orphan_why = _orphan_lock_recoverable(holder, lock)
+            identity_missing = orphan_why == "sidecar_identity_missing"
+            force_ok = orphan or (identity_missing and _lock_is_free(lock))
+            if force_ok:
+                cleanup = _cleanup_watch_files(info=info, pid_file=pid_file)
+                logger.warning(
+                    "WATCH_ORPHAN_RECOVERED force 回收本机孤儿锁 why=%s cleanup=%s",
+                    orphan_why, cleanup,
+                )
+                return {
+                    "ok": True,
+                    "reason": "orphan_recovered",
+                    "why": orphan_why,
+                    "stopped": holder.get("owner", ""),
+                    "graph": holder.get("graph", ""),
+                    "hint": "force 回收：持有者已不存在（崩溃/被杀/僵尸）且协调锁已空闲，"
+                            "已清理 sidecar/PID 诊断件（协调锁文件保留、原地复用）；未对任何活进程动刀。",
+                    "cleanup": cleanup,
+                }
+        # 默认（无 force）或 force 但判定不成立：一个文件都不删，现场留着才读得懂为什么没停成。
         hint = (
             "watcher 是手工 `forge watch` 起的（没有 PID 文件）：请对它自己 Ctrl+C，"
-            "或对持有进程发信号——服务层不再猜 PID"
+            "或对持有进程发信号——服务层不再猜 PID；若确认无活 watcher，可传 force=true 回收。"
             if identity == "no_pid_file"
-            else "PID 文件与 sidecar 记录对不上：先按 `watch.lock.info` 查明持有者，再决定"
+            else "PID 文件与 sidecar 记录对不上（或持有者在别的主机）：先按 `watch.lock.info` "
+                 "查明持有者，再决定；若确认持有者已死且无活 watcher，可传 force=true 回收孤儿锁。"
         )
         return {
             "ok": False,
@@ -2785,8 +2930,10 @@ def _reap_stale_watch_scratch(
     """删掉历次 `start_watch` 留下的 `watch-ir-*` 目录，返回删掉的份数。
 
     三条例外一律留下：① sidecar 现在指着的那份部署 IR（在役 watcher 的身份，不是垃圾）；
-    ② 建出来还不足 `WATCH_SCRATCH_MIN_AGE_S` 的；③ 目录里不只 `deployed_ir.json` 的——形状
+    ② 建出来还不足 `WATCH_SCRATCH_MIN_AGE_S` 的；③ 目录里不是**单个本层 IR 文件**的——形状
     不是本层写出的就是归属未知，按第十八轮 F12 的口径**不动**。
+    单文件接受两种本层形态：`deployed_ir.json`（现版）与 `ir.json`（watch 侧/旧版，
+    2026-10-17 实测现场 4 个孤儿目录就是 ir.json，旧逻辑只认 deployed_ir.json 导致永不清理）。
     删不掉只出声、不抛穿：磁盘卫生不值得让一次 watch 启动失败。
     """
     deleted = 0
@@ -2797,6 +2944,7 @@ def _reap_stale_watch_scratch(
         return 0
     keep = Path(keep_graph).parent if keep_graph else None
     moment = time.time() if now is None else now
+    known_ir_files = {WATCH_IR_FILENAME, "ir.json"}
     for scratch in candidates:
         if keep is not None and scratch == keep:
             continue
@@ -2809,7 +2957,7 @@ def _reap_stale_watch_scratch(
         except OSError as exc:
             logger.warning("WATCH_SCRATCH_DIR_UNREADABLE path=%s err=%s —— 跳过这一份", scratch, exc)
             continue
-        if entries != [WATCH_IR_FILENAME]:
+        if len(entries) != 1 or entries[0] not in known_ir_files:
             logger.warning(
                 "WATCH_SCRATCH_SHAPE_FOREIGN path=%s 内容=%s —— 不是本层写出的形状，不动",
                 scratch,
@@ -2817,7 +2965,7 @@ def _reap_stale_watch_scratch(
             )
             continue
         try:
-            (scratch / WATCH_IR_FILENAME).unlink()
+            (scratch / entries[0]).unlink()
             scratch.rmdir()
         except OSError as exc:
             logger.warning("WATCH_SCRATCH_DELETE_FAILED path=%s err=%s", scratch, exc)
@@ -2955,17 +3103,27 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
     if dry_live:
         cmd.append("--dry-live")
     else:
-        # 真机常驻监听必须 --confirm + --live-allow（白名单）
+        # 真机常驻监听必须 --confirm + --live-allow（白名单）。
+        # 注意：本层在 dry_live=False 这一档**确实**传 --confirm/--live-allow（下一行），
+        # 与早期"本层从不传"的旧注释相反——那条注释是陈旧的第二份真值（2026-10-17 审计核对）。
         cmd.append("--confirm")
-        # 从 IR 提取所有实体作为白名单
+        # 从 IR 提取所有实体作为白名单：含触发器（递归 group sources）、do 节点 params、
+        # 以及 expect/if 等条件节点 params，避免真机档漏掉实体被白名单拦下。
         entities: set[str] = set()
+
+        def _collect_trigger_entities(trig: dict) -> None:
+            if not isinstance(trig, dict):
+                return
+            eid = trig.get("entity_id") or trig.get("entity")
+            if eid:
+                entities.add(eid)
+            for src in trig.get("sources", []) or []:
+                _collect_trigger_entities(src)
+
         for auto in ir.get("automations", []):
             for node in auto.get("nodes", []):
-                trig = node.get("trigger", {})
-                eid = trig.get("entity_id") or trig.get("entity")
-                if eid:
-                    entities.add(eid)
-                params = node.get("params", {})
+                _collect_trigger_entities(node.get("trigger", {}) or {})
+                params = node.get("params", {}) or {}
                 eid = params.get("entity_id")
                 if eid:
                     entities.add(eid)
@@ -2992,20 +3150,11 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
         # 子进程确定没起来 ⇒ 本次这份 scratch 就地收回，不等下一次启动才扫。
         _drop_watch_scratch(scratch)
         return {"ok": False, "error": f"启动 watch 失败: {e}"}
-    # 写 PID 文件（供 `stop_watch` 用）。内容仍是裸数字——**可信身份不在这里**，而在 sidecar 的
-    # `owner`（`{hostname}-{pid}-{uuid8}`）：停之前两边必须对得上，见 `_verified_pid`。
-    # AF58：旧实现写失败直接 `pass` 且紧接着照回 `ok=True`——这个 watcher 后续无法经
-    # stop_watch 核验终止（PID 文件不存在 ⇒ refused_to_kill），等于启动了一个管理不了的
-    # 孤儿，持续占着协调锁，且全链零日志。现在：写失败留痕，并在成功返回里如实降级。
-    pid_written = True
-    try:
-        atomic_write_text(pid_file, str(proc.pid))
-    except OSError as exc:
-        pid_written = False
-        logger.warning(
-            "start_watch: 写 PID 文件失败（watcher 已启动但后续无法经 stop_watch 核验终止）"
-            " pid=%s path=%s err=%r", proc.pid, pid_file, exc,
-        )
+    # PID 文件**推迟到探测成功后才写**（2026-10-17 敲打 P0 修复）：旧实现 Popen 后立即写，
+    # 而子进程可能抢锁失败/启动即退——此时 pid_file 已被写成一个死进程的 PID，且 child_exited
+    # 分支不回滚，导致后续 stop_watch 永远 pid_mismatch_with_sidecar → 孤儿锁死锁。
+    # 现在只有在 sidecar 确认属于本次（真正注册成功）后才落 pid_file。
+    pid_written = False
     # 等 sidecar 出现，同时做健康探测。
     # **sidecar 身份必须对得上本次这份 IR**：它是目录里唯一的一个文件，上一条 watch 的残留会被读成
     # "本次启动成功"（2026-10-09 现场实测：1.18s 就回 ok=true，带的是 9-29 另一条 watch 的 graph 路径）。
@@ -3015,11 +3164,9 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
     # 档位如实命名，且**从本函数自己拼给 CLI 的旗子里读回来**（不另立第二套说法）。
     # `forge watch` 没有 `--live` 这个旗子：它的真机档是"不带 `--dry-live`"（af_cli.py:585
     # `live=not dry_live`），而缺 `--confirm` 时 CLI 直接拒启动（af_cli.py:565-566）。
-    # 本层从不传 `--confirm`/`--live-allow` ⇒ `dry_live=False` 这一档只会得到子进程退出；
-    # HTTP/用户界面到真机那条**常驻**通道因此今天不存在，是否开它归 DCD 裁（20261009-AF 申请）。
-    # 一次性真机下发 `POST /api/live/run` 是另一条已存在的通道（要 confirm + live_allow），
-    # 它不在这格的射程内——那一档下发完就退出，不监听。
-    tier = "dry_live" if "--dry-live" in cmd else "live_unconfirmed"
+    # 本层在 dry_live=False 这一档**会**传 `--confirm`/`--live-allow`（见上），故该档能真正
+    # 常驻监听真机；dry_live=True 只带 `--dry-live`，不碰真机。
+    tier = "dry_live" if "--dry-live" in cmd else "live_confirmed"
     other: dict[str, Any] = {}
     for delay_s in _WATCH_PROBE_DELAYS_S:
         time.sleep(delay_s)
@@ -3030,6 +3177,19 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
         except (OSError, ValueError):
             data = None
         if data is not None and data.get("graph") == mine:
+            # 注册成功后才写 PID 文件，且必须与 sidecar owner 的 PID 一致（从根上杜绝
+            # pid_file ≠ sidecar 这档死锁）。
+            owner_identity = _owner_pid_from_sidecar(str(data.get("owner", "")))
+            sidecar_pid = owner_identity[1] if owner_identity else None
+            pid_to_record = sidecar_pid if sidecar_pid is not None else proc.pid
+            try:
+                atomic_write_text(pid_file, str(pid_to_record))
+                pid_written = True
+            except OSError as exc:
+                logger.warning(
+                    "start_watch: 写 PID 文件失败（watcher 已注册但无法经 stop_watch 核验终止）"
+                    " pid=%s path=%s err=%r", pid_to_record, pid_file, exc,
+                )
             success_payload: dict[str, Any] = {
                 "pid": proc.pid,
                 "owner": data.get("owner", ""),
@@ -3037,8 +3197,9 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
                 "acquired_at": data.get("acquired_at", ""),
                 "dry_live": dry_live,
                 "tier": tier,
-                # 两档都不落真机：dry_live 只记意图，live_unconfirmed 被 CLI 拒启动（走不到这一格）。
-                "real_device": False,
+                # dry_live=True 只记意图不碰真机；dry_live=False 已带 --confirm + --live-allow，
+                # 注册成功后常驻监听并可下发真机，故 real_device 据实回填。
+                "real_device": not dry_live,
                 "pid_file_written": pid_written,
                 "credentials": cred_state,
             }

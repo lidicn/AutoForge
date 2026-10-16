@@ -266,6 +266,27 @@ def _scope_ok(scope: str, scopes) -> bool:
 #: 带 write 的第三方服务令牌（`AUTOFORGE_TOKENS` 里自定 subject）不是 owner ⇒ 只给掩码。
 _OWNER_SUBJECTS = frozenset({"owner", "shared"})
 
+#: `/api/user/agents` 列表里要排除的「系统保留主体」＝owner 面（`_OWNER_SUBJECTS`）＋
+#: 未认证占位 `unknown`。这是 `_OWNER_SUBJECTS` 的派生集合，**不是第二份手写名单**——
+#: 判据 A（check_owner_subject）要求 owner 判定只认 `_OWNER_SUBJECTS` 这枚真源，
+#: 故 unknown 这格以「在真源上并一枚占位」的方式表达，而不是另抄一份 `('shared','unknown','owner')`。
+_AGENT_LIST_RESERVED = _OWNER_SUBJECTS | frozenset({"unknown"})
+
+
+def _assert_agent_subject_owner(agent_id: str, caller_subject: str | None) -> None:
+    """把『调用方主体 ↔ 路径主体（agent_id）』绑定一次（check_owner_subject 判据 B）。
+
+    `/api/user/agents/{agent_id}` 是**管理配对主体**的端点（撤销／改名），只有 owner 面
+    能调用：一枚第三方 write 令牌不得借路径里写别人的主体名来撤销／改名任何 agent。
+    `caller_subject is None` 只可能来自未启用鉴权 / 无令牌的本地逃生舱，按 owner 处理
+    （与其余端点口径一致）；否则主体必须落在 `_OWNER_SUBJECTS` 内，非 owner 一律 403。
+    """
+    if caller_subject is not None and caller_subject not in _OWNER_SUBJECTS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"仅 owner 可管理配对 agent（路径主体 {agent_id}），当前主体 {caller_subject} 无权",
+        )
+
 #: 用户端 SPA 的挂载前缀（唯一真源）。三处必须与它同字：`ui-user-mimo/vite.config.ts` 的
 #: `base`、`docker/docker-compose.api.yml` 的卷挂载点与 `--ui-user-dir` 值、这里的常量。
 #: 不同步的形状是"/mimo 出页面、资源全 404"或"深链刷出开发面板"，两档都不报错，
@@ -911,9 +932,16 @@ def build_app(
         return svc.list_watches(store.root if store else None)
 
     @app.post("/api/watch/stop", dependencies=[Depends(_write)])
-    def api_watch_stop(owner: str = "") -> dict[str, Any]:
-        """停止运行中的 watch 进程。"""
-        return svc.stop_watch(owner=owner, store_root=store.root if store else None)
+    def api_watch_stop(owner: str = "", body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """停止运行中的 watch 进程。
+
+        body 可选 ``{"force": true}``：仅在 sidecar 身份缺失、但内核锁确认空闲时，
+        授权回收无主孤儿锁；持有者已死/僵尸且锁空闲的明确孤儿锁无需 force 即自动回收。
+        """
+        force = bool((body or {}).get("force", False))
+        return svc.stop_watch(
+            owner=owner, store_root=store.root if store else None, force=force
+        )
 
     @app.post("/api/asks/answer", dependencies=[Depends(_write)])
     def api_asks_answer(body: dict[str, Any]) -> dict[str, Any]:
@@ -1012,7 +1040,8 @@ def build_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not ok:
             raise HTTPException(status_code=409, detail="已有管理员，不允许重复注册")
-        token = registry.issue_for_agent(body.username, ("read", "write", "live"))
+        #: WebUI 注册即登录，签发的是 owner 面令牌（subject 固定 owner），登录用户名进 label 仅供显示。
+        token = registry.issue_for_agent("owner", ("read", "write", "live"), label=body.username)
         return {
             "ok": True,
             "user": {"username": body.username, "role": "admin"},
@@ -1031,7 +1060,7 @@ def build_app(
             raise HTTPException(status_code=401, detail="用户名或密码为空")
         # 未注册时的兼容模式：任意非空凭据可登录（旧行为）
         if not admin_store.has_admin:
-            token = registry.issue_for_agent(body.username, ("read", "write", "live"))
+            token = registry.issue_for_agent("owner", ("read", "write", "live"), label=body.username)
             return {
                 "ok": True,
                 "user": {"username": body.username, "role": "admin"},
@@ -1041,7 +1070,7 @@ def build_app(
         # 已注册：严格验证
         if not admin_store.verify(body.username, body.password):
             raise HTTPException(status_code=401, detail="用户名或密码错误")
-        token = registry.issue_for_agent(body.username, ("read", "write", "live"))
+        token = registry.issue_for_agent("owner", ("read", "write", "live"), label=body.username)
         return {
             "ok": True,
             "user": {"username": body.username, "role": "admin"},
@@ -1062,7 +1091,8 @@ def build_app(
         """登录态恢复：返回当前令牌主体；未登录/失效 401。"""
         if info is None:
             raise HTTPException(status_code=401, detail="未登录或令牌已失效")
-        return {"ok": True, "user": {"username": info.subject, "role": "admin"}}
+        #: owner 登录令牌 subject 固定 "owner"，真实登录用户名在 label；配对 agent 无 label 时回退 subject。
+        return {"ok": True, "user": {"username": info.label or info.subject, "role": "admin"}}
 
     # ── v1.10.0 系统自更新（宿主侧 sidecar 模式，参考 DCD 20261010 MA 裁定）──
     # 流程：WebUI 点更新 → 容器写标记文件 /data/.update_request.json → 宿主 cron 脚本
@@ -1308,20 +1338,34 @@ def build_app(
         agents = [
             {"id": s["subject"], "name": s["subject"], "scopes": s["scopes"]}
             for s in registry.subjects()
-            if s["subject"] not in ("shared", "unknown", "owner")
+            if s["subject"] not in _AGENT_LIST_RESERVED
             and s["subject"] != current_subject  # 排除当前登录用户，避免用户自己出现在 agent 列表里
         ]
         return {"ok": True, "agents": agents}
 
     @app.delete("/api/user/agents/{agent_id}", dependencies=[Depends(_write)])
-    def api_agent_delete(agent_id: str, creds: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> dict[str, Any]:
+    def api_agent_delete(
+        agent_id: str,
+        creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+        token_info: TokenInfo | None = Depends(authenticated()),
+    ) -> dict[str, Any]:
+        # 主体绑定：仅 owner 面可撤销配对主体（一枚第三方 write 令牌不得借路径名撤销他人）
+        caller_subject = token_info.subject if token_info else None
+        _assert_agent_subject_owner(agent_id, caller_subject)
         # 删除 agent 时排除当前登录用户的 token，避免把自己踢下线
         current_token = creds.credentials if creds else None
         n = registry.revoke_by_subject(agent_id, except_token=current_token)
         return {"ok": True, "revoked_tokens": n, "agent": agent_id}
 
     @app.patch("/api/user/agents/{agent_id}", dependencies=[Depends(_write)])
-    def api_agent_rename(agent_id: str, body: AgentRenameBody) -> dict[str, Any]:
+    def api_agent_rename(
+        agent_id: str,
+        body: AgentRenameBody,
+        token_info: TokenInfo | None = Depends(authenticated()),
+    ) -> dict[str, Any]:
+        # 主体绑定：仅 owner 面可改名配对主体
+        caller_subject = token_info.subject if token_info else None
+        _assert_agent_subject_owner(agent_id, caller_subject)
         new_name = (body.name or "").strip()
         if not new_name:
             raise HTTPException(status_code=400, detail="name 不能为空")

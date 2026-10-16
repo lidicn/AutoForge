@@ -224,7 +224,7 @@ def test_real_repo_lifecycle_counts_pinned():
     sites = cpm.scan_lifecycle(trees, REPO)
     by = {k: sum(1 for s in sites if s["kind"] == k) for k in cpm.KINDS}
     assert by["subprocess.Popen"] == 1
-    assert by["os.kill"] == 2
+    assert by["os.kill"] == 3
     assert by["signal.signal"] == 1
     assert by["atexit.register"] == 1
     assert by["os.fork"] == 0 and by["multiprocessing.Process"] == 0
@@ -233,7 +233,7 @@ def test_real_repo_lifecycle_counts_pinned():
 def test_real_repo_counts_line_in_doc():
     doc = (REPO / DOC_REL).read_text(encoding="utf-8")
     assert "atexit.register=1" in doc and "signal.signal=1" in doc
-    assert "os.kill=2" in doc and "subprocess.Popen=1" in doc
+    assert "os.kill=3" in doc and "subprocess.Popen=1" in doc
 
 
 def test_real_repo_primitive_counts_pinned():

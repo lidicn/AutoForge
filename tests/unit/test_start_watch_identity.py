@@ -108,11 +108,14 @@ def test_success_payload_names_the_runtime_tier(tmp_path, root, monkeypatch):
     assert "--dry-live" in captured["cmd"] and "--live" not in captured["cmd"]
 
 
-def test_no_confirm_tier_is_named_live_unconfirmed_not_real(tmp_path, root, monkeypatch):
-    """`dry_live=False` 在本层拼不出 `--confirm`，那一档的名字是 `live_unconfirmed`——**不能**被读成"真机在跑"。
+def test_live_confirm_tier_is_named_live_confirmed_and_real(tmp_path, root, monkeypatch):
+    """`dry_live=False` 是 approve 后的**真机常驻档**：本层传 `--confirm` + `--live-allow`（白名单）、
+    不带 `--dry-live`，tier=`live_confirmed`，real_device=True。
 
-    `forge watch` 没有 `--live` 旗子：真机档 = 不带 `--dry-live`（af_cli.py:584 `live=not dry_live`），
-    而缺 `--confirm` 时 CLI 自己拒启动（af_cli.py:565-566，见下面那一格的真读数）。
+    2026-10-16 评审动作4对齐：代码本就在这一档拼 `--confirm`/`--live-allow`（旧注释却声称"本层从不传"，
+    是第二份真值，且错误地把该档命名为 `live_unconfirmed`）。approve_pending → start_watch(dry_live=False)
+    的语义就是"已人工确认、常驻监听并可下发真机"，故 tier/real_device 据实回填。
+    `forge watch` 没有 `--live` 旗子：真机档 = 不带 `--dry-live`（af_cli.py `live=not dry_live`）。
     """
     captured: dict = {}
     _popen(monkeypatch, _FakeProc(), captured)
@@ -122,8 +125,9 @@ def test_no_confirm_tier_is_named_live_unconfirmed_not_real(tmp_path, root, monk
 
     monkeypatch.setattr(time, "sleep", spawn_sidecar)
     res = svc.start_watch(IR, store_root=str(root), dry_live=False)
-    assert "--dry-live" not in captured["cmd"] and "--confirm" not in captured["cmd"], captured["cmd"]
-    assert res["tier"] == "live_unconfirmed" and res["real_device"] is False, res
+    assert "--dry-live" not in captured["cmd"] and "--confirm" in captured["cmd"], captured["cmd"]
+    # `--live-allow` 白名单仅在 IR 提取到实体时才追加（本测试 IR 无 nodes，故不出现，属正常）
+    assert res["tier"] == "live_confirmed" and res["real_device"] is True, res
 
 
 def test_watch_cli_refuses_without_confirm(tmp_path):

@@ -179,7 +179,7 @@ forge sim examples/ir/case01_day_light.json
 |---|---|---|
 | 项目声明下限（真源） | `>=3.11` | `pyproject.toml:10` |
 | CI 的四个 Python 作业钉值 | `3.11` | `.github/workflows/ci.yml:16` |
-| 交付镜像 base | `3.14` | `docker/Dockerfile.api:10` |
+| 交付镜像 base | `3.14` | `docker/Dockerfile.api:27` |
 | 测试镜像 base | `3.14` | `docker/Dockerfile.test:13` |
 
 - **项目自身不要求 3.14**。`>=3.11` 这一档装得上仿真依赖：PyPI 元数据现读该包 578 枚 wheel，`>=3.11` 面最新

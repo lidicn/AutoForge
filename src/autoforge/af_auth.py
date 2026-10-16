@@ -133,6 +133,10 @@ class TokenInfo:
     #: `expires_at` 解析失败 / 无时区 → fail-closed 禁用该令牌（`authenticate` 返回 None）。
     invalid: bool = False
     invalid_reason: str = ""
+    #: 仅用于界面显示的人类可读名（如 WebUI 登录用户名）。**不参与任何授权判定**——
+    #: owner 面只看 `subject` 是否落在 `_OWNER_SUBJECTS`；WebUI 登录令牌的 subject 固定是
+    #: `owner`（见 af_api 登录/注册签发），登录用户名靠这一格带到 `/api/auth/me` 显示。
+    label: str | None = None
 
 
 class TokenRegistry:
@@ -324,8 +328,14 @@ class TokenRegistry:
         scopes: Iterable[str] = ("read", "write", "live"),
         token: str | None = None,
         ttl_s: float | None = None,
+        label: str | None = None,
     ) -> str:
-        """运行时为 agent 签发 Bearer 令牌（配对成功后调用）。返回明文令牌。"""
+        """运行时为 agent 签发 Bearer 令牌（配对成功后调用）。返回明文令牌。
+
+        `label` 仅作界面显示名，不参与授权；WebUI 登录面以 `agent_name="owner"` 签发、
+        把登录用户名放进 `label`，使 owner 判定（subject 落在 `_OWNER_SUBJECTS`）不依赖
+        用户名恰好叫什么，同时 `/api/auth/me` 仍能显示真实登录用户名。
+        """
         token = token or ("af_" + secrets.token_hex(20))
         scopes_set = {s for s in scopes if s in SCOPES} or {"read"}
         # 运行期签发的令牌此前**不带 expires_at** ⇒ 结构上永远无法过期，
@@ -335,13 +345,13 @@ class TokenRegistry:
         expires_at = (time.time() + ttl) if ttl > 0 else None
         with self._lock:
             self._tokens[token] = TokenInfo(
-                subject=agent_name, scopes=scopes_set, expires_at=expires_at
+                subject=agent_name, scopes=scopes_set, expires_at=expires_at, label=label
             )
             self._purge_expired_locked()
             if len(self._tokens) > self.MAX_ISSUED:
                 self._evict_oldest_locked()
             if self._issued_path:
-                self._persist_issued(token, agent_name, sorted(scopes_set), expires_at)
+                self._persist_issued(token, agent_name, sorted(scopes_set), expires_at, label)
         return token
 
     def _purge_expired_locked(self) -> None:
@@ -428,10 +438,12 @@ class TokenRegistry:
                     subject=meta["subject"],
                     scopes=set(meta.get("scopes", ["read"])),
                     expires_at=float(exp) if isinstance(exp, (int, float)) else None,
+                    label=meta.get("label"),
                 )
 
     def _persist_issued(
-        self, token: str, subject: str, scopes: list[str], expires_at: float | None = None
+        self, token: str, subject: str, scopes: list[str], expires_at: float | None = None,
+        label: str | None = None,
     ) -> None:
         if not self._issued_path:
             return
@@ -460,6 +472,8 @@ class TokenRegistry:
         entry: dict[str, Any] = {"subject": subject, "scopes": scopes}
         if expires_at is not None:
             entry["expires_at"] = expires_at
+        if label is not None:
+            entry["label"] = label
         data[token] = entry
         _atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2))
 

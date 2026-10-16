@@ -480,6 +480,13 @@ class Node:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Node":
+        # 注意：if 节点的 expr 在这里**宽容加载、不做 check_expr**。AF 的分层是
+        # 「反序列化宽容 → StaticScanner 严格」：WebUI/导入要能加载一张有问题的图并在
+        # 置信度面板报 EXPR_INVALID（test_scanner_flags_invalid_expression_and_accepts_valid
+        # 钉死这条），而不是在 from_dict 直接抛、连扫描都进不去。表达式编译期校验
+        # （未知 op/fn、参数个数、MAX_EXPR_DEPTH/MAX_EXPR_NODES）统一在
+        # af_scanner.StaticScanner._check_expr 跑，build 第一道闸（stage_build）必过它。
+        expr_data = data.get("expr")
         return cls(
             id=data["id"],
             kind=data["kind"],
@@ -488,7 +495,7 @@ class Node:
             trigger=Trigger.from_dict(data["trigger"]) if data.get("trigger") else None,
             for_=data.get("for"),
             debounce=data.get("debounce"),
-            expr=data.get("expr"),
+            expr=expr_data,
             adapter=data.get("adapter"),
             action=data.get("action"),
             params=dict(data.get("params") or {}),
@@ -643,6 +650,9 @@ class Automation:
             raw=raw,
         )
         _check_edges(auto)
+        # 「主自动化必须有 on 入口节点」不在此处拒收，与 expr 同一分层原则：from_dict 宽容加载，
+        # 让 WebUI/导入能读出一张缺触发的图；结构性判红由 StaticScanner 落 NO_ENTRY_NODE
+        # （2026-10-17 敲打 N02），build 第一道闸据此 ok=false。
         return auto
 
     # ── 图查询 ────────────────────────────────────────────────────────

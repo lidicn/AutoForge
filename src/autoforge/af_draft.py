@@ -234,7 +234,13 @@ def draft_intent(
     # 1. on 节点
     on_id = _gen_id("t", counter)
     trigger = _resolve_trigger(when, resolved, catalog)
-    nodes.append({"id": on_id, "kind": "on", "name": "触发", "trigger": trigger})
+    on_node: dict[str, Any] = {"id": on_id, "kind": "on", "name": "触发", "trigger": trigger}
+    # for（持续条件）/debounce（去抖）属于 on 节点而非 trigger（见 _resolve_trigger 注释），
+    # 意图侧写在 when 里，这里提升到节点级，否则会被 Trigger.from_dict 静默丢弃。
+    for node_key in ("for", "debounce"):
+        if when.get(node_key):
+            on_node[node_key] = when[node_key]
+    nodes.append(on_node)
     prev = on_id
 
     # 2. if 节点
@@ -359,38 +365,103 @@ def draft_intent(
 
 
 def _resolve_trigger(when: dict[str, Any], resolved: dict[str, str], catalog: Any) -> dict[str, Any]:
-    """解析触发条件。"""
+    """解析触发条件。
+
+    state 触发器有实体；sun/time/event 触发器**没有实体**（sun/time 由时间/太阳几何驱动，
+    event 由事件总线驱动）。旧实现对所有类型都调 `_resolve_entity(when.get("entity",""))`，
+    无实体时把空名解析成占位，最终 build 报"引用了不存在的实体：?"（2026-10-17 敲打 T07/T08）。
+    """
     t_type = when.get("type", "state")
+
+    # 无实体触发器：只透传时间/事件相关字段，不做实体解析。
+    if t_type in ("sun", "time", "event"):
+        trigger: dict[str, Any] = {"type": t_type}
+        for key in ("at", "event", "offset", "before", "after", "tz"):
+            if key in when:
+                trigger[key] = when[key]
+        return trigger
+
+    # group 触发器：递归解析其中的子触发器。
+    # 注意输出键必须是 IR 侧的 `sources`（Trigger.from_dict / af_nl_parse 都读 sources），
+    # 意图侧入参宽容地接受 triggers/children/sources 三种写法。
+    if t_type == "group":
+        children = when.get("sources") or when.get("triggers") or when.get("children") or []
+        return {
+            "type": "group",
+            "op": when.get("op", "and"),
+            "sources": [_resolve_trigger(c, resolved, catalog) for c in children],
+        }
+
+    # state 触发器：必须有实体
     entity_name = when.get("entity", "")
+    if not entity_name:
+        raise DraftError("E_INVALID_WHEN", f"state 触发器必须提供 entity：{when!r}")
     entity_id = _resolve_entity(entity_name, catalog)
     resolved[entity_name] = entity_id
 
     trigger = {"type": t_type, "entity_id": entity_id}
-    if "to" in when:
-        trigger["to"] = when["to"]
-    if "at" in when:
-        trigger["at"] = when["at"]
-    if "event" in when:
-        trigger["event"] = when["event"]
+    # 注意：`for`（持续条件）/`debounce`（去抖）在 IR 里属于 **on 节点**（node.for_/node.debounce，
+    # Trigger dataclass 没有这两个字段，放进 trigger 会被 from_dict 静默丢弃、运行时不生效）。
+    # 这里只透传触发源自身的 to/from，for/debounce 由 draft_intent 提升到节点级。
+    for key in ("to", "from"):
+        if key in when:
+            trigger[key] = when[key]
     return trigger
 
 
 def _resolve_expr(
     expr: dict[str, Any], resolved: dict[str, str], catalog: Any, _depth: int = 0
 ) -> dict[str, Any]:
-    """解析条件表达式，支持 and/or 嵌套。
+    """解析条件表达式，支持 and/or/not 嵌套、比较操作、一元状态谓词。
 
-    深度用 `MAX_EXPR_DEPTH` 那份单一真值源，超限抛本模块声明的 DraftError
-    （第二十轮 F2：改造前 `{"and": [...]}` 嵌套实测 997 层才 RecursionError）。
+    支持的意图侧写法：
+      - 组合：``{"and": [...]}``、``{"or": [...]}``、``{"not": <expr>}``
+      - 比较：``{"lt": {"var": "照度", "const": 200}}``（eq/ne/lt/lte/gt/gte）
+      - 一元：``{"is_on": {"var": "书房灯"}}``（is_on/is_off/is_home/is_not_home/
+        truthy/not_is_on/not_is_off，**无 const**）
+
+    深度用 `MAX_EXPR_DEPTH` 那份单一真值源，超限抛本模块声明的 DraftError。
     """
     if _depth > MAX_EXPR_DEPTH:
         raise DraftError("E_INVALID_EXPR", f"条件表达式嵌套超过上限 {MAX_EXPR_DEPTH}")
+
+    # 一元状态谓词（is_on/is_off/is_home/is_not_home/truthy/not_is_on/not_is_off）
+    from .af_ir.expr import _UNARY_OPS as _UNARY
+    for op in _UNARY:
+        if op in expr:
+            val = expr[op]
+            if not isinstance(val, dict) or "var" not in val:
+                raise DraftError(
+                    "E_INVALID_EXPR",
+                    f"一元条件 `{op}` 需要 {{\"var\": \"实体名\"}}，收到 {val!r}",
+                )
+            var_name = val["var"]
+            entity_id = _resolve_entity(var_name, catalog)
+            resolved[var_name] = entity_id
+            vtype = val.get("type", "string")
+            operand = (
+                {"var": var_name, "type": vtype}
+                if var_name.startswith("entity.") or "." in var_name
+                else {"var": f"entity.{entity_id}", "type": vtype}
+            )
+            return {"op": op, "value": operand}
+
+    # not：单参数逻辑非
+    if "not" in expr:
+        inner = expr["not"]
+        if isinstance(inner, list):
+            if len(inner) != 1:
+                raise DraftError("E_INVALID_EXPR", "`not` 只能包一个条件")
+            inner = inner[0]
+        return {"op": "not", "args": [_resolve_expr(inner, resolved, catalog, _depth + 1)]}
+
     # and/or 组合
     for op in ("and", "or"):
         if op in expr and isinstance(expr[op], list):
             args = [_resolve_expr(sub, resolved, catalog, _depth + 1) for sub in expr[op]]
             return {"op": op, "args": args}
-    # 单条件：{"lt": {"var": "xxx", "const": 200}}
+
+    # 比较条件：{"lt": {"var": "xxx", "const": 200}}
     for op, val in expr.items():
         if isinstance(val, dict) and "var" in val:
             var_name = val["var"]
@@ -401,6 +472,11 @@ def _resolve_expr(
                 left = {"var": var_name, "type": vtype}
             else:
                 left = {"var": f"entity.{entity_id}", "type": vtype}
+            if "const" not in val:
+                raise DraftError(
+                    "E_INVALID_EXPR",
+                    f"比较条件 `{op}` 需要 const 右值（一元状态请用 is_on/is_off 等）：{val!r}",
+                )
             right = {"const": val["const"]}
             return {"op": op, "left": left, "right": right}
     raise DraftError("E_INVALID_EXPR", f"无法解析条件表达式: {expr}")

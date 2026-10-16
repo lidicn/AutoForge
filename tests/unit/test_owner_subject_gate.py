@@ -1,9 +1,9 @@
 """owner 主体单一真源 ＋ `/api/user/agents/*` 主体校验门禁（裁定 20261011《八问》§3 Q1 丙）。
 
-本批改动**只有判据**：⛔ 不动 `src/autoforge/af_api.py` 一行码（那两格归登录线，#79 窗）。
-因此真仓现在就是红的，而"红"是这一条的设计目的（裁定原话：「门在补齐前持续红是**预期**，
-不是回归」）。红只落在 `gates.sh` 那一道门上；本文件的真仓腿只核**射程没塌**，
-不核"今天有几条红"——把红数钉进 pytest 会变成"修好了反而判红"的 perverse 激励。
+真仓 `src/autoforge/af_api.py` 的主体绑定已于 2026-10-17 补齐（`_AGENT_LIST_RESERVED` 单一真源
+＋ `_assert_agent_subject_owner(agent_id, caller_subject)` 把调用方主体与路径主体绑定，非 owner 403），
+门禁现在对真仓判绿。本文件的合成夹具同时保留 0／1／2 三档真路径：红数不钉真仓，避免
+"修好了反而判红"的 perverse 激励。
 """
 from __future__ import annotations
 
@@ -224,9 +224,20 @@ def test_gate_is_wired_into_gates_sh():
 
 
 def test_script_help_runs_and_returns_the_declared_codes(tmp_path):
-    """CLI 面自证：退出码三档各有一条真跑得通的路径（合成树＝0，真仓＝1）。"""
-    ok = subprocess.run([sys.executable, str(SCRIPT), str(_repo(tmp_path, FIXED))],
+    """CLI 面自证：退出码 0/1 各有一条真跑得通的路径（合成好树＝0，合成坏树＝1）。
+
+    ⛔ 不拿真仓当"必然 rc=1"的坏样本——真仓的 af_api 主体绑定补齐后该判 0，把"真仓=1"钉进
+    pytest 正好是文件头 docstring 自己反对的"修好了反而判红"的 perverse 激励。rc=1 这一档用
+    一棵当场构造的合成坏树来证明。
+    """
+    ok = subprocess.run([sys.executable, str(SCRIPT), str(_repo(tmp_path / "fixed", FIXED))],
                         capture_output=True, text=True)
     assert ok.returncode == 0, ok.stdout + ok.stderr
-    bad = subprocess.run([sys.executable, str(SCRIPT), str(ROOT)], capture_output=True, text=True)
+    broken = FIXED.replace(
+        '    if agent_id != token_info.subject:\n        raise HTTPException(403, "只能撤销自己名下的 agent")\n',
+        "",
+    )
+    assert broken != FIXED
+    bad = subprocess.run([sys.executable, str(SCRIPT), str(_repo(tmp_path / "broken", broken))],
+                         capture_output=True, text=True)
     assert bad.returncode == 1, bad.stdout + bad.stderr

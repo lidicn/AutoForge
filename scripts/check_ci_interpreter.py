@@ -68,7 +68,7 @@ IMAGES = {
 # 「CI→镜像还是镜像→CI」这后半句明写是对齐**之后**再谈 ⇒ 两格继续挂着，等第二问裁掉。
 INTERPRETER_DRIFT: dict[str, str] = {
     "docker/Dockerfile.api": (
-        "`test`（显示名 `pytest`）钉 3.11，交付镜像 base 是 3.14（`docker/Dockerfile.api:10`）。"
+        "`test`（显示名 `pytest`）钉 3.11，交付镜像 base 是 3.14（`docker/Dockerfile.api:27`）。"
         "CI 那条链跑的是内置 FakeHA：`pyproject.toml:84` 的 `addopts = \"-p no:homeassistant\"` 默认不加载 "
         "pytest-homeassistant 插件，`tests/conftest.py` 因此在 CI 上把 vhass 那族用例整批 skip，而镜像面走的是 "
         "`docker/Dockerfile.test:37` 显式 `-p` 加载插件的另一条路。两侧跑的不是同一条口径。"

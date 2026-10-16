@@ -194,6 +194,67 @@ def test_hand_watched_process_without_a_pid_file_is_not_killed_by_guesswork(root
     assert paths["info"].exists() and paths["lock"].exists(), res
 
 
+# ── 2026-10-17 敲打实测死锁：force 回收孤儿锁（保守默认 + 显式逃生通道）──────
+
+def test_force_recovers_orphan_when_pid_file_disagrees_but_holder_is_dead(root, monkeypatch):
+    """实测死锁现场：pid_file=247(死)、sidecar owner=36(僵尸)、内核锁空闲。
+
+    默认档位仍拒杀（见上一条）；**显式 force=True** 且确认本机持有者已死、锁空闲，
+    才回收 sidecar/pid。全程不发任何杀进程信号（进程本来就没了），协调锁文件保留。
+    """
+    paths = _seed_store(root, owner_pid=9999, pid_file_value="4242")
+    kill = _KillSpy()
+    monkeypatch.setattr(svc.os, "kill", kill)
+    # 容器/Linux 真值：9999 不存活（含僵尸），锁空闲
+    monkeypatch.setattr(svc, "_process_alive", lambda pid: False)
+    monkeypatch.setattr(svc, "_lock_is_free", lambda _p: True)
+
+    res = svc.stop_watch(store_root=str(root), force=True)
+    assert res["ok"] is True and res["reason"] == "orphan_recovered", res
+    assert kill.calls == [], "孤儿回收不杀任何进程，只清诊断件"
+    assert not paths["info"].exists() and not paths["pid"].exists(), res
+    assert paths["lock"].exists(), "协调锁文件永不删（BUG-04）"
+    assert res["cleanup"]["lock_file_kept"] is True, res
+
+
+def test_force_refuses_when_the_holder_is_still_alive(root, monkeypatch):
+    """force 也不是万能：持有者进程还活着（哪怕 pid_file 与 sidecar 对不上），拒回收。"""
+    _seed_store(root, owner_pid=9999, pid_file_value="4242")
+    kill = _KillSpy()
+    monkeypatch.setattr(svc.os, "kill", kill)
+    monkeypatch.setattr(svc, "_process_alive", lambda pid: True)
+    monkeypatch.setattr(svc, "_lock_is_free", lambda _p: True)
+
+    res = svc.stop_watch(store_root=str(root), force=True)
+    assert res["ok"] is False and res["reason"] == "refused_to_kill", res
+    assert kill.calls == [], res
+
+
+def test_force_refuses_when_the_kernel_lock_is_still_held(root, monkeypatch):
+    """force 回收的最后一道闸：内核 flock 还被持有（fd 被孙进程继承等），绝不回收。"""
+    paths = _seed_store(root, owner_pid=9999, pid_file_value="4242")
+    monkeypatch.setattr(svc, "_process_alive", lambda pid: False)
+    monkeypatch.setattr(svc, "_lock_is_free", lambda _p: False)
+
+    res = svc.stop_watch(store_root=str(root), force=True)
+    assert res["ok"] is False and res["reason"] == "refused_to_kill", res
+    assert paths["info"].exists() and paths["pid"].exists() and paths["lock"].exists(), res
+
+
+def test_force_does_not_recover_a_lock_owned_by_another_host(root, monkeypatch):
+    """跨主机 owner：本机 /proc 查不到它的死活，force 也无权回收。"""
+    paths = _seed_store(root, owner_pid=4242, host="elsewhere-box")
+    kill = _KillSpy()
+    monkeypatch.setattr(svc.os, "kill", kill)
+
+    res = svc.stop_watch(store_root=str(root), force=True)
+    assert res["ok"] is False and res["reason"] == "refused_to_kill", res
+    assert res["why"].startswith("pid_belongs_to_another_host"), res
+    assert paths["info"].exists() and paths["lock"].exists(), res
+    assert kill.calls == [], res
+
+
+
 @pytest.mark.parametrize(
     "owner, expected",
     [
