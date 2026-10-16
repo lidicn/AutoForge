@@ -74,9 +74,9 @@ def test_real_repo_site_readings_are_pinned(real):
     from collections import Counter
 
     lv = Counter(s["level"] for s in real["sites"])
-    assert len(real["sites"]) == 169
-    assert len({s["path"] for s in real["sites"]}) == 31
-    assert dict(lv) == {"debug": 20, "info": 9, "warning": 108, "error": 21, "exception": 11}
+    assert len(real["sites"]) == 198
+    assert len({s["path"] for s in real["sites"]}) == 32
+    assert dict(lv) == {"debug": 20, "info": 9, "warning": 134, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -100,8 +100,8 @@ def test_real_repo_named_code_readings_are_pinned(real):
     from collections import Counter
 
     coded = real["coded"]
-    assert len(coded) == 41
-    assert len({s["code"] for s in coded}) == 38
+    assert len(coded) == 84
+    assert len({s["code"] for s in coded}) == 81
     # 41 站／38 枚＝仓内三例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
     # ① `DEPLOY_AUDIT_PERSIST_FAILED` 同时出自「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」
     #    两条腿——同一句承诺（台账没落稳）；
@@ -117,8 +117,8 @@ def test_real_repo_named_code_readings_are_pinned(real):
         "WATCH_SCRATCH_DELETE_FAILED",
     }, f"重码名单漂了：{dup}"
     nc = Counter(s["level"] for s in real["sites"] if not s["code"])
-    assert sum(nc.values()) == 128
-    assert nc["warning"] == 86 and nc["exception"] == 11 and nc["info"] == 7
+    assert sum(nc.values()) == 114
+    assert nc["warning"] == 72 and nc["exception"] == 11 and nc["info"] == 7
 
 
 Q83_CODES = ("DEVICE_GUARD_CATALOG_INJECT_FAILED", "DEVICE_ACL_LOAD_FAILED")
@@ -153,7 +153,7 @@ def test_real_repo_q83_promotion_did_not_move_the_uncoded_ceiling(real):
     nc = Counter(s["level"] for s in real["sites"] if not s["code"])
     by_code = {s["code"] for s in real["coded"]}
     assert set(Q83_CODES) <= by_code, "带码这一前提是'棘轮未动'的根据，码没了就要重新谈上限"
-    assert nc["error"] == 10 and nc["warning"] == 86, (
+    assert nc["error"] == 10 and nc["warning"] == 72, (
         f"无码存量漂了（error={nc['error']} warning={nc['warning']}）——这跟 Q8.3 无关，"
         "但要在这里响，免得有人把两件事记成同一件"
     )
@@ -164,7 +164,7 @@ def test_real_repo_every_named_code_is_registered(real):
     findings, info = gate.check(REPO)
     b = [f for f in findings if f.startswith("B：")]
     assert not b, "\n".join(b)
-    assert info["codes"] == 38 and info["coded"] == 41
+    assert info["codes"] == 81 and info["coded"] == 84
 
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
@@ -203,9 +203,10 @@ def test_real_repo_http_face_readings_are_pinned(real):
     assert len(http["handlers"]) == 1, "两条装饰器挂同一函数，处理器数按函数计"
     assert len(http["middleware"]) == 1
     # 无账可对的两格，现状重钉：28 → 32、89 → 96，出处 `117f4dd`（WebUI 一键升级新增端点）
-    # ＋ `86bd023`／`0055e61`（round-005 审计确证 bug 修复）。
+    # ＋ `86bd023`／`0055e61`（round-005 审计确证 bug 修复）；96 → 98 出处 2026-10-17 基础设施敲打
+    # （09d93a7：agent delete/rename 加 authenticated Depends 主体安全，两处）。
     assert http["ok_true"] == 32
-    assert http["depends"] == 96
+    assert http["depends"] == 98
 
 
 def test_real_repo_debt_rows_match_fresh_readings(real):
@@ -244,11 +245,13 @@ def test_real_repo_ceilings_did_not_rise_with_the_debt_rows(real):
     assert ceilings == {
         "debug": 14, "info": 7, "warning": 83, "error": 10, "exception": 11, "critical": 0,
     }, f"§四 六行动了：{ceilings}"
-    # 现读仍高于上限的那一格是**已知欠账**，本批按裁定不认领、也不抬上限。
-    # 86 这一钉是「§4.1 差集名单的新鲜度」而非新账：补码掉一枚就红在这里，逼人重取差集、改名单。
+    # 2026-10-17 基础设施敲打补码后：warning 无码现读 86 → 72（已低于上限 83），超限差集清零，
+    # 棘轮不仅没抬、反而被收紧了 11 枚余量。这一钉从"差集新鲜度"（86−83＝3）改为"收紧后基线"（72）：
+    # 今后谁再新增无码 warning 把它顶回 83 以上，这里照样红；上限 83 一个数字没动是本腿的核心。
     nc = gate._no_code_counts(real["sites"])
-    assert nc["warning"] == 86, (
-        f"warning 无码现读是 {nc['warning']}，不是 86——§4.1 的逐枚差集（86−83＝3）要重取"
+    assert nc["warning"] == 72, (
+        f"warning 无码现读是 {nc['warning']}，不是 72（补码后基线）——新增无码留痕请先补码进 §三，"
+        "上限 83 仍不许抬"
     )
 
 
