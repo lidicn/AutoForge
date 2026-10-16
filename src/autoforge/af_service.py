@@ -789,6 +789,43 @@ def list_pending(store: GraphStore, agent: str | None = None) -> dict[str, Any]:
     return {"ok": True, "items": PendingStore(store.root).list(agent)}
 
 
+def _build_merged_ir(store: GraphStore) -> dict[str, Any] | None:
+    """把所有已部署 graph 的最新版本合并成一个 IR，供 watch 一次性挂全部自动化。
+
+    - 遍历 history 取每个 graph 名的最新版本
+    - 把所有 automations 拼到一起
+    - 对写同一实体的自动化自动分配递增 priority（避免 ENTITY_WRITE_CONFLICT）
+    """
+    # 1. 取每个 graph 名的最新版本
+    latest: dict[str, int] = {}
+    for record in store.history():
+        name = str(record.get("name", ""))
+        ver = int(record.get("version") or 0)
+        if name not in latest or ver > latest[name]:
+            latest[name] = ver
+    # 2. 加载所有 automations
+    all_autos: list[dict] = []
+    for name, ver in latest.items():
+        try:
+            graph = store.load(name, ver)
+            for auto in graph:
+                all_autos.append(auto.to_dict() if hasattr(auto, "to_dict") else dict(auto))
+        except Exception as e:
+            logger.warning("_build_merged_ir: 跳过 graph %s@%s: %r", name, ver, e)
+    if not all_autos:
+        return None
+    # 3. 给写同一实体的自动化分配递增 priority
+    write_count: dict[str, int] = {}
+    for auto in all_autos:
+        for node in auto.get("nodes", []):
+            if node.get("kind") == "do":
+                eid = node.get("params", {}).get("entity_id", "")
+                if eid:
+                    write_count[eid] = write_count.get(eid, 0) + 1
+                    auto.setdefault("meta", {})["priority"] = write_count[eid]
+    return {"version": 1, "automations": all_autos}
+
+
 def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> dict[str, Any]:
     """批准并回放 payload 落盘（复用 `_t_save` 的落盘逻辑，无二次渲染）。
 
@@ -830,11 +867,11 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
     result["pending"] = op_id
     if self_check:
         result["self_check"] = self_check  # ADM B-11
-    # approve 后自动起 watch（真机常驻监听）
+    # approve 后自动起 watch（真机常驻监听）——合并所有已部署自动化，不只这一条
     try:
-        ir = payload.get("ir")
-        if ir:
-            watch_res = start_watch(ir=ir, store_root=str(store.root), dry_live=False)
+        merged = _build_merged_ir(store)
+        if merged:
+            watch_res = start_watch(ir=merged, store_root=str(store.root), dry_live=False)
             result["watch"] = watch_res
     except Exception as e:
         logger.warning("approve_pending: 自动起 watch 失败（不影响落盘）: %r", e)
