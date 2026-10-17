@@ -1497,7 +1497,10 @@ def serve(
             try:
                 from .af_service import _catalog
                 from .af_store import GraphStore
-                _catalog(GraphStore(_store_root)).refresh(full=False)
+                res = _catalog(GraphStore(_store_root)).refresh(full=False)
+                if not res.get("ok"):
+                    import sys
+                    print(f"[catalog-auto] refresh returned not-ok: {res.get('error')}", file=sys.stderr, flush=True)
             except Exception as _e:
                 import sys
                 print(f"[catalog-auto] refresh failed: {_e!r}", file=sys.stderr, flush=True)
