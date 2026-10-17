@@ -58,8 +58,8 @@ PYEOF
 [ ! -f "$MARKER" ] && exit 0
 log "=== 收到更新请求 ==="
 
-# 读取目标分支
-REF=$(python3 -c "import json; print(json.load(open('$MARKER')).get('ref','main'))" 2>/dev/null || echo "main")
+# 读取目标分支（DCD-20261017-001：发布线追认 master；本脚本待 crontab 读数确认后改名 .disabled）
+REF=$(python3 -c "import json; print(json.load(open('$MARKER')).get('ref','master'))" 2>/dev/null || echo "master")
 log "目标 ref: $REF"
 
 cd "$REPO_DIR" || { log "ERROR: 无法进入 $REPO_DIR"; exit 1; }

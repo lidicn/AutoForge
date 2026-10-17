@@ -2,13 +2,13 @@
 # AutoForge WebUI 自更新宿主侧执行脚本（参考 DCD 20261010 MA 裁定 Q1=B）
 # crontab: * * * * * /vol1/1000/docker/autoforge/scripts/host_update.sh
 #
-# 流程：
+# 流程（2026-10-17 DCD-20261017-001 §2.4 改为 compose build 重烘镜像）：
 #   1. 检测 /data/.update_request.json 标记文件
-#   2. cd 到作者树，git fetch + reset --hard
-#   3. 构建 UI（npm install + npm run build）
-#   4. 同步 dist 到 docker 挂载目录
-#   5. docker cp 后端代码到容器
-#   6. 重启容器
+#   2. cd 到作者树，git fetch + reset --hard 到 github/$REF
+#   3. tar 备份 + py_compile 预检（失败回滚，不切流）
+#   4. 旧镜像打 tag autoforge-api:prev（回滚用）
+#   5. docker compose build 前后端一体镜像（前端已烘进镜像，不再宿主 npm/cp）
+#   6. docker compose up -d；失败回滚 prev 镜像
 #   7. 写结果到 /data/.update_result.json
 
 set -uo pipefail
@@ -127,78 +127,38 @@ if ! python3 -m py_compile src/autoforge/*.py >> "$LOG" 2>&1; then
 fi
 log "py_compile 通过"
 
-# 检测 node/npm
-HAS_NODE=0
-if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-    HAS_NODE=1
-fi
-
-# 构建 UI（开发者 webui）
-if [ "$HAS_NODE" -eq 1 ]; then
-    log "开始构建 ui（开发者 webui）..."
-    cd "$REPO_DIR/ui" || { log "ERROR: 无法进入 ui 目录"; write_result False "无法进入 ui 目录"; rm -f "$MARKER"; exit 1; }
-    if ! npm install >> "$LOG" 2>&1; then
-        log "ERROR: ui npm install 失败"
-        write_result False "ui npm install 失败"
-        rm -f "$MARKER"
-        exit 1
-    fi
-    if ! npm run build >> "$LOG" 2>&1; then
-        log "ERROR: ui npm run build 失败"
-        write_result False "ui npm run build 失败"
-        rm -f "$MARKER"
-        exit 1
-    fi
-    log "ui 构建成功"
+# 旧镜像打 tag，便于一键回滚（DCD-20261017-001 §2.5②：回滚 = up -d prev）
+if docker image inspect autoforge-api:latest >/dev/null 2>&1; then
+    docker tag autoforge-api:latest autoforge-api:prev
+    log "旧镜像已打 tag: autoforge-api:prev"
 else
-    log "WARN: NAS 上未安装 node/npm，跳过 ui 构建（使用仓库中已有的 dist）"
+    log "WARN: 无 autoforge-api:latest，跳过 prev tag"
 fi
 
-# 构建 UI（用户视角 mimo）
-if [ "$HAS_NODE" -eq 1 ]; then
-    log "开始构建 ui-user-mimo（用户视角）..."
-    cd "$REPO_DIR/ui-user-mimo" || { log "ERROR: 无法进入 ui-user-mimo 目录"; write_result False "无法进入 ui-user-mimo 目录"; rm -f "$MARKER"; exit 1; }
-    if ! npm install >> "$LOG" 2>&1; then
-        log "ERROR: ui-user-mimo npm install 失败"
-        write_result False "ui-user-mimo npm install 失败"
-        rm -f "$MARKER"
-        exit 1
-    fi
-    if ! npm run build >> "$LOG" 2>&1; then
-        log "ERROR: ui-user-mimo npm run build 失败"
-        write_result False "ui-user-mimo npm run build 失败"
-        rm -f "$MARKER"
-        exit 1
-    fi
-    log "ui-user-mimo 构建成功"
-else
-    log "WARN: NAS 上未安装 node/npm，跳过 ui-user-mimo 构建（使用仓库中已有的 dist）"
-fi
-
-# 同步 dist 到 docker 挂载目录
-log "同步 dist 到 docker 挂载目录..."
-rm -rf "$DOCKER_DIR/ui/dist"
-cp -r "$REPO_DIR/ui/dist" "$DOCKER_DIR/ui/dist"
-rm -rf "$DOCKER_DIR/ui-user-mimo/dist"
-cp -r "$REPO_DIR/ui-user-mimo/dist" "$DOCKER_DIR/ui-user-mimo/dist"
-log "dist 同步完成"
-
-# docker cp 后端代码到容器
-log "docker cp 后端代码到容器..."
-docker cp "$REPO_DIR/src/autoforge/." "$CONTAINER:/app/src/autoforge/" >> "$LOG" 2>&1
-if [ $? -ne 0 ]; then
-    log "ERROR: docker cp 失败"
-    write_result False "docker cp 后端代码失败"
+# 从镜像构建前后端（DCD-20261017-001 §2.4：前端已烘进镜像，不再宿主 npm build / docker cp / dist 同步）
+# build 失败 ⇒ 不切流：旧镜像仍在服务，latest tag 未被覆盖，回滚 git 保持代码一致。
+log "开始 docker compose build 镜像（前后端一体）..."
+if ! docker compose -f "$DOCKER_DIR/docker/docker-compose.api.yml" build >> "$LOG" 2>&1; then
+    log "ERROR: docker compose build 失败，不切流（旧镜像继续服务），git 回滚到 $FROM_SHA"
+    git reset --hard "$FROM_SHA" >> "$LOG" 2>&1
+    write_result False "镜像构建失败，未切流，旧镜像继续服务"
     rm -f "$MARKER"
     exit 1
 fi
-log "docker cp 完成"
+log "镜像构建成功"
+
+# up -d 起新容器；失败则回滚 prev 镜像
+if ! docker compose -f "$DOCKER_DIR/docker/docker-compose.api.yml" up -d >> "$LOG" 2>&1; then
+    log "ERROR: up -d 失败，回滚到 prev 镜像"
+    docker tag autoforge-api:prev autoforge-api:latest >> "$LOG" 2>&1
+    docker compose -f "$DOCKER_DIR/docker/docker-compose.api.yml" up -d >> "$LOG" 2>&1
+    git reset --hard "$FROM_SHA" >> "$LOG" 2>&1
+    write_result False "up -d 失败，已回滚到 prev 镜像"
+    rm -f "$MARKER"
+    exit 1
+fi
 
 # 写结果
 write_result True ""
 rm -f "$MARKER"
-log "=== 更新完成，重启容器 ==="
-
-sleep 2
-docker restart "$CONTAINER" >> "$LOG" 2>&1
-log "容器已重启"
+log "=== 更新完成（compose build + up -d）==="

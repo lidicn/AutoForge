@@ -51,8 +51,10 @@ SCANNED = (
     ("src/autoforge", (".py",)),
     (".github/workflows", (".yml",)),
 )
-#: 现读 5 枚站点（清单 §三 五行角色）。要加第六枚先登记、再申请抬这里。
-SITE_CAP = 5
+#: 现读 8 枚站点（清单 §三 八行角色）。2026-10-17 DCD-20261017-001 §2.2④ 批准 5 → 8：
+#: 新增的 2 枚是 host_check_update.sh（部署指令）与 host_update_nas.sh（兜底/读取侧），是既成事实登记而非放宽标准。
+#: ⛔ 此后 8 为硬上限，第 9 枚必须删一枚换一枚，不许再抬。
+SITE_CAP = 8
 HOST_SH = "scripts/host_update.sh"
 API_PY = "src/autoforge/af_api.py"
 #: 未跟踪的同名载体只报观察行：提交面（HEAD 树）读不出它们，按裁甲「未进任何提交 ⇒ 不算交付」。
@@ -78,10 +80,11 @@ RE_DEPLOY = re.compile(r'\borigin/([A-Za-z0-9._/-]+)')
 RE_BRANCHES = re.compile(r"^\s*branches:\s*\[([^\]]*)\]")
 #: 取值域锚点：出现任一形状即判「有校验」，与清单 §二 那一格对撞。
 RE_DOMAIN = re.compile(r"(?:branch\s+not\s+in|_ALLOWED_BRANCH|VALID_BRANCHES)")
-ANCHORS_HOST = (
-    'git fetch --force origin "$REF"',
-    'git reset --hard "origin/$REF"',
-)
+#: D 锚点（remote 名可参数化，2026-10-17 DCD-20261017-001 §2.3）：脚本按部署事实把 GitHub remote 名叫 `github`
+#: （NAS 部署树），本地仓叫 `origin`。⛔ 门不把 remote 名写死成某一个——写死会把"脚本按事实写"误判成"读不出锚点"。
+#: 只要求：ref 经变量 `$REF` 传参、fetch/reset 成对、remote 名是合法 git remote 名（origin/github/nas 等均可）。
+RE_ANCHOR_FETCH = re.compile(r'git fetch --force [A-Za-z0-9._-]+ "\$REF"')
+RE_ANCHOR_RESET = re.compile(r'git reset --hard "[A-Za-z0-9._-]+/\$REF"')
 ANCHORS_API = (
     "confirm_version != _APP_VERSION",
     "atomic_write_text(_UPDATE_MARKER",
@@ -360,9 +363,15 @@ def check(root: Path) -> tuple[list[str], dict[str, object]]:
         # 判据 D：三枚形状锚点
         host = _text_of(snaps, HOST_SH)
         api = _text_of(snaps, API_PY)
-        for anchor in ANCHORS_HOST:
-            if anchor not in host:
-                findings.append(f"D `{HOST_SH}` 读不出锚点 `{anchor}`——ref 必须是变量传参，退回硬编码就断链")
+        if not RE_ANCHOR_FETCH.search(host):
+            findings.append(
+                f"D `{HOST_SH}` 读不出锚点 `git fetch --force <remote> \"$REF\"`——ref 必须是变量传参、"
+                "remote 名可参数化（origin/github/nas 均可），退回硬编码线名就断链"
+            )
+        if not RE_ANCHOR_RESET.search(host):
+            findings.append(
+                f"D `{HOST_SH}` 读不出锚点 `git reset --hard \"<remote>/$REF\"`——同上，reset 目标必须是变量 ref"
+            )
         for anchor in ANCHORS_API:
             if anchor not in api:
                 findings.append(f"D `{API_PY}` 读不出锚点 `{anchor}`——自更新端点的三枚形状被重构撞坏了一枚")
