@@ -82,7 +82,8 @@ RE_BRANCHES = re.compile(r"^\s*branches:\s*\[([^\]]*)\]")
 RE_DOMAIN = re.compile(r"(?:branch\s+not\s+in|_ALLOWED_BRANCH|VALID_BRANCHES)")
 #: D 锚点（remote 名可参数化，2026-10-17 DCD-20261017-001 §2.3）：脚本按部署事实把 GitHub remote 名叫 `github`
 #: （NAS 部署树），本地仓叫 `origin`。⛔ 门不把 remote 名写死成某一个——写死会把"脚本按事实写"误判成"读不出锚点"。
-#: 只要求：ref 经变量 `$REF` 传参、fetch/reset 成对、remote 名是合法 git remote 名（origin/github/nas 等均可）。
+#: 只要求：ref 经变量 `$REF` 传参、fetch/reset 成对、remote 名是合法 git remote 名（origin / github / nas 均可）。
+#: ⚠️ 本文件自身注释里⛔出现 `origin/<名字>` 形状——那会被 RE_DEPLOY 抓成一枚假"部署指令"站点。
 RE_ANCHOR_FETCH = re.compile(r'git fetch --force [A-Za-z0-9._-]+ "\$REF"')
 RE_ANCHOR_RESET = re.compile(r'git reset --hard "[A-Za-z0-9._-]+/\$REF"')
 ANCHORS_API = (
@@ -366,7 +367,7 @@ def check(root: Path) -> tuple[list[str], dict[str, object]]:
         if not RE_ANCHOR_FETCH.search(host):
             findings.append(
                 f"D `{HOST_SH}` 读不出锚点 `git fetch --force <remote> \"$REF\"`——ref 必须是变量传参、"
-                "remote 名可参数化（origin/github/nas 均可），退回硬编码线名就断链"
+                "remote 名可参数化（origin / github / nas 均可），退回硬编码线名就断链"
             )
         if not RE_ANCHOR_RESET.search(host):
             findings.append(
