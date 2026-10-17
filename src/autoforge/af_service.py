@@ -3143,7 +3143,7 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
                 cmd,
                 stdout=logf,
                 stderr=subprocess.STDOUT,
-                start_new_session=True,
+                start_new_session=False,  # 巡检 #7：serve 死则 watch 死（之前 True 导致孤儿持锁）
                 env=child_env,
             )
     except Exception as e:

@@ -1488,6 +1488,25 @@ def serve(
             typer.echo(f"· watch 恢复结果: ok={_wr.get('ok')}")
     except Exception as _e:
         typer.echo(f"⚠️ watch 自动恢复失败（不影响 API）: {_e!r}", err=True)
+
+    # catalog 自动刷新（巡检 #4）：serve 启动时刷一次，之后每 6h 增量刷。
+    # 之前 freshness 永远停在最后一次手动刷（9-26），因为 refresh 只有手动 API/CLI 触发。
+    def _catalog_auto_refresh_loop(_store_root: str):
+        import time
+        while True:
+            try:
+                from .af_service import _catalog
+                from .af_store import GraphStore
+                _catalog(GraphStore(_store_root)).refresh(full=False)
+            except Exception as _e:
+                import sys
+                print(f"[catalog-auto] refresh failed: {_e!r}", file=sys.stderr, flush=True)
+            time.sleep(6 * 3600)
+    import threading as _threading
+    _t = _threading.Thread(target=_catalog_auto_refresh_loop, args=(store_root,), daemon=True, name="catalog-auto-refresh")
+    _t.start()
+    typer.echo("· catalog 自动刷新：启动即刷一次，之后每 6h 增量")
+
     install_access_log_token_mask()
     import atexit
     # 裁定 20261011 §3 Q7.2 的第二条腿。SIGTERM 这一档**不在这里装处理器**，原因不是「装了不生效」：
@@ -1509,8 +1528,8 @@ def serve(
         if bridge is not None:
             bridge.stop()   # 显式 retained offline：LWT 只覆盖异常断连
         # 裁定 20261011 §3 Q7.1 的仓内兜底：子进程的**重启**归部署面（compose `restart:`），仓内不
-        # 自建第二套 supervisor；但**收**不能等下一次有人调 `start_watch` 才发现。`start_new_session=True`
-        # 让 watcher 脱离本进程会话，serve 死了它会继续持有协调锁、按档位继续下发动作。
+        # 自建第二套 supervisor；但**收**不能等下一次有人调 `start_watch` 才发现。`start_new_session=False`
+        # 让 watcher 留在本进程组，serve 死（含 kill -9）时 watcher 跟着死，不再孤儿持锁（巡检 #7）。
         reap_watch_child(store_root, readonly, where="finally")
 
 
