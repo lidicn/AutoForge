@@ -49,7 +49,7 @@ def build(app, atomic_write_text, _APP_VERSION, _UPDATE_MARKER):
             return {"ok": False, "error": "版本号不匹配"}, 400
         if os.path.isfile(_UPDATE_MARKER):
             return {"ok": False, "error": "已有更新请求进行中"}, 409
-        branch = (body.branch or "main").strip()
+        branch = (body.branch or "master").strip()
         marker = {"ref": branch, "version": _APP_VERSION}
         atomic_write_text(_UPDATE_MARKER, json.dumps(marker, ensure_ascii=False))
         return {"ok": True}
@@ -58,7 +58,7 @@ def build(app, atomic_write_text, _APP_VERSION, _UPDATE_MARKER):
 HOST_TXT = '''#!/bin/sh
 # 合成宿主 sidecar：读 marker 的 ref，读不出就吃两层兜底，然后走变量传参。
 MARKER=/data/.update_request.json
-REF=$(python3 -c "import json; print(json.load(open('$MARKER')).get('ref','main'))" 2>/dev/null || echo "main")
+REF=$(python3 -c "import json; print(json.load(open('$MARKER')).get('ref','master'))" 2>/dev/null || echo "master")
 cd /deploy/autoforge || exit 1
 if ! git fetch --force origin "$REF"; then
     exit 1
@@ -74,7 +74,7 @@ def propose_commands(target: str) -> str:
     return "\\n".join(
         [
             "# 以下动作本脚本不执行（要 owner 点头）：",
-            f"ssh {target} 'cd {NAS_USER_DIR} && git fetch && git merge --ff-only origin/main'",
+            f"ssh {target} 'cd {NAS_USER_DIR} && git fetch && git merge --ff-only origin/master'",
         ]
     )
 '''
@@ -91,13 +91,38 @@ jobs:
     runs-on: ubuntu-latest
 """
 
-FILES = {API_REL: API_TXT, HOST_REL: HOST_TXT, DEPLOY_REL: DEPLOY_TXT, CI_REL: CI_TXT}
+#: 合成自更新读侧（部署指令）：打印候选更新线，被 RE_DEPLOY 抓成 `origin/master`。
+HOST_CHECK_TXT = '''#!/bin/sh
+# 合成自更新读侧：候选更新线。
+git fetch origin/master
+'''
+
+#: 合成 NAS 旧兜底脚本：读取侧缺省 + 第二层兜底两枚站点（与 host_update.sh 同族）。
+HOST_NAS_TXT = '''#!/bin/sh
+MARKER=/data/.update_request.json
+REF=$(python3 -c "import json; print(json.load(open('$MARKER')).get('ref','master'))" 2>/dev/null || echo "master")
+'''
+
+FILES = {
+    API_REL: API_TXT, HOST_REL: HOST_TXT, DEPLOY_REL: DEPLOY_TXT, CI_REL: CI_TXT,
+    "scripts/host_check_update.sh": HOST_CHECK_TXT,
+    "scripts/host_update_nas.sh": HOST_NAS_TXT,
+}
 
 
 def _git(cwd: Path, *args: str) -> None:
     subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
         cwd=str(cwd), capture_output=True, check=True,
+    )
+
+
+def _commit(cwd: Path, msg: str) -> None:
+    """容忍「无变更可提交」：--write 重生成的 AUTO 段可能与磁盘逐字节相同，
+    这时 git commit 退出码 1 不是错误（变异已在 HEAD，无需再落一笔）。"""
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg],
+        cwd=str(cwd), capture_output=True, check=False,
     )
 
 
@@ -117,9 +142,11 @@ def make_tree(tmp_path: Path) -> Path:
     shutil.copyfile(REPO / DOC_REL, root / DOC_REL)
     _git(root, "init", "-q")
     _git(root, "add", "-A")
+    _commit(root, "init")
     rc = run_gate(root, write=True)
     assert rc.returncode == 0, rc.stdout + rc.stderr
     _git(root, "add", "-A")
+    _commit(root, "baseline auto")
     return root
 
 
@@ -128,6 +155,7 @@ def write_file(root: Path, rel: str, text: str) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(text, encoding="utf-8", newline="\n")
     _git(root, "add", "-A")
+    _commit(root, "mut")   # ⚠️ 本门判 HEAD 面：变异不 commit 就进不了索引，门看不见
 
 
 def patch(root: Path, rel: str, old: str, new: str) -> None:
@@ -144,6 +172,7 @@ def resync_and_check(root: Path):
     rc = run_gate(root, write=True)
     assert rc.returncode == 0, rc.stdout + rc.stderr
     _git(root, "add", "-A")
+    _commit(root, "resync")
     return run_gate(root)
 
 
@@ -177,16 +206,16 @@ def _real_snapshot(fn):
 
 
 def test_real_repo_readings():
-    """钉读数本身：5 枚站点／角色齐全／上限 5——扫描器静默退化会先把这条撞红。"""
+    """钉读数本身：8 枚站点／6 枚载体文件／上限 8（DCD-20261017-001 §2.2④ 批准 5→8）——扫描器静默退化会先把这条撞红。"""
     def read(snaps):
         return crl.scan_sites(snaps)
     sites = _real_snapshot(read)
-    assert len(sites) == 5, [s.line() for s in sites]
-    assert {s.path for s in sites} == set(SITE_PATHS), [s.line() for s in sites]
-    assert {s.role for s in sites} == {
-        crl.ROLE_WRITE, crl.ROLE_READ, crl.ROLE_FALLBACK, crl.ROLE_DEPLOY, crl.ROLE_CI
-    }
-    assert crl.SITE_CAP == 5
+    assert len(sites) == 8, [s.line() for s in sites]
+    assert {s.path for s in sites} == {
+        API_REL, HOST_REL, DEPLOY_REL, CI_REL,
+        "scripts/host_check_update.sh", "scripts/host_update_nas.sh",
+    }, [s.line() for s in sites]
+    assert crl.SITE_CAP == 8
 
 
 def test_real_repo_every_carrier_equals_registered_line():
@@ -196,7 +225,7 @@ def test_real_repo_every_carrier_equals_registered_line():
         cal = crl._caliber(text)
         return cal[crl.KEY_RELEASE_LINE], crl.scan_sites(snaps)
     release, sites = _real_snapshot(read)
-    assert release == "main"
+    assert release == "master"   # DCD-20261017-001 追认 master，翻案 20261013 归一 main
     for s in sites:
         if s.role == crl.ROLE_CI:
             assert release in s.literal.split(","), s.line()
@@ -205,13 +234,14 @@ def test_real_repo_every_carrier_equals_registered_line():
 
 
 def test_real_repo_deploy_command_follows_publish_line():
-    """2026-10-13 之前那枚「部署指令」载体写的是 `origin/master`：与自更新链不同源，同一台 NAS 会被两条路径喂两套代码。"""
+    """部署指令指发布线 master（DCD-20261017-001 追认）；host 经变量 $REF 传参、remote 名可参数化（§2.3，不再写死 origin）。"""
     def read(snaps):
         return crl._text_of(snaps, DEPLOY_REL), crl._text_of(snaps, HOST_REL)
     deploy_txt, host_txt = _real_snapshot(read)
-    assert "git merge --ff-only origin/main" in deploy_txt
-    assert "origin/master" not in deploy_txt
-    assert 'git fetch --force origin "$REF"' in host_txt
+    assert "git merge --ff-only origin/master" in deploy_txt
+    assert "origin/main" not in deploy_txt
+    assert crl.RE_ANCHOR_FETCH.search(host_txt), host_txt   # git fetch --force <remote> "$REF"
+    assert crl.RE_ANCHOR_RESET.search(host_txt), host_txt   # git reset --hard "<remote>/$REF"
 
 
 def test_real_repo_comments_are_not_carriers():
@@ -235,8 +265,9 @@ def test_synth_A_manual_auto_edit(tmp_path):
     doc = root / DOC_REL
     text = doc.read_text(encoding="utf-8")
     target = next(ln for ln in text.splitlines() if "角色=写入侧缺省" in ln)
-    doc.write_text(text.replace(target, target.replace("字面=main", "字面=master")), encoding="utf-8", newline="\n")
+    doc.write_text(text.replace(target, target.replace("字面=master", "字面=main")), encoding="utf-8", newline="\n")
     _git(root, "add", "-A")
+    _commit(root, "A mut")
     rc = run_gate(root)
     assert rc.returncode == 1, rc.stdout
     assert by_letter(rc.stdout, "A"), rc.stdout
@@ -246,7 +277,7 @@ def test_synth_A_manual_auto_edit(tmp_path):
 def test_synth_A_total_line_drift(tmp_path):
     """A：汇总行被人手改（上限数字也是逐行对撞的一部分）。"""
     root = make_tree(tmp_path)
-    patch(root, DOC_REL, "- 站点合计 = 5 · 上限 = 5", "- 站点合计 = 5 · 上限 = 9")
+    patch(root, DOC_REL, "- 站点合计 = 8 · 上限 = 8", "- 站点合计 = 8 · 上限 = 9")
     rc = run_gate(root)
     assert rc.returncode == 1 and by_letter(rc.stdout, "A"), rc.stdout
 
@@ -254,10 +285,11 @@ def test_synth_A_total_line_drift(tmp_path):
 def test_synth_B_unregistered_carrier(tmp_path):
     """B：新载体文件（`scripts/host_rollback.sh`）自带读取侧缺省却不登记 ⇒ 先显式认领。"""
     root = make_tree(tmp_path)
-    write_file(root, "scripts/host_rollback.sh", 'REF=$(python3 -c "x.get(\'ref\',\'main\')" || echo "main")\n')
+    write_file(root, "scripts/host_rollback.sh", 'REF=$(python3 -c "x.get(\'ref\',\'master\')" || echo "master")\n')
     rc = run_gate(root, write=True)          # 重生成自动段，把 A 摘出去
     assert rc.returncode == 0, rc.stdout
     _git(root, "add", "-A")
+    _commit(root, "B unreg")
     rc = run_gate(root)
     assert rc.returncode == 1, rc.stdout
     fs = by_letter(rc.stdout, "B")
@@ -270,6 +302,7 @@ def test_synth_B_stale_registration(tmp_path):
     root = make_tree(tmp_path)
     (root / DEPLOY_REL).unlink()
     _git(root, "add", "-A")
+    _commit(root, "B stale")
     rc = resync_and_check(root)
     assert rc.returncode == 1, rc.stdout
     assert any("过期登记" in f for f in by_letter(rc.stdout, "B")), rc.stdout
@@ -285,6 +318,7 @@ def test_synth_B_placeholder_claim(tmp_path):
     cells[-2] = " 待补 "
     doc.write_text(text.replace(row, "|".join(cells)), encoding="utf-8", newline="\n")
     _git(root, "add", "-A")
+    _commit(root, "B placeholder")
     rc = run_gate(root)
     assert rc.returncode == 1, rc.stdout
     assert any("占位" in f for f in by_letter(rc.stdout, "B")), rc.stdout
@@ -293,7 +327,7 @@ def test_synth_B_placeholder_claim(tmp_path):
 def test_synth_C_carrier_off_publish_line(tmp_path):
     """C（核心一句）：写入侧缺省改成别的线名 ⇒ 只有 C 红，修法提示指向 §二 那一格。"""
     root = make_tree(tmp_path)
-    patch(root, API_REL, 'body.branch or "main"', 'body.branch or "master"')
+    patch(root, API_REL, 'body.branch or "master"', 'body.branch or "main"')
     rc = resync_and_check(root)
     assert rc.returncode == 1, rc.stdout
     assert any("写入侧缺省" in f and "master" in f for f in by_letter(rc.stdout, "C")), rc.stdout
@@ -303,7 +337,7 @@ def test_synth_C_carrier_off_publish_line(tmp_path):
 def test_synth_C_fallback_only_diverges(tmp_path):
     """C：只改第二层兜底 `|| echo` 而不动读取侧缺省——正是「改上面漏下面」的形状。"""
     root = make_tree(tmp_path)
-    patch(root, HOST_REL, '2>/dev/null || echo "main"', '2>/dev/null || echo "dev"')
+    patch(root, HOST_REL, '2>/dev/null || echo "master"', '2>/dev/null || echo "dev"')
     rc = resync_and_check(root)
     assert rc.returncode == 1 and any("兜底字面" in f for f in by_letter(rc.stdout, "C")), rc.stdout
 
@@ -311,7 +345,7 @@ def test_synth_C_fallback_only_diverges(tmp_path):
 def test_synth_C_ci_drops_publish_line(tmp_path):
     """C：CI 触发名单里没有发布线 ⇒ 推到发布线上的提交根本不跑 CI。"""
     root = make_tree(tmp_path)
-    patch(root, CI_REL, "branches: [main, master, dev]", "branches: [master, dev]")
+    patch(root, CI_REL, "branches: [main, master, dev]", "branches: [main, dev]")
     rc = resync_and_check(root)
     assert rc.returncode == 1 and any("触发名单" in f for f in by_letter(rc.stdout, "C")), rc.stdout
 
@@ -319,7 +353,7 @@ def test_synth_C_ci_drops_publish_line(tmp_path):
 def test_synth_C_ci_extra_names_still_green(tmp_path):
     """C 的反例（防过度收紧）：名单里多几条别的线名不该红——发布线在名单里就成立（重生成自动段后判 C）。"""
     root = make_tree(tmp_path)
-    patch(root, CI_REL, "branches: [main, master, dev]", "branches: [main, dev, feat]")
+    patch(root, CI_REL, "branches: [main, master, dev]", "branches: [master, dev, feat]")
     rc = resync_and_check(root)
     assert rc.returncode == 0, rc.stdout
 
@@ -339,7 +373,7 @@ def test_synth_D_hardcoded_ref(tmp_path):
     patch(root, HOST_REL, 'git fetch --force origin "$REF"', "git fetch --force origin main")
     rc = run_gate(root)
     assert rc.returncode == 1, rc.stdout
-    assert any('origin "$REF"' in f for f in by_letter(rc.stdout, "D")), rc.stdout
+    assert any('$REF' in f and 'fetch' in f for f in by_letter(rc.stdout, "D")), rc.stdout
 
 
 def test_synth_D_marker_key_diverges(tmp_path):
@@ -364,8 +398,8 @@ def test_synth_E_site_cap(tmp_path):
     （站点按 `路径:行号 · 角色 · 字面` 去重，所以第二枚必须落在**另一行**——同一行的第二枚会被读成一枚。）
     """
     root = make_tree(tmp_path)
-    old_line = """f"ssh {target} 'cd {NAS_USER_DIR} && git fetch && git merge --ff-only origin/main'","""
-    extra = """f"ssh {target} 'cd {NAS_USER_DIR} && git reset --hard origin/main'","""
+    old_line = """f"ssh {target} 'cd {NAS_USER_DIR} && git fetch && git merge --ff-only origin/master'","""
+    extra = """f"ssh {target} 'cd {NAS_USER_DIR} && git reset --hard origin/master'","""
     patch(root, DEPLOY_REL, old_line, old_line + "\n            " + extra)
     rc = resync_and_check(root)
     assert rc.returncode == 1, rc.stdout
@@ -387,7 +421,7 @@ def test_scope_collapses_without_git(tmp_path):
     shutil.copyfile(REPO / DOC_REL, root / DOC_REL)
     rc = run_gate(root)
     assert rc.returncode == 2, rc.stdout + rc.stderr
-    assert "入库面" in rc.stdout
+    assert "工作树" in rc.stdout
     assert run_gate(root, write=True).returncode == 2, "拒绝用磁盘面改写清单"
 
 
@@ -404,6 +438,7 @@ def test_scope_collapses_when_doc_missing(tmp_path):
     root = make_tree(tmp_path)
     (root / DOC_REL).unlink()
     _git(root, "add", "-A")
+    _commit(root, "doc gone")
     assert run_gate(root).returncode == 2
 
 
@@ -432,9 +467,10 @@ def test_scope_collapses_when_role_table_emptied(tmp_path):
 def test_scope_collapses_when_carrier_files_gone(tmp_path):
     """载体文件整个消失：`scripts/` 在索引里读出 0 份 ⇒ 走到 `af_face` 的射程下限（⛔ 不是「没有违规」）。"""
     root = make_tree(tmp_path)
-    for rel in SITE_PATHS:
+    for rel in FILES:
         (root / rel).unlink()
     _git(root, "add", "-A")
+    _commit(root, "carriers gone")
     rc = run_gate(root)
     assert rc.returncode == 2, rc.stdout + rc.stderr
     assert "射程塌" in rc.stdout, rc.stdout
@@ -451,7 +487,7 @@ def test_scope_collapses_when_zero_sites_but_files_present(tmp_path):
     for rel, text in FILES.items():
         neutral = "\n".join(
             ln for ln in text.splitlines()
-            if "origin/" not in ln and 'or "main"' not in ln and "'ref','main'" not in ln
+            if "origin/" not in ln and 'or "master"' not in ln and "'ref','master'" not in ln
             and "branches: [" not in ln
         )
         write_file(root, rel, neutral + "\n")
@@ -463,6 +499,6 @@ def test_scope_collapses_when_zero_sites_but_files_present(tmp_path):
 
 def test_scope_collapses_when_caliber_key_renamed(tmp_path):
     root = make_tree(tmp_path)
-    patch(root, DOC_REL, f"- {crl.KEY_RELEASE_LINE} = main", "- 发布线（远端啊） = main")
+    patch(root, DOC_REL, f"- {crl.KEY_RELEASE_LINE} = master", "- 发布线（远端啊） = master")
     rc = run_gate(root)
     assert rc.returncode == 2, rc.stdout
