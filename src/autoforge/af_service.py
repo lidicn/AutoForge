@@ -2352,6 +2352,21 @@ def get_metrics(store: GraphStore) -> dict[str, Any]:
 
 def _catalog(store: GraphStore, **kwargs: Any) -> DeviceCatalog:
     """从 store 根目录构造设备目录（缓存与归档同根，便于整体搬运）。"""
+    # 巡检 #4：DeviceCatalog 只读环境变量，不读 credentials.json——WebUI 填的 token
+    # 写进 credentials.json 但 catalog 拿不到。这里从 Config 读 token/url 传进去。
+    if "ha_token" not in kwargs:
+        try:
+            from .af_config import Config
+            cfg = Config(store.root)
+            tok = cfg.get_ha_token()
+            if tok:
+                kwargs["ha_token"] = tok
+            url = os.getenv("AUTOFORGE_HA_URL", "")
+            if not url:
+                url = "http://192.168.2.200:8123"
+            kwargs.setdefault("ha_url", url)
+        except Exception:
+            pass
     return DeviceCatalog(store.root, **kwargs)
 
 
