@@ -13,6 +13,7 @@ services:
       dockerfile: docker/Dockerfile.api
     image: autoforge-api:latest
     container_name: autoforge-api
+    init: true  # 巡检 #8：用 Docker 自带 tini 作 PID1，收割僵尸子进程
     ports:
       - "8787:8787"
     # 前端静态托管：把构建产物 dist 以卷挂入 /ui，由 serve --ui-dir 启用同源 SPA fallback（/api 无需跨域）
@@ -82,6 +83,7 @@ services:
       - AUTOFORGE_HA_TOKEN=${AUTOFORGE_HA_TOKEN:-}
       - AF_ALLOW_NOAUTH=${AF_ALLOW_NOAUTH:-}
     restart: unless-stopped
+    stop_grace_period: 15s  # 巡检 #8：给 trap cleanup 留时间收 watch
 
 # 顶层 secret 定义（docker secrets 风格；默认全注释——启用前先在宿主机创建对应文件）：
 #   install -m 600 /path/to/ha_token /vol1/1000/docker/autoforge/secrets/AUTOFORGE_HA_TOKEN
