@@ -13,7 +13,7 @@
     POST /api/spec/compile
     GET  /api/faults
 
-v0.6.0 标签体系 + 批量启停（写操作，需服务端设置 AUTOFORGE_API_TOKEN 才强制鉴权）：
+v0.6.0 标签体系 + 批量启停（写操作，受服务端访问密钥鉴权；新名 AF_ACCESS_TOKEN/AF_ACCESS_TOKENS，旧 AUTOFORGE_API_TOKEN/AUTOFORGE_TOKENS）：
     POST /api/graphs/tags          # {name, tags[]} 设置某归档标签
     POST /api/graphs/enable        # {tag} 按标签批量启用其中全部自动化
     POST /api/graphs/disable       # {tag} 按标签批量禁用其中全部自动化
@@ -23,8 +23,9 @@ v0.7.0 模板导出与备份恢复：
     POST /api/store/import         # {bundle, strategy} 导入 bundle（写操作，需鉴权）
 
 v0.8.0 服务层鉴权升级（多令牌主体模型 + 撤销 + 限速 + scope 分级）：
-    - 令牌来源：`AUTOFORGE_API_TOKEN`（旧单密钥，等价 subject=shared、scopes=read+write+live）
-      或 `AUTOFORGE_TOKENS`（JSON 对象，每条令牌自报 subject + scopes）。
+    - 访问密钥来源（A 类：谁能调用 AF）：`AF_ACCESS_TOKEN`（旧单密钥 AUTOFORGE_API_TOKEN，等价
+      subject=shared、scopes=read+write+live）或 `AF_ACCESS_TOKENS`（旧 AUTOFORGE_TOKENS，
+      JSON 对象，每条令牌自报 subject + scopes）。
     - 端点 scope 分级：
         read  ：公开（健康/图表/配置/指标/审计/故障图鉴/store/export/sessions 列表与详情）
         write ：标签/批量启停/store/import/会话写/干预/`auth/*` 管理

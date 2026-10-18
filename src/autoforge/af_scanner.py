@@ -137,7 +137,7 @@ CODE_HINT: dict[str, str] = {
     "EMIT_SELF_LOOP": "纯事件环、无设备回灌，运行时安全；当前为放行告警（不阻断编译），如需消除可改名或加条件避免自触发。",
     "CROSS_DEP_CYCLE": "环含 emit 事件解耦边（即 case_lamp_sync 的良性双向同步模式），运行时靠状态收敛+熔断避免死循环，已放行（告警）；若确为无 emit 解耦的直接互写实体，应重构为 emit 解耦写法（否则会被 ENTITY_DEP_CYCLE 拦截）。",
     "EMIT_STORM_LIMIT": "单条自动化 emit 节点过多/同名重复发布；拆分为多条自动化。",
-    "LIVE_TOKEN_REQUIRED": "设置 `AUTOFORGE_HA_TOKEN` 或传 `--ha-token`。",
+    "LIVE_TOKEN_REQUIRED": "设置 `HA_LONG_LIVED_TOKEN`（旧 `AUTOFORGE_HA_TOKEN`）或传 `--ha-token`。",
     "LIVE_CONFIRM_REQUIRED": "真机下发必须显式传 `--confirm`。",
     "LIVE_WHITELIST_REQUIRED": "传 `--live-allow`（逗号分隔）或 `--entities` 收窄可写白名单。",
     "LIVE_ENTITY_NOT_WHITELISTED": "把该写目标加进 `--live-allow`，或从图里去掉。",
@@ -1360,7 +1360,7 @@ def live_preflight(
             Diagnostic(
                 LIVE_TOKEN_REQUIRED,
                 ERROR,
-                "真机下发需要 HA 长期访问令牌（--ha-token 或环境变量 AUTOFORGE_HA_TOKEN）",
+                "真机下发需要 HA 长期访问令牌（--ha-token 或环境变量 HA_LONG_LIVED_TOKEN，旧 AUTOFORGE_HA_TOKEN 回退）",
             )
         )
     if not confirm:

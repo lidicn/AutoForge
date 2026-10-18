@@ -174,7 +174,7 @@ onUnmounted(() => {
   <div>
     <div class="page-head">
       <h1>真机下发</h1>
-      <p class="sub">三重闸：服务端启用 + HA 令牌 + 显式二次确认 + 非空白名单（Round 2-B）</p>
+      <p class="sub">三重闸：服务端启用 + HA 长期令牌（HA_LONG_LIVED_TOKEN）+ 显式二次确认 + 非空白名单（Round 2-B）</p>
     </div>
 
     <n-alert v-if="error" type="error" title="状态获取失败" style="margin-bottom: 16px">{{ error }}</n-alert>

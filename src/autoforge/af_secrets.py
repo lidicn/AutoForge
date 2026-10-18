@@ -7,16 +7,17 @@ secrets（或任意挂载的 secret 文件目录）提供。
 
 第三段 `credentials.json` **不在本层**，它由 `af_config` 接在前面，而且只接在
 `af_config.get_ha_token()` / `get_api_token()` 这两个键上（先取 `credentials.json`，
-取不到才落到 `load_secret("AUTOFORGE_HA_TOKEN" / "AUTOFORGE_API_TOKEN")`）。
+取不到才落到 `load_secret("HA_LONG_LIVED_TOKEN" / "AF_ACCESS_TOKEN")`，旧名
+`AUTOFORGE_HA_TOKEN` / `AUTOFORGE_API_TOKEN` 回退）。
 所以「`credentials.json` > secret 文件 > 环境变量」这条三段链的**射程只有那两个键**：
-其余名字（`AUTOFORGE_TOKENS`、`AUTOFORGE_REVOKED_TOKENS`，以及 `af_auth.py` 里
-legacy 的 `AUTOFORGE_API_TOKEN` 回退）由 `af_auth` 直接调 `load_secret`，**不经**
-`credentials.json`。旧措辞把三段链写成了全局事实——安全审计 F-11 对撞后按现读订正射程，
-行为一行未改。
+其余名字（`AF_ACCESS_TOKENS`、`AF_REVOKED_TOKENS`，旧 `AUTOFORGE_TOKENS`、
+`AUTOFORGE_REVOKED_TOKENS`，以及 `af_auth.py` 里 legacy 单密钥回退）由 `af_auth`
+直接调 `load_secret`，**不经** `credentials.json`。旧措辞把三段链写成了全局事实——
+安全审计 F-11 对撞后按现读订正射程，行为一行未改。
 
 - secret 文件目录：默认 `/run/secrets`（docker secrets 挂载点），可用
   `AUTOFORGE_SECRET_DIR` 环境变量覆盖（本地开发/非 docker 场景）。
-- 文件名为大写环境变量名，如 `/run/secrets/AUTOFORGE_HA_TOKEN`。
+- 文件名为大写环境变量名，如 `/run/secrets/HA_LONG_LIVED_TOKEN`（旧 `AUTOFORGE_HA_TOKEN`）。
 - 缺失或为空时回退到同名环境变量，保证与旧 `env_file` 行为兼容。
 """
 
@@ -64,3 +65,15 @@ def load_secret_or_none(name: str) -> str | None:
     """同上，但缺失时返回 None（便于区分"未配置"与"空字符串"）。"""
     val = load_secret(name, "")
     return val or None
+
+
+def load_secret_chain(*names: str, default: str = "") -> str:
+    """按顺序尝试多个 secret/env 名，返回第一个非空值（新名优先、旧名回退）。
+
+    用于 20261017 角色法重命名：新名先读，读不到再回退旧名，平滑切换不断服。
+    """
+    for name in names:
+        val = load_secret(name, "")
+        if val:
+            return val
+    return default

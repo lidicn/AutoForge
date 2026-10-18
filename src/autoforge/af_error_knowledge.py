@@ -65,7 +65,7 @@ CATEGORY_LABEL: dict[str, str] = {
 CATEGORY_ADVICE: dict[str, str] = {
     "GATEWAY_HTTP": "出站网关/网络异常：先确认服务与网络连通（网关 5xx、连接被拒），再重试；不要改 IR。",
     "UPSTREAM_HA": "上游 HA 不可用：确认 HA 地址/令牌与连通性（`forge credentials show`），恢复后重试；不要改 IR。",
-    "TOKEN_EXPIRED": "令牌已过期：更新 `AUTOFORGE_TOKENS` 的 `expires_at` 或换新令牌（`forge credentials update`）。",
+    "TOKEN_EXPIRED": "访问密钥已过期：更新 `AF_ACCESS_TOKENS`（旧 AUTOFORGE_TOKENS）的 `expires_at` 或换新密钥（`forge credentials update`）。",
     "SCOPE_DENIED": "当前令牌缺少所需 scope：用含 `write`/`live` 的令牌访问（见 v0.8.0 多令牌主体模型）。",
     "PENDING_LIMIT": "该提交者待批条数达上限：先 `forge pending list` 审批/拒绝清理，再提交。",
     "BLAST_RADIUS": "一次归档的自动化条数超爆炸半径：拆小或显式 `allow_bulk=true`（确认是批量操作）。",

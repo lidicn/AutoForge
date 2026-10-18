@@ -9,12 +9,12 @@ import type { CredentialsResponse, SubjectItem, WhoamiResponse } from '@/types/a
 
 const message = useMessage()
 
-// ── 当前令牌（存 localStorage，随请求带 Authorization）──
+// ── A 类 AF 访问密钥（存 localStorage，随请求带 Authorization Bearer）──
 const token = ref(localStorage.getItem('af_token') || '')
 function saveToken() {
   if (token.value.trim()) localStorage.setItem('af_token', token.value.trim())
   else localStorage.removeItem('af_token')
-  message.success('令牌已保存（仅存于本浏览器）')
+  message.success('访问密钥已保存（仅存于本浏览器）')
 }
 
 // ── whoami ──
@@ -115,38 +115,41 @@ onMounted(load)
 
     <n-alert v-if="error" type="error" title="加载失败" style="margin-bottom: 16px">{{ error }}</n-alert>
 
-    <n-card title="访问令牌" :bordered="false" class="block">
+    <n-card title="AF 访问密钥 · 登录 / 调用 AF（A 类）" :bordered="false" class="block">
       <n-space vertical :size="12">
-        <n-text depth="3">生产环境（服务端已开启鉴权）下，写 / 真机操作需携带 Bearer 令牌。令牌仅保存在本浏览器。</n-text>
+        <n-text depth="3">
+          这是「谁能进入 AF」的密钥：填服务端 <code>AF_ACCESS_TOKENS</code>（旧 <code>AUTOFORGE_TOKENS</code>）
+          里的某一条，随请求带 <code>Authorization: Bearer</code>。只保存在本浏览器，与下面的 HA 连接令牌无关。
+        </n-text>
         <n-input
           v-model:value="token"
           type="password"
           show-password-on="click"
-          placeholder="粘贴 AUTOFORGE 令牌（Bearer 内容）"
+          placeholder="粘贴 AF 访问密钥（AF_ACCESS_TOKENS 里的某条 Bearer 值）"
           style="max-width: 460px"
         />
-        <div><n-button type="primary" size="small" @click="saveToken">保存令牌</n-button></div>
+        <div><n-button type="primary" size="small" @click="saveToken">保存访问密钥</n-button></div>
         <n-alert v-if="whoami" type="success" :title="`当前身份：${whoami.subject}`">
           权限范围：{{ whoami.scopes.join(', ') || '（无）' }}
         </n-alert>
-        <n-alert v-else type="warning" title="未携带有效令牌">当前请求未认证（服务端可能未开启鉴权，或令牌无效）。</n-alert>
+        <n-alert v-else type="warning" title="未携带有效访问密钥">当前请求未认证（服务端可能未开启鉴权，或访问密钥无效）。</n-alert>
       </n-space>
     </n-card>
 
-    <n-card title="HA / API 凭据（掩码）" :bordered="false" class="block">
+    <n-card title="Home Assistant 连接令牌 · AF 出站用（B 类）" :bordered="false" class="block">
       <n-space vertical :size="12">
         <div v-if="creds">
-          <div>HA 令牌：<code>{{ creds.ha_token || '（空）' }}</code></div>
-          <div>API 令牌：<code>{{ creds.api_token || '（空）' }}</code></div>
+          <div>HA 长期访问令牌（AF 连 Home Assistant 下发设备）：<code>{{ creds.ha_token || '（空）' }}</code></div>
+          <div>旧版 AF 单密钥（一般留空，登录请用上方 A 类访问密钥）：<code>{{ creds.api_token || '（空）' }}</code></div>
           <div>连接代数 connection_revision：<b>{{ creds.connection_revision }}</b></div>
         </div>
         <n-text depth="3">留空表示不修改；提交后 connection_revision +1，所有依赖方即时生效，无需重启。</n-text>
-        <n-input v-model:value="haToken" placeholder="新 HA 长期访问令牌（留空=不改）" style="max-width: 460px" />
+        <n-input v-model:value="haToken" placeholder="新 HA 长期访问令牌（HA_LONG_LIVED_TOKEN，留空=不改）" style="max-width: 460px" />
         <n-input
           v-model:value="apiToken"
           type="password"
           show-password-on="click"
-          placeholder="新 API 令牌（留空=不改）"
+          placeholder="旧版 AF 单密钥（一般留空，留空=不改）"
           style="max-width: 460px"
         />
         <div><n-button type="primary" size="small" :loading="savingCreds" @click="saveCredentials">更新凭据</n-button></div>

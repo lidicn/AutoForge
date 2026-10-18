@@ -255,7 +255,9 @@ class DeviceCatalog:
         self._fetch_all = fetch_all
         self._fetch_one = fetch_one
         self.ha_url = ha_url or os.getenv("AUTOFORGE_HA_URL", DEFAULT_HA_URL)
-        self.ha_token = ha_token if ha_token is not None else os.getenv("AUTOFORGE_HA_TOKEN", "")
+        self.ha_token = ha_token if ha_token is not None else (
+            os.getenv("HA_LONG_LIVED_TOKEN") or os.getenv("AUTOFORGE_HA_TOKEN") or ""
+        )
         #: 传输层套接超时（秒）：HA 不可达时必须**有界失败**，不能把调用方挂死。
         #: 可用 `AUTOFORGE_HA_TIMEOUT` 覆盖（测试里设很小值即可秒失败）。
         # C-8 修复：改用 env_number 安全解析，配错值时回落默认 10 并告警，而非启动即 ValueError。
@@ -384,7 +386,7 @@ class DeviceCatalog:
         if raw is None:
             return {
                 "ok": False,
-                "error": "拉取 HA 全量状态失败：无法连接 HA 或令牌无效（检查 AUTOFORGE_HA_URL / AUTOFORGE_HA_TOKEN）",
+                "error": "拉取 HA 全量状态失败：无法连接 HA 或令牌无效（检查 AUTOFORGE_HA_URL / HA_LONG_LIVED_TOKEN，旧 AUTOFORGE_HA_TOKEN）",
                 "hint": "可用 --ha-url / --ha-token 覆盖，或设置环境变量后重试。",
             }
 

@@ -1,12 +1,16 @@
 """v0.8.0 服务层鉴权引擎：多令牌主体模型 + 撤销（jti 黑名单）+ 限速 + 端点 scope 分级。
 
 设计目标：
-- **向后兼容**：仅设 `AUTOFORGE_API_TOKEN`（旧单密钥）→ 视为 subject=shared、scopes={read,write,live} 的令牌。
-- **多令牌主体模型**：`AUTOFORGE_TOKENS` 为 JSON 对象，每条令牌自报 `subject` + `scopes`
-  （`read`/`write`/`live` 子集）。主体（subject）用于审计与限速归因。
+- **命名（角色法 20261017）**：A 类「访问密钥」= 谁能登录/调用 AF（与 B 类 AF→HA 出站令牌严格区分）。
+  新名 `AF_ACCESS_TOKENS`（多密钥 JSON）/ `AF_ACCESS_TOKEN`（旧式单密钥）；
+  旧名 `AUTOFORGE_TOKENS` / `AUTOFORGE_API_TOKEN` / `AUTOFORGE_REVOKED_TOKENS` 作为回退兼容。
+- **向后兼容**：仅设 `AF_ACCESS_TOKEN`（或旧 `AUTOFORGE_API_TOKEN`，单密钥）→ 视为
+  subject=shared、scopes={read,write,live} 的令牌。
+- **多令牌主体模型**：`AF_ACCESS_TOKENS`（或旧 `AUTOFORGE_TOKENS`）为 JSON 对象，每条令牌自报
+  `subject` + `scopes`（`read`/`write`/`live` 子集）。主体（subject）用于审计与限速归因。
 - **撤销**：内存黑名单 + 落盘 `{store_root}/.auth/revoked.json`；`revoke(token)` 即时生效，
-  重启后从盘恢复；另支持启动期紧急封禁 `AUTOFORGE_REVOKED_TOKENS`（逗号分隔）。
-- **过期三重 fail-closed（v1.4.0 附，调研 §2.8）**：`AUTOFORGE_TOKENS` 每条令牌可选
+  重启后从盘恢复；另支持启动期紧急封禁 `AF_REVOKED_TOKENS`（旧 `AUTOFORGE_REVOKED_TOKENS`，逗号分隔）。
+- **过期三重 fail-closed（v1.4.0 附，调研 §2.8）**：`AF_ACCESS_TOKENS` 每条令牌可选
   `expires_at`（ISO8601 **必须带时区**）。解析失败 / 无时区 → **拒绝**该令牌（不是放过）；
   已过期 → `TokenExpired`（由 `af_api` 转 HTTP 403）。未配 `expires_at` → 永不过期（向后兼容）。
 - **限速**：IP + 主体双维度固定窗口（默认 1000/min，可配 `AUTOFORGE_RATE_LIMIT_PER_MIN`）。
@@ -166,19 +170,31 @@ class TokenRegistry:
         self._load_issued_file()
 
     # ── 配置加载 ──
+    # 命名（角色法 20261017）：A 类「访问密钥」= 谁能登录/调用 AF。
+    #   新名 AF_ACCESS_TOKENS（多密钥 JSON）/ AF_ACCESS_TOKEN（旧式单密钥）；
+    #   旧名 AUTOFORGE_TOKENS / AUTOFORGE_API_TOKEN 作为回退（新名优先，旧名兜底，平滑切换）。
     def _load_env(self) -> None:
-        legacy = (load_secret("AUTOFORGE_API_TOKEN") or "").strip()
+        # 单密钥（新名优先，旧名回退）：拥有全部 scope，便于平滑升级
+        legacy = (
+            load_secret("AF_ACCESS_TOKEN")
+            or load_secret("AUTOFORGE_API_TOKEN")
+            or ""
+        ).strip()
         if legacy:
-            # 旧单密钥：拥有全部 scope，便于平滑升级
             self._tokens[legacy] = TokenInfo(subject="shared", scopes={"read", "write", "live"})
-        raw = (load_secret("AUTOFORGE_TOKENS") or "").strip()
+        # 多密钥 JSON（新名优先，旧名回退）
+        raw = (
+            load_secret("AF_ACCESS_TOKENS")
+            or load_secret("AUTOFORGE_TOKENS")
+            or ""
+        ).strip()
         if raw:
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError as exc:
-                raise ValueError(f"AUTOFORGE_TOKENS 不是合法 JSON：{exc}") from exc
+                raise ValueError(f"访问密钥 AF_ACCESS_TOKENS 不是合法 JSON：{exc}") from exc
             if not isinstance(data, dict):
-                raise ValueError("AUTOFORGE_TOKENS 必须是对象 {token: {subject, scopes}}")
+                raise ValueError("访问密钥 AF_ACCESS_TOKENS 必须是对象 {token: {subject, scopes}}")
             for token, meta in data.items():
                 subject, scopes = self._parse_meta(meta)
                 expires_at, invalid_reason = self._parse_expiry(meta)
@@ -190,7 +206,7 @@ class TokenRegistry:
                     invalid_reason=invalid_reason,
                 )
         # 启动期紧急封禁（运维封禁已泄露令牌）
-        for t in (load_secret("AUTOFORGE_REVOKED_TOKENS") or "").split(","):
+        for t in (load_secret("AF_REVOKED_TOKENS") or load_secret("AUTOFORGE_REVOKED_TOKENS") or "").split(","):
             t = t.strip()
             if t:
                 self._revoked.add(t)

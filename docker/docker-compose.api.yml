@@ -32,11 +32,14 @@ services:
     # ---- 敏感 token：secret 管理（v2.0.1 / PR 0.1-b）----
     # 不再依赖明文 env_file: ../.env（.env 仍被 .gitignore 忽略，绝不进版本库）。
     # 代码读取顺序：credentials.json > secret 文件（AUTOFORGE_SECRET_DIR，默认 /run/secrets）> 环境变量。
+    # 两套令牌务必分清（20261017 角色法重命名，旧名回退兼容）：
+    #   A 类·AF 访问密钥（谁能登录/调用 AF）：新名 AF_ACCESS_TOKENS，旧 AUTOFORGE_TOKENS。
+    #   B 类·AF→HA 出站长期令牌（AF 连 Home Assistant）：新名 HA_LONG_LIVED_TOKEN，旧 AUTOFORGE_HA_TOKEN。
     # 非敏感开关用 environment 从宿主机 shell env 注入；敏感 token 二选一：
     #   (A) docker secrets：取消下方 `secrets:` 引用 + 文件末 `secrets:` 段注释，并在宿主机
-    #       创建 secret 文件（install -m 600 ... /vol1/1000/docker/autoforge/secrets/AUTOFORGE_HA_TOKEN）；
-    #   (B) shell env：取消 `- AUTOFORGE_HA_TOKEN=${AUTOFORGE_HA_TOKEN:-}` 注释，宿主机
-    #       export AUTOFORGE_HA_TOKEN=... 后 docker compose up。
+    #       创建 secret 文件（install -m 600 ... /vol1/1000/docker/autoforge/secrets/HA_LONG_LIVED_TOKEN）；
+    #   (B) shell env：取消 `- HA_LONG_LIVED_TOKEN=${HA_LONG_LIVED_TOKEN:-}` 注释，宿主机
+    #       export HA_LONG_LIVED_TOKEN=... 后 docker compose up。
     # secrets:
     #   - autoforge_ha_token
     #   - autoforge_tokens
@@ -75,22 +78,26 @@ services:
       # 同机 AF/MA 都用 homesdk、容器 PID 都是 1 时 default_client_id 撞成同一个 ⇒ broker 互踢。
       # 部署侧给 AF 一个独占 client_id（如 homesdk-autoforge-af）；缺省留空走 default。
       - MQTT_CLIENT_ID=${MQTT_CLIENT_ID:-}
-      # 令牌面的键名真源是 `af_auth.py` 的 `load_secret(...)`：多令牌主体用这枚键（JSON 对象，
-      # 每条自报 subject + scopes）。旧文案把它写成了复数，而代码里没有复数那枚读数——宿主机的值
-      # 注入得再认真也只是喂给一个没人读的空位，鉴权照旧失败且不留原因（NAS 现场手补即为此）。
-      # 这条键名同源由 `tests/unit/test_compose_env_key_source.py` 当场核对。
+      # ── A 类·AF 访问密钥（谁能登录/调用 AF），20261017 角色法重命名 ──
+      # 新名 AF_ACCESS_TOKENS（多密钥 JSON，每条自报 subject + scopes）；旧 AUTOFORGE_TOKENS 回退兼容。
+      # 令牌面键名真源是 `af_auth.py` 的 `load_secret(...)`。新部署优先用新名，旧值仍被读取。
+      - AF_ACCESS_TOKENS=${AF_ACCESS_TOKENS:-}
       - AUTOFORGE_TOKENS=${AUTOFORGE_TOKENS:-}
+      # ── B 类·AF→HA 出站长期令牌（AF 连 Home Assistant 下发设备），与 A 类访问密钥严格区分 ──
+      # 新名 HA_LONG_LIVED_TOKEN；旧 AUTOFORGE_HA_TOKEN 回退兼容。
+      - HA_LONG_LIVED_TOKEN=${HA_LONG_LIVED_TOKEN:-}
       - AUTOFORGE_HA_TOKEN=${AUTOFORGE_HA_TOKEN:-}
       - AF_ALLOW_NOAUTH=${AF_ALLOW_NOAUTH:-}
     restart: unless-stopped
     stop_grace_period: 15s  # 巡检 #8：给 trap cleanup 留时间收 watch
 
 # 顶层 secret 定义（docker secrets 风格；默认全注释——启用前先在宿主机创建对应文件）：
-#   install -m 600 /path/to/ha_token /vol1/1000/docker/autoforge/secrets/AUTOFORGE_HA_TOKEN
+#   B 类 HA 出站令牌：install -m 600 /path/to/ha_token /vol1/1000/docker/autoforge/secrets/HA_LONG_LIVED_TOKEN
+#   A 类访问密钥：install -m 600 /path/to/access_tokens /vol1/1000/docker/autoforge/secrets/AF_ACCESS_TOKENS
 # secrets:
 #   autoforge_ha_token:
-#     file: /vol1/1000/docker/autoforge/secrets/AUTOFORGE_HA_TOKEN
+#     file: /vol1/1000/docker/autoforge/secrets/HA_LONG_LIVED_TOKEN   # 旧名 AUTOFORGE_HA_TOKEN 回退
 #   autoforge_tokens:
-#     file: /vol1/1000/docker/autoforge/secrets/AUTOFORGE_TOKENS
+#     file: /vol1/1000/docker/autoforge/secrets/AF_ACCESS_TOKENS       # 旧名 AUTOFORGE_TOKENS 回退
 #   autoforge_revoked_tokens:
-#     file: /vol1/1000/docker/autoforge/secrets/AUTOFORGE_REVOKED_TOKENS
+#     file: /vol1/1000/docker/autoforge/secrets/AF_REVOKED_TOKENS      # 旧名 AUTOFORGE_REVOKED_TOKENS 回退

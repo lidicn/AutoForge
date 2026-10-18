@@ -7,8 +7,9 @@
   变化即丢弃缓存重建，免重启进程（对齐「多个 Gateway 共享单例」的自愈语义）；
 - `describe()` 只回**掩码 + 长度**（连末 4 位都不露），防 WebUI 截图 / 投屏泄露。
 
-`credentials.json` 与 `AUTOFORGE_HA_TOKEN` / `AUTOFORGE_API_TOKEN` 环境变量并存：
-文件优先，缺省回退环境变量（向后兼容原型期 `export` 启动方式）。
+`credentials.json` 与环境变量并存：文件优先，缺省回退环境变量（向后兼容原型期 `export` 启动方式）。
+- B 类 AF→HA 出站令牌：env `HA_LONG_LIVED_TOKEN`（旧 `AUTOFORGE_HA_TOKEN`）。
+- A 类旧式单访问密钥：env `AF_ACCESS_TOKEN`（旧 `AUTOFORGE_API_TOKEN`）。
 """
 
 from __future__ import annotations
@@ -130,16 +131,27 @@ class Config:
         return int(rev_val or 0)
 
     def get_ha_token(self) -> str:
-        """HA 长期访问令牌：credentials.json 文件优先，缺省回退 secret 文件/环境变量。
+        """B 类：AF 出站连 Home Assistant 的长期访问令牌。credentials.json 文件优先，
+        缺省回退 secret 文件/环境变量。
 
-        v2.0.1/0.1-b：原仅回退 `os.environ`，现经 `load_secret` 把 secret 文件
-        （docker secrets 挂载点）作为凭据主路径之一，env 仅作兼容回退。
+        命名（角色法 20261017）：新名 `HA_LONG_LIVED_TOKEN`，旧名 `AUTOFORGE_HA_TOKEN` 回退。
         """
-        return str(self._creds.get("ha_token") or load_secret("AUTOFORGE_HA_TOKEN"))
+        return str(
+            self._creds.get("ha_token")
+            or load_secret("HA_LONG_LIVED_TOKEN")
+            or load_secret("AUTOFORGE_HA_TOKEN")
+        )
 
     def get_api_token(self) -> str:
-        """AutoForge API 令牌：credentials.json 文件优先，缺省回退 secret 文件/环境变量。"""
-        return str(self._creds.get("api_token") or load_secret("AUTOFORGE_API_TOKEN"))
+        """A 类遗留：旧式单访问密钥（credentials.json 优先，回退 secret/env）。
+
+        命名（角色法 20261017）：新名 `AF_ACCESS_TOKEN`，旧名 `AUTOFORGE_API_TOKEN` 回退。
+        """
+        return str(
+            self._creds.get("api_token")
+            or load_secret("AF_ACCESS_TOKEN")
+            or load_secret("AUTOFORGE_API_TOKEN")
+        )
 
     # ── 原子写（mkstemp + fsync + os.replace，权限在 tmp 上先设）────────────────────
     def _atomic_write(self, path: Path, data: Mapping[str, Any]) -> None:

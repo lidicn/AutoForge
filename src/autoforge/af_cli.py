@@ -472,7 +472,7 @@ def run(
     live: bool = typer.Option(False, "--live", help="真机下发（真实操作 HA，需 --confirm + 令牌 + 白名单）"),
     dry_live: bool = typer.Option(False, "--dry-live", help="真时钟/真 HA 状态，但 do 只记意图不下发（抓 live 代码路径 bug，不动设备）"),
     ha_url: str = typer.Option(DEFAULT_HA_URL, "--ha-url", help="HA 地址（--live/--dry-live 时生效）"),
-    ha_token: str = typer.Option("", "--ha-token", help="HA 长期访问令牌（缺省读环境变量 AUTOFORGE_HA_TOKEN）"),
+    ha_token: str = typer.Option("", "--ha-token", help="HA 长期访问令牌（缺省读 HA_LONG_LIVED_TOKEN，旧 AUTOFORGE_HA_TOKEN 回退）"),
     confirm: bool = typer.Option(False, "--confirm", help="真机下发二次确认（--live 必需）"),
     live_allow: str = typer.Option(
         "",
@@ -494,7 +494,7 @@ def run(
 
     undo_enabled = undo or os.getenv("AUTOFORGE_UNDO", "") == "1"
     if live or dry_live:
-        token = ha_token or os.environ.get("AUTOFORGE_HA_TOKEN", "")
+        token = ha_token or os.environ.get("HA_LONG_LIVED_TOKEN") or os.environ.get("AUTOFORGE_HA_TOKEN", "")
         allow = (
             {x.strip() for x in live_allow.split(",") if x.strip()}
             if live_allow
@@ -539,7 +539,7 @@ def watch(
     entities: str = typer.Option("", "--entities", help="已知实体清单 JSON"),
     acl: str = typer.Option("", "--acl", help="实体读写权限表 JSON"),
     ha_url: str = typer.Option(DEFAULT_HA_URL, "--ha-url", help="HA 地址（--live/--dry-live 时生效）"),
-    ha_token: str = typer.Option("", "--ha-token", help="HA 长期访问令牌（缺省读环境变量 AUTOFORGE_HA_TOKEN）"),
+    ha_token: str = typer.Option("", "--ha-token", help="HA 长期访问令牌（缺省读 HA_LONG_LIVED_TOKEN，旧 AUTOFORGE_HA_TOKEN 回退）"),
     confirm: bool = typer.Option(False, "--confirm", help="真机下发二次确认（常驻监听必需；--dry-live 不需要）"),
     dry_live: bool = typer.Option(False, "--dry-live", help="真时钟/真 HA 状态常驻，do 只记意图不下发（不动设备）"),
     live_allow: str = typer.Option("", "--live-allow", help="真机可写实体白名单（逗号分隔）"),
@@ -569,7 +569,7 @@ def watch(
         raise typer.Exit(code=EXIT_SCAN_ERROR)
 
     cfg = get_config(persist_dir or DEFAULT_STORE_ROOT)
-    token = ha_token or cfg.get_ha_token() or os.environ.get("AUTOFORGE_HA_TOKEN", "")
+    token = ha_token or cfg.get_ha_token() or os.environ.get("HA_LONG_LIVED_TOKEN") or os.environ.get("AUTOFORGE_HA_TOKEN", "")
     allow = (
         {x.strip() for x in live_allow.split(",") if x.strip()}
         if live_allow
@@ -675,7 +675,7 @@ def undo(
     confirm: bool = typer.Option(False, "--confirm", help="风险域（climate/cover/lock 等）二次确认"),
     root: str = typer.Option(DEFAULT_STORE_ROOT, "--root", help="UndoStore 根目录（与部署时一致）"),
     ha_url: str = typer.Option(DEFAULT_HA_URL, "--ha-url", help="HA 地址（撤销真实下发到此）"),
-    ha_token: str = typer.Option("", "--ha-token", help="HA 长期访问令牌（缺省读 AUTOFORGE_HA_TOKEN）"),
+    ha_token: str = typer.Option("", "--ha-token", help="HA 长期访问令牌（缺省读 HA_LONG_LIVED_TOKEN，旧 AUTOFORGE_HA_TOKEN 回退）"),
 ):
     """回滚一次部署的设备态（F7，决策 E）。
 
@@ -689,7 +689,7 @@ def undo(
     if not store.exists(deploy_id):
         typer.echo(f"[撤销失败] 未知 deploy_id：{deploy_id}", err=True)
         raise typer.Exit(code=EXIT_IR_ERROR)
-    token = ha_token or os.environ.get("AUTOFORGE_HA_TOKEN", "")
+    token = ha_token or os.environ.get("HA_LONG_LIVED_TOKEN") or os.environ.get("AUTOFORGE_HA_TOKEN", "")
 
     # 惰性适配器：仅在真正需要下发（revert 通过校验）时才构造 HATransport，
     # 这样 unknown/expired/risk 被拒的场景不要求 HA_URL 就绪。
@@ -989,7 +989,7 @@ def mcp_serve(
 
     配置示例（agent 侧 mcpServers）：
         {"autoforge": {"command": "forge", "args": ["mcp"]}}
-    写/live 工具受 v0.8.0 scope 限制：用含对应 scope 的令牌启动（AUTOFORGE_TOKENS）即可。
+    写/live 工具受 v0.8.0 scope 限制：用含对应 scope 的访问密钥启动（AF_ACCESS_TOKENS，旧 AUTOFORGE_TOKENS）即可。
     """
     from .af_mcp import serve_mcp
 
@@ -1004,7 +1004,7 @@ def auth_list():
 
     subjects = TokenRegistry().subjects()
     if not subjects:
-        typer.echo("（未配置任何令牌：AUTOFORGE_API_TOKEN / AUTOFORGE_TOKENS 均为空，全站公开）")
+        typer.echo("（未配置任何访问密钥：AF_ACCESS_TOKEN / AF_ACCESS_TOKENS（旧 AUTOFORGE_API_TOKEN / AUTOFORGE_TOKENS）均为空，全站公开）")
         return
     for item in subjects:
         typer.echo(f"· {item['subject']}: scopes={item['scopes']}")
@@ -1194,7 +1194,7 @@ app.add_typer(entities_app, name="entities")
 def entities_refresh(
     root: str = typer.Option(DEFAULT_STORE_ROOT, "--root", help="存储根目录（目录缓存落 `{root}/.catalog/`）"),
     ha_url: str = typer.Option("", "--ha-url", help="HA 地址（缺省读 AUTOFORGE_HA_URL）"),
-    ha_token: str = typer.Option("", "--ha-token", help="HA 令牌（缺省读 AUTOFORGE_HA_TOKEN）"),
+    ha_token: str = typer.Option("", "--ha-token", help="HA 长期令牌（缺省读 HA_LONG_LIVED_TOKEN，旧 AUTOFORGE_HA_TOKEN 回退）"),
     full: bool = typer.Option(True, "--full/--incremental", help="全量替换（默认）｜增量合并"),
     domain: str = typer.Option("", "--domain", help="可选：只刷新某域"),
     area: str = typer.Option("", "--area", help="可选：只刷新某房间"),

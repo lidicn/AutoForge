@@ -18,8 +18,8 @@ import type {
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8787/api'
 
 function _authHeader(): Record<string, string> {
-  // 生产环境（AUTOFORGE_TOKENS 已配置）下，写/live 操作需带 Bearer 令牌。
-  // 令牌存于 localStorage('af_token')，由「治理 / 设置」页填写；未配置则留空。
+  // 生产环境（AF_ACCESS_TOKENS / 旧 AUTOFORGE_TOKENS 已配置）下，写/live 操作需带 Bearer 访问密钥。
+  // 访问密钥存于 localStorage('af_token')，由「治理 / 设置」页填写；未配置则留空。
   const token = typeof localStorage !== 'undefined' ? localStorage.getItem('af_token') : ''
   return token ? { Authorization: `Bearer ${token}` } : {}
 }

@@ -1894,7 +1894,7 @@ def delete_session(session_id: str) -> dict[str, Any]:
 #
 # 安全模型（三重闸，缺一不可）：
 #   1. 服务端开关 `AUTOFORGE_LIVE_ENABLED=1`（默认**关闭**）
-#   2. 服务端令牌 `AUTOFORGE_HA_TOKEN`（**绝不从请求体接收令牌**）
+#   2. 服务端令牌 `HA_LONG_LIVED_TOKEN`（旧 `AUTOFORGE_HA_TOKEN`，**绝不从请求体接收令牌**）
 #   3. 请求体 `confirm=true` + 非空 `live_allow` 白名单，且 IR 的写目标 ⊆ 白名单
 # 复用 `af_scanner.live_preflight` 的语义（与 CLI `forge run --live` 一致口径）。
 # ─────────────────────────────────────────────────────────────────────
@@ -1903,11 +1903,16 @@ def delete_session(session_id: str) -> dict[str, Any]:
 LIVE_TRANSPORT_FACTORY: Callable[[str, str], Any] | None = None
 
 
+def _env_ha_token() -> str:
+    """B 类 AF→HA 长期令牌：新名 HA_LONG_LIVED_TOKEN 优先，旧 AUTOFORGE_HA_TOKEN 回退。"""
+    return os.getenv("HA_LONG_LIVED_TOKEN") or os.getenv("AUTOFORGE_HA_TOKEN") or ""
+
+
 def _live_config() -> dict[str, Any]:
     return {
         "enabled": os.getenv("AUTOFORGE_LIVE_ENABLED", "").strip().lower() in ("1", "true", "yes"),
         "ha_url": os.getenv("AUTOFORGE_HA_URL", DEFAULT_HA_URL),
-        "has_token": bool(os.getenv("AUTOFORGE_HA_TOKEN", "")),
+        "has_token": bool(_env_ha_token()),
     }
 
 
@@ -1918,7 +1923,7 @@ def live_status() -> dict[str, Any]:
     if not cfg["enabled"]:
         reasons.append("服务端未启用真机下发（需设置 AUTOFORGE_LIVE_ENABLED=1）")
     if not cfg["has_token"]:
-        reasons.append("服务端缺少 HA 令牌（需设置 AUTOFORGE_HA_TOKEN）")
+        reasons.append("服务端缺少 HA 长期令牌（需设置 HA_LONG_LIVED_TOKEN，旧 AUTOFORGE_HA_TOKEN 亦可）")
     return {
         "ok": True,
         "enabled": cfg["enabled"] and cfg["has_token"],
@@ -2028,7 +2033,7 @@ def live_run(
     if not cfg["enabled"]:
         raise ServiceError("真机下发未启用：服务端需设置 AUTOFORGE_LIVE_ENABLED=1", status=403)
     if not cfg["has_token"]:
-        raise ServiceError("真机下发缺少 HA 令牌：服务端需设置 AUTOFORGE_HA_TOKEN", status=403)
+        raise ServiceError("真机下发缺少 HA 令牌：服务端需设置 HA_LONG_LIVED_TOKEN（旧 AUTOFORGE_HA_TOKEN）", status=403)
     if not confirm:
         raise ServiceError("真机下发必须显式二次确认（confirm=true）", status=403)
 
@@ -2063,7 +2068,7 @@ def live_run(
     if outside:
         raise ServiceError(f"写目标不在白名单内：{outside}", status=400)
 
-    token = os.getenv("AUTOFORGE_HA_TOKEN", "")
+    token = _env_ha_token()
     ha_url = str(cfg["ha_url"])
     if factory is not None:
         transport = factory(ha_url, token)
@@ -2129,7 +2134,7 @@ def live_run(
 # ─────────────────────────────────────────────────────────────────────
 # F7 残留（WebUI 撤销按钮）：撤销的 HTTP 服务面。
 #   撤销 = 对真实设备**再下发一次**，所以服务端闸门口径与 `live_run` 完全对齐：
-#   ① `AUTOFORGE_LIVE_ENABLED=1`；② 令牌只从服务端 `AUTOFORGE_HA_TOKEN` 取，绝不从请求体收。
+#   ① `AUTOFORGE_LIVE_ENABLED=1`；② 令牌只从服务端 `HA_LONG_LIVED_TOKEN`（旧 AUTOFORGE_HA_TOKEN）取，绝不从请求体收。
 #   时间窗 / 风险域二次确认 / 未知 deploy_id 这些**判定仍归 `af_undo.UndoStore`**
 #   （单一真值源，本层不重算，只转发并把结果结构化给前端）。
 # ─────────────────────────────────────────────────────────────────────
@@ -2184,10 +2189,10 @@ def undo_deploy(
     if not cfg["enabled"]:
         raise ServiceError("撤销未启用：真机回滚需要服务端设置 AUTOFORGE_LIVE_ENABLED=1", status=403)
     if not cfg["has_token"]:
-        raise ServiceError("撤销缺少 HA 令牌：服务端需设置 AUTOFORGE_HA_TOKEN", status=403)
+        raise ServiceError("撤销缺少 HA 令牌：服务端需设置 HA_LONG_LIVED_TOKEN（旧 AUTOFORGE_HA_TOKEN）", status=403)
 
     store = _undo_store(store_root)
-    token = os.getenv("AUTOFORGE_HA_TOKEN", "")
+    token = _env_ha_token()
     ha_url = str(cfg["ha_url"])
     factory = LIVE_TRANSPORT_FACTORY
     transport = factory(ha_url, token) if factory is not None else HATransport(base_url=ha_url, token=token)
@@ -3043,7 +3048,7 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
     """启动 watch 进程跑指定 IR。
 
     P1-19 修复：
-    - HA 令牌经环境变量 AUTOFORGE_HA_TOKEN 传递（不出现在 /proc/pid/cmdline）
+    - HA 令牌经环境变量 HA_LONG_LIVED_TOKEN（旧 AUTOFORGE_HA_TOKEN）传递（不出现在 /proc/pid/cmdline）
     - 用 PID 文件精确终止旧 watch（不用 pkill -f 模式匹配）
     - 返回值基于真实健康探测（子进程 poll）
 
@@ -3144,9 +3149,10 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
                     entities.add(eid)
         if entities:
             cmd.extend(["--live-allow", ",".join(sorted(entities))])
-    # P1-19：构造子进程环境，注入 AUTOFORGE_HA_TOKEN
+    # P1-19：构造子进程环境，注入 HA 令牌（新名 + 旧名双写，兼容新旧 CLI 读取）
     child_env = dict(os.environ)
     if ha_token:
+        child_env["HA_LONG_LIVED_TOKEN"] = ha_token
         child_env["AUTOFORGE_HA_TOKEN"] = ha_token
     # 日志句柄在**父进程侧**必须关掉（审计 BUG-14）：`Popen` 已经把 fd 复制给子进程，父进程再
     # 持着一份只会让 Windows 上的 watch.log 无法轮转/删除，而 `Popen` 抛错的异常路径原来连

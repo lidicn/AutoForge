@@ -69,7 +69,7 @@ MCP_NOACCESS: dict[str, Any] = {"subject": "<no-access>", "scopes": []}
 
 
 def _build_current(registry: TokenRegistry) -> dict[str, Any] | None:
-    """当前启动主体：鉴权已配时必须由显式启动令牌 AUTOFORGE_MCP_TOKEN 确定。
+    """当前启动主体：鉴权已配时必须由显式启动令牌确定（新名 AF_ACCESS_MCP_TOKEN，旧 AUTOFORGE_MCP_TOKEN 回退）。
 
     - 未配任何令牌（registry.enabled=False）→ None，即"无身份"。`_guard` 对无身份的
       需鉴权工具**默认拒绝**，只有 `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1` 才放行（裁定 20261004 §一 Q2=B）。
@@ -78,7 +78,7 @@ def _build_current(registry: TokenRegistry) -> dict[str, Any] | None:
     """
     if not registry.enabled:
         return None
-    token = (os.environ.get("AUTOFORGE_MCP_TOKEN") or "").strip()
+    token = (os.environ.get("AF_ACCESS_MCP_TOKEN") or os.environ.get("AUTOFORGE_MCP_TOKEN") or "").strip()
     if not token:
         return dict(MCP_NOACCESS)
     try:
@@ -111,7 +111,8 @@ def _guard(scope: str | None, current: dict[str, Any] | None) -> None:
             return
         raise ServiceError(
             f"拒绝：MCP 面没有令牌身份 ⇒ 工具 '{scope}' 域默认拒绝（裁定 20261004 §一 Q2=B）。"
-            "请配 `AUTOFORGE_TOKENS` 并用含该 scope 的 `AUTOFORGE_MCP_TOKEN` 启动；"
+            "请配 `AF_ACCESS_TOKENS`（旧 AUTOFORGE_TOKENS）并用含该 scope 的 `AF_ACCESS_MCP_TOKEN`"
+            "（旧 AUTOFORGE_MCP_TOKEN）启动；"
             "确需原型全放行请显式设 `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1`。"
         )
     if scope not in current.get("scopes", []):
