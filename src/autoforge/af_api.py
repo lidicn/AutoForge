@@ -135,7 +135,6 @@ class PendingRejectBody(BaseModel):
 
 
 class UpdateBody(BaseModel):
-    confirm_version: str = ""
     branch: str | None = None
 
 
@@ -1169,26 +1168,14 @@ def build_app(
 
     @app.post("/api/system/update", dependencies=[Depends(_write)])
     def api_system_update(body: UpdateBody, info: TokenInfo | None = Depends(authenticated())) -> dict[str, Any]:
-        """提交更新请求（admin + 版本号二次确认）。
+        """提交更新请求（admin）。
 
-        DCD 20261010 Q4=B：必须传 confirm_version 且等于当前版本号。
+        出资人 2026-10-21 定案：去掉「输入当前版本号」二次确认——防误触已有三道真闸
+        （write 权限鉴权 + 进行中标记 409 + marker 原子写），版本号回显是第四道假闸
+        （版本号本身就显示在同一页上，抄一遍没有任何区分度）。DCD 20261010 Q4 的
+        confirm_version 形状随之作废；`body.branch` 缺省对齐发布线 master（DCD 20261017-001 §2.1）。
         容器不执行 git 操作，只写标记文件给宿主 sidecar。
         """
-        confirm_version = (body.confirm_version or "").strip()
-        if not confirm_version:
-            return {
-                "ok": False,
-                "error": "需要确认版本号",
-                "detail": f"请在 body 中传 confirm_version=\"{_APP_VERSION}\"",
-            }, 400
-        if confirm_version != _APP_VERSION:
-            return {
-                "ok": False,
-                "error": "版本号不匹配，已拒绝更新",
-                "expected": _APP_VERSION,
-                "received": confirm_version,
-            }, 400
-
         # 检查是否已有进行中的更新请求
         if os.path.isfile(_UPDATE_MARKER):
             return {

@@ -72,6 +72,6 @@ export const facade = {
   // ── v1.10.0 系统自更新（宿主侧 sidecar 模式）──
   systemVersion: () => api.systemVersion(),
   systemUpdateCheck: () => api.systemUpdateCheck(),
-  systemUpdate: (confirm_version: string, branch?: string) => api.systemUpdate(confirm_version, branch),
+  systemUpdate: (branch?: string) => api.systemUpdate(branch),
   systemUpdateStatus: () => api.systemUpdateStatus(),
 }

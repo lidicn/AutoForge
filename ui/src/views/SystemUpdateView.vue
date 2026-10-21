@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import {
-  NAlert, NButton, NCard, NInput, NSpin, NTag, NThing, useMessage,
+  NAlert, NButton, NCard, NSpin, NTag, NThing, useMessage,
 } from 'naive-ui'
 import { facade } from '@/api'
 
@@ -16,7 +16,6 @@ const updateInfo = ref<Record<string, unknown> | null>(null)
 const checkingUpdate = ref(false)
 
 // 执行更新
-const confirmVersion = ref('')
 const updating = ref(false)
 
 // 更新状态
@@ -53,18 +52,13 @@ async function checkUpdate() {
 }
 
 async function doUpdate() {
-  if (!confirmVersion.value.trim()) {
-    message.warning('请输入当前版本号确认')
-    return
-  }
   updating.value = true
   error.value = ''
   try {
-    const res = await facade.systemUpdate(confirmVersion.value.trim())
+    const res = await facade.systemUpdate()
     const data = res.data as Record<string, unknown>
     if (data.ok) {
       message.success(data.message as string || '更新请求已提交')
-      confirmVersion.value = ''
       // 开始轮询状态
       startPolling()
     } else {
@@ -196,17 +190,11 @@ onMounted(() => {
     <!-- 执行更新 -->
     <n-card title="执行更新" :bordered="false" class="block">
       <n-alert type="info" title="安全确认" style="margin-bottom: 16px">
-        更新操作会从 GitHub 拉取最新代码、重新构建 UI、同步到生产环境并重启容器。
-        为防止误触，需要输入当前版本号 <code>{{ versionInfo?.version }}</code> 确认。
+        更新操作会从 GitHub 拉取最新代码、重新构建前后端镜像并重启容器。
+        宿主脚本带构建失败自动回滚；防误触由写入权限鉴权 + 进行中防重兜底。
       </n-alert>
 
       <div style="display: flex; align-items: center; gap: 12px">
-        <n-input
-          v-model:value="confirmVersion"
-          placeholder="输入当前版本号确认"
-          style="width: 200px"
-          @keyup.enter="doUpdate"
-        />
         <n-button
           type="error"
           :loading="updating"

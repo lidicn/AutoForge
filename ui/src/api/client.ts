@@ -208,7 +208,7 @@ export const api = {
   // ── v1.10.0 系统自更新（宿主侧 sidecar 模式）──
   systemVersion: () => request<Record<string, unknown>>('GET', '/system/version'),
   systemUpdateCheck: () => request<Record<string, unknown>>('GET', '/system/update/check'),
-  systemUpdate: (confirm_version: string, branch?: string) =>
-    request<Record<string, unknown>>('POST', '/system/update', { confirm_version, branch }),
+  systemUpdate: (branch?: string) =>
+    request<Record<string, unknown>>('POST', '/system/update', { branch }),
   systemUpdateStatus: () => request<Record<string, unknown>>('GET', '/system/update/status'),
 }

@@ -87,7 +87,6 @@ RE_DOMAIN = re.compile(r"(?:branch\s+not\s+in|_ALLOWED_BRANCH|VALID_BRANCHES)")
 RE_ANCHOR_FETCH = re.compile(r'git fetch --force [A-Za-z0-9._-]+ "\$REF"')
 RE_ANCHOR_RESET = re.compile(r'git reset --hard "[A-Za-z0-9._-]+/\$REF"')
 ANCHORS_API = (
-    "confirm_version != _APP_VERSION",
     "atomic_write_text(_UPDATE_MARKER",
     "}, 409",
 )

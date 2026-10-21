@@ -36,7 +36,7 @@ DEPLOY_REL = "scripts/verify_ui_nas_deploy.py"
 CI_REL = ".github/workflows/ci.yml"
 SITE_PATHS = (API_REL, HOST_REL, DEPLOY_REL, CI_REL)
 
-API_TXT = '''"""合成自更新端点：只保留判据 D 要的三枚形状与写入侧缺省。"""
+API_TXT = '''"""合成自更新端点：只保留判据 D 要的形状与写入侧缺省（20261021 去版本号确认）。"""
 import json
 import os
 
@@ -44,9 +44,6 @@ import os
 def build(app, atomic_write_text, _APP_VERSION, _UPDATE_MARKER):
     @app.post("/api/system/update")
     def api_system_update(body) -> dict:
-        confirm_version = (body.confirm_version or "").strip()
-        if confirm_version != _APP_VERSION:
-            return {"ok": False, "error": "版本号不匹配"}, 400
         if os.path.isfile(_UPDATE_MARKER):
             return {"ok": False, "error": "已有更新请求进行中"}, 409
         branch = (body.branch or "master").strip()
@@ -97,16 +94,12 @@ HOST_CHECK_TXT = '''#!/bin/sh
 git fetch origin/master
 '''
 
-#: 合成 NAS 旧兜底脚本：读取侧缺省 + 第二层兜底两枚站点（与 host_update.sh 同族）。
-HOST_NAS_TXT = '''#!/bin/sh
-MARKER=/data/.update_request.json
-REF=$(python3 -c "import json; print(json.load(open('$MARKER')).get('ref','master'))" 2>/dev/null || echo "master")
-'''
+# （20261021 收账：合成 fixtures 里的 `host_update_nas.sh` 随真仓 7b4c06a 改名 .disabled 一并移除——
+# 它引用的载体已不在发布面，留着会让 B 判据在未修改的 HEAD 上就红（存量红，与本次改动无关）。）
 
 FILES = {
     API_REL: API_TXT, HOST_REL: HOST_TXT, DEPLOY_REL: DEPLOY_TXT, CI_REL: CI_TXT,
     "scripts/host_check_update.sh": HOST_CHECK_TXT,
-    "scripts/host_update_nas.sh": HOST_NAS_TXT,
 }
 
 
@@ -206,20 +199,24 @@ def _real_snapshot(fn):
 
 
 def test_real_repo_readings():
-    """钉读数本身：8 枚站点／6 枚载体文件／上限 8（DCD-20261017-001 §2.2④ 批准 5→8）——扫描器静默退化会先把这条撞红。"""
+    """钉读数本身：6 枚站点／4 枚载体文件／上限 8（DCD-20261017-001 §2.2④ 批准 5→8）——扫描器静默退化会先把这条撞红。
+
+    8 → 6（20261021 收账）：`host_update_nas.sh` 已于 7b4c06a 改名 `.disabled`（不在发布面），
+    台账 AUTO 段当时已重生成 6，但本腿钉针漏改——存量红，本批一并清。
+    """
     def read(snaps):
         return crl.scan_sites(snaps)
     sites = _real_snapshot(read)
-    assert len(sites) == 8, [s.line() for s in sites]
+    assert len(sites) == 6, [s.line() for s in sites]
     assert {s.path for s in sites} == {
         API_REL, HOST_REL, DEPLOY_REL, CI_REL,
-        "scripts/host_check_update.sh", "scripts/host_update_nas.sh",
+        "scripts/host_check_update.sh",
     }, [s.line() for s in sites]
     assert crl.SITE_CAP == 8
 
 
 def test_real_repo_every_carrier_equals_registered_line():
-    """五枚载体逐枚对上 §二 那一格的值（本门的核心一句，读数在这里再钉一遍）。"""
+    """四枚在册载体逐枚对上 §二 那一格的值（本门的核心一句，读数在这里再钉一遍）。"""
     def read(snaps):
         text = (crl.REPO / crl.DOC_REL).read_text(encoding="utf-8").splitlines()
         cal = crl._caliber(text)
@@ -277,7 +274,7 @@ def test_synth_A_manual_auto_edit(tmp_path):
 def test_synth_A_total_line_drift(tmp_path):
     """A：汇总行被人手改（上限数字也是逐行对撞的一部分）。"""
     root = make_tree(tmp_path)
-    patch(root, DOC_REL, "- 站点合计 = 8 · 上限 = 8", "- 站点合计 = 8 · 上限 = 9")
+    patch(root, DOC_REL, "- 站点合计 = 6 · 上限 = 8", "- 站点合计 = 6 · 上限 = 9")
     rc = run_gate(root)
     assert rc.returncode == 1 and by_letter(rc.stdout, "A"), rc.stdout
 
@@ -385,22 +382,32 @@ def test_synth_D_marker_key_diverges(tmp_path):
 
 
 def test_synth_D_endpoint_shape_anchor(tmp_path):
-    """D：删掉版本二次确认比对（自更新的铁律形状）⇒ 锚点红，⛔ 不靠 C 兜住。"""
+    """D：marker 原子写这一行（自更新链的落盘形状）被挪走 ⇒ 锚点红，⛔ 不靠 C 兜住。
+
+    （20261021 改判：版本二次确认经出资人定案作废，`confirm_version != _APP_VERSION`
+    锚随代码删除；落盘形状锚换 `atomic_write_text(_UPDATE_MARKER`，仍是删掉即红。）
+    """
     root = make_tree(tmp_path)
-    patch(root, API_REL, "if confirm_version != _APP_VERSION:", "if confirm_version and False:")
+    patch(root, API_REL, "atomic_write_text(_UPDATE_MARKER", "os.replace(_UPDATE_MARKER")
     rc = run_gate(root)
-    assert rc.returncode == 1 and any("confirm_version" in f for f in by_letter(rc.stdout, "D")), rc.stdout
+    assert rc.returncode == 1 and any("atomic_write_text" in f for f in by_letter(rc.stdout, "D")), rc.stdout
 
 
 def test_synth_E_site_cap(tmp_path):
-    """E：同一枚已登记载体上**多一行**分支字面 ⇒ A/B/C/D 全闭合，只剩上限拦新增。
+    """E：同一枚已登记载体上**多行**分支字面 ⇒ A/B/C/D 全闭合，只剩上限拦新增。
 
-    （站点按 `路径:行号 · 角色 · 字面` 去重，所以第二枚必须落在**另一行**——同一行的第二枚会被读成一枚。）
+    （站点按 `路径:行号 · 角色 · 字面` 去重，所以新增必须落在**别的行**——同一行的第二枚会被读成一枚。
+    20261021 调参：合成树基线从 8 枚降到 6 枚（host_update_nas.sh 移出 fixtures），要压破上限 8 得加 3 枚。）
     """
     root = make_tree(tmp_path)
     old_line = """f"ssh {target} 'cd {NAS_USER_DIR} && git fetch && git merge --ff-only origin/master'","""
-    extra = """f"ssh {target} 'cd {NAS_USER_DIR} && git reset --hard origin/master'","""
-    patch(root, DEPLOY_REL, old_line, old_line + "\n            " + extra)
+    # 字面仍是发布线 master（C 不该红），只靠「多出的行」撑爆上限——去重键是 路径:行号:字面，
+    # 三行同字面 = 三枚独立站点。
+    extras = "\n".join(
+        """f"ssh {target} 'cd {NAS_USER_DIR} && git rev-parse origin/master'  # ref-%d",""" % i
+        for i in range(3)
+    )
+    patch(root, DEPLOY_REL, old_line, old_line + "\n            " + extras)
     rc = resync_and_check(root)
     assert rc.returncode == 1, rc.stdout
     assert any("上限" in f for f in by_letter(rc.stdout, "E")), rc.stdout
