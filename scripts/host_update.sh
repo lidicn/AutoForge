@@ -13,6 +13,13 @@
 
 set -uo pipefail
 
+# 全程持锁（2026-10-21）：cron 每分钟一跳，构建要 30+ 分钟，标记只在退出时删——没锁时重复实例会
+# 堆叠（上次部署实测 5 例并发），失败例的回滚还会把 latest tag 打回旧镜像。非 0 退出码 = 已有
+# 实例在跑，直接让位。
+LOCK="$DATA_DIR/.update.lock"
+exec 9>"$LOCK"
+flock -n 9 || exit 0
+
 # 配置
 REPO_DIR="/vol1/1000/docker/autoforge"
 DATA_DIR="/vol1/1000/docker/autoforge-store"
