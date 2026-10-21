@@ -22,7 +22,6 @@ const whoami = ref<WhoamiResponse | null>(null)
 // ── credentials ──
 const creds = ref<CredentialsResponse | null>(null)
 const haToken = ref('')
-const apiToken = ref('')
 const savingCreds = ref(false)
 // ── subjects ──
 const subjects = ref<SubjectItem[]>([])
@@ -50,12 +49,8 @@ async function load() {
 async function saveCredentials() {
   savingCreds.value = true
   try {
-    await facade.updateCredentials(
-      haToken.value.trim() || undefined,
-      apiToken.value.trim() || undefined,
-    )
+    await facade.updateCredentials(haToken.value.trim() || undefined)
     haToken.value = ''
-    apiToken.value = ''
     message.success('凭据已更新（connection_revision +1，免重启生效）')
     await load()
   } catch (e) {
@@ -140,19 +135,15 @@ onMounted(load)
       <n-space vertical :size="12">
         <div v-if="creds">
           <div>HA 长期访问令牌（AF 连 Home Assistant 下发设备）：<code>{{ creds.ha_token || '（空）' }}</code></div>
-          <div>旧版 AF 单密钥（一般留空，登录请用上方 A 类访问密钥）：<code>{{ creds.api_token || '（空）' }}</code></div>
           <div>连接代数 connection_revision：<b>{{ creds.connection_revision }}</b></div>
         </div>
         <n-text depth="3">留空表示不修改；提交后 connection_revision +1，所有依赖方即时生效，无需重启。</n-text>
         <n-input v-model:value="haToken" placeholder="新 HA 长期访问令牌（HA_LONG_LIVED_TOKEN，留空=不改）" style="max-width: 460px" />
-        <n-input
-          v-model:value="apiToken"
-          type="password"
-          show-password-on="click"
-          placeholder="旧版 AF 单密钥（一般留空，留空=不改）"
-          style="max-width: 460px"
-        />
         <div><n-button type="primary" size="small" :loading="savingCreds" @click="saveCredentials">更新凭据</n-button></div>
+        <n-text depth="3">
+          注：旧版「AF 单密钥」（credentials.json 的 api_token 键）已无鉴权消费方——登录走左上角登录入口
+          （或上方 A 类访问密钥），此处不再展示该键。
+        </n-text>
       </n-space>
     </n-card>
 

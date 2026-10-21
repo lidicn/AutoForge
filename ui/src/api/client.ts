@@ -15,13 +15,23 @@ import type {
   InsightsPendingResponse, InsightApproveResponse, InsightRejectResponse,
 } from '../types/api'
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8787/api'
+// 同源相对路径为缺省：镜像内 /api 由同一 uvicorn 托管，写死 localhost 会在
+// 从别的设备访问 NAS 时把请求打到设备自己（部署地雷）。本地 dev 用 VITE_API_BASE 覆盖。
+const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
+
+export const TOKEN_KEY = 'af_token'
 
 function _authHeader(): Record<string, string> {
   // 生产环境（AF_ACCESS_TOKENS / 旧 AUTOFORGE_TOKENS 已配置）下，写/live 操作需带 Bearer 访问密钥。
-  // 访问密钥存于 localStorage('af_token')，由「治理 / 设置」页填写；未配置则留空。
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('af_token') : ''
+  // 登录令牌（/api/auth/login 签发）与治理页手贴的长期访问密钥共用同一格存储。
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : ''
   return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+/** 401 全局处理：登录态失效时由 router 守卫接管跳转。默认只清掉本地令牌。 */
+let _onUnauthorized: (() => void) | null = null
+export function onUnauthorized(cb: (() => void) | null) {
+  _onUnauthorized = cb
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<{ data: T }> {
@@ -30,6 +40,14 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     headers: { 'Content-Type': 'application/json', ..._authHeader() },
     body: body ? JSON.stringify(body) : undefined,
   })
+  if (res.status === 401) {
+    // 令牌过期/被撤销：清本地并通知路由守卫。登录/注册端点自身的 401（密码错）不走这里。
+    if (path !== '/auth/login' && path !== '/auth/register') {
+      localStorage.removeItem(TOKEN_KEY)
+      _onUnauthorized?.()
+    }
+    throw new Error(`HTTP ${res.status}: ${await _detail(res)}`)
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${await _detail(res)}`)
   // 真后端返回**扁平**对象（无 { data } 外壳）；此处统一包装成 { data }，
   // 与 mock 层保持一致，视图侧无需改动。
@@ -52,7 +70,34 @@ async function _detail(res: Response): Promise<string> {
   return text.slice(0, 300)
 }
 
+/** 裸 fetch 版（登录/注册/has-admin 不该带旧令牌头，401 也不该触发全局登出钩子）。 */
+async function authRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (!res.ok) throw new Error(await _detail(res))
+  return (await res.json()) as T
+}
+
+export interface LoginResult {
+  ok: boolean
+  user: { username: string; role: string }
+  token: string
+  warning?: string
+}
+
 export const api = {
+  // ── 登录正规化（v1.9.0 后端已有，管理端此批接入）──
+  hasAdmin: () => authRequest<{ ok: boolean; has_admin: boolean }>('GET', '/auth/has-admin'),
+  authRegister: (username: string, password: string) =>
+    authRequest<LoginResult>('POST', '/auth/register', { username, password }),
+  authLogin: (username: string, password: string) =>
+    authRequest<LoginResult>('POST', '/auth/login', { username, password }),
+  authLogout: () => request<{ ok: boolean }>('POST', '/auth/logout'),
+  authMe: () => request<{ ok: boolean; user: { username: string; role: string } }>('GET', '/auth/me'),
+
   health: () => request<HealthResponse>('GET', '/health'),
   graphs: () => request<GraphListResponse>('GET', '/graphs'),
   graph: (name: string, version?: string) =>

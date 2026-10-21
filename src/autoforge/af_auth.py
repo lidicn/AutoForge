@@ -61,6 +61,21 @@ def _longcode_ttl_days() -> float:
 LONGCODE_TTL_DAYS_DEFAULT = 180.0
 
 
+def _login_token_ttl_s() -> float:
+    """WebUI 登录令牌的默认存活期（秒）。env `AF_LOGIN_TOKEN_TTL_S` 可覆盖，默认 86400（24h）。
+
+    读在调用时刻而非 import 时刻（与 `_longcode_ttl_days` 同一口径）。
+    解析失败或非正数回落默认——配错键不该把会话悄悄变成永不过期。
+    """
+    raw = (os.getenv("AF_LOGIN_TOKEN_TTL_S") or "").strip()
+    if not raw:
+        return 86400.0
+    try:
+        return float(raw) if float(raw) > 0 else 86400.0
+    except ValueError:
+        return 86400.0
+
+
 def _longcode_expires_at(rec: dict[str, Any]) -> float | None:
     """该码的到期时刻（epoch 秒），`None` = 不过期。
 
@@ -149,6 +164,7 @@ class TokenRegistry:
     #: 运行时签发令牌的默认存活期（秒）。此前运行期签发的令牌**不带** `expires_at`，
     #: 结构上永远无法过期，而 `/api/auth/login` 无鉴权依赖、每调一次追加一条 ⇒
     #: 凭证库只增不减（新增审计 BUG-19）。给默认 TTL，令牌到期即失效并被清理。
+    #: env `AF_LOGIN_TOKEN_TTL_S` 可覆盖默认值（部署侧调长/调短，不用改码）。
     ISSUED_TTL_S = 86400.0
     #: 已签发令牌条数硬上限（兜底）：与同文件 `RateLimiter._MAX_KEYS` 同一纪律。
     MAX_ISSUED = 10000
@@ -357,7 +373,8 @@ class TokenRegistry:
         # 运行期签发的令牌此前**不带 expires_at** ⇒ 结构上永远无法过期，
         # 而 `/api/auth/login` 无鉴权依赖、每次调用都追加一条 ⇒ 凭证库单调增长
         # （新增审计 BUG-19）。给一个默认 TTL，并加条数硬上限兜底。
-        ttl = self.ISSUED_TTL_S if ttl_s is None else float(ttl_s)
+        # TTL 默认值在调用时刻读 env（`AF_LOGIN_TOKEN_TTL_S`），部署侧可调；显式 ttl_s 优先。
+        ttl = float(ttl_s) if ttl_s is not None else _login_token_ttl_s()
         expires_at = (time.time() + ttl) if ttl > 0 else None
         with self._lock:
             self._tokens[token] = TokenInfo(
@@ -615,6 +632,8 @@ def _refuse_when_list_file_unreadable(path: Path, label: str) -> None:
 BOOTSTRAP_REQUEST_PER_MIN = 6    # 每 IP 每分钟 ≤6 次配对请求
 BOOTSTRAP_REDEEM_PER_MIN = 10    # redeem 放宽到 10 次：裁定明写"要容忍用户口述打错一次"
 BOOTSTRAP_LOCK_S = 300           # 超限即锁该 IP 于**该端点** 5 分钟
+LOGIN_PER_MIN = 10               # 登录/注册每 IP 每分钟 ≤10 次（手输错几次够用，爆破被锁）
+LOGIN_LOCK_S = 300               # 超限即锁该 IP 于该端点 5 分钟（与 bootstrap 同档）
 
 
 class PairCodeStore:

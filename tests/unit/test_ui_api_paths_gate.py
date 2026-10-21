@@ -458,6 +458,10 @@ def test_real_ui_and_src_are_clean_and_counted():
     取数两面都按 HEAD 干净导出树复测过（`git archive HEAD` ⇒ 58／57／94／excluded 2），
     ⛔ 不是把并发在途工作树的读数钉进来。四枚调用点全有真消费者 ⇒ 门的 `check()` 照旧判不出红，
     红的仍然只是这一格计数。
+
+    58 → 61 / 57 → 59（20261021 收，本批自首）：开发端 `ui` 补上登录正规化（v1.9.0）的
+    五枚调用点（`has-admin`／`register`／`login`／`logout`／`me`），新增 `authRequest` 传输层包装
+    ⇒ ui 树传输层包装 1 → 2；服务端路由数不动（这五条装饰器路由在 `e5b3fd5` 已在册）。
     """
     mod = _module()
     sites, unparsed = mod.collect_ui_sites(ROOT / "ui" / "src")
@@ -465,9 +469,9 @@ def test_real_ui_and_src_are_clean_and_counted():
     assert unparsed == []
     assert mount_errs == []
     assert mod.check(sites, routes) == []
-    assert len(sites) == 58 and len(excluded) == 2
+    assert len(sites) == 61 and len(excluded) == 2
     live = [s for s in sites if "transport" not in s["kinds"]]
-    assert len(live) == 57 and len(sites) - len(live) == 1   # +1 = `api/client.ts` 的 `fetch` 包装
+    assert len(live) == 59 and len(sites) - len(live) == 2   # +2 = `api/client.ts` 的 `fetch`/`authRequest` 两枚包装
     mounted = sum(1 for r in routes if r["how"] == "add_api_route")
     assert mounted == 5                              # af_conflict_runtime._ROUTES
     assert len(routes) - mounted + len(excluded) == 91   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（现读 91 对 91；旧锚点 87 停在 `117f4dd` 之前）
@@ -644,13 +648,14 @@ def test_all_trees_of_this_repo_are_in_scope_and_green(capsys):
     """真仓 `--all` 的整条读数：三棵树各自的调用点数、跨树反向读数——这条就是本批的第一手读数。
 
     `ui 53 → 57` 与 §一之 54/90 同因（`117f4dd` 那四条 `/system/*`），出处见上面那条的 docstring。
+    `ui 57 → 59`（20261021）：开发端登录正规化五枚调用点 + `authRequest` 传输层包装，同上。
     """
     mod = _module()
     assert mod.main(["check_ui_api_paths.py", "--all"]) == 0
     out = capsys.readouterr().out
-    for name in ("ui 57", "ui-user 19", "ui-user-mimo 22"):
+    for name in ("ui 59", "ui-user 19", "ui-user-mimo 22"):
         assert name in out, out
-    assert "传输层包装 3 处" in out, out
+    assert "传输层包装 4 处" in out, out
     assert "SSE 建流 2 处" in out, out
     assert "跨 3 棵树仍未被调用 15 条" in out, out
 
@@ -746,18 +751,19 @@ def build_app():
 
 
 def test_transport_wrappers_are_pinned_to_the_api_layer():
-    """真仓只有三处"整条路径是变量"的传输层包装，且都在各棵树的 api 门面文件里。
+    """真仓只有四处"整条路径是变量"的传输层包装，且都在各棵树的 api 门面文件里。
 
     这条是 `test_non_literal_path_is_registered_as_transport` 放宽判红之后的兜底：视图里再冒出一处
     动态路径（那才是真该追问"调的是哪条接口"的地方）会红在这里，逼来留名而不是静默过关。
+    `ui/src/api/client.ts:75`（20261021）：登录正规化批次的 `authRequest` 第二枚包装。
     """
     mod = _module()
     got: list[str] = []
     for t in mod._registry_trees():
         sites, _ = mod.collect_ui_sites(t["root"], t["name"])
         got += [f"{s['rel']}:{s['line']}" for s in sites if "transport" in s["kinds"]]
-    assert sorted(got) == ["ui-user-mimo/src/api/http.ts:92", "ui-user/src/api/client.ts:36",
-                           "ui/src/api/client.ts:28"], got
+    assert sorted(got) == ["ui-user-mimo/src/api/http.ts:103", "ui-user/src/api/client.ts:36",
+                           "ui/src/api/client.ts:38", "ui/src/api/client.ts:75"], got
 
 
 def test_helper_names_have_one_source():

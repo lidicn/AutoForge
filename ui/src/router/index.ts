@@ -1,8 +1,11 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import type { RouteLocationNormalized } from 'vue-router'
+import { TOKEN_KEY } from '@/api/client'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { public: true } },
     { path: '/', redirect: '/overview' },
     { path: '/overview', name: 'overview', component: () => import('@/views/OverviewView.vue') },
     { path: '/automations', name: 'automations', component: () => import('@/views/AutomationsListView.vue') },
@@ -31,6 +34,22 @@ const router = createRouter({
     { path: '/system-update', name: 'system-update', component: () => import('@/views/SystemUpdateView.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('@/views/NotFoundView.vue') },
   ],
+})
+
+/** 会话判定：localStorage 里有登录令牌即视为已登录（有效性由 API 401 全局钩子兜底）。 */
+function hasSession(): boolean {
+  try {
+    return !!localStorage.getItem(TOKEN_KEY)
+  } catch {
+    return false
+  }
+}
+
+router.beforeEach((to: RouteLocationNormalized) => {
+  if (to.meta.public) return true
+  if (hasSession()) return true
+  // 未登录：跳登录页并带上原目的地，登录后跳回
+  return { name: 'login', query: to.fullPath !== '/' ? { redirect: to.fullPath } : {} }
 })
 
 export default router

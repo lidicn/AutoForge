@@ -10,16 +10,27 @@ import type { Agent, AuthCode, Automation, PairRequest, PendingItem, User } from
 import { apiError, type ApiClient, type ApiErrorCode } from './mock.ts'
 import { API_BASE } from './env.ts'
 
-const TOKEN_KEY = 'forgesight_token'
+// 双端统一 token key（与管理端 ui/ 同一格存储）：同一浏览器登录一次，两套 UI 都认。
+// 旧 key forgesight_token 做一次性迁移读取，避免已登录用户被登出。
+const TOKEN_KEY = 'af_token'
+const LEGACY_TOKEN_KEY = 'forgesight_token'
 
 // ---------------- token 持久化 ----------------
 function loadToken (): string | null {
-  try { return localStorage.getItem(TOKEN_KEY) } catch { return null }
+  try {
+    return localStorage.getItem(TOKEN_KEY) ?? localStorage.getItem(LEGACY_TOKEN_KEY)
+  } catch { return null }
 }
 function saveToken (t: string | null): void {
   try {
-    if (t) localStorage.setItem(TOKEN_KEY, t)
-    else localStorage.removeItem(TOKEN_KEY)
+    if (t) {
+      localStorage.setItem(TOKEN_KEY, t)
+      // 迁移完成即清旧 key，避免残留两份登录态
+      localStorage.removeItem(LEGACY_TOKEN_KEY)
+    } else {
+      localStorage.removeItem(TOKEN_KEY)
+      localStorage.removeItem(LEGACY_TOKEN_KEY)
+    }
   } catch { /* ignore */ }
 }
 

@@ -71,6 +71,8 @@ from .af_auth import (
     BOOTSTRAP_LOCK_S,
     BOOTSTRAP_REDEEM_PER_MIN,
     BOOTSTRAP_REQUEST_PER_MIN,
+    LOGIN_LOCK_S,
+    LOGIN_PER_MIN,
     AdminUserStore,
     AuthCodeStore,
     PairCodeStore,
@@ -336,6 +338,18 @@ def build_app(
     bootstrap_redeem_limiter = RateLimiter(
         per_minute=BOOTSTRAP_REDEEM_PER_MIN, lock_s=BOOTSTRAP_LOCK_S
     )
+    # 登录/注册的**匿名**面：这两个端点同样无鉴权依赖且直接对撞凭据库，
+    # 此前无限速（配对码都有 6/min，登录反而裸奔）。同档口径：10/min、超限锁该 IP
+    # 于该端点 5 分钟——正常手输错几次打不完 10 次，而在线爆破会被锁出去。
+    login_limiter = RateLimiter(per_minute=LOGIN_PER_MIN, lock_s=LOGIN_LOCK_S)
+    register_limiter = RateLimiter(per_minute=LOGIN_PER_MIN, lock_s=LOGIN_LOCK_S)
+
+    def _login_limit(bucket: RateLimiter, request: Request) -> None:
+        """匿名登录面的按 IP 限速（与 `_bootstrap_limit` 同形状：键带端点身份，互不连坐）。"""
+        try:
+            bucket.check(f"ip:{_client_ip(request)}")
+        except RateLimitExceeded as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
 
     # v1.9.0 用户 WebUI：配对码 / 授权码 文件存储（与 .auth/revoked.json 同目录）
     pair_store = PairCodeStore(Path(store_root) / ".auth" / "pair_codes.json")
@@ -1024,11 +1038,12 @@ def build_app(
         return {"ok": True, "has_admin": admin_store.has_admin}
 
     @app.post("/api/auth/register")
-    def api_auth_register(body: RegisterBody) -> dict[str, Any]:
+    def api_auth_register(request: Request, body: RegisterBody) -> dict[str, Any]:
         """首次注册管理员。只有当没有管理员时才允许；已有管理员则拒绝。
 
         注册成功后自动签发登录令牌，免去注册后再登录一步。
         """
+        _login_limit(register_limiter, request)
         if not (body.username and body.password):
             raise HTTPException(status_code=400, detail="用户名或密码为空")
         if len(body.username) < 2:
@@ -1051,12 +1066,13 @@ def build_app(
 
     # ── v1.9.0 用户 WebUI：登录（验证用户名密码）──
     @app.post("/api/auth/login")
-    def api_auth_login(body: LoginBody) -> dict[str, Any]:
+    def api_auth_login(request: Request, body: LoginBody) -> dict[str, Any]:
         """登录：验证用户名和密码，通过后签发 owner JWT。
 
         向后兼容：如果还没有管理员用户（未注册），保持旧的「任意非空凭据可登录」行为，
         避免升级后老用户被锁在外面。注册后切换为严格验证。
         """
+        _login_limit(login_limiter, request)
         if not (body.username and body.password):
             raise HTTPException(status_code=401, detail="用户名或密码为空")
         # 未注册时的兼容模式：任意非空凭据可登录（旧行为）

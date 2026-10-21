@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, h } from 'vue'
-import { RouterLink, RouterView, useRoute } from 'vue-router'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import {
+  NButton,
   NConfigProvider,
   NMessageProvider,
   NLayout,
@@ -12,8 +13,25 @@ import {
   dateZhCN,
 } from 'naive-ui'
 import type { GlobalThemeOverrides, MenuOption } from 'naive-ui'
+import { onUnauthorized, TOKEN_KEY } from '@/api/client'
 
 const route = useRoute()
+const router = useRouter()
+
+// 登录态失效（401 全局钩子）：清令牌跳登录页，带 redirect 登录后跳回
+onUnauthorized(() => {
+  const here = router.currentRoute.value
+  if (here.name === 'login') return
+  void router.push({
+    name: 'login',
+    query: here.fullPath !== '/' ? { redirect: here.fullPath } : {},
+  })
+})
+
+function logout() {
+  localStorage.removeItem(TOKEN_KEY)
+  void router.push({ name: 'login' })
+}
 
 const menuOptions: MenuOption[] = [
   { label: () => h(RouterLink, { to: '/overview' }, { default: () => '概览' }), key: '/overview' },
@@ -38,6 +56,9 @@ const menuOptions: MenuOption[] = [
 
 const activeKey = computed(() => (route.path.startsWith('/automations') ? '/automations' : route.path))
 
+// 登录页不渲染导航壳（无侧栏、无菜单，只有表单本身）
+const isLoginRoute = computed(() => route.name === 'login')
+
 const themeOverrides: GlobalThemeOverrides = {
   common: {
     primaryColor: '#4f46e5',
@@ -56,7 +77,9 @@ const themeOverrides: GlobalThemeOverrides = {
 <template>
   <n-config-provider :theme-overrides="themeOverrides" :locale="zhCN" :date-locale="dateZhCN">
     <n-message-provider>
-      <n-layout class="app-shell" style="height: 100vh">
+      <!-- 登录页：只渲染表单本体，不套控制台壳 -->
+      <router-view v-if="isLoginRoute" />
+      <n-layout v-else class="app-shell" style="height: 100vh">
         <n-layout-header class="app-header" bordered>
           <div class="brand">
             <div class="brand-mark">AF</div>
@@ -66,6 +89,7 @@ const themeOverrides: GlobalThemeOverrides = {
             </div>
           </div>
           <n-menu class="app-menu" mode="horizontal" :options="menuOptions" :value="activeKey" />
+          <n-button quaternary size="small" class="logout-btn" @click="logout">退出登录</n-button>
         </n-layout-header>
         <n-layout-content class="app-content" :native-scrollbar="false">
           <div class="app-container">
@@ -146,6 +170,10 @@ body {
 .app-menu {
   flex: 1;
   min-width: 0;
+}
+
+.logout-btn {
+  flex-shrink: 0;
 }
 
 .app-content {
