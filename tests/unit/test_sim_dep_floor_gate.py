@@ -77,8 +77,10 @@ def test_real_repo_is_green_and_pinned():
     assert mod.anchor_ok(ROOT) is None
     findings, info = mod.check(ROOT)
     assert findings == [], f"真仓读数不该为空却给出：{findings}"
-    assert info["total"] == 19, f"包声明依赖总数现读 {info['total']}"
-    assert info["core"] == ["jsonschema>=4.20", "typer>=0.12"], info["core"]
+    # 19 → 20（20261021 收账）：a6b96cf（10-17 tzdata 跨时区修复）给 core 加了第三枚依赖，
+    # 漏跟本腿钉针——存量红，本批对齐。
+    assert info["total"] == 20, f"包声明依赖总数现读 {info['total']}"
+    assert info["core"] == ["jsonschema>=4.20", "typer>=0.12", "tzdata>=2024.1"], info["core"]
     assert info["extras"] == {"api": 3, "dev": 10, "ha": 1, "homesdk": 1, "mqtt": 1, "sim": 1}, info["extras"]
     want, per = info["floors"][VHASS]
     assert want == FLOOR and per == {"sim": FLOOR, "dev": FLOOR}, f"在册下界现读 {want} / {per}"

@@ -2374,7 +2374,9 @@ def _catalog(store: GraphStore, **kwargs: Any) -> DeviceCatalog:
                 url = "http://192.168.2.200:8123"
             kwargs.setdefault("ha_url", url)
         except Exception:
-            pass
+            # ARCH-01（关键模块不许 except-pass-broad）：读不出就退回 env/缺省行为，
+            # 但必须留痕——静默吞会让"WebUI 填的 token 为什么没生效"无从查起。
+            logger.debug("CATALOG_TOKEN_SOURCE_SKIPPED", exc_info=True)
     return DeviceCatalog(store.root, **kwargs)
 
 
