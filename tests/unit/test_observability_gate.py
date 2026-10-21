@@ -70,13 +70,15 @@ def test_real_repo_site_readings_are_pinned(real):
     168 → 169（执行记录 §二之一百二十九）：`af_service.health()` 那格探测失败新增一枚带码 DEBUG
        留痕 `PREMIERE_HEALTH_PROBE_SKIPPED`（裁定 20261011 §3 的只读读数接进健康面）。带码 ⇒ 不吃
        §四 的无码格子；文件数仍 31（`af_service.py` 本来就在射程里）。
+    198 → 199（20261021 收账，8664511 的 ARCH-01 补留痕）：`af_service._catalog` 那格裸吞
+       补成带码 DEBUG `CATALOG_TOKEN_SOURCE_SKIPPED`。同因 DEBUG +1。
     """
     from collections import Counter
 
     lv = Counter(s["level"] for s in real["sites"])
-    assert len(real["sites"]) == 198
+    assert len(real["sites"]) == 199
     assert len({s["path"] for s in real["sites"]}) == 32
-    assert dict(lv) == {"debug": 20, "info": 9, "warning": 134, "error": 24, "exception": 11}
+    assert dict(lv) == {"debug": 21, "info": 9, "warning": 134, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -96,12 +98,16 @@ def test_real_repo_named_code_readings_are_pinned(real):
 
     40 → 41 站／37 → 38 枚（执行记录 §二之一百二十九）：本批 +1 站 +1 码，同一枚
     `PREMIERE_HEALTH_PROBE_SKIPPED`（`af_service.py:295`，DEBUG 带码）。⛔ 无码存量与 §四 上限同样不动。
+
+    41 → 42 站／38 → 39 枚（20261021 收账，8664511 的 ARCH-01 补留痕）：`af_service._catalog` 那格
+    裸吞补成带码 DEBUG `CATALOG_TOKEN_SOURCE_SKIPPED`——同因同形状，+1 站 +1 码。
+    ⛔ 无码存量 114 与 §四 上限 83 同样一字未动（带码 ⇒ 不吃那一格）；白名单三例也没动。
     """
     from collections import Counter
 
     coded = real["coded"]
-    assert len(coded) == 84
-    assert len({s["code"] for s in coded}) == 81
+    assert len(coded) == 85
+    assert len({s["code"] for s in coded}) == 82
     # 41 站／38 枚＝仓内三例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
     # ① `DEPLOY_AUDIT_PERSIST_FAILED` 同时出自「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」
     #    两条腿——同一句承诺（台账没落稳）；
@@ -164,7 +170,9 @@ def test_real_repo_every_named_code_is_registered(real):
     findings, info = gate.check(REPO)
     b = [f for f in findings if f.startswith("B：")]
     assert not b, "\n".join(b)
-    assert info["codes"] == 81 and info["coded"] == 84
+    # 81 → 82 枚／84 → 85 站（20261021 收账）：`CATALOG_TOKEN_SOURCE_SKIPPED` 新码入 §三
+    # （8664511 的 ARCH-01 补留痕），上面那条腿已经红过——本批对齐钉针。
+    assert info["codes"] == 82 and info["coded"] == 85
 
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
