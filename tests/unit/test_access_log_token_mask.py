@@ -147,6 +147,49 @@ def test_filter_rewrites_only_the_token_value(raw, expected):
     assert record.getMessage() == expected
 
 
+def test_masked_record_survives_uvicorn_access_formatter():
+    """掩码命中后，record 必须能被 uvicorn 的 AccessFormatter 无恙格式化。
+
+    根因（生产 NAS 容器日志反复刷的那条）：旧实现把整行替好、`record.args = None`，
+    而 uvicorn `AccessFormatter.formatMessage` 无条件把 args 当五元组解包 ⇒
+    `TypeError: cannot unpack non-iterable NoneType object`。修法是掩码 args 里的
+    full_path、模板与元组形状原样保留 —— 本条用真 formatter 钉住这条路。
+    """
+    record = logging.LogRecord(
+        ACCESS_LOGGER, logging.INFO, __file__, 1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:6000", "GET", f"/api/events?token={SECRET}&since=1", "1.1", 200),
+        None,
+    )
+    assert af_cli.AccessLogTokenMask().filter(record) is True
+    formatter = uvicorn.logging.AccessFormatter(
+        "%(client_addr)s - \"%(request_line)s\" %(status_code)s")
+    line = formatter.format(record)  # 修前在这行抛 TypeError
+    assert SECRET not in line and "token=***" in line, line
+
+    # percent-encoding 的 URL 同样不崩不二次展开（%25d 不得被 % 格式化吃掉）
+    record_pct = logging.LogRecord(
+        ACCESS_LOGGER, logging.INFO, __file__, 1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:6000", "GET", "/api/search?q=%E4%B8%AD%25d", "1.1", 200),
+        None,
+    )
+    af_cli.AccessLogTokenMask().filter(record_pct)
+    line_pct = formatter.format(record_pct)
+    assert "%E4%B8%AD%25d" in line_pct, line_pct
+
+
+def test_masked_record_survives_plain_formatter_getmessage():
+    """非五元组腿（args=None）经标准 Formatter / getMessage 也不炸不泄。"""
+    record = logging.LogRecord(
+        ACCESS_LOGGER, logging.INFO, __file__, 1,
+        "custom %s", (f"/api/events?token={SECRET}",), None,
+    )
+    assert af_cli.AccessLogTokenMask().filter(record) is True
+    assert record.getMessage() == "custom /api/events?token=***"
+    assert SECRET not in logging.Formatter("%(message)s").format(record)
+
+
 def test_serve_installs_the_mask_before_uvicorn_run():
     """AST 守卫：`serve` 必须在 `uvicorn.run` 之前调用安装函数（漏了就静默回到明文）。"""
     tree = ast.parse(CLI_PATH.read_text(encoding="utf-8"))

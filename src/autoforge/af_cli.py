@@ -1402,9 +1402,27 @@ class AccessLogTokenMask(logging.Filter):
 
     射程只有本进程：反代 / nginx 同样记完整 URL，那一半属 NAS 部署侧（铁律 #3），
     不要把这条读成"凭据不会进日志"。
+
+    实现注记：uvicorn 的 `AccessFormatter.formatMessage` 会把 `record.args` 当五元组
+    解包（uvicorn/logging.py，0.30+ 一直如此），所以**不能**走"把整行替好、args 置
+    None"的路——掩码一命中，下游 formatter 解包就崩，容器日志里反复刷
+    `TypeError: cannot unpack non-iterable NoneType object`（starlette 异常处理器
+    落日志时被同一个 formatter 炸掉，噪音翻倍）。正确姿势是掩码 args 里的
+    `full_path` 元素、模板与元组形状原样保留，任何 formatter（含色彩版）都不坏。
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and len(record.args) == 5:
+            # uvicorn access log 的真实调用形：'%s - "%s %s HTTP/%s" %d'。
+            # 只替 args 里的 full_path（等）字符串元素，模板与元组形状原样保留。
+            record.args = tuple(
+                _TOKEN_IN_URL.sub(r"\1***", arg) if isinstance(arg, str) else arg
+                for arg in record.args
+            )
+            return True
+        # 非五元组形（自定义 fmt、别的 logger 复用）：只能替整条已格式化串。
+        # args 置 None 后 getMessage() 不再做 % 展开，字面串里的 % 序列安全；
+        # uvicorn 的 AccessFormatter 只格式化它自己发的那批五元组 record，到不了这条腿。
         line = record.getMessage()
         masked = _TOKEN_IN_URL.sub(r"\1***", line)
         if masked != line:
