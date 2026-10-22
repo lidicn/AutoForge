@@ -1428,7 +1428,7 @@ def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="监听地址（容器内用 0.0.0.0）"),
     port: int = typer.Option(8787, "--port", help="监听端口"),
     store_root: str = typer.Option(DEFAULT_STORE_ROOT, "--store-root", help="G6 归档目录"),
-    examples: str = typer.Option("", "--examples", help="启动时把样例 IR 幂等灌入归档的目录（缺省 examples/ir）"),
+    examples: str = typer.Option("", "--examples", help="启动时把样例 IR 幂等灌入归档的目录（**只认显式传参**；缺省不灌——2026-10-22 修复：演示数据混入生产 /data，删除后每次重启又回来）"),
     ui_dir: str = typer.Option("", "--ui-dir", help="前端构建产物 dist 目录；提供后一并托管 UI（SPA fallback，同源 /api）"),
     ui_user_dir: str = typer.Option("", "--ui-user-dir", help="用户视角 UI（ui-user-mimo）dist 目录；提供后挂到 /mimo 前缀下"),
 ):
@@ -1458,7 +1458,10 @@ def serve(
     else:
         typer.echo(f"· 取得单写者锁（owner={owner_id()}）")
 
-    examples_path = examples or ("examples/ir" if Path("examples/ir").is_dir() else "")
+    # v2.6（2026-10-22）：样例灌入只认显式 --examples 传参，不再按 CWD 自动回退
+    # examples/ir——容器 WORKDIR=/app 里恰好烘着 examples/，这个回退曾让「删掉的演示
+    # 自动化每次容器重启都被灌回 /data 持久盘」（应用数据与用户数据混写的根因）。
+    examples_path = examples
     app_ = build_app(store_root, examples_path or None, ui_dir or None, ui_user_dir or None, readonly=readonly)
     typer.echo(f"· AutoForge 只读服务层：http://{host}:{port}（文档 /docs，store={store_root}）")
     if ui_dir and Path(ui_dir).is_dir():

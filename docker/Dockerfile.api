@@ -64,6 +64,8 @@ USER autoforge
 
 EXPOSE 8787
 
-# 启动时把 examples/ir 幂等灌入 /data 归档，让控制台一开就有数据
+# 2026-10-22：不再传 --examples——examples/ 仍烘在镜像里（verify_api.py 等窗后验收脚本
+# 要读它），但 serve 不再把演示 IR 灌进 /data 持久归档。此前每次容器重启都把删掉的
+# 演示自动化（case* 等）灌回 /data：应用样例与用户数据混写，删除永远删不净。
 CMD ["forge", "serve", "--host", "0.0.0.0", "--port", "8787", \
-     "--store-root", "/data", "--examples", "/app/examples/ir"]
+     "--store-root", "/data"]

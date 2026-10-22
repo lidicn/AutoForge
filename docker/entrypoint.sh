@@ -5,9 +5,9 @@
 set -e
 
 # 启动 serve（前台跑，但我们要 trap，所以后台跑再 wait）
+# 2026-10-22：去掉 --examples——样例灌入只认显式传参，演示 IR 不再混进 /data 用户数据
 forge serve --host 0.0.0.0 --port 8787 \
   --store-root /data \
-  --examples /app/examples/ir \
   --ui-dir /ui \
   --ui-user-dir /mimo &
 
