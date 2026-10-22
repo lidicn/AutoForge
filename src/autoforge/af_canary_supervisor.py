@@ -14,7 +14,7 @@ Supervisor，把 canary 变成一个**阶段**：
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping
 
 from autoforge.af_conf import AUTO_MIN, ConfidenceStore
@@ -93,6 +93,26 @@ def _do_nodes(auto: Any):
     return [n for n in items if getattr(n, "kind", "") == "do"]
 
 
+def _replace_node(auto: Any, old: Any, new: Any) -> None:
+    """把 auto.nodes 里的 old 节点换成 new。
+
+    真 IR 的 ``Node`` 是 frozen dataclass（af_ir/models.py，`canary` 字段直接赋值会抛
+    FrozenInstanceError——生产转正 strip 一直坏的根因），必须按 nodes 容器形状（dict/list）
+    原位替换整个节点对象；FakeNode（单测）是可变的，直接替换同样成立。
+    """
+    nodes = getattr(auto, "nodes", None)
+    if isinstance(nodes, Mapping):
+        for key, n in list(nodes.items()):
+            if n is old:
+                nodes[key] = new
+                return
+    elif isinstance(nodes, list):
+        for i, n in enumerate(nodes):
+            if n is old:
+                nodes[i] = new
+                return
+
+
 def graph_canary_stripper(graph: Any) -> Callable[[str], int]:
     """返回 ``strip(automation_id) -> 变更节点数``：把 IR 的 canary 字段置 None。"""
 
@@ -103,7 +123,7 @@ def graph_canary_stripper(graph: Any) -> Callable[[str], int]:
         changed = 0
         for node in _do_nodes(auto):
             if getattr(node, "canary", None) is not None:
-                node.canary = None
+                _replace_node(auto, node, replace(node, canary=None))
                 changed += 1
         return changed
 
@@ -123,7 +143,7 @@ def graph_canary_applier(
         changed = 0
         for node in _do_nodes(auto):
             if getattr(node, "canary", None) is None:
-                node.canary = dict(payload)
+                _replace_node(auto, node, replace(node, canary=dict(payload)))
                 changed += 1
         return changed
 
