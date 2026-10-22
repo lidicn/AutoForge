@@ -88,6 +88,11 @@ services:
       - HA_LONG_LIVED_TOKEN=${HA_LONG_LIVED_TOKEN:-}
       - AUTOFORGE_HA_TOKEN=${AUTOFORGE_HA_TOKEN:-}
       - AF_ALLOW_NOAUTH=${AF_ALLOW_NOAUTH:-}
+      # ── conf 分级引擎（mimo #19）：NAS 面正式启用 ──
+      # 字面量 1 = 发布开关烘进入库文件，确定性单源：不依赖宿主 .env（NAS .env 仍是旧键名、
+      # 迁移是遗留任务）。关闭 = 走 revert commit + 自部署，不留宿主侧暗门。
+      # 读点 src/autoforge/af_runtime.py:100；watch 子进程经 af_service.py:3158 child_env 继承。
+      - AUTOFORGE_CONF_GRADING=1
     restart: unless-stopped
     stop_grace_period: 15s  # 巡检 #8：给 trap cleanup 留时间收 watch
 
