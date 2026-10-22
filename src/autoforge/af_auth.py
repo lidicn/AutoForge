@@ -805,6 +805,12 @@ def redeem_pair_code(
     把它翻成 MCP 的 `{ok:false,error}` 还是 HTTP 的 4xx，语义分层留在各自的面里，
     但"consume 之后才签发"这一条顺序只有一份。
 
+    **配对令牌不设过期（2026-10-23 出资人裁定）**：配对一次长期有效，只有撤销
+    （`revoke_by_subject` / 单令牌 revoke）才失效——与长期授权码同语义（gap #9 的
+    分型口径）。此前 BUG-19 修复给所有 `issue_for_agent` 签发统一打了 24h TTL，
+    把「登录令牌该有 TTL」误套到配对令牌上 ⇒ agent 每天被迫重新配对。BUG-19 的
+    凭证库增长担忧对配对不成立：低频操作 + `MAX_ISSUED` 上限 + 撤销机制兜底。
+
     `not_ready` 只在**注册表对象都没有**时给（`registry is None`）。不要在"没配置任何令牌"时
     也拒绝：那档下全站本来就是公开的（`TokenRegistry.enabled` 的口径），此时拒发配对令牌
     只会把开发档的配对流程打断，换不到任何安全收益。
@@ -818,7 +824,9 @@ def redeem_pair_code(
     subject = (agent_name or "").strip() or pc.agent_name_hint or "agent"
     if registry is None:
         return "not_ready", None, None
-    return "ok", registry.issue_for_agent(subject), subject
+    # ttl_s=0 ⇒ `expires_at=None`（`issue_for_agent` 的口径：ttl<=0 不过期）——
+    # 与 WebUI 登录令牌（走默认 24h）在同一签发点上分型。
+    return "ok", registry.issue_for_agent(subject, ttl_s=0), subject
 
 
 @dataclass

@@ -36,6 +36,7 @@ from autoforge.af_auth import (  # noqa: E402
     RateLimiter,
     RateLimitExceeded,
     TokenRegistry,
+    redeem_pair_code,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -191,6 +192,41 @@ def test_redeemed_token_actually_bears(tmp_path, monkeypatch):
     pc = _pair_store(tmp_path, monkeypatch).create("小助手")
     token = client.post(REDEEM_PATH, json={"code": pc.code, "agent_name": "小助手"}).json()["token"]
     assert client.get(ACCEPTING_PATH, headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+
+def test_paired_agent_token_never_expires(tmp_path, monkeypatch):
+    """配对令牌不设过期——2026-10-23 出资人裁定（长期码同语义，gap #9 分型口径）。
+
+    BUG-19 修复（ISSUED_TTL_S=86400）把「登录令牌该有 TTL」无差别套到所有
+    `issue_for_agent` 签发上 ⇒ agent 配对一次 24h 后必死，每天要重新配对。
+    配对的正确语义：不撤销一直可用；凭证库增长由 MAX_ISSUED 上限 + 撤销兜底，
+    对配对这种低频操作不成立。对照腿：WebUI 登录令牌（/api/auth/login）保持
+    默认 24h——那条才是 BUG-19 的靶子（无鉴权端点每次登录追加一条）。
+    """
+    registry = TokenRegistry(revoked_path=tmp_path / "revoked.json",
+                             issued_path=tmp_path / "issued.json")
+    pair_store = PairCodeStore(tmp_path / "pair_codes.json")
+    pc = pair_store.create("小助手")
+    token, subject = redeem_pair_code(pair_store, registry, pc.code, "小助手")[1:]
+    assert subject == "小助手"
+    info = registry._tokens[token]
+    assert info.expires_at is None, (
+        info.expires_at, "配对令牌带上了 expires_at ⇒ 24h 后 agent 被迫重新配对（BUG-19 误伤回归）"
+    )
+    # 老令牌语义不受影响：env 静态令牌本就永不过期，配对令牌现在与它对齐
+    # （registry.authenticate 吃裸令牌，Bearer 剥前缀在 HTTP 层）
+    assert registry.authenticate(token) is not None
+
+
+def test_login_token_still_expires_by_default(tmp_path, monkeypatch):
+    """对照腿：WebUI 登录令牌（BUG-19 的真靶子）默认 TTL 必须还在——分型不许一边倒。"""
+    monkeypatch.delenv("AF_LOGIN_TOKEN_TTL_S", raising=False)
+    registry = TokenRegistry(revoked_path=tmp_path / "revoked.json",
+                             issued_path=tmp_path / "issued.json")
+    token = registry.issue_for_agent("owner")
+    info = registry._tokens[token]
+    ttl = info.expires_at - time.time()
+    assert 86300 < ttl <= 86400, ttl
 
 
 # ── 三处成功标记都必须是回读，不是字面量（反空洞腿）─────────────────
