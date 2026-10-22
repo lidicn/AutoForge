@@ -253,14 +253,18 @@ export const httpApi: ApiClient = {
   },
 
   async listAuthCodes () {
-    const data = await req<{ ok: boolean; codes: Array<{ code: string; kind: string; created_at: number; expires_at: number | null; revoked?: boolean }> }>('/api/user/auth-codes')
+    // 审计 F-21 修复（v2.6 gap #9）：consumed 的码（用掉的短期码/历史废长期码）不得再当可用码展示——
+    // 只按 revoked 过滤会把废码伪装成活的。
+    const data = await req<{ ok: boolean; codes: Array<{ code: string; kind: string; created_at: number; expires_at: number | null; revoked?: boolean; consumed?: boolean; use_count?: number }> }>('/api/user/auth-codes')
     return (data.codes || [])
-      .filter((c) => !c.revoked)
+      .filter((c) => !c.revoked && !c.consumed)
       .map((c) => ({
         code: c.code,
         type: c.kind === 'short' ? 'short' : 'long',
         created_at: toIso(c.created_at) ?? new Date().toISOString(),
         expires_at: c.expires_at ? toIso(c.expires_at) : null,
+        consumed: c.consumed ?? false,
+        use_count: c.use_count ?? 0,
       }))
   },
 

@@ -6,6 +6,11 @@
 `tests/` 里对 `auth_code` 与 `AuthCode` 两个词的全仓检索为空。没有反例的安全修复等于没有修复：下一个改
 `validate()` 的人不会看见任何门红。
 
+v2.6 语义修复（gap #9，2026-10-22）：一次性 `consume` 只保留给**短期码**；**长期码**回归设计口径
+「不撤销一直可用」（docs/design/咨询_用户WebUI后端确认_20260924.md:37）——consume 只计
+`use_count`、不清码，抗重放由高熵 + 失败窗口/软锁 + 撤销承担。历史已被 v2.5 消耗掉的
+长期码不自动复活（见 `test_legacy_consumed_long_code_stays_invalid`）。
+
 第三条是**本批才发现还活着的**：单码那层计数只在码**存在**时累加（`record_failure()` 遇未知码
 直接 return），而 10⁸ 码空间的实际枚举路径恰恰是"试不存在的码"——审计侧实测吞吐 195 万次/秒，
 8 位熵只把穷举从 0.51 秒推到约 51 秒，量级不够。所以补了存储级失败尝试窗口，并把"计数器就是
@@ -15,6 +20,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 
@@ -45,14 +51,68 @@ def test_code_is_8_digits(acs):
     assert re.fullmatch(r"[0-9]{8}", code), code
 
 
-def test_validate_is_query_only_then_consume_invalidates(acs):
-    """审计回归项 1/2 的现口径：`validate()` 反复查询不消耗（消耗由调用方显式做），
-    而一旦 `consume()`，同一枚码立刻不再有效。"""
+def test_validate_is_query_only(acs):
+    """审计回归项 1：`validate()` 反复查询不消耗、不改状态（消耗/计数由调用方显式做）。"""
     code = acs.create("long").code
     assert all(acs.validate(code) for _ in range(5))
+    assert acs._codes[code]["use_count"] == 0
+    assert acs._codes[code]["consumed"] is False
+
+
+def test_short_code_consume_burns_it(acs):
+    """审计回归项 2（v2.5 口径对短期码保留）：短期码一次性——consume 后 validate/consume 全灭。"""
+    code = acs.create("short").code
+    assert acs.validate(code) is True
     assert acs.consume(code) is True
     assert acs.validate(code) is False
     assert acs.consume(code) is False
+
+
+def test_long_code_is_reusable_until_revoked(acs):
+    """v2.6（gap #9）：长期码不撤销一直可用——consume 只计 use_count、不清码；revoke 才是终点。"""
+    code = acs.create("long").code
+    for i in range(1, 4):
+        assert acs.consume(code) is True, f"第 {i} 次 consume"
+        assert acs.validate(code) is True, f"第 {i} 次 consume 后仍应有效"
+        assert acs._codes[code]["consumed"] is False
+        assert acs._codes[code]["use_count"] == i
+    assert acs.revoke(code) is True
+    assert acs.validate(code) is False
+    assert acs.consume(code) is False
+
+
+def test_long_code_use_count_persists_across_restart(acs):
+    """v2.6（gap #9）：use_count 随 `_persist`/`_load` 回路跨重启存活（钉 BUG-20 读前重读口径）。"""
+    code = acs.create("long").code
+    assert acs.consume(code) is True
+    assert acs.consume(code) is True
+    revived = AuthCodeStore(acs._path)  # 同路径新实例 = 模拟重启
+    rows = revived.list()
+    assert len(rows) == 1
+    assert rows[0]["code"] == code
+    assert rows[0]["use_count"] == 2
+    assert rows[0]["consumed"] is False
+    assert revived.validate(code) is True
+
+
+def test_legacy_consumed_long_code_stays_invalid(acs):
+    """v2.6（gap #9）不迁移决策的钉子：盘上已被 v2.5 语义消耗（consumed=true）的长期码
+    **不自动复活**——无法与真烧掉的码区分，部署快速通道上自动复活凭据是错误默认。"""
+    legacy = {
+        "code": "12345678",
+        "kind": "long",
+        "created_at": time.time(),
+        "expires_at": time.time() + 86400,
+        "revoked": False,
+        "consumed": True,  # v2.5 时期被一次性 consume 烧掉的长码
+        "failed_attempts": 0,
+        "locked_until": None,
+    }
+    acs._path.parent.mkdir(parents=True, exist_ok=True)
+    acs._path.write_text(json.dumps([legacy]), encoding="utf-8")
+    store = AuthCodeStore(acs._path)
+    assert store.validate("12345678") is False
+    assert store.consume("12345678") is False
 
 
 def test_per_code_lockout_after_threshold_and_expires(acs, monkeypatch):

@@ -56,6 +56,10 @@ export interface AuthCode {
   type: AuthCodeType
   created_at: string
   expires_at: string | null
+  // v2.6（gap #9）：consumed=true = 已被一次性消耗（短期码/历史废码），不得再当可用码展示（审计 F-21）；
+  // use_count = 长期码累计使用次数（长期码不清码，只有 revoked 才失效）。
+  consumed?: boolean
+  use_count?: number
 }
 
 // ===== Pending =====

@@ -831,6 +831,8 @@ class AuthCode:
     consumed: bool = False
     failed_attempts: int = 0
     locked_until: float | None = None
+    # v2.6 语义修复（gap #9）：长期码不消耗，只累计使用次数（consume 时 +1）。
+    use_count: int = 0
 
 
 #: 非 owner 面看到的定形掩码（裁定 20261004 §一 F-3："非 owner 面只给掩码 + 状态"）。
@@ -941,6 +943,7 @@ class AuthCodeStore:
             "consumed": False,
             "failed_attempts": 0,
             "locked_until": None,
+            "use_count": 0,
         }
         # 写前重读：`_persist` 是全量覆盖写，不重读会用陈旧快照抹掉别的进程写入的码
         # （新增审计 BUG-20——用户看到弹窗里的码随即被判无效，配对走不通且日志无痕）
@@ -958,7 +961,7 @@ class AuthCodeStore:
         要的两项：owner 面必须看得见"这枚长期码还活多久"，否则 180 天上限只是后台数字。
 
         掩码只挡"看得见"，不挡"改得动"：状态字段（kind/created/expires/revoked/consumed/
-        failed_attempts）两档都给，撤销一枚码仍然要求手里真有那枚码。谁可以 `reveal=True`
+        use_count/failed_attempts）两档都给，撤销一枚码仍然要求手里真有那枚码。谁可以 `reveal=True`
         由 API 面判（`/api/user/auth-codes` 的 owner 面），存储层不自备身份概念。
         """
         # FFL 20261008 发现：list() 不调用 _load()，内存快照从不刷新，
@@ -980,6 +983,7 @@ class AuthCodeStore:
                         "expires_in_s": round(exp - now, 1) if exp is not None else None,
                         "revoked": c.get("revoked", False),
                         "consumed": c.get("consumed", False),
+                        "use_count": c.get("use_count", 0),
                         "failed_attempts": c.get("failed_attempts", 0),
                         "locked_until": c.get("locked_until"),
                     }
@@ -1006,6 +1010,10 @@ class AuthCodeStore:
 
         R17-01：读前重载盘——长驻单例（MCP 进程）必须能看到其他进程（API/管理员）的撤销/消耗，
         否则已撤销的码在重启前持续有效。
+
+        v2.6（gap #9）：`consumed` 只会咬短期码（长期码 consume 不再置 consumed，见 `consume`）。
+        历史上已被 v2.5 语义消耗掉（盘上 consumed=true）的长期码仍按已消耗处理，**不自动复活**——
+        无法与真烧掉的码区分，部署快速通道上自动复活凭据是错误默认；作废重生成即可。
         """
         self._load()
         with self._lock:
@@ -1035,9 +1043,16 @@ class AuthCodeStore:
             return True
 
     def consume(self, code: str) -> bool:
-        """一次性消耗有效授权码。返回是否消耗成功（码存在且未消耗过）。
+        """消耗一次授权码使用额度：短期码一次性置 consumed；长期码不消耗，只累计 use_count。
 
-        N-P0-sec 核心修复：授权码**必须 consume 才生效**，防止无限重试。
+        v2.6 语义修复（gap #9，2026-10-22）：设计意图是「长期码…不撤销一直可用」
+        （docs/design/咨询_用户WebUI后端确认_20260924.md:37）；v2.5 的 fp-authcode-bruteforce
+        修复把一次性 consume 无差别套到两种码上，长期码用一次就废。本处按 kind 分型：
+        长期码的抗重放改由 高熵（10^8）+ 存储级失败窗口（ATTEMPT_LIMIT/ATTEMPT_WINDOW_S）
+        + 单码软锁（record_failure）+ 撤销 + 180 天绝对上限共同承担，不再依赖一次性消耗
+        （对 docs/audit/归档/AutoForge_内核安全与架构深度审计报告.md HIGH-1 与 R17-01
+        「一次性消耗」口径的有意修订）。
+        kind 缺失的历史记录按短期码处理（保守缺省 = 维持 v2.5 一次性语义）。
         """
         self._load()  # 写前重读，同 create（BUG-20）
         with self._lock:
@@ -1046,7 +1061,12 @@ class AuthCodeStore:
                 return False
             if rec.get("consumed") or rec.get("revoked"):
                 return False
-            rec["consumed"] = True
+            if rec.get("kind") == "long":
+                # 长期码：记录使用、不清码（.get 兼容 v2.5 时期没有 use_count 的记录）
+                rec["use_count"] = rec.get("use_count", 0) + 1
+            else:
+                # 短期码（及缺 kind 的历史记录）：一次性消耗，防重放语义不变
+                rec["consumed"] = True
             self._persist()
             return True
 
@@ -1060,7 +1080,8 @@ class AuthCodeStore:
         "反复试同一枚真实码"，而 10^8 码空间的实际枚举路径是"试不存在的码"——它在单码层
         根本落不到任何记录上，审计侧实测吞吐 195 万次/秒（fp-authcode-bruteforce 证据 [5]），
         8 位熵只把穷举从 0.51 秒推到约 51 秒，量级不够。窗口计数在进程内存，重启即清零，
-        这是登记在册的边界（主防线仍是高熵 + 一次性消耗）。
+        这是登记在册的边界（主防线是高熵 + 失败窗口/软锁 + 撤销；长期码可重复使用，
+        短期码一次性——v2.6 分型语义，gap #9）。
 
         返回：True = 本次失败使**该码**进入锁定（调用方应提示用户稍后再试）。
         """

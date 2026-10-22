@@ -172,9 +172,9 @@ function seed (): Db {
   ]
 
   const authCodes: AuthCode[] = [
-    { code: 'AF-4K2Q-9XRM-7TDV', type: 'long', created_at: agoMin(60 * 24 * 20), expires_at: null },
-    { code: 'AF-P8LM-3RWX-K29C', type: 'long', created_at: agoMin(60 * 24 * 4), expires_at: null },
-    { code: '482913', type: 'short', created_at: agoMin(3), expires_at: aheadMin(9) },
+    { code: 'AF-4K2Q-9XRM-7TDV', type: 'long', created_at: agoMin(60 * 24 * 20), expires_at: null, consumed: false, use_count: 0 },
+    { code: 'AF-P8LM-3RWX-K29C', type: 'long', created_at: agoMin(60 * 24 * 4), expires_at: null, consumed: false, use_count: 3 },
+    { code: '482913', type: 'short', created_at: agoMin(3), expires_at: aheadMin(9), consumed: false, use_count: 0 },
   ]
 
   return { agents, automations, pendings, authCodes, pairRequests: [] }
@@ -320,7 +320,7 @@ export const mockApi: ApiClient = {
     return call('createLongCode', () => {
       let code = genLongCode()
       while (db.authCodes.some(c => c.code === code)) code = genLongCode()
-      const item: AuthCode = { code, type: 'long', created_at: iso(now()), expires_at: null }
+      const item: AuthCode = { code, type: 'long', created_at: iso(now()), expires_at: null, consumed: false, use_count: 0 }
       db.authCodes.unshift(item)
       return item
     })

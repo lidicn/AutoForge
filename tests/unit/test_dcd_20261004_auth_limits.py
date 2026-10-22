@@ -404,6 +404,7 @@ def test_plaintext_sample_credential_is_not_carried_in_product_source():
 
 
 #: 两档面必须同形：面板切档不靠字段增减，只靠 `code` 换形状。
+#: v2.6（gap #9）新增 `use_count`：长期码 consume 只计数不清码，owner 面要看得见用了几次。
 ROW_KEYS = {
     "code",
     "kind",
@@ -414,6 +415,7 @@ ROW_KEYS = {
     "expires_in_s",
     "revoked",
     "consumed",
+    "use_count",
     "failed_attempts",
     "locked_until",
 }

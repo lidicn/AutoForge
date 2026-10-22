@@ -162,6 +162,8 @@ async function revoke (code: string) {
               {{ codeKindMeta(c.type).label }}
             </n-tag>
             <span class="num time">{{ formatDateTime(c.created_at) }} 创建</span>
+            <!-- v2.6（gap #9）：长期码不清码只计数，已用次数要看得见（0 次不占位） -->
+            <span v-if="c.use_count" class="num time used">已用 {{ c.use_count }} 次</span>
           </div>
         </div>
         <div class="code-actions">
@@ -220,5 +222,6 @@ async function revoke (code: string) {
 }
 .code-main .meta { display: flex; align-items: center; gap: 8px; margin: 6px 0 0; }
 .time { font-size: 11px; color: var(--ink-3); }
+.used { color: var(--amber); }
 .code-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 </style>

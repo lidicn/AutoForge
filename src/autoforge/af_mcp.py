@@ -213,8 +213,10 @@ def _t_import(store: GraphStore, args: dict[str, Any], current: dict[str, Any] |
 
 def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
     # v1.4.0：部署前写操作先入待批队列，人审后由服务层回放落盘。
-    # v1.9.0 用户 WebUI：部署授权码路径——持高熵一次性消耗的有效码可走快速通道（人审替代路径）。
-    # v2.5 安全加固（fp-authcode-bruteforce）：码须一次性 consume 才生效，无限重试验证已被堵死。
+    # v1.9.0 用户 WebUI：部署授权码路径——持有效码可走快速通道（人审替代路径）。
+    # v2.5 安全加固（fp-authcode-bruteforce）：无限重试验证已被堵死（失败窗口 + 单码软锁）。
+    # v2.6 语义修复（gap #9）：consume 分型——短期码一次性置 consumed；长期码只计 use_count、
+    # 不撤销一直可用（设计口径 docs/design/咨询_用户WebUI后端确认_20260924.md:37）。
     owner = (current or {}).get("subject", "") or ""
     payload = {
         "ir": args["ir"],
@@ -230,7 +232,8 @@ def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | N
     if auth_code:
         acs = _MCP_AUTH_STORE or AuthCodeStore(Path(store.root) / ".auth" / "auth_codes.json")
         if acs.validate(auth_code):
-            # 路径 A：持有效授权码 → 先一次性 consume（防重放），直接部署
+            # 路径 A：持有效授权码 → consume 一次使用额度（短期码置 consumed；长期码计 use_count），
+            # 直接部署
             # R17-01：必须检查 consume 返回值——validate/consume 是两步，中间可能被其他进程抢走；
             # consume 失败（已被消耗/已撤销）则回落待批队列，不能静默继续直部署。
             if not acs.consume(auth_code):
@@ -255,7 +258,7 @@ def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | N
             store, "af_save", payload,
             submitted_by=owner or "mcp", authenticated_subject=owner or None,
         )
-        pending["warning"] = "auth_code 无效或已消耗，已转为待人工审批（连续 10 次错误该码将锁定 5 分钟）"
+        pending["warning"] = "auth_code 无效（不存在/已消耗/已过期/已锁定），已转为待人工审批（连续 10 次错误该码将锁定 5 分钟）"
         return pending
     return svc.submit_pending(store, "af_save", payload, submitted_by=owner or "mcp", authenticated_subject=owner or None)
 
@@ -826,7 +829,8 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
         "【写】把 IR 归档为新版本（**先过第一道闸**：未通过静态扫描则拒绝）。参数：name(str 必填)、"
         "ir(dict 必填)、note(str 可选，版本备注)、tags(list[str] 可选，覆盖式标签)、"
         "expect_version(int 可选，乐观锁，不匹配报冲突)、auth_code(str 可选，部署授权码——8 位纯数字，"
-        "一次性消耗，连续 10 次错误该码锁定 5 分钟)、allow_bulk(bool 可选，确认批量、绕过爆炸半径护栏)。"
+        "长期码可重复使用（不撤销一直可用），短期码一次性；连续 10 次错误该码锁定 5 分钟)、"
+        "allow_bulk(bool 可选，确认批量、绕过爆炸半径护栏)。"
         "需 write 权限。返回 {ok,name,version,tags,warnings}。",
         {
             "type": "object",
@@ -837,8 +841,8 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
                 "tags": {"type": "array", "items": {"type": "string"}, "description": "标签（覆盖式）"},
                 "expect_version": {"type": "integer", "description": "乐观锁：期望的当前最新版本"},
                 "auth_code": {"type": "string", "pattern": "^[0-9]{8}$",
-                              "description": "部署授权码（用户在 WebUI 生成）；8 位纯数字；一次性消耗，"
-                                             "连续 10 次错误该码锁定 5 分钟"},
+                              "description": "部署授权码（用户在 WebUI 生成）；8 位纯数字；长期码可重复使用"
+                                             "（不撤销一直可用），短期码一次性；连续 10 次错误该码锁定 5 分钟"},
                 "allow_bulk": {
                     "type": "boolean",
                     "description": "true=确认这是一次批量归档，绕过爆炸半径护栏（默认 false）",
