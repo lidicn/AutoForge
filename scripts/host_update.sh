@@ -13,13 +13,6 @@
 
 set -uo pipefail
 
-# 全程持锁（2026-10-21）：cron 每分钟一跳，构建要 30+ 分钟，标记只在退出时删——没锁时重复实例会
-# 堆叠（上次部署实测 5 例并发），失败例的回滚还会把 latest tag 打回旧镜像。非 0 退出码 = 已有
-# 实例在跑，直接让位。
-LOCK="$DATA_DIR/.update.lock"
-exec 9>"$LOCK"
-flock -n 9 || exit 0
-
 # 配置
 REPO_DIR="/vol1/1000/docker/autoforge"
 DATA_DIR="/vol1/1000/docker/autoforge-store"
@@ -28,6 +21,15 @@ CONTAINER="autoforge-api"
 MARKER="$DATA_DIR/.update_request.json"
 RESULT="$DATA_DIR/.update_result.json"
 LOG="$DATA_DIR/update.log"
+
+# 全程持锁（2026-10-21）：cron 每分钟一跳，构建要 30+ 分钟，标记只在退出时删——没锁时重复实例会
+# 堆叠（上次部署实测 5 例并发），失败例的回滚还会把 latest tag 打回旧镜像。非 0 退出码 = 已有
+# 实例在跑，直接让位。
+# 2026-10-22 修复：锁块原在 DATA_DIR 定义之前，`set -u` 下 `DATA_DIR: unbound variable`
+# 秒退——dcc41f6 部署了自己之后的死脚本，自更新链路静默中断（本轮实测根因）。
+LOCK="$DATA_DIR/.update.lock"
+exec 9>"$LOCK"
+flock -n 9 || exit 0
 
 # SSH 密钥（用于 git pull）
 export GIT_SSH_COMMAND="ssh -i /home/lidicn/.ssh/id_ed25519_github -o StrictHostKeyChecking=no"
