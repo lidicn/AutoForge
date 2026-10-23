@@ -51,6 +51,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
 import warnings
 from datetime import datetime, timezone
@@ -253,9 +254,17 @@ class AliasBody(BaseModel):
 
 #: scope 蕴含表（DCD 裁定 20261004 §一 F-1 的前提"DB 持 write 域令牌，write 域含 read"）。
 #: 本仓 `requires()` 早先是**逐名比对**——那句话在代码里并不成立，写侧只给 `write` 的令牌
-#: 会在 read 门上吃 403。蕴含只做这一条、且只往一个方向：read 令牌碰不了 write/live，
-#: `live` 也不蕴含 `write`。
-_SCOPE_SATISFIED_BY = {"read": ("read", "write")}
+#: 会在 read 门上吃 403。蕴含只往一个方向：read 令牌碰不了 write/live，`live` 也不蕴含 `write`。
+#: v1.13.0（2026-10-23，autoflow 三级身份制照搬）：新增 `admin` 运维档——admin 蕴含
+#: read/write/live（运维刀要用全档），反向不蕴含；对应三级预设 normal={read} /
+#: expert={read,write} / developer={read,write,live,admin}。admin 不经配对自动获得，
+#: 只能显式配在 AF_ACCESS_TOKENS 或由 owner subject 名单通道放行（见 requires）。
+_SCOPE_SATISFIED_BY = {
+    "read": ("read", "write", "admin"),
+    "write": ("write", "admin"),
+    "live": ("live", "admin"),
+    "admin": ("admin",),
+}
 
 
 def _scope_ok(scope: str, scopes) -> bool:
@@ -396,7 +405,7 @@ def build_app(
             raise HTTPException(status_code=429, detail=str(exc)) from exc
 
     def requires(scope: str):
-        """端点分级依赖：write / live。
+        """端点分级依赖：read / write / live / admin（v1.13.0 新增 admin 运维档）。
 
         鉴权策略（P0-9 收口，fail-closed 默认）：
         - 未配置任何令牌 -> 默认 403（生产无令牌即不开）
@@ -437,6 +446,12 @@ def build_app(
                 ) from None
             if info is None:
                 raise HTTPException(status_code=403, detail="无效或已撤销的 API 令牌")
+            # admin 门的 owner 名单通道（v1.13.0）：subject ∈ _OWNER_SUBJECTS 的登录令牌
+            # 视同持 admin——WebUI 升级页/watch 治理不用改签发。第三方 agent 令牌要 admin
+            # 必须在 AF_ACCESS_TOKENS 显式配 scopes:["admin"]（autoflow 铁律：身份由人签发，
+            # admin 永不经配对自动获得）。
+            if scope == "admin" and info.subject in _OWNER_SUBJECTS:
+                return info
             if not _scope_ok(scope, info.scopes):
                 raise HTTPException(
                     status_code=403,
@@ -465,6 +480,7 @@ def build_app(
     _write = requires("write")
     _live = requires("live")
     _read = requires("read")
+    _admin = requires("admin")  # v1.13.0 运维档：gap #6 四端点收口（watch 治理/升级/删归档）
 
     #: 授权码列表用的依赖：**write 域，但不吃只读降级**。
     #: 必须在下面 `readonly` 把 `_write` 换成 503 阻塞器之前捕获——那条 GET 本身不写任何东西，
@@ -945,7 +961,7 @@ def build_app(
         """列出当前在跑的 watch 实例（读 persist dir 的 watch.lock.info）。"""
         return svc.list_watches(store.root if store else None)
 
-    @app.post("/api/watch/stop", dependencies=[Depends(_write)])
+    @app.post("/api/watch/stop", dependencies=[Depends(_admin)])
     def api_watch_stop(owner: str = "", body: dict[str, Any] | None = None) -> dict[str, Any]:
         """停止运行中的 watch 进程。
 
@@ -1002,7 +1018,7 @@ def build_app(
             }
         return {"ok": True, "channel_error": False, "inbox": str(fname), "signed": True}
 
-    @app.post("/api/watch/start", dependencies=[Depends(_write)])
+    @app.post("/api/watch/start", dependencies=[Depends(_admin)])
     def api_watch_start(body: dict[str, Any]) -> dict[str, Any]:
         """启动 watch 进程跑指定 IR（dry-live 默认）。"""
         ir = body.get("ir")
@@ -1166,7 +1182,7 @@ def build_app(
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    @app.post("/api/system/update", dependencies=[Depends(_write)])
+    @app.post("/api/system/update", dependencies=[Depends(_admin)])
     def api_system_update(body: UpdateBody, info: TokenInfo | None = Depends(authenticated())) -> dict[str, Any]:
         """提交更新请求（admin）。
 
@@ -1176,14 +1192,24 @@ def build_app(
         confirm_version 形状随之作废；`body.branch` 缺省对齐发布线 master（DCD 20261017-001 §2.1）。
         容器不执行 git 操作，只写标记文件给宿主 sidecar。
         """
-        # 检查是否已有进行中的更新请求
+        # 检查是否已有进行中的更新请求（返回类型已标注 dict ⇒ 元组不合法会 500，
+        # v1.13.0 起 JSONResponse 显式状态码——响应体形状与原口径一致）
         if os.path.isfile(_UPDATE_MARKER):
-            return {
-                "ok": False,
-                "error": "已有更新请求进行中，请等待宿主脚本执行完成",
-            }, 409
+            return JSONResponse(
+                status_code=409,
+                content={"ok": False, "error": "已有更新请求进行中，请等待宿主脚本执行完成"},
+            )
 
         branch = (body.branch or "master").strip()
+        # ref 白名单（v1.13.0，2026-10-23）：与宿主脚本 scripts/host_update.sh 的 case 白名单
+        # 同规则（master | vX.Y.Z tag）。此前取值域=无（docs/发布线清单.md §一.4 登记格），
+        # 本批按"谁加校验谁改格"翻格为「master | v*tag」并补锚点。SHA 不收——fetch-by-SHA
+        # 依赖服务端 allowReachableSHA1InWant，回滚走 tag。
+        if not re.fullmatch(r"master|v\d+\.\d+\.\d+", branch):
+            raise HTTPException(
+                status_code=400,
+                detail=f"branch 只允许 master 或 vX.Y.Z 版本 tag，收到 {branch!r}",
+            )
         marker = {
             "ref": branch,
             "requested_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -1559,7 +1585,7 @@ def build_app(
         store.set_tags(name, [t for t in store.get_tags(name) if t != "archived"])
         return {"ok": True, "name": name, "archived": False}
 
-    @app.delete("/api/automations/{name}", dependencies=[Depends(_write)])
+    @app.delete("/api/automations/{name}", dependencies=[Depends(_admin)])
     def api_automation_delete(name: str) -> dict[str, Any]:
         d = store._dir(name)
         if not d.is_dir():

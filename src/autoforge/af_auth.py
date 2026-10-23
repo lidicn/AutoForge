@@ -36,8 +36,12 @@ from typing import Any, Iterable
 
 from .af_secrets import load_secret
 
-#: 端点 scope 三档
-SCOPES = ("read", "write", "live")
+#: 端点 scope 档（v1.13.0 新增 admin 运维档，2026-10-23 autoflow 三级身份制照搬）：
+#: normal={read} / expert={read,write} / developer={read,write,live,admin}。
+#: admin 蕴含 read/write/live（_SCOPE_SATISFIED_BY），反向不蕴含；owner subject 名单
+#: 通道（af_api.requires）另对 WebUI 登录令牌放行。admin 不经配对自动获得——
+#: 只能显式配在 AF_ACCESS_TOKENS（身份由人签发的铁律，autoflow ARCHITECTURE §5）。
+SCOPES = ("read", "write", "live", "admin")
 
 
 def _longcode_ttl_days() -> float:
