@@ -39,6 +39,7 @@ SITE_PATHS = (API_REL, HOST_REL, DEPLOY_REL, CI_REL)
 API_TXT = '''"""合成自更新端点：只保留判据 D 要的形状与写入侧缺省（20261021 去版本号确认）。"""
 import json
 import os
+import re
 
 from fastapi.responses import JSONResponse
 
@@ -49,6 +50,8 @@ def build(app, atomic_write_text, _APP_VERSION, _UPDATE_MARKER):
         if os.path.isfile(_UPDATE_MARKER):
             return JSONResponse(status_code=409, content={"ok": False, "error": "已有更新请求进行中"})
         branch = (body.branch or "master").strip()
+        if not re.fullmatch(r"master|v\\d+\\.\\d+\\.\\d+", branch):
+            raise ValueError(branch)
         marker = {"ref": branch, "version": _APP_VERSION}
         atomic_write_text(_UPDATE_MARKER, json.dumps(marker, ensure_ascii=False))
         return {"ok": True}
@@ -360,14 +363,15 @@ def test_synth_C_ci_extra_names_still_green(tmp_path):
 
 
 def test_synth_C_domain_registration(tmp_path):
-    """C：偷偷给 `body.branch` 加取值域却不改登记格 ⇒ 红（反向撤校验同样红）。
+    """C：偷偷给 `body.branch` 撤取值域却不改登记格 ⇒ 红（反向加校验同样红）。
 
-    （v1.13.0 起登记格合法值扩「master | v*tag」＝双侧校验形态；合成树基线格仍「无」，
-    加校验就是对撞红。）
+    （v1.13.0 起登记格三值 有/无/master | v*tag，合成树基线格已随真清单翻成
+    「master | v*tag」＝双侧校验形态；基线夹具带 fullmatch 同形状，撤掉即对撞红。）
     """
     root = make_tree(tmp_path)
-    patch(root, API_REL, '        marker = {',
-          '        if branch not in _ALLOWED_BRANCHES:\n            raise ValueError(branch)\n        marker = {')
+    patch(root, API_REL,
+          '        if not re.fullmatch(r"master|v\\d+\\.\\d+\\.\\d+", branch):\n            raise ValueError(branch)\n',
+          '')
     rc = resync_and_check(root)
     assert rc.returncode == 1 and any("取值域" in f for f in by_letter(rc.stdout, "C")), rc.stdout
 
