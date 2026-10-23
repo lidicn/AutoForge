@@ -40,12 +40,14 @@ API_TXT = '''"""合成自更新端点：只保留判据 D 要的形状与写入�
 import json
 import os
 
+from fastapi.responses import JSONResponse
+
 
 def build(app, atomic_write_text, _APP_VERSION, _UPDATE_MARKER):
     @app.post("/api/system/update")
     def api_system_update(body) -> dict:
         if os.path.isfile(_UPDATE_MARKER):
-            return {"ok": False, "error": "已有更新请求进行中"}, 409
+            return JSONResponse(status_code=409, content={"ok": False, "error": "已有更新请求进行中"})
         branch = (body.branch or "master").strip()
         marker = {"ref": branch, "version": _APP_VERSION}
         atomic_write_text(_UPDATE_MARKER, json.dumps(marker, ensure_ascii=False))
@@ -53,14 +55,15 @@ def build(app, atomic_write_text, _APP_VERSION, _UPDATE_MARKER):
 '''
 
 HOST_TXT = '''#!/bin/sh
-# 合成宿主 sidecar：读 marker 的 ref，读不出就吃两层兜底，然后走变量传参。
+# 合成宿主 sidecar：读 marker 的 ref，读不出就吃两层兜底，然后走变量传参（v1.13.0 三护栏形状）。
 MARKER=/data/.update_request.json
 REF=$(python3 -c "import json; print(json.load(open('$MARKER')).get('ref','master'))" 2>/dev/null || echo "master")
 cd /deploy/autoforge || exit 1
 if ! git fetch --force origin "$REF"; then
     exit 1
 fi
-git reset --hard "origin/$REF"
+TARGET_SHA=$(git rev-parse "origin/$REF" 2>/dev/null || echo "")
+git checkout -f "$TARGET_SHA"
 '''
 
 DEPLOY_TXT = '''"""合成部署指令生成器：它打印的每一条 owner 都会照着敲。"""
@@ -238,7 +241,8 @@ def test_real_repo_deploy_command_follows_publish_line():
     assert "git merge --ff-only origin/master" in deploy_txt
     assert "origin/main" not in deploy_txt
     assert crl.RE_ANCHOR_FETCH.search(host_txt), host_txt   # git fetch --force <remote> "$REF"
-    assert crl.RE_ANCHOR_RESET.search(host_txt), host_txt   # git reset --hard "<remote>/$REF"
+    assert crl.RE_ANCHOR_REVPARSE.search(host_txt), host_txt  # git rev-parse "<remote>/$REF"
+    assert crl.RE_ANCHOR_CHECKOUT.search(host_txt), host_txt  # git checkout -f "$<SHA变量>"
 
 
 def test_real_repo_comments_are_not_carriers():
@@ -356,7 +360,11 @@ def test_synth_C_ci_extra_names_still_green(tmp_path):
 
 
 def test_synth_C_domain_registration(tmp_path):
-    """C：偷偷给 `body.branch` 加取值域却不改登记格 ⇒ 红（反向撤校验同样红）。"""
+    """C：偷偷给 `body.branch` 加取值域却不改登记格 ⇒ 红（反向撤校验同样红）。
+
+    （v1.13.0 起登记格合法值扩「master | v*tag」＝双侧校验形态；合成树基线格仍「无」，
+    加校验就是对撞红。）
+    """
     root = make_tree(tmp_path)
     patch(root, API_REL, '        marker = {',
           '        if branch not in _ALLOWED_BRANCHES:\n            raise ValueError(branch)\n        marker = {')
@@ -391,6 +399,33 @@ def test_synth_D_endpoint_shape_anchor(tmp_path):
     patch(root, API_REL, "atomic_write_text(_UPDATE_MARKER", "os.replace(_UPDATE_MARKER")
     rc = run_gate(root)
     assert rc.returncode == 1 and any("atomic_write_text" in f for f in by_letter(rc.stdout, "D")), rc.stdout
+
+
+def test_synth_D_reset_hard_forbidden(tmp_path):
+    """D 反锚（v1.13.0 三护栏）：宿主脚本出现 `reset --hard` 即红——autoflow「升级按钮当格式化键」铁律。"""
+    root = make_tree(tmp_path)
+    patch(root, HOST_REL, 'git checkout -f "$TARGET_SHA"', 'git reset --hard "origin/$REF"')
+    rc = run_gate(root)
+    assert rc.returncode == 1, rc.stdout
+    fs = by_letter(rc.stdout, "D")
+    assert any("reset --hard" in f for f in fs), rc.stdout
+
+
+def test_synth_D_409_shape_anchor(tmp_path):
+    """D：409 形状锚（进行中请求的冲突返回）被挪走 ⇒ 锚点红。"""
+    root = make_tree(tmp_path)
+    patch(root, API_REL, "status_code=409", "status_code=429")
+    rc = run_gate(root)
+    assert rc.returncode == 1 and any("409" in f for f in by_letter(rc.stdout, "D")), rc.stdout
+
+
+def test_synth_D_missing_revparse_anchor(tmp_path):
+    """D：rev-parse pinned-SHA 锚被挪走（退回 reset/裸 checkout）⇒ 锚点红。"""
+    root = make_tree(tmp_path)
+    patch(root, HOST_REL, 'TARGET_SHA=$(git rev-parse "origin/$REF" 2>/dev/null || echo "")',
+          'TARGET_SHA="origin/$REF"')
+    rc = run_gate(root)
+    assert rc.returncode == 1 and any("rev-parse" in f for f in by_letter(rc.stdout, "D")), rc.stdout
 
 
 def test_synth_E_site_cap(tmp_path):

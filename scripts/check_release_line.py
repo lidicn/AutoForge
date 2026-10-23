@@ -79,17 +79,25 @@ RE_ECHO = re.compile(r'\|\|\s*echo\s+"([A-Za-z0-9._/-]+)"')
 RE_DEPLOY = re.compile(r'\borigin/([A-Za-z0-9._/-]+)')
 RE_BRANCHES = re.compile(r"^\s*branches:\s*\[([^\]]*)\]")
 #: 取值域锚点：出现任一形状即判「有校验」，与清单 §二 那一格对撞。
-RE_DOMAIN = re.compile(r"(?:branch\s+not\s+in|_ALLOWED_BRANCH|VALID_BRANCHES)")
+RE_DOMAIN = re.compile(r"(?:branch\s+not\s+in|_ALLOWED_BRANCH|VALID_BRANCHES|fullmatch\(r\"master\|v)")
 #: D 锚点（remote 名可参数化，2026-10-17 DCD-20261017-001 §2.3）：脚本按部署事实把 GitHub remote 名叫 `github`
 #: （NAS 部署树），本地仓叫 `origin`。⛔ 门不把 remote 名写死成某一个——写死会把"脚本按事实写"误判成"读不出锚点"。
-#: 只要求：ref 经变量 `$REF` 传参、fetch/reset 成对、remote 名是合法 git remote 名（origin / github / nas 均可）。
+#: 只要求：ref 经变量 `$REF` 传参、fetch/rev-parse/checkout 成对、remote 名是合法 git remote 名（origin / github / nas 均可）。
 #: ⚠️ 本文件自身注释里⛔出现 `origin/<名字>` 形状——那会被 RE_DEPLOY 抓成一枚假"部署指令"站点。
 RE_ANCHOR_FETCH = re.compile(r'git fetch --force [A-Za-z0-9._-]+ "\$REF"')
-RE_ANCHOR_RESET = re.compile(r'git reset --hard "[A-Za-z0-9._-]+/\$REF"')
+#: 2026-10-23 换锚（autoflow 方案 C 照搬）：`reset --hard` 被三护栏禁用（"升级按钮当格式化键"事故），
+#: checkout 改走 rev-parse 解析的 pinned SHA——锚点随之换成「rev-parse <remote>/$REF + checkout -f 变量」
+#: 加一枚**反锚**：脚本里出现 `reset --hard` 本身即红。
+RE_ANCHOR_REVPARSE = re.compile(r'git rev-parse "[A-Za-z0-9._-]+/\$REF"')
+RE_ANCHOR_CHECKOUT = re.compile(r'git checkout -f "\$[A-Za-z_][A-Za-z0-9_]*"')
+ANCHOR_FORBIDDEN_RESET = "reset --hard"
 ANCHORS_API = (
     "atomic_write_text(_UPDATE_MARKER",
-    "}, 409",
 )
+#: 「已有更新进行中」409 形状锚：2026-10-23 起 API 面从 `}, 409` 元组改为
+#: `JSONResponse(status_code=409, ...)`（返回类型标注 dict ⇒ 元组是 500 隐患），
+#: 两形态都认，删掉即红（⛔ 不靠 C 兜住）。
+RE_ANCHOR_409 = re.compile(r'(?:status_code=409|\}, 409)')
 ANCHORS_KEY_WRITE = re.compile(r'"ref":\s*branch')
 
 SITE_RE = re.compile(
@@ -250,8 +258,8 @@ def caliber_ok(cal: dict[str, str]) -> str | None:
         return f"§二读不出「{KEY_RELEASE_LINE}」那一行（键名改了或整行挪走）"
     if KEY_DOMAIN not in cal:
         return f"§二读不出「{KEY_DOMAIN}」那一行——取值域这一格失去对照物"
-    if cal[KEY_DOMAIN] not in {"有", "无"}:
-        return f"§二「{KEY_DOMAIN}」现读 `{cal[KEY_DOMAIN]}`，只许写「有」或「无」"
+    if cal[KEY_DOMAIN] not in {"有", "无", "master | v*tag"}:
+        return f"§二「{KEY_DOMAIN}」现读 `{cal[KEY_DOMAIN]}`，只许写「有」「无」或「master | v*tag」"
     return None
 
 
@@ -368,13 +376,25 @@ def check(root: Path) -> tuple[list[str], dict[str, object]]:
                 f"D `{HOST_SH}` 读不出锚点 `git fetch --force <remote> \"$REF\"`——ref 必须是变量传参、"
                 "remote 名可参数化（origin / github / nas 均可），退回硬编码线名就断链"
             )
-        if not RE_ANCHOR_RESET.search(host):
+        if not RE_ANCHOR_REVPARSE.search(host):
             findings.append(
-                f"D `{HOST_SH}` 读不出锚点 `git reset --hard \"<remote>/$REF\"`——同上，reset 目标必须是变量 ref"
+                f"D `{HOST_SH}` 读不出锚点 `git rev-parse \"<remote>/$REF\"`——checkout 目标必须是"
+                "解析出的 pinned SHA（v1.13.0 三护栏：禁 reset --hard，checkout -f 到定锚提交）"
+            )
+        if not RE_ANCHOR_CHECKOUT.search(host):
+            findings.append(
+                f"D `{HOST_SH}` 读不出锚点 `git checkout -f \"$<SHA变量>\"`——同上，checkout 目标必须是变量 ref"
+            )
+        if ANCHOR_FORBIDDEN_RESET in host:
+            findings.append(
+                f"D `{HOST_SH}` 出现 `reset --hard`——2026-10-23 三护栏禁用（autoflow「升级按钮当格式化键」"
+                "事故铁律：永不 reset --hard / git clean -f）；checkout -f 到 pinned SHA 同效且不动分支指针"
             )
         for anchor in ANCHORS_API:
             if anchor not in api:
                 findings.append(f"D `{API_PY}` 读不出锚点 `{anchor}`——自更新端点的三枚形状被重构撞坏了一枚")
+        if not RE_ANCHOR_409.search(api):
+            findings.append(f"D `{API_PY}` 读不出 409 形状锚（`status_code=409` 或 `}}, 409`）——进行中请求的冲突返回形状被挪走")
         if not ANCHORS_KEY_WRITE.search(api):
             findings.append(f"D `{API_PY}` 写标记处读不出 `" + '"ref": branch' + "`——写入侧键名漂移")
         if not RE_READ.search(host):
