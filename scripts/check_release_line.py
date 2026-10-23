@@ -434,8 +434,14 @@ def _text_of(snaps: dict[str, Snapshot], rel: str) -> str:
 
 
 def _domain_detected(snaps: dict[str, Snapshot]) -> str:
-    """af_api 里读不读得出 branch 取值域校验；读得出＝有，读不出＝无。"""
+    """af_api 里读不读得出 branch 取值域校验。
+
+    读出 fullmatch(r"master|v…) 形状 ⇒「master | v*tag」（v1.13.0 双侧校验形态）；
+    读出其他白名单/黑名单形状 ⇒「有」；读不出 ⇒「无」。
+    """
     api = _text_of(snaps, API_PY)
+    if re.search(r'fullmatch\(r"master\|v', api):
+        return "master | v*tag"
     return "有" if RE_DOMAIN.search(api) else "无"
 
 
