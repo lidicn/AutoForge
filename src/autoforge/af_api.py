@@ -304,6 +304,59 @@ def _assert_agent_subject_owner(agent_id: str, caller_subject: str | None) -> No
 #: 所以由 `tests/unit/test_ui_user_mount.py` 直接拿 vite 那份字符串对账，而不是靠人记。
 UI_USER_PREFIX = "mimo"
 
+#: 更新标记/结果文件的**模块级**唯一实现（v1.13.3，autoflow af_deploy 照搬）：HTTP 面
+#: （`/api/system/update`）与 MCP 面（`af_deploy` 工具）写同一枚 marker，格式只有这一份。
+#: 此前 marker 路径/键名/白名单都长在 `build_app` 闭包里，MCP 侧要用就得抄第二份——
+#: "不写第二份 marker 格式"是本批的铁约束（docs/发布线清单.md §一.4 的登记格同源）。
+_UPDATE_REF_RE = re.compile(r"master|v\d+\.\d+\.\d+")
+
+
+def update_marker_path(root: str | None) -> str:
+    """marker / result / preview 三枚路径的真源（容器内 `/data` 缺省与 build_app 旧口径一致）。"""
+    base = root if root else "/data"
+    return os.path.join(base, ".update_request.json")
+
+
+def update_result_path(root: str | None) -> str:
+    return os.path.join(root if root else "/data", ".update_result.json")
+
+
+def submit_update_request(
+    root: str | None,
+    ref: str,
+    requested_by: str,
+    app_version: str,
+) -> tuple[bool, str]:
+    """写更新标记文件（HTTP 端点与 MCP `af_deploy` 的共用实现）。
+
+    返回 `(ok, message)`：`ok=False` 时 `message` 是拒绝原因（进行中 409 / ref 非法），
+    调用方各自翻成 HTTP 状态码或 MCP 失败体——语义分层留在各自的面里，
+    但"409 检查 → 白名单 → 原子写 → 清旧结果"这一条顺序只有一份（发布线门判据 D 的四枚锚
+    全部落在这一个函数里，两面对撞同一形状）。
+    """
+    marker = update_marker_path(root)
+    result = update_result_path(root)
+    if os.path.isfile(marker):
+        return False, "已有更新请求进行中，请等待宿主脚本执行完成"
+    branch = (ref or "master").strip()
+    # ref 白名单（v1.13.0）：与宿主脚本 scripts/host_update.sh 的 case 白名单同规则
+    # （master | vX.Y.Z tag）。SHA 不收——fetch-by-SHA 依赖服务端 allowReachableSHA1InWant，
+    # 回滚走 tag。
+    if not _UPDATE_REF_RE.fullmatch(branch):
+        return False, f"branch 只允许 master 或 vX.Y.Z 版本 tag，收到 {branch!r}"
+    payload = {
+        "ref": branch,
+        "requested_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "requested_by": requested_by,
+        "version": app_version,
+    }
+    # D-1 修复口径：atomic_write_text（mkstemp 随机名 + fsync + replace），
+    # 不用固定名 .tmp 的非原子 check-then-write。
+    atomic_write_text(marker, json.dumps(payload, ensure_ascii=False, indent=2))
+    if os.path.isfile(result):
+        os.remove(result)
+    return True, "更新请求已提交，宿主脚本将在约1分钟内执行 git pull + 构建 + 重启"
+
 
 def build_app(
     store_root: str = ".forge",
@@ -1192,41 +1245,22 @@ def build_app(
         confirm_version 形状随之作废；`body.branch` 缺省对齐发布线 master（DCD 20261017-001 §2.1）。
         容器不执行 git 操作，只写标记文件给宿主 sidecar。
         """
-        # 检查是否已有进行中的更新请求（返回类型已标注 dict ⇒ 元组不合法会 500，
-        # v1.13.0 起 JSONResponse 显式状态码——响应体形状与原口径一致）
-        if os.path.isfile(_UPDATE_MARKER):
-            return JSONResponse(
-                status_code=409,
-                content={"ok": False, "error": "已有更新请求进行中，请等待宿主脚本执行完成"},
-            )
-
-        branch = (body.branch or "master").strip()
-        # ref 白名单（v1.13.0，2026-10-23）：与宿主脚本 scripts/host_update.sh 的 case 白名单
-        # 同规则（master | vX.Y.Z tag）。此前取值域=无（docs/发布线清单.md §一.4 登记格），
-        # 本批按"谁加校验谁改格"翻格为「master | v*tag」并补锚点。SHA 不收——fetch-by-SHA
-        # 依赖服务端 allowReachableSHA1InWant，回滚走 tag。
-        if not re.fullmatch(r"master|v\d+\.\d+\.\d+", branch):
-            raise HTTPException(
-                status_code=400,
-                detail=f"branch 只允许 master 或 vX.Y.Z 版本 tag，收到 {branch!r}",
-            )
-        marker = {
-            "ref": branch,
-            "requested_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "requested_by": info.subject if info else "admin",
-            "version": _APP_VERSION,
-        }
-        # D-1 修复：改用 atomic_write_text（mkstemp 随机名 + fsync + replace），
-        # 不再用固定名 .tmp + 非原子 check-then-write，避免并发提交时内容交错。
-        atomic_write_text(_UPDATE_MARKER, json.dumps(marker, ensure_ascii=False, indent=2))
-
-        # 清除旧结果
-        if os.path.isfile(_UPDATE_RESULT):
-            os.remove(_UPDATE_RESULT)
-
+        # v1.13.3（autoflow af_deploy 照搬）：marker 写入提取为模块级 `submit_update_request`
+        # ——HTTP 面与 MCP `af_deploy` 工具写**同一枚** marker，格式只有这一份（"不写第二份
+        # marker 格式"铁约束）。409（进行中）与 400（ref 白名单）两档拒绝分开写字面状态码
+        # （发布线门判据 D 的 409 锚点钉在这处）；返回类型已标注 dict ⇒ 元组不合法会 500，
+        # JSONResponse 显式状态码（v1.13.0 起）。
+        requested_by = info.subject if info else "admin"
+        ok, message = submit_update_request(
+            store.root if store else None, body.branch or "master", requested_by, _APP_VERSION
+        )
+        if not ok:
+            if "进行中" in message:
+                return JSONResponse(status_code=409, content={"ok": False, "error": message})
+            return JSONResponse(status_code=400, content={"ok": False, "error": message})
         return {
             "ok": True,
-            "message": "更新请求已提交，宿主脚本将在约1分钟内执行 git pull + 构建 + 重启",
+            "message": message,
             "marker": _UPDATE_MARKER,
             "expected_delay_sec": 60,
         }

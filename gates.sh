@@ -321,6 +321,16 @@ echo "══ 有界缓存注册表门禁（TTL 与硬上限成对、回收要有
 cache_rc=$?
 
 echo
+echo "══ except:pass 吞异常门禁（宽 except+pass 只减不增——autoflow「静默失效」死因）══"
+# autoflow 前代复盘（docs/audit/参考/调研_autoflow前代复盘_20261023.md）把「静默失效」列为
+# 四大死因之一：宽 except 吃掉异常后系统照常运转，坏的那一格直到事故才被看见。本门不逼存量
+# 清零（17 枚在册多为旁路容错的合法形状），只把存量冻死、新增判红：收窄 handler/补留痕，
+# 或就地 `# except-pass: exempt(理由)`。窄 except（明确说"这种错我知道"）与带任何语句的
+# handler（有痕）都不收——口径刻意窄，只盯"吞而不说"那一族。
+"$PYTHON" "$REPO/scripts/check_except_pass.py" "$REPO/src/autoforge"
+except_pass_rc=$?
+
+echo
 echo "══ owner 主体单一真源 ＋ /api/user/agents/* 主体校验门禁（裁定 20261011 §3 Q1 丙）════"
 # 这一道门**今天就是红的**，而且是设计目的：它盯的两格归属在并发登录线（#79 窗），本批
 # ⛔ 不动 \`af_api.py\` 一行码——「判据先立、门逼两侧补齐」零冲突（裁定 §2 对 Q1 的原话）。
@@ -559,6 +569,14 @@ fi
 if [ $cache_rc -ne 0 ]; then
   echo "结论：有界缓存注册表门禁红（exit=$cache_rc）。注册表说的那条腿必须真在模块里（\`cap\`/\`ttl\`/\`trim\` 逐个核对）、指向的测试必须真被收集、新增增长容器必须进 \`BOUNDED_CACHES\`（两条腿 + 一条『纯写不读也被回收』的测试）或在那一行写 \`# bounded-cache: exempt(理由)\`；基线名单只减不增。判据 E 还会单独判红一种形状：容器只有写入点、**全仓读不到这个名字**（基线也冻不住它——基线认的是'有没有界'，不是'有没有人读'），处置四选一：真去读它 / 加封顶与裁剪 / 进注册表 / 就地写豁免理由。稳定性审计 BUG-01 删掉的就是这一族。约定来自第六轮审计 §三，落法来自裁定 20261004 §一 3 B，E 来自同一份审计 §六 P1。"
   exit $cache_rc
+fi
+if [ $except_pass_rc -eq 2 ]; then
+  echo "结论：except:pass 门禁读不出（exit=$except_pass_rc）。三种情形：\`src/autoforge\` 目录缺失或其下一个 .py 都没有、任一 .py 解析不了（SyntaxError）、全树扫出 0 枚严格吞掉型站点——基线在册 17 枚，归零只可能是扫描器坏了（判据 D 反空洞），不是代码一夜清完。三种都不许报『干净』。"
+  exit $except_pass_rc
+fi
+if [ $except_pass_rc -ne 0 ]; then
+  echo "结论：except:pass 门禁红（exit=$except_pass_rc）。宽 except+pass 的严格吞掉型站点只减不增（基线 17 枚，autoflow「静默失效」死因的落地）：新增要么收窄 handler 类型、补留痕（一句 logger/回执都算有痕），要么在**被扫到的那一行**写 \`# except-pass: exempt(理由)\` 且理由非空；豁免写在扫不到的行上＝第二份口径，同样红。行号漂移会让同一枚数成两枚（A 红一并给 C 提示）——用 \`python scripts/check_except_pass.py --print-baseline\` 重冻结前先核对是同一批站点；真删了站点就把基线下调，只减不增。"
+  exit $except_pass_rc
 fi
 
 if [ $ir_keys_rc -ne 0 ]; then

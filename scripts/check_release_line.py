@@ -79,7 +79,10 @@ RE_ECHO = re.compile(r'\|\|\s*echo\s+"([A-Za-z0-9._/-]+)"')
 RE_DEPLOY = re.compile(r'\borigin/([A-Za-z0-9._/-]+)')
 RE_BRANCHES = re.compile(r"^\s*branches:\s*\[([^\]]*)\]")
 #: 取值域锚点：出现任一形状即判「有校验」，与清单 §二 那一格对撞。
-RE_DOMAIN = re.compile(r"(?:branch\s+not\s+in|_ALLOWED_BRANCH|VALID_BRANCHES|fullmatch\(r\"master\|v)")
+#: 2026-10-23 二次扩形（v1.13.3）：白名单正则提取为模块常量（`_UPDATE_REF_RE = re.compile(r"master|v…")`
+#: + 调用点 `_UPDATE_REF_RE.fullmatch(branch)`）——HTTP 端点与 MCP `af_deploy` 共用同一份校验
+#: 时字面只在一处，锚点两形都认：内联 `re.fullmatch(r"master|v…"` 或常量定义 `_…_RE = re.compile(r"master|v…`。
+RE_DOMAIN = re.compile(r"(?:branch\s+not\s+in|_ALLOWED_BRANCH|VALID_BRANCHES|fullmatch\(r\"master\|v|_UPDATE_REF_RE = re\.compile\(r\"master\|v)")
 #: D 锚点（remote 名可参数化，2026-10-17 DCD-20261017-001 §2.3）：脚本按部署事实把 GitHub remote 名叫 `github`
 #: （NAS 部署树），本地仓叫 `origin`。⛔ 门不把 remote 名写死成某一个——写死会把"脚本按事实写"误判成"读不出锚点"。
 #: 只要求：ref 经变量 `$REF` 传参、fetch/rev-parse/checkout 成对、remote 名是合法 git remote 名（origin / github / nas 均可）。
@@ -91,8 +94,14 @@ RE_ANCHOR_FETCH = re.compile(r'git fetch --force [A-Za-z0-9._-]+ "\$REF"')
 RE_ANCHOR_REVPARSE = re.compile(r'git rev-parse "[A-Za-z0-9._-]+/\$REF"')
 RE_ANCHOR_CHECKOUT = re.compile(r'git checkout -f "\$[A-Za-z_][A-Za-z0-9_]*"')
 ANCHOR_FORBIDDEN_RESET = "reset --hard"
+#: 2026-10-23 二次换锚（v1.13.3 af_deploy 照搬）：marker 原子写提取为模块级
+#: `submit_update_request`（HTTP 端点与 MCP `af_deploy` 同一实现，不写第二份格式），
+#: 锚点随之从 `atomic_write_text(_UPDATE_MARKER` 换成「提取函数的定义签名 + 函数内
+#: `atomic_write_text(marker,` + 端点对它的调用」三枚——重构撞坏任一即红。
 ANCHORS_API = (
-    "atomic_write_text(_UPDATE_MARKER",
+    "def submit_update_request(",
+    "atomic_write_text(marker,",
+    "ok, message = submit_update_request(",
 )
 #: 「已有更新进行中」409 形状锚：2026-10-23 起 API 面从 `}, 409` 元组改为
 #: `JSONResponse(status_code=409, ...)`（返回类型标注 dict ⇒ 元组是 500 隐患），
@@ -436,11 +445,12 @@ def _text_of(snaps: dict[str, Snapshot], rel: str) -> str:
 def _domain_detected(snaps: dict[str, Snapshot]) -> str:
     """af_api 里读不读得出 branch 取值域校验。
 
-    读出 fullmatch(r"master|v…) 形状 ⇒「master | v*tag」（v1.13.0 双侧校验形态）；
+    读出 fullmatch(r"master|v…) 内联形状**或**模块常量 `_…_RE = re.compile(r"master|v…")`
+    形状 ⇒「master | v*tag」（v1.13.0 双侧校验形态；v1.13.3 提取常量供 HTTP/MCP 共用）；
     读出其他白名单/黑名单形状 ⇒「有」；读不出 ⇒「无」。
     """
     api = _text_of(snaps, API_PY)
-    if re.search(r'fullmatch\(r"master\|v', api):
+    if re.search(r'fullmatch\(r"master\|v', api) or re.search(r'_UPDATE_REF_RE = re\.compile\(r"master\|v', api):
         return "master | v*tag"
     return "有" if RE_DOMAIN.search(api) else "无"
 

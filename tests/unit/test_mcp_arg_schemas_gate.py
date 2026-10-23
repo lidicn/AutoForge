@@ -130,10 +130,11 @@ def test_exempt_marker_suppresses_and_is_counted(tmp_path):
 
 
 def test_real_registry_is_green_with_measured_numbers():
-    """真注册表的读数钉在绿行里：31 个工具 / 61 声明 / 61 消费 / 双向差额 0。
+    """真注册表的读数钉在绿行里：33 个工具 / 62 声明 / 62 消费 / 双向差额 0。
 
     这一条同时是"审计那 6 个未声明键已补齐"的回归位：任何一侧再漂移（新增参数忘声明、
-    声明了不接），这里先红。
+    声明了不接），这里先红。读数从 31/61 抬到 33/62 = v1.13.3 af_deploy(+ref) /
+    af_deploy_status(+0) 两工具入册。
     """
     import io
     import contextlib
@@ -144,7 +145,7 @@ def test_real_registry_is_green_with_measured_numbers():
         rc = mod.main(["check_mcp_arg_schemas.py", str(REAL_REGISTRY)])
     out = buf.getvalue()
     assert rc == 0, out
-    assert "31 个工具" in out and "声明参数 61 个" in out and "handler 消费 61 个" in out, out
+    assert "33 个工具" in out and "声明参数 62 个" in out and "handler 消费 62 个" in out, out
     assert REAL_REGISTRY.is_file()
 
 

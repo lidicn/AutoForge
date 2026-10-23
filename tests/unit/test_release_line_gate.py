@@ -36,12 +36,26 @@ DEPLOY_REL = "scripts/verify_ui_nas_deploy.py"
 CI_REL = ".github/workflows/ci.yml"
 SITE_PATHS = (API_REL, HOST_REL, DEPLOY_REL, CI_REL)
 
-API_TXT = '''"""合成自更新端点：只保留判据 D 要的形状与写入侧缺省（20261021 去版本号确认）。"""
+API_TXT = '''"""合成自更新端点：只保留判据 D 要的形状与写入侧缺省（20261021 去版本号确认；
+v1.13.3 形状——marker 原子写提取为模块级 submit_update_request，HTTP/MCP 共用）。"""
 import json
 import os
 import re
 
 from fastapi.responses import JSONResponse
+
+_UPDATE_REF_RE = re.compile(r"master|v\\d+\\.\\d+\\.\\d+")
+
+
+def submit_update_request(root, ref, requested_by, app_version):
+    marker = os.path.join(root or "/data", ".update_request.json")
+    if os.path.isfile(marker):
+        return False, "已有更新请求进行中，请等待宿主脚本执行完成"
+    branch = (ref or "master").strip()
+    if not _UPDATE_REF_RE.fullmatch(branch):
+        return False, f"branch 只允许 master 或 vX.Y.Z 版本 tag，收到 {branch!r}"
+    atomic_write_text(marker, json.dumps({"ref": branch, "version": app_version}))
+    return True, "已提交"
 
 
 def build(app, atomic_write_text, _APP_VERSION, _UPDATE_MARKER):
@@ -49,11 +63,9 @@ def build(app, atomic_write_text, _APP_VERSION, _UPDATE_MARKER):
     def api_system_update(body) -> dict:
         if os.path.isfile(_UPDATE_MARKER):
             return JSONResponse(status_code=409, content={"ok": False, "error": "已有更新请求进行中"})
-        branch = (body.branch or "master").strip()
-        if not re.fullmatch(r"master|v\\d+\\.\\d+\\.\\d+", branch):
-            raise ValueError(branch)
-        marker = {"ref": branch, "version": _APP_VERSION}
-        atomic_write_text(_UPDATE_MARKER, json.dumps(marker, ensure_ascii=False))
+        ok, message = submit_update_request("/data", body.branch or "master", "admin", _APP_VERSION)
+        if not ok:
+            return JSONResponse(status_code=400, content={"ok": False, "error": message})
         return {"ok": True}
 '''
 
@@ -366,12 +378,12 @@ def test_synth_C_domain_registration(tmp_path):
     """C：偷偷给 `body.branch` 撤取值域却不改登记格 ⇒ 红（反向加校验同样红）。
 
     （v1.13.0 起登记格三值 有/无/master | v*tag，合成树基线格已随真清单翻成
-    「master | v*tag」＝双侧校验形态；基线夹具带 fullmatch 同形状，撤掉即对撞红。）
+    「master | v*tag」＝双侧校验形态；v1.13.3 夹具改常量形 `_UPDATE_REF_RE`，
+    撤校验=连常量定义一起删，对撞红。）
     """
     root = make_tree(tmp_path)
     patch(root, API_REL,
-          '        if not re.fullmatch(r"master|v\\d+\\.\\d+\\.\\d+", branch):\n            raise ValueError(branch)\n',
-          '')
+          '_UPDATE_REF_RE = re.compile(r"master|v\\d+\\.\\d+\\.\\d+")\n', '')
     rc = resync_and_check(root)
     assert rc.returncode == 1 and any("取值域" in f for f in by_letter(rc.stdout, "C")), rc.stdout
 
@@ -388,7 +400,7 @@ def test_synth_D_hardcoded_ref(tmp_path):
 def test_synth_D_marker_key_diverges(tmp_path):
     """D：写入侧键名从 `ref` 漂走 ⇒ 读取侧永远吃缺省、用户选的 ref 被静默丢弃。"""
     root = make_tree(tmp_path)
-    patch(root, API_REL, 'marker = {"ref": branch,', 'marker = {"target_ref": branch,')
+    patch(root, API_REL, '"ref": branch', '"target_ref": branch')
     rc = run_gate(root)
     assert rc.returncode == 1 and any('"ref": branch' in f for f in by_letter(rc.stdout, "D")), rc.stdout
 
@@ -397,10 +409,20 @@ def test_synth_D_endpoint_shape_anchor(tmp_path):
     """D：marker 原子写这一行（自更新链的落盘形状）被挪走 ⇒ 锚点红，⛔ 不靠 C 兜住。
 
     （20261021 改判：版本二次确认经出资人定案作废，`confirm_version != _APP_VERSION`
-    锚随代码删除；落盘形状锚换 `atomic_write_text(_UPDATE_MARKER`，仍是删掉即红。）
+    锚随代码删除；v1.13.3 提取为 `submit_update_request` 后锚点是三枚——
+    函数定义签名 / 函数内 `atomic_write_text(marker,` / 端点调用式，撞坏任一即红。
+    本条变异第三枚：端点不再走共用函数（= MCP 面与 HTTP 面分叉的前兆形状）。）
     """
     root = make_tree(tmp_path)
-    patch(root, API_REL, "atomic_write_text(_UPDATE_MARKER", "os.replace(_UPDATE_MARKER")
+    patch(root, API_REL, "ok, message = submit_update_request(", "ok, message = _local_submit(")
+    rc = run_gate(root)
+    assert rc.returncode == 1 and any("submit_update_request" in f for f in by_letter(rc.stdout, "D")), rc.stdout
+
+
+def test_synth_D_shared_marker_impl_anchor(tmp_path):
+    """D（v1.13.3）：提取函数内的原子写被换成裸 os.replace ⇒ 共用实现的落盘形状锚红。"""
+    root = make_tree(tmp_path)
+    patch(root, API_REL, "atomic_write_text(marker,", "os.replace(marker,")
     rc = run_gate(root)
     assert rc.returncode == 1 and any("atomic_write_text" in f for f in by_letter(rc.stdout, "D")), rc.stdout
 

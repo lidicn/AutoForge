@@ -14,7 +14,19 @@
   `expires_at`（ISO8601 **必须带时区**）。解析失败 / 无时区 → **拒绝**该令牌（不是放过）；
   已过期 → `TokenExpired`（由 `af_api` 转 HTTP 403）。未配 `expires_at` → 永不过期（向后兼容）。
 - **限速**：IP + 主体双维度固定窗口（默认 1000/min，可配 `AUTOFORGE_RATE_LIMIT_PER_MIN`）。
-- **端点分级**：`read`（公开）/ `write` / `live` 三档，由 `af_api.requires(scope)` 落地。
+- **端点分级**：`read`（公开）/ `write` / `live` / `admin` 四档，由 `af_api.requires(scope)` 落地。
+- **三级 agent 身份制（v1.13.0 起，2026-10-23 autoflow 照搬；v1.13.3 文档化收尾）**：
+  三档是 **scope 预设约定**，不是独立机制——
+  `normal = {read}`（只读，不能写 IR 不能下发）；
+  `expert = {read, write, live}`（默认档：配对签发 `issue_for_agent` 的缺省就是它，能写能仿真能真机下发）；
+  `developer = {read, write, live, admin}`（运维档：加了 admin——系统升级、watch 启停、删除自动化、
+  `af_deploy`/`af_deploy_status` MCP 工具都在这档后面）。
+  三条铁律：① admin 蕴含 read/write/live，反向不蕴含（`_SCOPE_SATISFIED_BY`）；
+  ② **admin 永不经配对自动获得**——配对只签 expert 预设，developer 档必须出资人在
+  `AF_ACCESS_TOKENS` 显式配（"身份码由人签发"，autoflow ARCHITECTURE §5）；
+  ③ WebUI 登录令牌（subject=owner/shared）经 `af_api.requires` 的 owner 通道过 admin 门，
+  与 scope 无关——那是"这台部署自己的手"，不是 agent 身份制的一员。
+  agent 端自检用 `af_whoami`（实时返回 subject + scopes，即当前在哪一档）。
 
 本模块为纯逻辑（不依赖 FastAPI 具体请求对象），`af_api` 负责把它接线成路由依赖。
 """

@@ -72,13 +72,16 @@ def test_real_repo_site_readings_are_pinned(real):
        §四 的无码格子；文件数仍 31（`af_service.py` 本来就在射程里）。
     198 → 199（20261021 收账，8664511 的 ARCH-01 补留痕）：`af_service._catalog` 那格裸吞
        补成带码 DEBUG `CATALOG_TOKEN_SOURCE_SKIPPED`。同因 DEBUG +1。
+    199 → 200（v1.13.3 autoflow 经验闭环收尾）：`af_mcp._t_draft` 失败归因旁路新增
+       带码 DEBUG `DRAFT_FAILURE_RECORD_SKIPPED`。同因 DEBUG +1；文件数 32 不动
+       （`af_mcp.py` 本来就在射程里）。
     """
     from collections import Counter
 
     lv = Counter(s["level"] for s in real["sites"])
-    assert len(real["sites"]) == 199
+    assert len(real["sites"]) == 200
     assert len({s["path"] for s in real["sites"]}) == 32
-    assert dict(lv) == {"debug": 21, "info": 9, "warning": 134, "error": 24, "exception": 11}
+    assert dict(lv) == {"debug": 22, "info": 9, "warning": 134, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -102,12 +105,16 @@ def test_real_repo_named_code_readings_are_pinned(real):
     41 → 42 站／38 → 39 枚（20261021 收账，8664511 的 ARCH-01 补留痕）：`af_service._catalog` 那格
     裸吞补成带码 DEBUG `CATALOG_TOKEN_SOURCE_SKIPPED`——同因同形状，+1 站 +1 码。
     ⛔ 无码存量 114 与 §四 上限 83 同样一字未动（带码 ⇒ 不吃那一格）；白名单三例也没动。
+
+    42 → 43 站／39 → 40 枚（v1.13.3 autoflow 经验闭环收尾）：`af_mcp._t_draft` 失败归因旁路
+    新增带码 DEBUG `DRAFT_FAILURE_RECORD_SKIPPED`——同因同形状，+1 站 +1 码。
+    ⛔ 无码存量与 §四 上限同样一字未动；白名单三例没动。
     """
     from collections import Counter
 
     coded = real["coded"]
-    assert len(coded) == 85
-    assert len({s["code"] for s in coded}) == 82
+    assert len(coded) == 86
+    assert len({s["code"] for s in coded}) == 83
     # 41 站／38 枚＝仓内三例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
     # ① `DEPLOY_AUDIT_PERSIST_FAILED` 同时出自「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」
     #    两条腿——同一句承诺（台账没落稳）；
@@ -172,7 +179,9 @@ def test_real_repo_every_named_code_is_registered(real):
     assert not b, "\n".join(b)
     # 81 → 82 枚／84 → 85 站（20261021 收账）：`CATALOG_TOKEN_SOURCE_SKIPPED` 新码入 §三
     # （8664511 的 ARCH-01 补留痕），上面那条腿已经红过——本批对齐钉针。
-    assert info["codes"] == 82 and info["coded"] == 85
+    # 82 → 83 枚／85 → 86 站（v1.13.3）：`DRAFT_FAILURE_RECORD_SKIPPED` 新码入 §三
+    # （af_mcp._t_draft 失败归因旁路），同上一批对齐钉针。
+    assert info["codes"] == 83 and info["coded"] == 86
 
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):

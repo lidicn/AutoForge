@@ -381,11 +381,22 @@ def _t_draft(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     except DraftError as e:
         # 意图是 DB/MA 递过来的载荷，被拒就是"载荷校验失败"这一档（契约 §7.2）；
         # `error.code` 保留 AF 自己的细粒度子码，对端两级都能读。
-        return {
+        body = {
             "ok": False,
             "code": ADM_ERR_PAYLOAD_INVALID,
             "error": {"code": e.code, "message": str(e), "fix": e.fix},
         }
+        # v1.13.3（autoflow 经验闭环收尾）：失败也要进知识库/遥测——此前 af_draft 拒了
+        # 就完了，同形意图反复递、反复拒，知识库里一条痕迹都没有。归因/落库是旁路：
+        # record_failure 自己炸（盘满/权限）不许把业务回执拖成异常，兜底回原体。
+        try:
+            body["_telemetry"] = record_failure(
+                store.root, tool="af_draft", message=f"{e.code}: {e}",
+                context={"draft_code": e.code},
+            )
+        except Exception:  # 遥测失败不影响回执
+            logger.debug("DRAFT_FAILURE_RECORD_SKIPPED", exc_info=True)
+        return body
 
 
 def _t_apply(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
@@ -463,8 +474,67 @@ def _t_telemetry(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     return svc.get_telemetry(store, days=int(args.get("days", 30) or 30))
 
 
+def _t_deploy(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
+    """【admin】发起部署（v1.13.3，autoflow af_deploy 照搬）：写更新标记给宿主脚本。
+
+    与 WebUI 升级按钮**同一枚** marker（`af_api.submit_update_request` 唯一实现，格式不抄第二份）；
+    ref 白名单 master | vX.Y.Z tag、进行中防重 409 语义与 HTTP 面完全同源。
+    部署本身由宿主 cron 拉起（compose build 约 30-35 分钟），本工具只提交请求——
+    提交后用 `af_deploy_status` 轮询进度。
+    """
+    from .af_api import submit_update_request, update_marker_path
+    from autoforge import __version__ as app_version
+
+    ref = (args.get("ref") or "master").strip() or "master"
+    requested_by = (current or {}).get("subject") or "mcp"
+    ok, message = submit_update_request(store.root, ref, requested_by, app_version)
+    if not ok:
+        return {"ok": False, "code": ADM_ERR_PAYLOAD_INVALID, "error": message}
+    return {
+        "ok": True,
+        "message": message,
+        "marker": update_marker_path(store.root),
+        "expected_delay_sec": 60,
+    }
+
+
+def _t_deploy_status(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
+    """【admin】部署进度（v1.13.3）：marker 存在性 + 最近一次结果（ok/to_tag/changelog）。
+
+    pending=true 表示宿主脚本还没消化标记；result 为 null 表示尚无历史结果。
+    current_version 供对端比对（部署完成后它应跳到新版本号）。
+    """
+    from .af_api import update_marker_path, update_result_path
+
+    marker = update_marker_path(store.root)
+    result_path = update_result_path(store.root)
+    pending = os.path.isfile(marker)
+    result: dict[str, Any] | None = None
+    requested: dict[str, Any] | None = None
+    if os.path.isfile(marker):
+        try:
+            with open(marker, encoding="utf-8") as f:
+                requested = json.load(f)
+        except (OSError, ValueError):
+            requested = None
+    if os.path.isfile(result_path):
+        try:
+            with open(result_path, encoding="utf-8") as f:
+                result = json.load(f)
+        except (OSError, ValueError):
+            result = None
+    return {
+        "ok": True,
+        "pending": pending,
+        "requested": requested,
+        "result": result,
+        "current_version": SERVER_VERSION,
+    }
+
+
 #: 需要注入当前令牌主体（`current`）的工具：用于归档归属 / 所有权隔离（v1.3.0）
-_TOOLS_WITH_CONTEXT = frozenset({_t_whoami, _t_save, _t_import, _t_enable})
+#: ＋ 部署请求的 requested_by 归属（v1.13.3 af_deploy）
+_TOOLS_WITH_CONTEXT = frozenset({_t_whoami, _t_save, _t_import, _t_enable, _t_deploy})
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -909,6 +979,30 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
         _t_telemetry,
         None,
     ),
+    (
+        "af_deploy",
+        "【admin】发起部署：写更新标记给宿主脚本（与 WebUI 升级按钮同一枚 marker、同一份格式）。"
+        "ref 白名单 master | vX.Y.Z tag；已有进行中请求则拒。宿主 cron 约 1 分钟内拉起 compose build"
+        "（30-35 分钟），提交后用 af_deploy_status 轮询。参数：ref(str 可选，默认 master；回滚传 v* tag)。"
+        "需 admin 权限（AF_ACCESS_TOKENS 显式配，配对令牌永不携带）。",
+        {
+            "type": "object",
+            "properties": {
+                "ref": {"type": "string", "description": "目标 ref：master（默认）或 vX.Y.Z 版本 tag（回滚用）"},
+            },
+        },
+        _t_deploy,
+        "admin",
+    ),
+    (
+        "af_deploy_status",
+        "【admin】部署进度：pending（标记是否还在）+ requested（标记内容：ref/requested_by/version）+ "
+        "result（宿主脚本最近一次结果：ok/from/to/to_tag/error/changelog）。current_version 供比对。"
+        "需 admin 权限。无参数。",
+        {"type": "object", "properties": {}},
+        _t_deploy_status,
+        "admin",
+    ),
 ]
 
 
@@ -1041,8 +1135,16 @@ def _annotate_failure(store: GraphStore, tool: str, message: str) -> str:
     if not tel.get("category") or tel["category"] == "UNKNOWN":
         return message
     tail = f"\n↳ 归因：{tel['label']}｜建议：{tel['advice']}"
-    if tel.get("history"):
-        tail += f"｜历史同类 {len(tel['history'])} 条"
+    history = tel.get("history") or []
+    if history:
+        # v1.13.3（autoflow 经验闭环收尾）：历史不只报条数——把 ≤3 条压成一行摘要
+        # （`label@时间`），agent 当场就能看到"这类失败最近发生过、何时发生过"，
+        # 而不是只拿到一个数字再自己去查。老 entry 缺 label 就用 category 兜底。
+        parts = [
+            f"{(h.get('label') or h.get('category') or '?')[:24]}@{(h.get('ts') or '?')[:16]}"
+            for h in history[:3]
+        ]
+        tail += f"｜历史同类 {len(history)} 条：{'；'.join(parts)}"
     return message + tail
 
 
