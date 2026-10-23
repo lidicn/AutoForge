@@ -121,7 +121,10 @@ log "fetch 成功"
 # 活树体检（2026-10-23，autoflow「升级按钮当格式化键」事故照搬）：已跟踪文件有未提交
 # 改动即拒绝——checkout -f 会把 docker-compose 绑定等 NAS 特有手工配置整片冲掉。
 # 未跟踪文件（data/、*.bak）不拦（autoflow 同口径）。
-DIRTY=$(git status --porcelain -- 2>/dev/null | grep -c . || true)
+# ⚠️ 必须用 --untracked-files=no：新版 git 的 `git status --porcelain --` 仍把
+# 未跟踪文件计入（-- 不再屏蔽未跟踪），本 NAS 有 5 个 .bak 遗留会被误判成
+# 「活树改动」⇒ 永久拒绝部署。只数已跟踪改动（M/A/D/R）。
+DIRTY=$(git status --porcelain --untracked-files=no -- 2>/dev/null | grep -c . || true)
 if [ "$DIRTY" -gt 0 ] 2>/dev/null; then
     log "ERROR: 活树有未提交改动（已跟踪文件 $DIRTY 处），拒绝覆盖"
     TO_SHA="$FROM_SHA"; TO_TAG="$FROM_TAG"

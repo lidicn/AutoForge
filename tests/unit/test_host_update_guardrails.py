@@ -50,11 +50,15 @@ def test_ref_read_defaults_to_master():
 
 
 def test_dirty_tree_check_present():
-    """护栏②：fetch 之后 checkout 之前有 git status --porcelain 体检，非空即拒。"""
+    """护栏②：fetch 之后 checkout 之前有 git status --porcelain 体检，非空即拒。
+
+    体检必须 `--untracked-files=no`：新版 git 的 `git status --porcelain --`
+    仍把未跟踪文件计入，*.bak 遗留会被误判成「活树改动」⇒ 永久拒绝部署。
+    """
     fetch_pos = _TEXT.index("git fetch --force github \"$REF\"")
     checkout_pos = _TEXT.index('git checkout -f "$TARGET_SHA"')
     window = _TEXT[fetch_pos:checkout_pos]
-    assert "git status --porcelain" in window, "体检不在 fetch 之后"
+    assert "git status --porcelain --untracked-files=no" in window, "体检不在 fetch 之后 / 未用 --untracked-files=no（未跟踪 .bak 会被误拦）"
     assert 'write_result False "活树有未提交改动' in window, window
 
 
@@ -76,6 +80,38 @@ def test_checkout_f_comes_after_second_fetch():
     assert first_fetch < second_fetch < revparse < checkout, (
         "pinned-SHA 解析与第二次 fetch 的相对顺序漂移"
     )
+
+
+def test_dirty_check_ignores_untracked_files(tmp_path):
+    """护栏②口径（autoflow 同）：未跟踪 .bak 不算活树改动，不应触发拒绝。
+
+    v1.13.0 实战缺陷：本 NAS 部署仓有 5 个 .bak 遗留，旧体检命令
+    `git status --porcelain --` 在新版 git 仍把它们计入 ⇒ 永久拒绝部署。
+    修法 `--untracked-files=no` 只数已跟踪改动（M/A/D/R）。
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "src.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "src.py.bak").write_text("x = 0\n", encoding="utf-8")  # 未跟踪
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
+    # 脚本实际用的命令（--untracked-files=no）必须不再数到 .bak
+    out = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=no", "--"],
+        capture_output=True, text=True,
+    )
+    assert out.stdout.strip() == "", "未跟踪 .bak 不应被体检命令数到"
+
+    # 对照：旧命令 `git status --porcelain --` 在本机若是新 git 会把 .bak 数进来，
+    # 证明修复必要；旧版 git 不数（对照跳过，不影响修复断言）。
+    out2 = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain", "--"],
+        capture_output=True, text=True,
+    )
+    if "src.py.bak" in out2.stdout:
+        # 新版 git 复现了本 NAS 实战根因：旧命令会误拦未跟踪 .bak
+        assert "src.py.bak" not in out.stdout, "修复后必须不再数到"
 
 
 def test_gate_scripts_watch_this_file():
