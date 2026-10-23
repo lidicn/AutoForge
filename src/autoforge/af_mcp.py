@@ -372,12 +372,21 @@ def _t_draft(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     """意图 JSON → IR，返回 ref。
 
     session_id（可选）：同一用户 compose 请求内多次调用传相同 id，
-    用于统计多意图会话占比（v2.3 决策门，见 af_draft.ComposeMetrics）。
+    用于统计多意图 compose 会话占比（v2.3 决策门，见 af_draft.ComposeMetrics）。
     不传则不采样（默认零影响）。
+
+    G4 修复（实测 2026-10-23）：把 store 的设备目录传进 `draft_intent`——
+    旧实现不传 catalog，中文设备名全部落到 `?占位`（build 阶段 ENTITY_NOT_FOUND），
+    `af_remember_entity` 沉淀的别名对意图通道也无效，等于"自动实体解析"在
+    MCP 面形同虚设。目录解析失败的兜底路径不变（`?名字` → bind 闸门 fail-closed）。
     """
     from .af_draft import draft_intent, DraftError
     try:
-        return draft_intent(args["intent"], session_id=args.get("session_id"))
+        return draft_intent(
+            args["intent"],
+            catalog=svc._catalog(store),
+            session_id=args.get("session_id"),
+        )
     except DraftError as e:
         # 意图是 DB/MA 递过来的载荷，被拒就是"载荷校验失败"这一档（契约 §7.2）；
         # `error.code` 保留 AF 自己的细粒度子码，对端两级都能读。

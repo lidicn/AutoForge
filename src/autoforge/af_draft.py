@@ -140,6 +140,20 @@ def reset_compose_metrics() -> None:
 _ENTITY_ID_RE = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z0-9_]+$")
 
 
+def _var_already_namespaced(var_name: Any) -> bool:
+    """`var` 是否已是**带命名空间前缀**的引用（`entity.*` / `vars.*` / `context.*`）。
+
+    G2 修复（实测 2026-10-23）：旧判断 `"." in var_name` 会把合法 entity_id
+    （`sensor.xxx`——agent 按目录返回值直填的正常写法）误判成"已带命名空间"，
+    生成的 `{"var": "sensor.xxx"}` 在求值时被 `split_namespace` 判成未知命名空间
+    直接抛错。真源只有三个命名空间前缀（af_state.py `_NAMESPACES`），按前缀判，
+    不按"有没有点"猜。
+    """
+    if not isinstance(var_name, str):
+        return False
+    return var_name.startswith(("entity.", "vars.", "context."))
+
+
 def _resolve_entity(name: str, catalog: Any = None) -> str:
     """把中文名解析成 entity_id；**解析不出来绝不原样透传**。
 
@@ -181,6 +195,19 @@ def _resolve_entity(name: str, catalog: Any = None) -> str:
 def _gen_id(prefix: str, counter: list[int]) -> str:
     counter[0] += 1
     return f"{prefix}{counter[0]}"
+
+
+def _node_kind(node_id: str, nodes: list[dict[str, Any]]) -> str:
+    """查图内某节点的 kind；找不到返回空串（调用方按非 ask 处理）。
+
+    G1 修复配套：`_build_edges` 需要按**上游节点种类**决定出边类型
+    （if 出 `then`、ask 出 `yes`），此前是拿局部变量猜的，链条里混入
+    wait/do 后就会猜错。
+    """
+    for n in nodes:
+        if n.get("id") == node_id:
+            return str(n.get("kind") or "")
+    return ""
 
 
 def draft_intent(
@@ -264,14 +291,20 @@ def draft_intent(
         if room:
             ask_node["room"] = room
         nodes.append(ask_node)
-        edges.append({"from": prev, "to": ask_id, "kind": "yes" if if_entry else "then"})
+        # G1（同批修复）：if→ask 的入边也必须是 `then`——执行器对 if 求值 True
+        # 返回 `{"then"}`，写 `yes` 同样匹配不上（旧实现 `if_entry` 时写 `yes`）。
+        edges.append({"from": prev, "to": ask_id, "kind": "then"})
         prev = ask_id
 
     # 4. wait 节点
     if wait:
         wait_id = _gen_id("w", counter)
         nodes.append({"id": wait_id, "kind": "wait", "name": "等待", "duration": wait})
-        edges.append({"from": prev, "to": wait_id, "kind": "then"})
+        # G1 同族：上游是 ask 时走 yes（应答放行），否则 then（if 求值真/直连）。
+        edges.append({
+            "from": prev, "to": wait_id,
+            "kind": "yes" if _node_kind(prev, nodes) == "ask" else "then",
+        })
         prev = wait_id
 
     # 5. do 节点（支持单动作和多动作；多动作 list 内可混 wait 步骤）
@@ -285,7 +318,19 @@ def draft_intent(
 
     do_ids = []
     for i, item in enumerate(raw_actions):
-        edge_kind = "yes" if (i == 0 and if_entry and not ask) else "then"
+        # G1 修复（实测 2026-10-23）：出边类型按**上游节点种类**分派，两侧口径相反：
+        # - 上游是 if（或链上无 ask）：执行器 `_execute` 对 if 求值 True 返回
+        #   `{"then"}`（af_executor.py）⇒ 边必须写 `then`；旧实现给「if 后首动作」
+        #   写 `yes` ⇒ `pick_edge` 匹配不上 ⇒ 实例静默终止（带 if 的意图自动化
+        #   条件成立时永远到不了动作）。
+        # - 上游是 ask：应答唤醒走 `resume(kind=verdict)`，边选择集是
+        #   `pick_edge({verdict, "default"})`（af_executor.py resume）⇒ 答应
+        #   （verdict=yes）时需要 `yes` 边；旧实现写 `then` ⇒ 同样匹配不上 ⇒
+        #   ask+do 的图答了 yes 也到不了动作（同族病灶第三处，实测 trace 停在
+        #   ask 节点、灯不开、state=done 谎报完成）。
+        # - 上游是 wait/do/on：直连 `then`（wait 到点走 `resume_then`）。
+        # 参照 graphops.py:126-128 的既有正确口径：if → then/no，ask → yes/no。
+        edge_kind = "yes" if _node_kind(prev, nodes) == "ask" else "then"
         if isinstance(item, dict) and "wait" in item:
             nid = _gen_id("w", counter)
             nodes.append({"id": nid, "kind": "wait", "name": "等待", "duration": item["wait"]})
@@ -441,7 +486,7 @@ def _resolve_expr(
             vtype = val.get("type", "string")
             operand = (
                 {"var": var_name, "type": vtype}
-                if var_name.startswith("entity.") or "." in var_name
+                if _var_already_namespaced(var_name)
                 else {"var": f"entity.{entity_id}", "type": vtype}
             )
             return {"op": op, "value": operand}
@@ -468,7 +513,7 @@ def _resolve_expr(
             entity_id = _resolve_entity(var_name, catalog)
             resolved[var_name] = entity_id
             vtype = val.get("type", "numeric")
-            if var_name.startswith("entity.") or "." in var_name:
+            if _var_already_namespaced(var_name):
                 left = {"var": var_name, "type": vtype}
             else:
                 left = {"var": f"entity.{entity_id}", "type": vtype}
