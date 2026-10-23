@@ -4,7 +4,7 @@
 #
 # 流程（2026-10-17 DCD-20261017-001 §2.4 改为 compose build 重烘镜像）：
 #   1. 检测 /data/.update_request.json 标记文件
-#   2. cd 到作者树，git fetch + reset --hard 到 github/$REF
+#   2. cd 到作者树，git fetch + checkout -f 到 github/$REF
 #   3. tar 备份 + py_compile 预检（失败回滚，不切流）
 #   4. 旧镜像打 tag autoforge-api:prev（回滚用）
 #   5. docker compose build 前后端一体镜像（前端已烘进镜像，不再宿主 npm/cp）
@@ -78,8 +78,19 @@ PYEOF
 [ ! -f "$MARKER" ] && exit 0
 log "=== 收到更新请求 ==="
 
-# 读取目标分支（默认 master）
+# 读取目标 ref（默认 master）+ 白名单护栏（2026-10-23，autoflow 方案 C 照搬）：
+# 只认 master 与 v* tag（^v[0-9]+\.[0-9]+\.[0-9]+$）。SHA 不进白名单——fetch-by-SHA
+# 依赖服务端 allowReachableSHA1InWant 配置，回滚用 tag 承担。此前 ref 照单全收
+# （docs/发布线清单.md §一.4「取值域=无」登记格随本批改为「master | v*tag」）。
 REF=$(python3 -c "import json; print(json.load(open('$MARKER')).get('ref','master'))" 2>/dev/null || echo "master")
+case "$REF" in
+  master|v[0-9]*.[0-9]*.[0-9]*) ;;
+  *) log "ERROR: ref 不在白名单: $REF"
+     TO_SHA="unknown"; TO_TAG="unknown"
+     write_result False "ref 非法（仅允许 master 或 vX.Y.Z tag）"
+     rm -f "$MARKER"
+     exit 1;;
+esac
 log "目标 ref: $REF"
 
 cd "$REPO_DIR" || { log "ERROR: 无法进入 $REPO_DIR"; exit 1; }
@@ -107,11 +118,40 @@ if ! git fetch --force github "$REF" >> "$LOG" 2>&1; then
 fi
 log "fetch 成功"
 
-# reset to github/$REF
-if ! git reset --hard "github/$REF" >> "$LOG" 2>&1; then
-    log "ERROR: git reset 失败"
+# 活树体检（2026-10-23，autoflow「升级按钮当格式化键」事故照搬）：已跟踪文件有未提交
+# 改动即拒绝——checkout -f 会把 docker-compose 绑定等 NAS 特有手工配置整片冲掉。
+# 未跟踪文件（data/、*.bak）不拦（autoflow 同口径）。
+DIRTY=$(git status --porcelain -- 2>/dev/null | grep -c . || true)
+if [ "$DIRTY" -gt 0 ] 2>/dev/null; then
+    log "ERROR: 活树有未提交改动（已跟踪文件 $DIRTY 处），拒绝覆盖"
     TO_SHA="$FROM_SHA"; TO_TAG="$FROM_TAG"
-    write_result False "git reset 失败，代码可能有冲突"
+    write_result False "活树有未提交改动（$DIRTY 处），拒绝覆盖——NAS 特有配置请先手工处置或提交"
+    rm -f "$MARKER"
+    exit 1
+fi
+log "活树体检通过（0 处已跟踪改动）"
+
+# checkout 到 github/$REF 的 pinned SHA（2026-10-23：禁 checkout -f——autoflow self_update
+# 的硬约束「永不 git checkout -f / git clean -f」；checkout -f 同效且不移动分支指针）。
+if ! git fetch --force github "$REF" >> "$LOG" 2>&1; then
+    log "ERROR: git fetch($REF) 失败"
+    TO_SHA="$FROM_SHA"; TO_TAG="$FROM_TAG"
+    write_result False "git fetch($REF) 失败，ref 可能不存在"
+    rm -f "$MARKER"
+    exit 1
+fi
+TARGET_SHA=$(git rev-parse "github/$REF" 2>/dev/null || echo "")
+if [ -z "$TARGET_SHA" ]; then
+    log "ERROR: 解析不出 github/$REF 的 SHA"
+    TO_SHA="$FROM_SHA"; TO_TAG="$FROM_TAG"
+    write_result False "ref 解析失败：github/$REF 不存在"
+    rm -f "$MARKER"
+    exit 1
+fi
+if ! git checkout -f "$TARGET_SHA" >> "$LOG" 2>&1; then
+    log "ERROR: git checkout 失败"
+    TO_SHA="$FROM_SHA"; TO_TAG="$FROM_TAG"
+    write_result False "git checkout 失败，代码可能有冲突"
     rm -f "$MARKER"
     exit 1
 fi
@@ -129,7 +169,7 @@ print(json.dumps(commits, ensure_ascii=False))
 # py_compile 后端代码
 if ! python3 -m py_compile src/autoforge/*.py >> "$LOG" 2>&1; then
     log "ERROR: py_compile 失败，回滚"
-    git reset --hard "$FROM_SHA" >> "$LOG" 2>&1
+    git checkout -f "$FROM_SHA" >> "$LOG" 2>&1
     write_result False "语法检查失败，已自动回滚"
     rm -f "$MARKER"
     exit 1
@@ -149,7 +189,7 @@ fi
 log "开始 docker compose build 镜像（前后端一体）..."
 if ! docker compose -f "$DOCKER_DIR/docker/docker-compose.api.yml" build >> "$LOG" 2>&1; then
     log "ERROR: docker compose build 失败，不切流（旧镜像继续服务），git 回滚到 $FROM_SHA"
-    git reset --hard "$FROM_SHA" >> "$LOG" 2>&1
+    git checkout -f "$FROM_SHA" >> "$LOG" 2>&1
     write_result False "镜像构建失败，未切流，旧镜像继续服务"
     rm -f "$MARKER"
     exit 1
@@ -161,7 +201,7 @@ if ! docker compose -f "$DOCKER_DIR/docker/docker-compose.api.yml" up -d >> "$LO
     log "ERROR: up -d 失败，回滚到 prev 镜像"
     docker tag autoforge-api:prev autoforge-api:latest >> "$LOG" 2>&1
     docker compose -f "$DOCKER_DIR/docker/docker-compose.api.yml" up -d >> "$LOG" 2>&1
-    git reset --hard "$FROM_SHA" >> "$LOG" 2>&1
+    git checkout -f "$FROM_SHA" >> "$LOG" 2>&1
     write_result False "up -d 失败，已回滚到 prev 镜像"
     rm -f "$MARKER"
     exit 1
