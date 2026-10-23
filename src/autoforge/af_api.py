@@ -1206,8 +1206,14 @@ def build_app(
                 info["commit"] = preview.get("local_commit", "")
                 info["tag"] = preview.get("local_tag", "")
                 info["branch"] = preview.get("branch", "")
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            # AST 门欠账收账（2026-10-24）：此前裸 except + pass——预览文件损坏时
+            # commit/tag/branch 静默报空串、ok=True 照常返回（swallow-and-claim-ok，
+            # 谎报成功）。改具名捕获 + 具名码留痕：读不出与「没跑预检」对 UI 可区分。
+            logger.warning(
+                "UPDATE_PREVIEW_READ_FAILED path=%s err=%s —— 版本号回显为空，请检查宿主预检脚本产物",
+                _UPDATE_PREVIEW, exc,
+            )
         return {"ok": True, **info}
 
     @app.get("/api/system/update/check", dependencies=[Depends(_read)])

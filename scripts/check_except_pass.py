@@ -55,8 +55,11 @@ BROAD_NAMES = {"Exception", "BaseException"}
 #: 这一份，增了判据 A 红。行号漂移后请用 --print-baseline 重新冻结并核对是同一批站点。
 BASELINE: frozenset[str] = frozenset(
     {
-        "af_api.py:1209",
-        "af_api.py:1334",
+        # 2026-10-24 AST 门禁收账重冻结：af_api.py 两处变化——1209 是修掉的那枚
+        # （裸 except+pass 改具名捕获 UPDATE_PREVIEW_READ_FAILED，本门 A 判据的正向收账）；
+        # 1334 是行漂 +6 → 1340（pair SSE 心跳的 `except Exception: pass`，同一批站点，
+        # api_system_version 补留痕涨了 6 行）。17 → 16 枚：净 -1 全是修掉的真缺陷。
+        "af_api.py:1340",
         "af_closedloop/deepfix.py:52",
         "af_conflict.py:680",
         "af_conflict_audit.py:150",

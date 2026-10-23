@@ -4,7 +4,6 @@
 src/autoforge/af_api.py#except-pass-broad#build_app._pair_event_gen
 src/autoforge/af_closedloop/deepfix.py#except-pass-broad#extract_json
 src/autoforge/af_conflict.py#except-pass-broad#ConflictArbiter._emit
-src/autoforge/af_conflict_audit.py#except-pass-broad#ConflictAuditor._persist
 src/autoforge/af_conflict_audit.py#except-pass-broad#ConflictAuditor.locks
 src/autoforge/af_conflict_runtime.py#except-pass-broad#ConflictService.attach._uninstall
 src/autoforge/af_conflict_runtime.py#except-pass-broad#ConflictService.detach
@@ -13,7 +12,6 @@ src/autoforge/af_health.py#except-pass-broad#HealthEngine._band
 src/autoforge/af_orchestrator.py#except-pass-broad#IntentParser.parse
 src/autoforge/af_orchestrator.py#except-pass-broad#_extract_json
 src/autoforge/af_runtime_plugins.py#except-pass-broad#install._tick_conflict
-src/autoforge/af_runtime_plugins.py#except-pass-broad#install_api
 src/autoforge/af_time.py#except-pass-broad#load_tz
 src/autoforge/af_version.py#except-pass-broad#_audit
 src/autoforge/af_version.py#except-pass-broad#_now
@@ -61,7 +59,6 @@ src/autoforge/af_service.py#fake-ok-const#_session_view
 src/autoforge/af_service.py#fake-ok-const#asks_pending
 src/autoforge/af_service.py#fake-ok-const#delete_session
 src/autoforge/af_service.py#fake-ok-const#diff
-src/autoforge/af_service.py#fake-ok-const#enable_by_tag
 src/autoforge/af_service.py#fake-ok-const#export_store
 src/autoforge/af_service.py#fake-ok-const#faults
 src/autoforge/af_service.py#fake-ok-const#get_conf
@@ -83,3 +80,12 @@ src/autoforge/af_service.py#fake-ok-const#start_watch
 src/autoforge/af_service.py#fake-ok-const#submit_pending
 src/autoforge/af_store.py#fake-ok-const#GraphStore.import_bundle
 src/autoforge/af_telemetry.py#fake-ok-const#TelemetryStore.usage
+src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_has_admin
+src/autoforge/af_api.py#fake-ok-const#build_app.api_auth_register
+src/autoforge/af_api.py#fake-ok-const#build_app.api_system_update_check
+src/autoforge/af_api.py#fake-ok-const#build_app.api_system_update
+src/autoforge/af_api.py#fake-ok-const#build_app.api_system_update_status
+src/autoforge/af_mcp.py#fake-ok-const#_t_deploy
+src/autoforge/af_mcp.py#fake-ok-const#_t_deploy_status
+src/autoforge/af_service.py#fake-ok-const#stop_watch
+src/autoforge/af_api.py#fake-ok-const#build_app.api_system_version

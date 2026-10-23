@@ -117,13 +117,20 @@ def test_subdirectory_keys_are_relative(tmp_path):
 
 
 def test_real_repo_gate_is_green():
-    """真仓现状判绿（基线 17 枚 = 现读 17 枚）。行号漂移后先 --print-baseline 重冻结。"""
+    """真仓现状判绿（基线 16 枚 = 现读 16 枚）。行号漂移后先 --print-baseline 重冻结。
+    17 → 16（2026-10-24 AST 门禁收账）：af_api.py:1209 那枚真缺陷修掉（具名捕获+
+    UPDATE_PREVIEW_READ_FAILED 留痕），1334 行漂 6 → 1340 重冻结。"""
     repo_src = SCRIPT.parents[1] / "src" / "autoforge"
     if not repo_src.is_dir():
         pytest.skip("real repo src not present")
     assert _run(repo_src) == 0
 
 
-def test_baseline_frozen_at_17():
-    """基线规模钉：17 枚（首跑读数）。增减都要走"重冻结+核对同一批"的流程。"""
-    assert len(check_except_pass.BASELINE) == 17
+def test_baseline_frozen_at_16():
+    """基线规模钉：16 枚。增减都要走"重冻结+核对同一批"的流程。
+    17 → 16（2026-10-24）：-1 是修掉的真缺陷，非静默缩水——见 BASELINE 旁注释。"""
+    assert len(check_except_pass.BASELINE) == 16
+    repo_src = SCRIPT.parents[1] / "src" / "autoforge"
+    if not repo_src.is_dir():
+        pytest.skip("real repo src not present")
+    assert _run(repo_src) == 0

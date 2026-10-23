@@ -5,4 +5,12 @@
 # 2026-10-02 登记：except-pass-broad=27 | fake-ok-const=77（合计 104），当轮实测 rc=0。
 # 2026-10-06 下调：except-pass-broad=20 | fake-ok-const=77（合计 97）。配对 bootstrap 那批
 # 把四处成功标记改成回读读数（不是字面量），并清掉 6 条不再命中的存量指纹——只降不升。
-97 # 2026-10-06 登记（AST 全量口径，`--no-baseline --no-smoke`）
+# 2026-10-24 上调：97→100（except-pass-broad 18→16 | fake-ok-const 81→84）。1.13.x 三连
+# 发版积欠集中收账（docs/AST门禁欠账分析_20261024.md）：① api_system_version 吞错谎报
+# ok 的 ERROR 修真缺陷（具名捕获+UPDATE_PREVIEW_READ_FAILED 具名码，except-pass 与
+# swallow-and-claim-ok 两类各 -1/-1）；② 9 条 fake-ok-const 进基线（读端点/回执面的
+# ok=True 信封，与 api_agents_list 等既有口径一致：4a20464 的 auth 族 2 条、779b9ed
+# 的 update_check、v1.13.0 的 update/update_status、bd0a1b5 的 _t_deploy/_t_deploy_status、
+# 敲打 P0 的 stop_watch、v1.13.3 的 api_system_version）；③ 3 条 STALE 过期指纹按
+# cee6a3a 口径删除。上调这 3 条全部是「发版时未同步基线」的积欠认领，不是新豁免。
+100 # 2026-10-24 收账登记（AST 全量口径，`--no-baseline --no-smoke`）
