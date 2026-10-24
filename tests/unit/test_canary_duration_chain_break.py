@@ -79,6 +79,28 @@ def test_canary_with_duration_chain_break_d4_never_runs():
     )
 
 
+def test_canary_check_ran_but_break_is_at_pick_edge():
+    """腿3（证据腿）：观察期恢复后 canary 证据已落（漂移检查跑完了），但 d4 仍不跑——
+    证明断点在恢复后的选边（on_timeout 选边 vs d3→d4 的 then 边），
+    而不是漂移检查被异常吞掉、连证据都没产出。"""
+    from autoforge import af_watch
+
+    af_watch._default._by_auto.clear()  # 模块级单例，别被别的测试污染
+    runtime = _build({"duration": "0.2s"})
+    runtime.emit("binary_sensor.m", "on")
+    assert runtime.instances.all()[0].state == SUSPENDED
+
+    runtime.advance(1.0)  # 过观察期 → on_timeout 恢复
+
+    events = [e for e in af_watch._default._by_auto.get("g10", []) if e.kind == "canary"]
+    # 证据腿：漂移检查这一步真的跑完了（verified/unmodeled/failed 任一）
+    assert events, "canary 证据没落——漂移检查没跑完，不能把锅扣在选边上"
+    # 但 d4 仍没被调用：断在选边，不在检查
+    inst = runtime.instances.all()[0]
+    assert "d4" not in _trace_nodes(inst)
+
+
+
 def test_without_canary_duration_d4_runs_normally():
     """腿2（对照）：不带 canary.duration，同一条 then 链 d4 正常走完。"""
     runtime = build_runtime(Graph([load_automation(_ir(None))]))
