@@ -531,8 +531,12 @@ def read_answer_inbox(runtime: Any, inbox_dir: Optional[str] = None) -> None:
         return
     key = (os.environ.get("AUTOFORGE_INBOX_KEY") or "").strip()
 
-    def _expect_sig(ask_id: Any, text: str, room: Any, answer_json: str) -> str:
-        msg = f"{ask_id}|{text}|{room}|{answer_json}".encode("utf-8")
+    #: AF-001：inbox 应答新鲜窗口（秒）。带 ts 的签名文件超过此窗口拒——旧/重放
+    #: inbox 文件不再被无限接受。无 ts 字段的旧格式文件一律拒（裸签名已作废）。
+    INBOX_MAX_AGE_S = 300.0
+
+    def _expect_sig(ask_id: Any, text: str, room: Any, answer_json: str, ts: Any) -> str:
+        msg = f"{ask_id}|{text}|{room}|{answer_json}|{ts}".encode("utf-8")
         return hmac.new(key.encode("utf-8"), msg, hashlib.sha256).hexdigest()
 
     try:
@@ -548,7 +552,20 @@ def read_answer_inbox(runtime: Any, inbox_dir: Optional[str] = None) -> None:
                 answer = data.get("answer")  # v2 M3 结构化应答（AskAnswer dict）；缺省走自由文本
                 answer_json = json.dumps(answer or {}, sort_keys=True, ensure_ascii=False)
                 sig = str(data.get("sig", "") or "")
-                if not key or not hmac.compare_digest(sig, _expect_sig(ask_id, text, room, answer_json)):
+                ts = data.get("ts")
+                if not key or not isinstance(ts, (int, float)):
+                    logger.warning(
+                        "INBOX_REJECT_NO_TS inbox reject: 缺密钥或无 ts 时间戳（裸签名已作废，旧格式不接受），未动作: %s ask_id=%r",
+                        f.name, ask_id,
+                    )
+                    continue
+                if abs(time.time() - float(ts)) > INBOX_MAX_AGE_S:
+                    logger.warning(
+                        "INBOX_REJECT_STALE inbox reject: 应答超过新鲜窗口 %.0fs（重放/旧文件），未动作: %s ask_id=%r ts=%r",
+                        INBOX_MAX_AGE_S, f.name, ask_id, ts,
+                    )
+                    continue
+                if not hmac.compare_digest(sig, _expect_sig(ask_id, text, room, answer_json, ts)):
                     logger.warning(
                         "INBOX_REJECT_BAD_SIGNATURE inbox reject: 签名缺失或不符，未动作（保留证据文件）: %s ask_id=%r",
                         f.name, ask_id,

@@ -1051,8 +1051,13 @@ def build_app(
         body = dict(body)
         answer_json = json.dumps(answer or {}, sort_keys=True, ensure_ascii=False)
         if key:
-            msg = f"{ask_id}|{text}|{room}|{answer_json}".encode("utf-8")
+            # AF-001 修复：签名消息带签发时间戳 ts，读侧按新鲜窗口校验。
+            # 旧裸 HMAC 无新鲜度，旧/重放 inbox 文件会被无限接受；ts 进签名后，
+            # 篡改 ts 即 sig 失效，读侧拒过期文件。
+            ts = int(time.time())
+            msg = f"{ask_id}|{text}|{room}|{answer_json}|{ts}".encode("utf-8")
             body["sig"] = _hmac.new(key.encode("utf-8"), msg, _hashlib.sha256).hexdigest()
+            body["ts"] = ts
         # R14-03：毫秒时间戳作文件名，同毫秒两条应答后者覆盖前者。
         # 加 uuid 后缀保证唯一性（时间戳保留排序语义）。
         fname = inbox / f"{int(time.time()*1000)}-{uuid.uuid4().hex[:8]}.json"

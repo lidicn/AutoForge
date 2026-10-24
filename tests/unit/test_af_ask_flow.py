@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -149,13 +150,14 @@ def test_read_inbox_consumes_structured_answer(tmp_path, monkeypatch):
 
     payload = {"kind": "choice", "value": "开"}
     answer_json = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    ts = int(time.time())
     sig = hmac.new(
         key.encode("utf-8"),
-        f"{ask_id}||{ROOM}|{answer_json}".encode("utf-8"),
+        f"{ask_id}||{ROOM}|{answer_json}|{ts}".encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
     (inbox / "1.json").write_text(
-        json.dumps({"ask_id": ask_id, "text": "", "room": ROOM, "answer": payload, "sig": sig}, ensure_ascii=False),
+        json.dumps({"ask_id": ask_id, "text": "", "room": ROOM, "answer": payload, "sig": sig, "ts": ts}, ensure_ascii=False),
         encoding="utf-8",
     )
 
@@ -186,6 +188,30 @@ def test_read_inbox_rejects_bad_signature(tmp_path, monkeypatch):
     assert len(list(inbox.glob("*.json"))) == 1  # 证据文件保留
 
 
+def test_read_inbox_rejects_stale_ts_replay(tmp_path, monkeypatch):
+    """AF-001 修复：签名正确但 ts 超出新鲜窗口 → 重放/旧文件拒收。"""
+    key = "k"
+    monkeypatch.setenv("AUTOFORGE_INBOX_KEY", key)
+    rt = _runtime()
+    ask_id = next(iter(rt.executor.pending_asks))
+    rt.store = SimpleNamespace(root=str(tmp_path))
+    inbox = tmp_path / "answer_inbox"
+    inbox.mkdir()
+    payload = {"kind": "choice", "value": "开"}
+    aj = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    stale_ts = int(time.time()) - 400  # 超过 300s 窗口
+    sig = hmac.new(key.encode("utf-8"), f"{ask_id}||{ROOM}|{aj}|{stale_ts}".encode("utf-8"), hashlib.sha256).hexdigest()
+    (inbox / "1.json").write_text(
+        json.dumps({"ask_id": ask_id, "text": "", "room": ROOM, "answer": payload, "sig": sig, "ts": stale_ts}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    read_answer_inbox(rt)
+
+    assert ask_id in rt.executor.pending_asks  # 重放未注入
+    assert len(list(inbox.glob("*.json"))) == 1  # 证据保留
+
+
 def test_read_inbox_keeps_evidence_when_answer_rejected(tmp_path, monkeypatch):
     """不合规应答经 inbox 注入同样被拒 → 文件保留、ask 仍挂起（可重答）。"""
     key = "k"
@@ -197,9 +223,10 @@ def test_read_inbox_keeps_evidence_when_answer_rejected(tmp_path, monkeypatch):
     inbox.mkdir()
     payload = {"kind": "choice", "value": "越界值"}
     aj = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    sig = hmac.new(key.encode("utf-8"), f"{ask_id}||{ROOM}|{aj}".encode("utf-8"), hashlib.sha256).hexdigest()
+    ts = int(time.time())
+    sig = hmac.new(key.encode("utf-8"), f"{ask_id}||{ROOM}|{aj}|{ts}".encode("utf-8"), hashlib.sha256).hexdigest()
     (inbox / "1.json").write_text(
-        json.dumps({"ask_id": ask_id, "text": "", "room": ROOM, "answer": payload, "sig": sig}, ensure_ascii=False),
+        json.dumps({"ask_id": ask_id, "text": "", "room": ROOM, "answer": payload, "sig": sig, "ts": ts}, ensure_ascii=False),
         encoding="utf-8",
     )
 
