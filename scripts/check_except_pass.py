@@ -59,7 +59,9 @@ BASELINE: frozenset[str] = frozenset(
         # （裸 except+pass 改具名捕获 UPDATE_PREVIEW_READ_FAILED，本门 A 判据的正向收账）；
         # 1334 是行漂 +6 → 1340（pair SSE 心跳的 `except Exception: pass`，同一批站点，
         # api_system_version 补留痕涨了 6 行）。17 → 16 枚：净 -1 全是修掉的真缺陷。
-        "af_api.py:1340",
+        # 2026-10-24 傍晚再冻一次：1340 → 1345（AF-001 inbox 新鲜窗口那笔 05dc1f2 在它
+        # 上方加了 5 行，**同一枚站点**，不是新增）。16 → 16 枚：本期净变化 0。
+        "af_api.py:1345",
         "af_closedloop/deepfix.py:52",
         "af_conflict.py:680",
         "af_conflict_audit.py:150",
