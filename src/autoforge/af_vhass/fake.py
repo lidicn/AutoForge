@@ -214,6 +214,10 @@ def is_modeled(domain: str, service: str) -> bool:
 
     vhass 与 FakeHA 共用此判据，避免两条仿真路径对「未建模」的判断不一致。
     """
+    # G3：set_state 是状态提供者接口（states.set_state(entity, state, attrs)），
+    # 任意 domain 都可直接落态（新状态取 params.state），不发明到具体 HA 服务的映射。
+    if service == "set_state":
+        return True
     return (domain, service) in SERVICE_STATE or (domain, service) in DYNAMIC_SERVICES
 
 
@@ -254,6 +258,11 @@ def service_effect(
     if domain in ("notify", "persistent_notification"):
         attrs = {k: v for k, v in params.items() if k in ("message", "title", "entity_id")}
         return None, attrs
+    # G3：set_state 直接落 params.state（状态提供者接口，任意 domain）；
+    # 与 af_shadow 的 @params.state 期望口径一致。无 state 参数则保持现状不假绿。
+    if service == "set_state":
+        state = params.get("state")
+        return (str(state) if state is not None else current), {}
     if service == "toggle":
         return ("off" if current == "on" else "on"), {}
     return SERVICE_STATE.get((domain, service)), {}
