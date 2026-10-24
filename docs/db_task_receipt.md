@@ -9,7 +9,7 @@
 | DB-01 | G5 draft_intent 类型闸 | `93aa058`（并发同批，内容一致） | tests/unit/test_draft_intent_type_guard.py · 5 条 |
 | DB-02 | G8 过期令牌剔除审计 | `deef0ed` | tests/unit/test_auth_purge_alerting.py · 5 条 |
 | DB-03 | G9 双令牌名 legacy 告警 | `fcff6f9`（+清单 b0fa69c） | tests/unit/test_auth_legacy_env_warning.py · 6 条 |
-| DB-04 | G10 canary+duration 掐链判据腿 | `2c9b502` | tests/unit/test_canary_duration_chain_break.py · 2 条（只加测试） |
+| DB-04 | G10 canary+duration 掐链判据腿 | `2c9b502` + `8edea22` | tests/unit/test_canary_duration_chain_break.py · 3 条（只加测试） |
 
 ## 新错误码 / 新审计事件
 - 错误码：`E_INTENT_NOT_OBJECT`（af_draft.py）
