@@ -10,6 +10,39 @@
 | DB-02 | G8 过期令牌剔除审计 | `deef0ed`（含两份清单同批 regen + §三 手工段行号对齐 + CRLF 修复） | tests/unit/test_auth_purge_alerting.py · 5 条 |
 | DB-03 | G9 双令牌名 legacy 告警 | `ebf818f`（含进程模型清单同批 regen + CRLF 修复） | tests/unit/test_auth_legacy_env_warning.py · 6 条 |
 | DB-04 | G10 canary+duration 掐链判据腿 | `2c9b502` + `8edea22` | tests/unit/test_canary_duration_chain_break.py · 3 条（只加测试） |
+| DB-05 | G10 实施：af_draft 回填 on_timeout 边 | `d0c0198` | tests/unit/test_canary_duration_chain_break.py · 4 条 |
+| DB-06 | G3 ①：set_state 仿真落态建模 | `032b7c2` | tests/unit/test_fakeha_set_state_modeling.py · 6 条 |
+
+## DB-05 · G10 实施：af_draft 给带 canary.duration 的 do 回填 on_timeout 边
+- **判据腿**：tests/unit/test_canary_duration_chain_break.py（4 条）。修前 3 passed（钉缺陷现状）；修后 4 passed。
+- **改了哪些文件**：src/autoforge/af_draft.py（零锚点，不撞台账）+ tests/。未碰 af_executor.py / af_canary.py / fake.py。
+- **回填边形状**：do_list 循环里维护 `pending_canary_do`；创建下一个节点 nid 后补
+  `{"from": 上一个带 duration 的 do, "to": nid, "kind": "on_timeout"}`；循环结束仍挂着的指到 pass_id。
+  实测输出：`Edge(from_='d2', to='d3', kind='on_timeout')`。
+- **断言方向翻转说明（PM 复核用）**：
+  - 修前腿1 `test_canary_with_duration_chain_break_d4_never_runs`：断言 `"d4" not in trace`（钉"链断在 d3"）。
+  - 修后改为 `test_canary_with_duration_d4_runs_after_observe_window`：断言 `"d4" in trace`、`state==DONE`、
+    `mock.actions` 含 `light.turn_off`（d4 真下发）。**翻转合理**：这是缺陷已修后的正向证据，不是放宽断言。
+  - 腿3 改验 canary 证据仍落（verified/unmodeled），不跳过漂移检查；腿2 无 duration 对照保留。
+  - 新增腿4：断言 af_draft 对带 duration 的 do 输出 on_timeout 边指向下一 do。
+- **IR 形状变化**：未变节点数（只补边，不展开节点）；边数 +N（每个带 duration 的 do 多一条 on_timeout）。
+- **gates.sh**：exit 0，全门绿（except:pass 16 枚基线、台账同批、发布线、IR 白名单等）。
+- **顺序污染自检**：`pytest -k "draft or canary or watch"` → 173 passed, 1 pre-existing failed
+  （test_watch_lifecycle 锁回收，单独跑也红，与本改动无关，af_draft 未触）。
+- **新增 except-pass**：0。
+- **我没做的事**：未改 af_executor.py（PM 裁决执行器侧不动）；未合回 master；未 bump 版本/tag。
+
+## DB-06 · G3 ①：仿真底座对 set_state 建模
+- **判据腿**：tests/unit/test_fakeha_set_state_modeling.py（6 条）。修前 4 failed（腿1/2/4/6）→ 修后 6 passed。
+- **改了哪些文件**：src/autoforge/af_vhass/fake.py（零锚点）+ tests/。未碰 af_shadow.py / af_state.py。
+- **修法**：`is_modeled`/`service_effect` 加 `service=="set_state"` 分支——新状态取 `params.state`，
+  任意 domain 支持；无 state 参数保持 current（不假绿）。按 PM 默认裁决**字面建模**，未映射到 set_hvac_mode。
+- **风险自检**：`pytest -k "simulate or vhass or fake or shadow or expect"` → 108 passed，无 IR 形状回归。
+- **gates.sh**：随 DB-05 那笔已绿；本笔仅 fake.py + tests，未改台账锚点。
+- **新增 except-pass**：0。
+- **我没做的事**：未动 af_shadow.py（其 @params.state 映射本就正确）；未连生产容器核 HA 是否真有 set_state 服务（PM §3 自留）；未写 blockers（同意 PM 字面建模裁决）。
+
+
 
 > **SHA 说明（PM 2026-10-24 复核）**：db 回执原文写的 `fcff6f9`/`b0fa69c`/`9de3524`/`5e01d74`
 > 是 amend 前的中间 SHA。PM 为修台账同批门（A/B 两腿）做过 soft reset + 重提，
