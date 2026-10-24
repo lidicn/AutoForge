@@ -333,6 +333,12 @@ def draft_intent(
         raw_actions = [do]
 
     do_ids = []
+    # G10 实施（PM 裁决 2026-10-24）：带 canary.duration 的 do 节点，观察期超时恢复时
+    # 执行器按 {on_timeout, default} 选边（af_executor resume）。原 af_draft 只给 do 发
+    # then/on_error，on_timeout 选边落空 → _terminate，链后半段永不执行。
+    # 修法：记下"上一个带 duration 的 do"，等下一个节点 nid 生成后补一条 on_timeout 边指过去；
+    # 循环结束后仍挂着的（最后一个 do）指到 pass_id。不改 af_executor。
+    pending_canary_do = None
     for i, item in enumerate(raw_actions):
         # G1 修复（实测 2026-10-23）：出边类型按**上游节点种类**分派，两侧口径相反：
         # - 上游是 if（或链上无 ask）：执行器 `_execute` 对 if 求值 True 返回
@@ -347,11 +353,11 @@ def draft_intent(
         # - 上游是 wait/do/on：直连 `then`（wait 到点走 `resume_then`）。
         # 参照 graphops.py:126-128 的既有正确口径：if → then/no，ask → yes/no。
         edge_kind = "yes" if _node_kind(prev, nodes) == "ask" else "then"
-        if isinstance(item, dict) and "wait" in item:
+        is_wait = isinstance(item, dict) and "wait" in item
+        if is_wait:
             nid = _gen_id("w", counter)
             nodes.append({"id": nid, "kind": "wait", "name": "等待", "duration": item["wait"]})
             edges.append({"from": prev, "to": nid, "kind": edge_kind})
-            prev = nid
         else:
             nid = _gen_id("d", counter)
             do_node = _resolve_do(item, resolved, catalog)
@@ -360,12 +366,23 @@ def draft_intent(
             do_node["name"] = f"动作{i+1}" if len(raw_actions) > 1 else "动作"
             nodes.append(do_node)
             edges.append({"from": prev, "to": nid, "kind": edge_kind})
-            prev = nid
             do_ids.append(nid)
+        # G10：上一个带 duration 的 do 的 on_timeout 边 → 当前新节点
+        if pending_canary_do is not None:
+            edges.append({"from": pending_canary_do, "to": nid, "kind": "on_timeout"})
+            pending_canary_do = None
+        # 当前 do 带 canary.duration → 记下，等下一个节点回填
+        if not is_wait and isinstance(do_node.get("canary"), dict) and do_node["canary"].get("duration"):
+            pending_canary_do = nid
+        prev = nid
 
     # 6. pass 节点
     pass_id = _gen_id("p", counter)
     nodes.append({"id": pass_id, "kind": "pass", "name": "结束"})
+
+    # G10：最后一个带 duration 的 do，其 on_timeout 指到结束 pass
+    if pending_canary_do is not None:
+        edges.append({"from": pending_canary_do, "to": pass_id, "kind": "on_timeout"})
 
     if do_ids:
         last_do = do_ids[-1]

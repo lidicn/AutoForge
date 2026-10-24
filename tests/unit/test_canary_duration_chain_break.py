@@ -1,13 +1,18 @@
-"""G10 判据腿：canary + duration 的链，观察期超时恢复后下一个节点不应被掐掉。
+"""G10：canary + duration 的链，观察期超时恢复后下一个节点必须被接上。
 
-实测缺口（docs/缺口登记_实测自动化_20261023.md G10）：
-a1(on) → d3(do, canary.duration) → d4(do/pass)。d3 下发后挂起观察 duration，
-到点 on_timeout 恢复做漂移检查；但恢复分支选边用的是 `{on_timeout, default}`，
-而 d3→d4 是 `then` 边 → pick_edge 落空 → _terminate，d4 永远不被执行。
+缺陷（缺口册 G10）：d3(do, canary.duration) 观察期超时恢复后，执行器按
+`{on_timeout, default}` 选边；若 d3→d4 只有 then 边，pick_edge 落空 → _terminate，
+链后半段永不执行。
 
-本文件只钉行为证据（不改 src——修 d3→then 边是 PM 的活）：
-- 腿1：带 canary.duration 时，advance 过观察期后 d4 从未进 trace（当前=缺陷，断言红是对的）。
-- 腿2：不带 canary.duration 时，同一条 then 链 d4 正常执行（对照，证明不是图本身搭错）。
+修法（PM 裁决，commit 在 af_draft.py）：af_draft 给带 canary.duration 的 do 节点
+回填一条 on_timeout 边指向下一个节点。执行器侧未改。
+
+判据腿：
+- 腿1（已翻转正向）：带 duration、图带 on_timeout 边（=draft 修复后输出形状）时，
+  advance 过观察期后 d4 真被执行，且 d4 的适配器调用真发生（不只是终态对）。
+- 腿3：同图下 d3 的 canary 证据仍落 verified/unmodeled——改边不能让漂移检查被跳过。
+- 腿2（对照）：不带 duration 时 then 链行为不变。
+- 腿4：af_draft 对带 canary.duration 的 do 节点，确实输出了 on_timeout 边。
 """
 
 from __future__ import annotations
@@ -18,7 +23,6 @@ from autoforge.af_ir import Graph, load_automation
 
 
 ON_M = {"id": "a1", "kind": "on", "trigger": {"type": "state", "entity_id": "binary_sensor.m", "to": "on"}}
-D4 = {"id": "d4", "kind": "pass"}
 
 
 def _d3(canary: dict | None) -> dict:
@@ -34,7 +38,18 @@ def _d3(canary: dict | None) -> dict:
     return node
 
 
-def _ir(canary: dict | None) -> dict:
+# d4 也是 do（mock 关灯），便于断言它的适配器调用真发生
+D4 = {"id": "d4", "kind": "do", "adapter": "mock", "action": "light.turn_off", "params": {"entity_id": "light.a"}}
+
+
+def _ir(canary: dict | None, *, with_timeout_edge: bool) -> dict:
+    edges = [
+        {"from": "a1", "to": "d3", "kind": "then"},
+        {"from": "d3", "to": "d4", "kind": "then"},
+    ]
+    if with_timeout_edge:
+        # = af_draft 修复后回填的 on_timeout 边
+        edges.append({"from": "d3", "to": "d4", "kind": "on_timeout"})
     return {
         "ir_version": "0.2.1",
         "id": "g10",
@@ -42,10 +57,7 @@ def _ir(canary: dict | None) -> dict:
         "version": 1,
         "mode": "single",
         "nodes": [ON_M, _d3(canary), D4],
-        "edges": [
-            {"from": "a1", "to": "d3", "kind": "then"},
-            {"from": "d3", "to": "d4", "kind": "then"},
-        ],
+        "edges": edges,
     }
 
 
@@ -53,59 +65,80 @@ def _trace_nodes(instance) -> list[str]:
     return [t["node"] for t in instance.ctx.trace]
 
 
-def _build(canary: dict | None):
-    runtime = build_runtime(Graph([load_automation(_ir(canary))]))
+def _build(canary: dict | None, *, with_timeout_edge: bool):
+    runtime = build_runtime(Graph([load_automation(_ir(canary, with_timeout_edge=with_timeout_edge))]))
     runtime.states.set_state("light.a", "off")  # canary 取 pre_snapshot 需要已知实体状态
     return runtime
 
 
-def test_canary_with_duration_chain_break_d4_never_runs():
-    """腿1（钉当前缺陷）：观察期超时恢复后，d4 从未被调用。"""
-    runtime = _build({"duration": "0.2s"})
+def test_canary_with_duration_d4_runs_after_observe_window():
+    """腿1（正向，G10 修复后）：观察期超时恢复 → on_timeout 边命中 d4，d4 真执行。"""
+    runtime = _build({"duration": "0.2s"}, with_timeout_edge=True)
     runtime.emit("binary_sensor.m", "on")
 
     inst = runtime.instances.all()[0]
-    # d3 已下发并挂起观察
-    assert inst.state == SUSPENDED
+    assert inst.state == SUSPENDED  # d3 已下发并挂起观察
     assert "d3" in _trace_nodes(inst)
 
     runtime.advance(1.0)  # 过观察期 → on_timeout 恢复
 
     nodes = _trace_nodes(inst)
-    # G10 缺陷证据：恢复后选边用 on_timeout/default，d3→d4(then) 落空 → 链断在 d3
-    assert "d4" not in nodes, (
-        f"G10 已修？d4 现在跑了（trace={nodes}）——若如此请把本腿改为正向断言；"
-        f"在此之前本测试钉住的是'链断在 d3'这个现状。"
+    assert "d4" in nodes, f"G10：恢复后应经 on_timeout 边到 d4，实际 trace={nodes}"
+    assert inst.state == DONE
+    # PM §1.5 A：d4 的适配器调用真发生（不只是终态对）
+    assert "light.turn_off" in runtime.adapters.get("mock").actions, (
+        f"d4 动作没真下发，actions={runtime.adapters.get('mock').actions}"
     )
 
 
-def test_canary_check_ran_but_break_is_at_pick_edge():
-    """腿3（证据腿）：观察期恢复后 canary 证据已落（漂移检查跑完了），但 d4 仍不跑——
-    证明断点在恢复后的选边（on_timeout 选边 vs d3→d4 的 then 边），
-    而不是漂移检查被异常吞掉、连证据都没产出。"""
+def test_canary_evidence_still_recorded_after_fix():
+    """腿3：修复后漂移检查仍跑（证据落 verified/unmodeled），改边没跳过检查。"""
     from autoforge import af_watch
 
-    af_watch._default._by_auto.clear()  # 模块级单例，别被别的测试污染
-    runtime = _build({"duration": "0.2s"})
+    af_watch._default._by_auto.clear()
+    runtime = _build({"duration": "0.2s"}, with_timeout_edge=True)
     runtime.emit("binary_sensor.m", "on")
     assert runtime.instances.all()[0].state == SUSPENDED
 
-    runtime.advance(1.0)  # 过观察期 → on_timeout 恢复
+    runtime.advance(1.0)
 
     events = [e for e in af_watch._default._by_auto.get("g10", []) if e.kind == "canary"]
-    # 证据腿：漂移检查这一步真的跑完了（verified/unmodeled/failed 任一）
-    assert events, "canary 证据没落——漂移检查没跑完，不能把锅扣在选边上"
-    # 但 d4 仍没被调用：断在选边，不在检查
-    inst = runtime.instances.all()[0]
-    assert "d4" not in _trace_nodes(inst)
-
+    assert events, "canary 证据没落——漂移检查被跳过了"
+    assert events[-1].status in ("verified", "unmodeled", "failed")
 
 
 def test_without_canary_duration_d4_runs_normally():
-    """腿2（对照）：不带 canary.duration，同一条 then 链 d4 正常走完。"""
-    runtime = build_runtime(Graph([load_automation(_ir(None))]))
+    """腿2（对照）：不带 canary.duration，then 链行为不变。"""
+    runtime = build_runtime(Graph([load_automation(_ir(None, with_timeout_edge=True))]))
     runtime.emit("binary_sensor.m", "on")
 
     inst = runtime.instances.all()[0]
     assert inst.state == DONE
     assert _trace_nodes(inst)[-1] == "d4"
+
+
+def test_draft_backfills_on_timeout_edge_for_canary_duration_do():
+    """腿4：af_draft 对带 canary.duration 的 do，输出 on_timeout 边指向下一节点。"""
+    from autoforge.af_draft import draft_intent, get_staged
+
+    intent = {
+        "name": "g10",
+        "when": {"type": "state", "entity": "binary_sensor.m", "to": "on"},
+        "do_list": [
+            {"action": "turn_on", "entity_id": "light.a", "canary": {"duration": "0.2s"}},
+            {"action": "turn_off", "entity_id": "light.a"},
+        ],
+    }
+    out = draft_intent(intent, catalog={"entities": {}})
+    staged = get_staged(out["ref"])
+    auto = staged["graph"].automations[0]
+    edges = list(auto.edges)
+    # 找两个 do 节点（id 由 gen_id("d") 生成）
+    d_ids = [nid for nid in auto.nodes if str(nid).startswith("d")]
+    assert len(d_ids) >= 2, f"应有两个 do 节点，nodes={list(auto.nodes)}"
+    timeout_edges = [
+        e for e in edges
+        if e.kind == "on_timeout" and e.from_ == d_ids[0]
+    ]
+    assert timeout_edges, f"带 duration 的 do 应回填 on_timeout 边，实际 edges={[str(e) for e in edges]}"
+    assert timeout_edges[0].to == d_ids[1], "on_timeout 边应指向下一个 do"
