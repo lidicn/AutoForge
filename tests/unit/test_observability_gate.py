@@ -78,13 +78,18 @@ def test_real_repo_site_readings_are_pinned(real):
     200 → 201（2026-10-24 AST 门禁收账）：`af_api.api_system_version` 的裸 except+pass
        改具名捕获 + WARNING `UPDATE_PREVIEW_READ_FAILED`。同因 WARNING +1；文件数不动
        （`af_api.py` 本来就在射程里，带码 ⇒ 不吃 §四 的无码格子）。
+    201 → 203（2026-10-24 AF-001 inbox 重放面收口）：`af_live.read_answer_inbox` 新增两枚
+       带码 WARNING `INBOX_REJECT_NO_TS`／`INBOX_REJECT_STALE`——同因同形状，+2 站 +2 码；
+       文件数 32 不动（`af_live.py` 本来就在射程里）。
+       ⚠️ 这两枚 1.13.4 发版时只更了 `docs/可观测性清单.md` 台账（门禁绿），**漏了本文件的 pin**，
+       全量单测 3 failed 才发现——教训：台账 regen 与 pin 是两套，都得同批。
     """
     from collections import Counter
 
     lv = Counter(s["level"] for s in real["sites"])
-    assert len(real["sites"]) == 201
+    assert len(real["sites"]) == 203
     assert len({s["path"] for s in real["sites"]}) == 32
-    assert dict(lv) == {"debug": 22, "info": 9, "warning": 135, "error": 24, "exception": 11}
+    assert dict(lv) == {"debug": 22, "info": 9, "warning": 137, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -116,12 +121,17 @@ def test_real_repo_named_code_readings_are_pinned(real):
     43 → 44 站／40 → 41 枚（2026-10-24 AST 门禁收账）：`af_api.api_system_version` 的裸
     except+pass 改具名捕获 + WARNING `UPDATE_PREVIEW_READ_FAILED`——同因同形状，+1 站 +1 码。
     ⛔ 无码存量与 §四 上限同样一字未动；白名单三例没动。
+
+    44 → 46 站／41 → 43 枚（2026-10-24 AF-001 inbox 重放面收口）：`af_live.read_answer_inbox`
+    新增两枚带码 WARNING `INBOX_REJECT_NO_TS`／`INBOX_REJECT_STALE`——同因同形状，+2 站 +2 码。
+    ⛔ 无码存量与 §四 上限同样一字未动；白名单三例没动。
+    ⚠️ 1.13.4 发版时只更了台账漏了本 pin，全量单测 3 failed 才发现（见上一格的同条教训）。
     """
     from collections import Counter
 
     coded = real["coded"]
-    assert len(coded) == 87
-    assert len({s["code"] for s in coded}) == 84
+    assert len(coded) == 89
+    assert len({s["code"] for s in coded}) == 86
     # 41 站／38 枚＝仓内三例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
     # ① `DEPLOY_AUDIT_PERSIST_FAILED` 同时出自「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」
     #    两条腿——同一句承诺（台账没落稳）；
@@ -190,7 +200,9 @@ def test_real_repo_every_named_code_is_registered(real):
     # （af_mcp._t_draft 失败归因旁路），同上一批对齐钉针。
     # 83 → 84 枚／86 → 87 站（2026-10-24 AST 门禁收账）：`UPDATE_PREVIEW_READ_FAILED`
     # 新码入 §三（af_api.api_system_version 吞错改具名），同上一批对齐钉针。
-    assert info["codes"] == 84 and info["coded"] == 87
+    # 84 → 86 枚／87 → 89 站（2026-10-24 AF-001 收口）：`INBOX_REJECT_NO_TS`／
+    # `INBOX_REJECT_STALE` 两枚新码入 §三（af_live.read_answer_inbox），同上。
+    assert info["codes"] == 86 and info["coded"] == 89
 
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
