@@ -165,6 +165,25 @@ PYTHONPATH=.../src python -m pytest tests/unit/test_你的腿.py \
 
 **发版前的单测由 PM 跑**，但 db 交活时要按 §1.7 自检顺序污染——否则 PM 那边就是一颗延迟爆炸的雷。
 
+### 1.9 ⚠️ 台账 regen 与测试 pin 也是两套，`gates.sh` 只读前者
+
+**2026-10-24 PM 自己踩到（第二批复核时）**：AF-001 给 `af_live` 加了两枚带码 WARNING，
+PM 跑了 `check_observability.py --write` 更台账（⇒ `gates.sh` 绿），
+**但漏了 `tests/unit/test_observability_gate.py` 里钉站点数的三个断言**
+（sites 201→203 / coded 87→89 / codes 84→86）⇒ 全量单测 3 failed。
+
+⇒ **改了 `src/autoforge/` 下任何文件后，除了 `--write` 台账，还要跑对应的
+`test_<那个门>_gate.py`**：
+
+| 你改的东西 | 除了 `--write` 台账，还要跑 |
+|---|---|
+| 新增/移动留痕站点 | `tests/unit/test_observability_gate.py` |
+| 新增 except-pass 或行漂 | `tests/unit/test_except_pass_gate.py` |
+| 动发布线载体 | `tests/unit/test_release_line_gate.py` |
+| 动进程模型/信任边界 | `tests/unit/test_process_model_gate.py` / `test_trust_boundary_gate.py` |
+
+db 第二批没踩到这条（改的两个文件零站点增量），但下一次未必——**主动跑，别等 PM 抓到**。
+
 ---
 
 ## 2. 任务清单（按依赖排序，可并行）

@@ -225,3 +225,38 @@ PYTHONPATH=".../src" bash gates.sh
 第一批我把清单列禁区是切错的（已改 §1.3.1）。本批动 `af_draft.py` 与 `af_vhass/fake.py` 前，**先跑一次
 `--write` 看这两个文件在不在任何清单里**——若在，按 §1.3.1 同批带上；若不在（预期如此，已核过），
 照常提交即可。**不要假设，核一遍。**
+
+---
+
+## 7. PM 复核记录（2026-10-24 深夜，第二批交付后）
+
+db 交付 DB-05（`d0c0198`）+ DB-06（`032b7c2`），PM 逐项复核**代码通过**：
+
+- **DB-05 实现符合裁决**：`pending_canary_do` 在循环内维护，下一个节点生成后回填
+  `on_timeout` 边，循环结束仍挂着的指到 `pass_id`。`prev = nid` 被正确移到 if/else
+  之外（wait 分支原先不更新 `prev` 是潜在隐患，顺手修对了）。执行器未动。
+  断言翻转合理：修前钉 `"d4" not in trace`，修后验 `"d4" in trace + state==DONE +
+  mock.actions 含 light.turn_off`——正向证据，不是放宽。新增腿 4 断言 draft 输出边形状。
+- **DB-06 实现符合字面建模裁决**：`is_modeled` 对任意 domain 的 `set_state` 返 True、
+  `service_effect` 取 `params.state`、无 state 时保持 current 不假绿。腿 3 断言
+  `in ("cool", None)` 是诚实口径。未发明到 `set_hvac_mode` 的映射。
+
+**但 PM 自己抓到一次漏检，必须记**：
+
+db 两笔的 gates.sh 全绿，PM 跑全量单测是 **3 failed**——红在
+`tests/unit/test_observability_gate.py` 的三个 pin（sites 201→203、coded 87→89、
+codes 84→86）。根因是 **1.13.4 发版时 AF-001 加了两枚带码 WARNING，我只跑了
+`check_observability.py --write` 更台账（所以门禁绿），漏了同文件的测试 pin。**
+
+⇒ **新增纪律 §1.9：台账 regen 与测试 pin 是两套东西，`gates.sh` 只读前者。**
+改了 `src/autoforge/` 下任何文件后，除了 `--write` 台账，**还要跑对应的
+`test_<那个门>_gate.py`**。这条对 db 同样适用（db 本批没踩到是因为它改的两个文件
+零站点增量，但下一次未必）。
+
+**另记一处观测矛盾**：db 回执称顺序污染自检有「1 pre-existing failed
+（test_watch_lifecycle 锁回收，单独跑也红）」。PM 复跑
+`test_watch_lifecycle_r6_audit.py` + `test_start_watch_identity.py` 共 41 passed、
+`test_af_watch*.py` 19 passed，全绿。db 看到的红 PM 在同一棵树同一文件上跑不出来。
+最终全量结果也未出现该失败（3 failed 全是观测性 pin）⇒ 判定为 db 自检时树状态
+与复核时不同，非真实缺陷。**但这类"我看到的红你跑不出来"必须记档**，它是顺序
+污染的典型前兆。
