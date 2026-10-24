@@ -42,6 +42,27 @@
 - **新增 except-pass**：0。
 - **我没做的事**：未动 af_shadow.py（其 @params.state 映射本就正确）；未连生产容器核 HA 是否真有 set_state 服务（PM §3 自留）；未写 blockers（同意 PM 字面建模裁决）。
 
+---
+
+> **PM 复核第二批（2026-10-24 深夜）**：DB-05 / DB-06 代码 review 均通过，实现与裁决一致
+> （详见 `db_roadmap_batch2_20261024.md` §7）。DB-05 在生产树形状上现读确认：
+> 带 `canary.duration: 60` 的 do 节点（书房三动作场景 d3）确实输出
+> `d3 --on_timeout--> d4`，掐链那一跳已接上。
+>
+> **PM 自己抓到一次漏检**：db 两笔 gates.sh 全绿，PM 跑全量单测 **3 failed**——
+> 红在 `tests/unit/test_observability_gate.py` 的三个 pin（sites 201→203、
+> coded 87→89、codes 84→86）。根因是 **1.13.4 发版时 AF-001 加了两枚带码 WARNING，
+> 我只跑了 `check_observability.py --write` 更台账（所以门禁绿），漏了同文件的测试 pin。**
+> PM 已修（`7dffcf0`，三格对齐 + 每格补核算 docstring），
+> 并新增纪律 §1.9 写进第一批路线图。
+>
+> **另记一处观测矛盾**：db 回执称顺序污染自检有「1 pre-existing failed
+> （test_watch_lifecycle 锁回收，单独跑也红）」。PM 复跑
+> `test_watch_lifecycle_r6_audit.py` + `test_start_watch_identity.py` 共 41 passed、
+> `test_af_watch*.py` 19 passed，全绿；最终全量亦未出现该失败。
+> 判定为 db 自检时树状态与复核时不同，非真实缺陷——但「我看到的红你跑不出来」
+> 这类事必须记档，它是顺序污染的典型前兆。
+
 
 
 > **SHA 说明（PM 2026-10-24 复核）**：db 回执原文写的 `fcff6f9`/`b0fa69c`/`9de3524`/`5e01d74`

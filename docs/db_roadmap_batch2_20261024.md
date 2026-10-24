@@ -179,9 +179,23 @@ PYTHONPATH=".../src" bash gates.sh
 
 | 项 | 原因 |
 |---|---|
-| **G6** af_apply 主体透传 | 断点 `af_mcp.py:411`；`_t_save` 有 `current` 参数可参照，改 `_TOOLS_WITH_CONTEXT` 语义 |
 | **G7** staging 持久化 | `af_draft.py` 首次引入写盘 ⇒ 原子写门 + 有界缓存门 + 卫生清单 |
 | **G3 第二层的生产核验** | 「HA 侧是否真有 set_state 服务」要连生产容器核，不是代码活 |
+| ~~**G6** af_apply 主体透传~~ | **已改判为可派，见第三批 `db_roadmap_batch3_20261025.md`** |
+
+**G6 改判说明（2026-10-25 PM 现读）**：第二批此处写「断点 `af_mcp.py:411`，
+`_TOOLS_WITH_CONTEXT` 语义」判为 PM 接。现读发现该判断过于粗糙——真实结构是三层：
+
+| 层 | 位置 | 现状 |
+|---|---|---|
+| 1 · MCP 面 | `af_mcp.py:411` `_t_apply(store, args)` | 无 `current` 参数，不在 `_TOOLS_WITH_CONTEXT`（:546 只列 5 个） |
+| 2 · 编排层 | `af_apply.py:200` / `:394` | `submitted_by="af_apply"` 硬编码，`authenticated_subject` 未传 |
+| 3 · 服务层 | `af_service.py:677` | **`authenticated_subject` 参数已存在**（P0-13 防伪造） |
+
+⇒ G6 不是发明机制，是把第三层已设计好的接口接到第一/二层。
+`af_apply.py` 三清单零锚点 ⇒ 主体文件可派；`af_mcp.py` 仅 1 个真锚点
+（`可观测性清单.md:149/:277` 的 `af_mcp.py:407` DRAFT_FAILURE_RECORD_SKIPPED），
+且改动区在它下方 ⇒ 台账风险低。**故改判派给 db，护栏见第三批 §1.3/§1.4/§1.5。**
 
 ---
 
