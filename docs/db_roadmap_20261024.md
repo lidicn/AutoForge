@@ -26,9 +26,12 @@
 - `af_audit.py` 只依赖 `af_atomic`，**不 import `af_auth`** ⇒ `af_auth` 反向调 `af_audit` 无循环
 - `af_audit` 是**非 logger 留痕通道**（结构化审计事件），不新增 `logger.*` 站点 ⇒ 不撞可观测性台账
 
-**切活结论**：
-- **给豆包**：`af_draft.py`、`af_auth.py`、`tests/` 下的改动 + 纯新增门禁脚本（不在任何名册里，由 `check_gates_coverage.py` 管的是工作流挂载而非清单锚点）
-- **留给自己**：任何碰 `af_api.py` / `af_mcp.py` 的改动（G6、G3 的适配层决策）——这两个文件撞发布线台账逐锚点钉 + 可观测性台账，豆包改完我再补台账，**一天窗口来不及**
+**切活结论**（2026-10-24 实测后修正，见 §1.3.1）：
+- **给豆包**：`af_draft.py`、`af_auth.py`、`tests/` 下的改动，**外加这些改动必然连带的台账 regen**——
+  清单不是禁区，是同批义务。原始规划把清单列进禁区是自相矛盾的（af_auth 的锁锚点在进程模型清单里，
+  不改清单 ⇒ A 腿红；改了 ⇒ 违反禁区），db 实测撞上后由 PM 改正。
+- **留给自己**：任何碰 `af_api.py` / `af_mcp.py` 的改动（G6、G3 的适配层决策）——这两个文件撞发布线台账
+  逐锚点钉 + 可观测性台账 §五，改动面比 af_auth 大得多，豆包改完我再补台账，**一天窗口来不及**
 
 ---
 
@@ -66,11 +69,36 @@ PYTHONPATH="E:/NAS/AutoForge/.claude/worktrees/busy-meninsky-653c24/src" bash ga
 | `src/autoforge/af_canary.py` / `af_vhass/fake.py` | canary 契约与仿真底座，改动影响全量既有仿真期望值 |
 | `scripts/check_*.py` | 门禁自身，改了等于自己给自己打分 |
 | `.gates.toml` / `.gates-baseline.txt` / `.gates-tally.txt` | 基线冻结与计数棘轮 |
-| `docs/可观测性清单.md` | 自动段由 `check_observability.py --write` 生成，手改必红 |
-| `docs/发布线清单.md` | 同上 |
-| `docs/进程模型清单.md` / `docs/信任边界清单.md` | 同上 |
 
 **如果你认为必须改上面某个文件：停下来，写进 `docs/db_roadmap_blockers.md`，不要动。**
+
+### 1.3.1 ⚠️ 台账清单：不是"不许碰"，是"必须同批碰"（2026-10-24 实测修正）
+
+**本节是 PM 原始规划的一处错误，已按实测改正。** 原路线图把五份 `docs/*清单.md` 也列进禁区，理由是"手改必红"。
+但 `af_auth.py` / `af_audit.py` **本身就在进程模型/可观测性两份清单里有锚点**（`threading.Lock` 站点、
+`DEPLOY_AUDIT_*` 具名码）——改这两个文件必然让锚点行号平移，于是 `check_ledger_same_batch.py` 的 A 腿
+**要求同一笔 commit 里必须带上重生成的清单**。禁区与同批纪律直接矛盾：db 不改清单 ⇒ 红；改了 ⇒ 违反禁区。
+
+**正确口径**（db 实测执行过，PM 补过手工段）：
+
+```bash
+# 改了 src/autoforge/ 下任何文件后，逐个跑受影响的生成器：
+PYTHONPATH=".../src" python scripts/check_observability.py --write   # af_audit/af_api 等
+PYTHONPATH=".../src" python scripts/check_process_model.py  --write   # af_auth/af_store 等
+# 然后把重生成的清单与源码改动放进同一笔 commit
+```
+
+**三条必须注意的**：
+
+1. **`--write` 只重写自动段**（`<!-- AUTO-BEGIN/END -->` 之间）。`## 三、具名码登记` 是**手工段**——
+   如果新增/移动了具名码站点，必须手工同步那一节的行号，否则 B 腿（默认拒绝在册）会判"过期登记"。
+   db 在 DB-02 漏了这一节，PM 补的。
+2. **`--write` 会破坏 CRLF**（实测：`write_text` 不保留行尾，把整个文件从 CRLF 改成 LF ⇒ 480 行假 diff）。
+   **跑完 `--write` 必须修行尾**：
+   ```bash
+   python -c "import pathlib; p=pathlib.Path('docs/可观测性清单.md'); b=p.read_bytes(); p.write_bytes(b.replace(b'\r\n',b'\n').replace(b'\n',b'\r\n'))"
+   ```
+3. **清单 regen 必须与源码改动同一笔**。分两笔 ⇒ B 腿判红（裁定 §一 Q1 点名要堵的形状）。
 
 ### 1.4 ⛔ 不许出现的写法
 
