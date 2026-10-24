@@ -22,6 +22,7 @@ from .af_spec import SpecError
 __all__ = [
     "DraftError",
     "E_UNKNOWN_DOMAIN",
+    "E_INTENT_NOT_OBJECT",
     "draft_intent",
     "StagingStore",
     "ComposeMetrics",
@@ -31,6 +32,9 @@ __all__ = [
 
 # ── 封闭词表（v2 M2：意图 JSON 顶层域编译前即拒，并回灌可机读 fix）──
 E_UNKNOWN_DOMAIN = "E_UNKNOWN_DOMAIN"
+# G5（2026-10-24）：意图必须是 JSON 对象（dict）。收到 str/list/None 时单独成码，
+# 而不是逐字符/逐元素迭代成"未知域"——后者会把协议错误伪装成字段名错误，误导 agent。
+E_INTENT_NOT_OBJECT = "E_INTENT_NOT_OBJECT"
 _INTENT_FIELDS = ("name", "mode", "when", "if", "do", "do_list", "ask", "wait")
 
 
@@ -229,6 +233,18 @@ def draft_intent(
     session_id：可选。同一用户 compose 请求内多次调用传相同 session_id，
     供 ComposeMetrics 统计多意图会话占比（决策门评估，见 ComposeMetrics）。
     """
+    # G5（2026-10-24）：类型闸——意图必须是 dict。传 str/list/None 时若直接落到下面的
+    # `for k in intent`，str 会被逐字符迭代、每个汉字成"未知域"，把协议错误伪装成字段名错误。
+    if not isinstance(intent, dict):
+        raise DraftError(
+            E_INTENT_NOT_OBJECT,
+            f"意图必须是 JSON 对象（dict），收到 {type(intent).__name__}",
+            fix={
+                "expected": "object",
+                "example": {"name": "...", "when": {}, "do": {}},
+            },
+        )
+
     # v2 M2：意图顶层域封闭词表——未知域编译前即拒并回灌可机读 fix
     unknown = [k for k in intent if k not in _INTENT_FIELDS]
     if unknown:
