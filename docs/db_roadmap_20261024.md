@@ -115,13 +115,55 @@ test(draft): <一句话>
 chore(release): bump 1.13.4   ← 这个 PM 做，豆包别做
 ```
 
-每个任务的分支命名：`db/task-NN`（从当前 HEAD 切）。做完**不要合回**，让 PM review 后统一合。
+每个任务的分支命名：`db/task-NN`（从当前 HEAD 切）。**不需要"合回 master"这个动作**——db 分支就是从发布线 HEAD 切的链，PM 直接 `git push origin HEAD:master` 即可（实测 2026-10-24：本地 `master` 停在很旧的 `98a3b40`，`origin/master` 才是发布线）。
 
-### 1.6 每笔 commit 的自检三问
+### 1.6 每笔 commit 的自检四问
 
 1. `gates.sh` 完整输出贴了吗？退出码 0 吗？
 2. 这笔碰了 §1.3 禁区的文件吗？碰了就停下。
 3. 新增了 `except.*pass` 吗？加了就重写。
+4. **判据腿自己会不会污染后面的测试？**（见 §1.7）
+
+### 1.7 ⛔ 判据腿的顺序污染：`os.environ` 一律走 `monkeypatch.setenv`
+
+**2026-10-24 实测踩到，代价是全量单测 30 failed / 3760 passed，而 `gates.sh` 同期全绿。**
+
+db 的 DB-03 判据腿用裸 `os.environ["AUTOFORGE_TOKENS"] = ...` 设密钥名，配了一个 autouse fixture 做
+`monkeypatch.delenv(...)` 清理。**这个组合是无效的**——`monkeypatch.delenv` 只恢复 monkeypatch
+自己记录的修改，对裸 `os.environ` 赋值不负责恢复。结果那四个密钥名残留在进程环境里，后续
+**19 个测试**（`test_v0_8_auth` 5 + `test_v1_4_token_expiry` 6 + `test_dcd_20261004_auth_limits` 8）
+读到"新名优先"而拿不到自己设的旧名令牌 ⇒ `authenticate` 返回 None ⇒ 全红。
+
+**为什么 db 自检发现不了**：跑自己那个文件全绿。只有按 pytest 收集顺序跑（全量）才红。
+**这类污染的检查成本极低，漏检代价极高。**
+
+```python
+# ✗ 会污染（fixture 救不回来）
+os.environ["AF_ACCESS_TOKENS"] = json.dumps({...})
+
+# ✓ 正确（monkeypatch 自动恢复，delenv fixture 退化成前置清理）
+def test_xxx(monkeypatch):
+    monkeypatch.setenv("AF_ACCESS_TOKENS", json.dumps({...}))
+```
+
+**同理适用于**：模块级单例（`af_watch._default._by_auto`、各种 `_DEFAULT` 缓存）、
+`sys.path` 修改、`logging` handler、cwd。**判据腿要么用 monkeypatch/fixture 管好生命周期，
+要么显式还原。**
+
+**自检命令**（提交前必跑，比跑自己那个文件多花不了多少时间）：
+```bash
+# 你的判据腿 + 最容易受害的那几个文件，一起跑
+PYTHONPATH=.../src python -m pytest tests/unit/test_你的腿.py \
+  tests/unit/test_v0_8_auth.py tests/unit/test_v1_4_token_expiry.py \
+  tests/unit/test_dcd_20261004_auth_limits.py -q
+```
+
+### 1.8 ⚠️ `gates.sh` 绿 ≠ 单测绿
+
+这是两套东西：`gates.sh` 跑的是 AST 门 / 台账对账 / 计数棘轮（静态、读 HEAD 树），
+**不跑单测**。db 汇报"gates 全绿"是真的，但那次全量单测是 30 failed。
+
+**发版前的单测由 PM 跑**，但 db 交活时要按 §1.7 自检顺序污染——否则 PM 那边就是一颗延迟爆炸的雷。
 
 ---
 
@@ -245,6 +287,10 @@ raw = (
 **旧名生效时无任何提示**。运维看着配置齐全，实际跑的是回退路径；哪天删旧名会静默改变鉴权面。
 
 **判据腿（先写测试，必须红）**——新建 `tests/unit/test_auth_legacy_env_warning.py`：
+
+> ⚠️ **本任务的 env 卫生是硬要求**（§1.7）：这个文件**每一处设环境变量都必须用 `monkeypatch.setenv`**。
+> db 初版用了裸 `os.environ[...] = ...`，配 `monkeypatch.delenv` 的 autouse fixture 是**无效组合**，
+> 导致 19 个下游测试全红。本条是补在地雷上的。
 
 | # | 场景 | 期望 |
 |---|---|---|
