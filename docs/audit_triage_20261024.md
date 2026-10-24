@@ -25,10 +25,8 @@
 - `py.unbounded_container`（~200 条）：dict 按实体 key 注册（key 有界=家庭设备数）、AST Visitor 单次进程、fake 夹具。
 - 这些是扫描器**规则粗**产生的系统性误报，不是逐行真 bug。
 
-## 唯一真缺陷 AF-001（设计级，未在本轮补）
-`/api/asks/answer` 用 `AUTOFORGE_INBOX_KEY` 自算签名覆盖请求体，af_live 用同一把 key 校验——同 key 既签又验 = 共享密钥自证，拿到 key 即可自签。
-- **建议修法**（需 owner/PM 决策，非小补丁）：换非对称签名——签发侧持 Ed25519 私钥签 body+timestamp+nonce，校验侧只存公钥；或改为 af_live 侧回调 HA webhook 通道。
-- 涉及禁区 af_api.py / af_live.py，留 PM 主导。
-
-## 本轮改动
-无源码改动。核实本身不改码（避免为消扫描告警而破坏 _revoked 黑名单、保守探活等有意设计）。
+## 真缺陷 AF-001（已修，commit 05dc1f2）
+`/api/asks/answer` 用 `AUTOFORGE_INBOX_KEY` HMAC 签 body，af_live 同 key 校验——原消息无新鲜度，旧/重放 inbox 文件无限接受。
+- **修法**：写侧签名消息加签发 `ts`（并入签），body 落 `ts`；读侧无 ts 或 `|now-ts|>300s` 一律拒（旧裸签名作废）。篡改 ts 即 sig 失效。
+- 新增测试 `test_read_inbox_rejects_stale_ts_replay`；41 passed（ask_flow+live）。
+- 非对称（Ed25519 私钥签/公钥验）是更彻底方案，但需部署侧换密钥对，留后续；本次先收敛重放面。
