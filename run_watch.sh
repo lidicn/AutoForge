@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 rm -f /data/watch.lock /data/watch.lock.info
 forge watch /data/watch-ir-manual/deployed_ir.json \
   --persist-dir /data \
