@@ -215,19 +215,20 @@ class TokenRegistry:
     #   旧名 AUTOFORGE_TOKENS / AUTOFORGE_API_TOKEN 作为回退（新名优先，旧名兜底，平滑切换）。
     def _load_env(self) -> None:
         # 单密钥（新名优先，旧名回退）：拥有全部 scope，便于平滑升级
-        legacy = (
-            load_secret("AF_ACCESS_TOKEN")
-            or load_secret("AUTOFORGE_API_TOKEN")
-            or ""
-        ).strip()
+        new_single = (load_secret("AF_ACCESS_TOKEN") or "").strip()
+        old_single = (load_secret("AUTOFORGE_API_TOKEN") or "").strip()
+        if old_single:
+            # G9（2026-10-24）：旧名被读到（无论新名是否也在）→ 落 legacy 告警，data 不带值。
+            self._record_legacy_env("AUTOFORGE_API_TOKEN", "AF_ACCESS_TOKEN", both=bool(new_single))
+        legacy = (new_single or old_single).strip()
         if legacy:
             self._tokens[legacy] = TokenInfo(subject="shared", scopes={"read", "write", "live"})
         # 多密钥 JSON（新名优先，旧名回退）
-        raw = (
-            load_secret("AF_ACCESS_TOKENS")
-            or load_secret("AUTOFORGE_TOKENS")
-            or ""
-        ).strip()
+        new_multi = (load_secret("AF_ACCESS_TOKENS") or "").strip()
+        old_multi = (load_secret("AUTOFORGE_TOKENS") or "").strip()
+        if old_multi:
+            self._record_legacy_env("AUTOFORGE_TOKENS", "AF_ACCESS_TOKENS", both=bool(new_multi))
+        raw = (new_multi or old_multi).strip()
         if raw:
             try:
                 data = json.loads(raw)
@@ -250,6 +251,22 @@ class TokenRegistry:
             t = t.strip()
             if t:
                 self._revoked.add(t)
+
+    def _record_legacy_env(self, old_name: str, new_name: str, *, both: bool) -> None:
+        """G9：A 类访问密钥走旧名回退 → 落一条 TOKEN_ENV_LEGACY_NAME（启动期一次性，不去重）。
+
+        data 只放名字对与 both 标志，**绝不带令牌值**。
+        """
+        from .af_audit import AuditEvent, TOKEN_ENV_LEGACY_NAME
+
+        self._audit.add(
+            AuditEvent(
+                type=TOKEN_ENV_LEGACY_NAME,
+                at=datetime.now(timezone.utc),
+                message=f"访问密钥走旧名回退：{old_name}",
+                data={"legacy_name": old_name, "new_name": new_name, "both_names_set": both},
+            )
+        )
 
     @staticmethod
     def _parse_meta(meta: Any) -> tuple[str, list[str]]:
