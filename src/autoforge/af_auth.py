@@ -42,7 +42,7 @@ import threading
 import time
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -189,7 +189,15 @@ class TokenRegistry:
         self,
         revoked_path: str | Path | None = None,
         issued_path: str | Path | None = None,
+        audit: Any = None,
     ) -> None:
+        # G8/G9（2026-10-24）：审计日志可注入（测试传内存 AuditLog 断言）；
+        # 不传则惰性建一个进程内 AuditLog——启动期模块不顶层 import af_audit（函数内建，防环）。
+        if audit is None:
+            from .af_audit import AuditLog
+
+            audit = AuditLog()
+        self._audit = audit
         self._tokens: dict[str, TokenInfo] = {}
         self._revoked: set[str] = set()
         #: 撤销黑名单文件在但读不出来 ⇒ 置位并保持，直到进程重启（见 `authenticate`）。
@@ -404,12 +412,33 @@ class TokenRegistry:
         return token
 
     def _purge_expired_locked(self) -> None:
-        """清掉已过期的已签发令牌（须持锁）。"""
+        """清掉已过期的已签发令牌（须持锁）。
+
+        G8（2026-10-24）：此前剔除是静默的——审计里查不到"某枚登录令牌何时到期被清"，
+        与"从未签发过"无从区分。dead 非空时落一条 TOKEN_EXPIRED_PURGED 事件（只记
+        count/subjects/at，**绝不带令牌明文**）；dead 为空不落（空事件是噪声）。
+        """
         now = time.time()
-        dead = [t for t, info in self._tokens.items()
-                if info.expires_at is not None and info.expires_at <= now]
-        for t in dead:
+        dead = [
+            (t, info)
+            for t, info in self._tokens.items()
+            if info.expires_at is not None and info.expires_at <= now
+        ]
+        if not dead:
+            return
+        subjects = sorted({info.subject for _, info in dead})
+        for t, _info in dead:
             self._tokens.pop(t, None)
+        from .af_audit import AuditEvent, TOKEN_EXPIRED_PURGED
+
+        self._audit.add(
+            AuditEvent(
+                type=TOKEN_EXPIRED_PURGED,
+                at=datetime.now(timezone.utc),
+                message=f"过期令牌剔除 {len(dead)} 枚",
+                data={"count": len(dead), "subjects": subjects, "at": now},
+            )
+        )
 
     def _evict_oldest_locked(self) -> None:
         """超过 `MAX_ISSUED` 时按过期时间淘汰最旧的（须持锁）。

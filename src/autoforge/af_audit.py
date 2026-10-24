@@ -66,6 +66,10 @@ TRIAL_ASSERT_FAILED = "trial_assert_failed"
 #: 所以"通过"与"未通过"都要各自留一条能对上节点与动作的账（拒绝侧不许只落在会被截断的 trace 里）。
 CONFIRM_GRANTED = "confirm_granted"
 CONFIRM_DENIED = "confirm_denied"
+#: G8（2026-10-24）：已过期的已签发令牌被静默剔除——落一条账，回答"什么时候掉的、掉了几枚"。
+TOKEN_EXPIRED_PURGED = "token_expired_purged"
+#: G9（2026-10-24）：A 类访问密钥走了旧名回退路径（运维看着配置齐，实际跑的是兜底名）。
+TOKEN_ENV_LEGACY_NAME = "token_env_legacy_name"
 
 #: 部署仪式台账的文件名（裁定 20261011 §3 Q13 丙：**只对 `DEPLOY_AUDIT` 这一族落盘**）。
 #: 落点跟着本次部署的 store 根走（见 `deploy_audit_sink`），所以它与 `write_conflicts.jsonl`
@@ -108,6 +112,8 @@ ALL_EVENT_TYPES = (
     TRIAL_ASSERT_FAILED,
     CONFIRM_GRANTED,
     CONFIRM_DENIED,
+    TOKEN_EXPIRED_PURGED,
+    TOKEN_ENV_LEGACY_NAME,
 )
 
 
