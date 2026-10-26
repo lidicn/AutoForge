@@ -18,6 +18,7 @@ from autoforge.af_auth import (  # noqa: E402
     RateLimitExceeded,
     RateLimiter,
     TokenRegistry,
+    _digest,
 )
 
 
@@ -67,7 +68,10 @@ def test_registry_revoke_persists_and_survives_restart(tmp_path, monkeypatch):
     assert first.revoke("secret") is True
     assert first.authenticate("secret") is None  # 即时生效
     assert first.revoke("secret") is False  # 重复撤销无变更
-    assert revoked_path.is_file() and json.loads(revoked_path.read_text()) == ["secret"]
+    # 批 2：revoked.json 落盘键改存 SHA-256 摘要（D6）——原断言钉的明文 ["secret"] 翻转。
+    # 调用方 revoke("secret") 入参仍是明文（请求体契约不变），落盘的是 _digest("secret")。
+    from autoforge.af_auth import _digest
+    assert revoked_path.is_file() and json.loads(revoked_path.read_text()) == [_digest("secret")]
 
     # 重启后从盘恢复，撤销不失效
     second = TokenRegistry(revoked_path)
@@ -171,9 +175,9 @@ def test_revocation_immediate_over_http(tmp_path, monkeypatch):
     assert _probe_write(client, headers).status_code == 403
     assert client.get("/api/auth/whoami", headers=headers).status_code == 401
 
-    # 黑名单已落盘，重启（新 registry 实例）后仍生效
+    # 黑名单已落盘，重启（新 registry 实例）后仍生效。批 2：落盘为摘要，非明文。
     persisted = json.loads((tmp_path / "store" / ".auth" / "revoked.json").read_text())
-    assert persisted == ["secret"]
+    assert persisted == [_digest("secret")]
     restarted = _client(tmp_path, monkeypatch, {"AUTOFORGE_API_TOKEN": "secret"})
     assert _probe_write(restarted, headers).status_code == 403
 

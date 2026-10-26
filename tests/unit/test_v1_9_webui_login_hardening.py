@@ -31,6 +31,7 @@ from autoforge.af_auth import (  # noqa: E402
     RateLimitExceeded,
     RateLimiter,
     TokenRegistry,
+    _digest,
     _login_token_ttl_s,
 )
 
@@ -133,12 +134,12 @@ def test_issue_for_agent_reads_env_ttl_at_call_time(tmp_path, monkeypatch):
     monkeypatch.setenv("AF_LOGIN_TOKEN_TTL_S", "3600")
     before = time.time()
     reg.issue_for_agent("owner", token="af_ttl_env_1")
-    info = reg._tokens["af_ttl_env_1"]
+    info = reg._issued[_digest("af_ttl_env_1")]  # 批 2：签发令牌落摘要索引
     assert info.expires_at is not None
     assert (before + 3600) <= info.expires_at <= time.time() + 3600 + 5, info.expires_at
 
     reg.issue_for_agent("owner", token="af_ttl_explicit", ttl_s=60)
-    assert reg._tokens["af_ttl_explicit"].expires_at <= time.time() + 60 + 5
+    assert reg._issued[_digest("af_ttl_explicit")].expires_at <= time.time() + 60 + 5
 
     # 顶层常量 ISSUED_TTL_S 保留为旧缺省口径（类属性不再参与运行期缺省，防口径漂移）
     assert TokenRegistry.ISSUED_TTL_S == 86400.0

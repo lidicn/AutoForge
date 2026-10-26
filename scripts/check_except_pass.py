@@ -64,7 +64,9 @@ BASELINE: frozenset[str] = frozenset(
         # 2026-10-26 第四批批 0：1345 → 1384（D1-D4 在它上方加了 ~39 行：auth-code 收 owner 面、
         # login fail-closed、import/tags/enable 透传 caller）。仍是 pair SSE 心跳那枚
         # `except Exception: pass`，**同一枚站点**，不是新增。16 → 16 枚。
-        "af_api.py:1384",
+        # 2026-10-26 批 2：1384 → 1388（登录/注册两处签发点补 principal_kind="login" 加了 4 行）。
+        # 仍是同一枚 pair SSE 心跳吞掉站点，不是新增。16 → 16 枚。
+        "af_api.py:1388",
         "af_closedloop/deepfix.py:52",
         "af_conflict.py:680",
         "af_conflict_audit.py:150",

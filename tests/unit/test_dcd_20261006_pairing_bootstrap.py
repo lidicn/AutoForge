@@ -209,7 +209,9 @@ def test_paired_agent_token_never_expires(tmp_path, monkeypatch):
     pc = pair_store.create("小助手")
     token, subject = redeem_pair_code(pair_store, registry, pc.code, "小助手")[1:]
     assert subject == "小助手"
-    info = registry._tokens[token]
+    # 批 2：运行期签发令牌落摘要索引（_issued），不再混在 env 明文 _tokens 里。
+    from autoforge.af_auth import _digest
+    info = registry._issued[_digest(token)]
     assert info.expires_at is None, (
         info.expires_at, "配对令牌带上了 expires_at ⇒ 24h 后 agent 被迫重新配对（BUG-19 误伤回归）"
     )
@@ -224,7 +226,8 @@ def test_login_token_still_expires_by_default(tmp_path, monkeypatch):
     registry = TokenRegistry(revoked_path=tmp_path / "revoked.json",
                              issued_path=tmp_path / "issued.json")
     token = registry.issue_for_agent("owner")
-    info = registry._tokens[token]
+    from autoforge.af_auth import _digest
+    info = registry._issued[_digest(token)]
     ttl = info.expires_at - time.time()
     assert 86300 < ttl <= 86400, ttl
 

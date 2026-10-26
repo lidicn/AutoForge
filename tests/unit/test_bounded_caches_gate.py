@@ -684,8 +684,10 @@ def test_real_repo_measurements_are_pinned():
     bounded, fixed, errs = gate.read_registry(src)
     containers, _lines, scan_errs = gate.scan(src)
     assert errs == [] and scan_errs == []
-    assert len(bounded) == 5 and len(fixed) == 3
-    assert len(containers) == 133 and len(gate.BASELINE) == 113
+    # 批 2（D6）：TokenRegistry._issued（运行期签发令牌摘要索引）登记进 BOUNDED_CACHES
+    # （cap=MAX_ISSUED / ttl=ISSUED_TTL_S / trim=_purge_expired_locked）⇒ bounded 5→6、扫到容器 133→134。
+    assert len(bounded) == 6 and len(fixed) == 3
+    assert len(containers) == 134 and len(gate.BASELINE) == 113
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"

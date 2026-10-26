@@ -1167,7 +1167,9 @@ def build_app(
         if not ok:
             raise HTTPException(status_code=409, detail="已有管理员，不允许重复注册")
         #: WebUI 注册即登录，签发的是 owner 面令牌（subject 固定 owner），登录用户名进 label 仅供显示。
-        token = registry.issue_for_agent("owner", ("read", "write", "live"), label=body.username)
+        #: 批 2：身份族标 login（与配对 agent、批4 developer 三族可分辨）。
+        token = registry.issue_for_agent("owner", ("read", "write", "live"), label=body.username,
+                                        principal_kind="login")
         return {
             "ok": True,
             "user": {"username": body.username, "role": "admin"},
@@ -1199,7 +1201,9 @@ def build_app(
         # 已注册：严格验证
         if not admin_store.verify(body.username, body.password):
             raise HTTPException(status_code=401, detail="用户名或密码错误")
-        token = registry.issue_for_agent("owner", ("read", "write", "live"), label=body.username)
+        # 批 2：身份族 login。
+        token = registry.issue_for_agent("owner", ("read", "write", "live"), label=body.username,
+                                        principal_kind="login")
         return {
             "ok": True,
             "user": {"username": body.username, "role": "admin"},

@@ -70,6 +70,9 @@ CONFIRM_DENIED = "confirm_denied"
 TOKEN_EXPIRED_PURGED = "token_expired_purged"
 #: G9（2026-10-24）：A 类访问密钥走了旧名回退路径（运维看着配置齐，实际跑的是兜底名）。
 TOKEN_ENV_LEGACY_NAME = "token_env_legacy_name"
+#: 批 2（D9）：签发点拒绝自助提权——调用方想经 issue_for_agent 递 developer 档。
+#: 数据只带 subject，绝不带令牌明文/摘要。
+TOKEN_ISSUED_REJECTED = "token_issued_rejected"
 
 #: 部署仪式台账的文件名（裁定 20261011 §3 Q13 丙：**只对 `DEPLOY_AUDIT` 这一族落盘**）。
 #: 落点跟着本次部署的 store 根走（见 `deploy_audit_sink`），所以它与 `write_conflicts.jsonl`
@@ -114,6 +117,7 @@ ALL_EVENT_TYPES = (
     CONFIRM_DENIED,
     TOKEN_EXPIRED_PURGED,
     TOKEN_ENV_LEGACY_NAME,
+    TOKEN_ISSUED_REJECTED,
 )
 
 

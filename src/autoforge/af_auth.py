@@ -147,6 +147,22 @@ def _atomic_write_text(path: Path, text: str) -> None:
         pass
 
 
+def _digest(raw: str) -> str:
+    """明文令牌 → SHA-256 十六进制摘要（第四批批 2：落盘键不再存明文）。
+
+    内存侧 `authenticate` 仍拿"调用方手里那枚明文"比对——先把明文摘要一次，再查
+    摘要索引，命中即返回，不再 O(n) 逐钥 compare_digest。revoked.json / issued_tokens.json
+    上的键一律是这枚摘要值；迁移脚本 `scripts/migrate_issued_tokens_digest.py` 负责把
+    存量明文键改写成摘要。⛔ 摘要值本身不是给人看的秘密，但也绝不写进审计/日志。
+    """
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _looks_digest(s: str) -> bool:
+    """64 位小写十六进制 = SHA-256 摘要。用于装载时兼容存量明文键（迁移窗口容错）。"""
+    return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
+
+
 class RateLimitExceeded(Exception):
     """限速触发，由 af_api 转换为 HTTP 429。"""
 
@@ -172,6 +188,11 @@ class TokenInfo:
     #: owner 面只看 `subject` 是否落在 `_OWNER_SUBJECTS`；WebUI 登录令牌的 subject 固定是
     #: `owner`（见 af_api 登录/注册签发），登录用户名靠这一格带到 `/api/auth/me` 显示。
     label: str | None = None
+    #: 身份族（第四批批 2 / D9）：`login`=WebUI 登录注册、`agent`=配对兑换、
+    #: `developer`=批 4 开发者签发端点。⛔ 不叫 `kind`（AuthCode 已占用，取值 long/short）。
+    #: 默认落在最窄档 `agent`——只有签发点能把它抬到 login/developer，调用方不能从
+    #: 请求体自助提权（见 issue_for_agent 的 principal_kind 形参校验）。
+    principal_kind: str = "agent"
 
 
 class TokenRegistry:
@@ -198,7 +219,10 @@ class TokenRegistry:
 
             audit = AuditLog()
         self._audit = audit
+        # env 访问密钥：明文键（不落盘，AF_ACCESS_TOKENS 那族，第四批批 2 维持明文内存键）。
         self._tokens: dict[str, TokenInfo] = {}
+        # 运行期签发令牌：**摘要键**（第四批批 2，D6）。落盘 issued_tokens.json 的键即摘要。
+        self._issued: dict[str, TokenInfo] = {}
         self._revoked: set[str] = set()
         #: 撤销黑名单文件在但读不出来 ⇒ 置位并保持，直到进程重启（见 `authenticate`）。
         self._revoked_poisoned = False
@@ -246,11 +270,11 @@ class TokenRegistry:
                     invalid=bool(invalid_reason),
                     invalid_reason=invalid_reason,
                 )
-        # 启动期紧急封禁（运维封禁已泄露令牌）
+        # 启动期紧急封禁（运维封禁已泄露令牌）——批 2：revoked 集合改存摘要，env 给的是明文。
         for t in (load_secret("AF_REVOKED_TOKENS") or load_secret("AUTOFORGE_REVOKED_TOKENS") or "").split(","):
             t = t.strip()
             if t:
-                self._revoked.add(t)
+                self._revoked.add(_digest(t))
 
     def _record_legacy_env(self, old_name: str, new_name: str, *, both: bool) -> None:
         """G9：A 类访问密钥走旧名回退 → 落一条 TOKEN_ENV_LEGACY_NAME（启动期一次性，不去重）。
@@ -324,7 +348,11 @@ class TokenRegistry:
             self._revoked_poisoned = True
             return
         if isinstance(data, list):
-            self._revoked.update(str(t) for t in data)
+            # 批 2：文件里的条目本应已是摘要；迁移窗口内若残留明文键，就地补摘要，
+            # 否则一枚"升级前已撤销"的令牌会因集合里躺着明文而被放行（fail-open）。
+            self._revoked.update(
+                (str(t) if _looks_digest(str(t)) else _digest(str(t))) for t in data
+            )
         else:
             # AF66：能解析但顶层形状不对（如 {"a":1}、标量）≠ 空名单。旧实现落到这里
             # 什么都不做，self._revoked 只剩 env 侧那点东西 ⇒ 盘上已撤销过的令牌全部复活
@@ -342,7 +370,7 @@ class TokenRegistry:
     @property
     def enabled(self) -> bool:
         """是否启用了鉴权（配置了任意令牌）。未启用时全站公开（读 + 写 + live）。"""
-        return bool(self._tokens)
+        return bool(self._tokens or self._issued)
 
     def authenticate(self, raw_token: str | None) -> TokenInfo | None:
         """返回令牌主体信息；未知 / 已撤销 / 配置非法（`expires_at` 无法解析）返回 None。
@@ -358,15 +386,15 @@ class TokenRegistry:
         if self._revoked_poisoned:
             return None
         with self._lock:
-            # P0-9 修复：恒定时间比较，防止时序攻击推断有效令牌
-            for revoked in self._revoked:
-                if hmac.compare_digest(raw_token, revoked):
-                    return None
-            info = None
-            for key, val in self._tokens.items():
-                if hmac.compare_digest(raw_token, key):
-                    info = val
-                    break
+            # 批 2：内存先把明文摘要一次，revoked 集合与 issued 索引都是摘要键——
+            # 一次哈希代替 O(n) 逐钥 compare_digest（顺带修掉原线性扫）。
+            dg = _digest(raw_token)
+            if dg in self._revoked:
+                return None
+            # 运行期签发令牌走摘要索引；env 访问密钥仍是明文键，原样查。
+            info = self._issued.get(dg)
+            if info is None:
+                info = self._tokens.get(raw_token)
             if info is None:
                 return None
             if info.invalid:
@@ -378,18 +406,23 @@ class TokenRegistry:
             return info
 
     def revoke(self, token: str) -> bool:
-        """撤销令牌；返回是否确实发生变更（False=本就不在注册表或已撤销）。即时生效并落盘。"""
+        """撤销令牌；返回是否确实发生变更（False=本就不在注册表或已撤销）。即时生效并落盘。
+
+        批 2：入参仍是调用方手里那枚明文（/api/auth/revoke 请求体契约不变），
+        内存与落盘黑名单只存摘要。
+        """
         with self._lock:
-            if token in self._revoked:
+            dg = _digest(token)
+            if dg in self._revoked:
                 return False
-            self._revoked.add(token)
+            self._revoked.add(dg)
             self._persist_revoked()
             return True
 
     def subjects(self) -> list[dict[str, Any]]:
         """已注册令牌的主体摘要（不含明文令牌，供 `forge auth list` / 审计用）。"""
         seen: dict[str, set[str]] = {}
-        for info in self._tokens.values():
+        for info in list(self._tokens.values()) + list(self._issued.values()):
             seen.setdefault(info.subject, set()).update(info.scopes)
         return [{"subject": s, "scopes": sorted(sc)} for s, sc in sorted(seen.items())]
 
@@ -402,13 +435,33 @@ class TokenRegistry:
         token: str | None = None,
         ttl_s: float | None = None,
         label: str | None = None,
+        principal_kind: str = "agent",
     ) -> str:
         """运行时为 agent 签发 Bearer 令牌（配对成功后调用）。返回明文令牌。
 
         `label` 仅作界面显示名，不参与授权；WebUI 登录面以 `agent_name="owner"` 签发、
         把登录用户名放进 `label`，使 owner 判定（subject 落在 `_OWNER_SUBJECTS`）不依赖
         用户名恰好叫什么，同时 `/api/auth/me` 仍能显示真实登录用户名。
+
+        `principal_kind`（批 2 / D9）：身份族。⛔ **只有服务端签发点能定它**——登录/注册
+        端点硬编码 `"login"`、配对兑换走默认 `"agent"`；调用方传 `"developer"` 视为自助
+        提权，直接拒绝（developer 档只能由批 4 专用端点落盘，不经此入口）。
         """
+        if principal_kind == "developer":
+            # 腿 11：签发点是唯一能定身份的地方；从这里递 developer = 自己给自己发身份码。
+            from .af_audit import AuditEvent, TOKEN_ISSUED_REJECTED
+
+            self._audit.add(
+                AuditEvent(
+                    type=TOKEN_ISSUED_REJECTED,
+                    at=datetime.now(timezone.utc),
+                    message="拒绝自助提权：issue_for_agent 不接受 principal_kind=developer",
+                    data={"subject": agent_name},
+                )
+            )
+            raise ValueError("签发点不接受 principal_kind=developer（developer 档须由专用端点签发）")
+        if principal_kind not in ("login", "agent"):
+            principal_kind = "agent"
         token = token or ("af_" + secrets.token_hex(20))
         scopes_set = {s for s in scopes if s in SCOPES} or {"read"}
         # 运行期签发的令牌此前**不带 expires_at** ⇒ 结构上永远无法过期，
@@ -418,14 +471,17 @@ class TokenRegistry:
         ttl = float(ttl_s) if ttl_s is not None else _login_token_ttl_s()
         expires_at = (time.time() + ttl) if ttl > 0 else None
         with self._lock:
-            self._tokens[token] = TokenInfo(
-                subject=agent_name, scopes=scopes_set, expires_at=expires_at, label=label
+            # 批 2：运行期签发令牌进摘要索引（不再混进 env 的明文 self._tokens）。
+            self._issued[_digest(token)] = TokenInfo(
+                subject=agent_name, scopes=scopes_set, expires_at=expires_at,
+                label=label, principal_kind=principal_kind,
             )
             self._purge_expired_locked()
-            if len(self._tokens) > self.MAX_ISSUED:
+            if len(self._issued) > self.MAX_ISSUED:
                 self._evict_oldest_locked()
             if self._issued_path:
-                self._persist_issued(token, agent_name, sorted(scopes_set), expires_at, label)
+                self._persist_issued(token, agent_name, sorted(scopes_set), expires_at, label,
+                                    principal_kind=principal_kind)
         return token
 
     def _purge_expired_locked(self) -> None:
@@ -436,16 +492,19 @@ class TokenRegistry:
         count/subjects/at，**绝不带令牌明文**）；dead 为空不落（空事件是噪声）。
         """
         now = time.time()
+        # 批 2：过期剔除作用于运行期签发索引（摘要键）；env 静态令牌一并照此判定。
+        pools = (self._issued, self._tokens)
         dead = [
-            (t, info)
-            for t, info in self._tokens.items()
+            (pool, t, info)
+            for pool in pools
+            for t, info in pool.items()
             if info.expires_at is not None and info.expires_at <= now
         ]
         if not dead:
             return
-        subjects = sorted({info.subject for _, info in dead})
-        for t, _info in dead:
-            self._tokens.pop(t, None)
+        subjects = sorted({info.subject for _, _, info in dead})
+        for pool, t, _info in dead:
+            pool.pop(t, None)
         from .af_audit import AuditEvent, TOKEN_EXPIRED_PURGED
 
         self._audit.add(
@@ -462,15 +521,15 @@ class TokenRegistry:
 
         淘汰顺序：先过期时间早的，没有过期时间的（永不过期）最后动。
         """
-        overflow = len(self._tokens) - self.MAX_ISSUED
+        overflow = len(self._issued) - self.MAX_ISSUED
         if overflow <= 0:
             return
         ordered = sorted(
-            self._tokens.items(),
+            self._issued.items(),
             key=lambda kv: (kv[1].expires_at is None, kv[1].expires_at or 0.0),
         )
         for tok, _info in ordered[:overflow]:
-            self._tokens.pop(tok, None)
+            self._issued.pop(tok, None)
 
     def revoke_by_subject(self, subject: str, *, except_token: str | None = None) -> int:
         """撤销某主体名下的全部已签发令牌；返回撤销数量。
@@ -478,10 +537,21 @@ class TokenRegistry:
         `except_token`：排除某个 token 不撤销（用于删除 agent 时保留当前用户的登录态）。
         """
         n = 0
+        except_dg = _digest(except_token) if except_token else None
         with self._lock:
+            # env 池：明文键，撤销前先摘要；issued 池：已是摘要键，直接用。
             for tok, info in list(self._tokens.items()):
-                if info.subject == subject and tok != except_token:
-                    self._revoked.add(tok)
+                if info.subject == subject:
+                    dg = _digest(tok)
+                    if except_dg and dg == except_dg:
+                        continue
+                    self._revoked.add(dg)
+                    n += 1
+            for dg, info in list(self._issued.items()):
+                if info.subject == subject:
+                    if except_dg and dg == except_dg:
+                        continue
+                    self._revoked.add(dg)
                     n += 1
             if self._issued_path:
                 self._persist_revoked()
@@ -492,10 +562,11 @@ class TokenRegistry:
         """给 agent 改名：更新其名下全部令牌的 subject；返回受影响数量。"""
         n = 0
         with self._lock:
-            for info in self._tokens.values():
-                if info.subject == old:
-                    info.subject = new
-                    n += 1
+            for pool in (self._tokens, self._issued):
+                for info in pool.values():
+                    if info.subject == old:
+                        info.subject = new
+                        n += 1
             if self._issued_path:
                 self._rewrite_issued(old, new_name=new)
         return n
@@ -521,24 +592,40 @@ class TokenRegistry:
             # `if isinstance(data, dict)` 不成立就什么都不做，症状同上。
             raise ValueError(f"{p.name} 形状不是对象，拒绝启动以保护已签发令牌名单")
         now = time.time()
-        for tok, meta in data.items():
-            if tok in self._revoked:
+        for key, meta in data.items():
+            # 批 2：盘上键本应是摘要；迁移窗口内若仍是明文键，就地补摘要（同 revoked 口径）。
+            dg = key if _looks_digest(key) else _digest(key)
+            if dg in self._revoked:
                 continue
             if isinstance(meta, dict) and "subject" in meta:
                 # 过期条目直接不载入：否则重启后满盘都是过期令牌（新增审计 BUG-19）
                 exp = meta.get("expires_at")
                 if isinstance(exp, (int, float)) and exp <= now:
                     continue
-                self._tokens[tok] = TokenInfo(
+                self._issued[dg] = TokenInfo(
                     subject=meta["subject"],
                     scopes=set(meta.get("scopes", ["read"])),
                     expires_at=float(exp) if isinstance(exp, (int, float)) else None,
                     label=meta.get("label"),
+                    principal_kind=self._infer_principal_kind(meta),
                 )
+
+    @staticmethod
+    def _infer_principal_kind(meta: dict[str, Any]) -> str:
+        """存量记录（无 principal_kind 字段）装载时推断身份族（批 2 迁移规则）。
+
+        subject ∈ {owner, shared} ⇒ `login`（WebUI 登录面签发）；其余 ⇒ `agent`（配对）。
+        ⛔ `developer` 只新发、不回溯——给存量记录回溯成 developer = 间接提权。
+        """
+        pk = meta.get("principal_kind")
+        if isinstance(pk, str) and pk:
+            return pk
+        subject = str(meta.get("subject", ""))
+        return "login" if subject in ("owner", "shared") else "agent"
 
     def _persist_issued(
         self, token: str, subject: str, scopes: list[str], expires_at: float | None = None,
-        label: str | None = None,
+        label: str | None = None, principal_kind: str = "agent",
     ) -> None:
         if not self._issued_path:
             return
@@ -556,6 +643,12 @@ class TokenRegistry:
                 ) from exc
         if not isinstance(data, dict):
             raise ValueError(f"{p.name} 形状不是对象，拒绝写入以保护已签发令牌名单")
+        # 批 2：存量文件可能还残留明文键（迁移窗口），先就地补摘要键，避免后面
+        # `data[_digest(token)] = entry` 与明文旧键并存导致一枚令牌两条记录。
+        migrated: dict[str, Any] = {}
+        for k, v in data.items():
+            migrated[k if _looks_digest(str(k)) else _digest(str(k))] = v
+        data = migrated
         # 顺带把已过期的条目从落盘文件里剔掉：否则重启后 `_load_issued_file`
         # 读回来的全是过期令牌，文件单调增长（新增审计 BUG-19）。
         now = time.time()
@@ -564,12 +657,13 @@ class TokenRegistry:
             exp = meta.get("expires_at") if isinstance(meta, dict) else None
             if isinstance(exp, (int, float)) and exp <= now:
                 data.pop(tok, None)
-        entry: dict[str, Any] = {"subject": subject, "scopes": scopes}
+        entry: dict[str, Any] = {"subject": subject, "scopes": scopes, "principal_kind": principal_kind}
         if expires_at is not None:
             entry["expires_at"] = expires_at
         if label is not None:
             entry["label"] = label
-        data[token] = entry
+        # 批 2：落盘键 = 摘要，绝不写明文令牌。
+        data[_digest(token)] = entry
         _atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2))
 
     def _rewrite_issued(self, subject: str, new_name: str | None = None, drop: bool = False, except_token: str | None = None) -> None:
@@ -592,8 +686,10 @@ class TokenRegistry:
             # 直接穿出调用方。统一在形状校验处抛可读错误。
             raise ValueError(f"{p.name} 形状不是对象，拒绝改写已签发令牌名单")
         changed = False
+        # 批 2：盘上键是摘要；except_token 来自调用方（明文），先摘要再比对。
+        except_dg = _digest(except_token) if except_token else None
         for tok, meta in list(data.items()):
-            if tok == except_token:
+            if except_dg is not None and tok == except_dg:
                 continue
             if isinstance(meta, dict) and meta.get("subject") == subject:
                 if drop:

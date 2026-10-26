@@ -106,6 +106,18 @@ BOUNDED_CACHES: list[dict[str, str]] = [
         "trim": "_prune_lockout_mono",
         "test": "tests/unit/test_af4_auth_security_fixes.py::test_lockout_mono_map_is_pruned_on_write_without_reads",
     },
+    {
+        # 第四批批 2（D6）：运行期签发令牌的**摘要索引**（明文键 → SHA-256）。与 env 静态
+        # 令牌 `_tokens` 分开——这张表随签发增长，cap=MAX_ISSUED 硬上限，ttl=ISSUED_TTL_S
+        # （登录默认 24h；配对 ttl_s=0 不设过期），trim=_purge_expired_locked 纯写不读也回收过期，
+        # 超上限再走 _evict_oldest_locked 淘汰最旧。
+        "module": "af_auth",
+        "attr": "TokenRegistry._issued",
+        "cap": "MAX_ISSUED",
+        "ttl": "ISSUED_TTL_S",
+        "trim": "_purge_expired_locked",
+        "test": "tests/unit/test_issued_tokens_digest_migration.py::test_issued_index_capped_without_reads",
+    },
 ]
 
 FIXED_KEY_CACHES: list[dict[str, str]] = [

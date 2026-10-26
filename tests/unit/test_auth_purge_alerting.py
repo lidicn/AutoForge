@@ -11,7 +11,7 @@ import json
 import time
 
 from autoforge.af_audit import AuditLog, TOKEN_EXPIRED_PURGED
-from autoforge.af_auth import TokenInfo, TokenRegistry
+from autoforge.af_auth import TokenInfo, TokenRegistry, _digest
 
 
 def _reg() -> TokenRegistry:
@@ -21,7 +21,7 @@ def _reg() -> TokenRegistry:
 def test_issue_expired_token_emits_one_purge_event():
     reg = _reg()
     tok = reg.issue_for_agent("agent_kaiwen", ttl_s=3600)
-    reg._tokens[tok].expires_at = time.time() - 1  # 模拟它已到期
+    reg._issued[_digest(tok)].expires_at = time.time() - 1  # 模拟它已到期
     reg._purge_expired_locked()
     evs = reg._audit.of_type(TOKEN_EXPIRED_PURGED)
     assert len(evs) == 1
@@ -52,7 +52,7 @@ def test_one_purge_removing_three_dead_counts_three():
 def test_event_is_json_serializable():
     reg = _reg()
     tok = reg.issue_for_agent("agent_kaiwen", ttl_s=3600)
-    reg._tokens[tok].expires_at = time.time() - 1
+    reg._issued[_digest(tok)].expires_at = time.time() - 1
     reg._purge_expired_locked()
     ev = reg._audit.of_type(TOKEN_EXPIRED_PURGED)[0]
     json.dumps(ev.to_dict(), ensure_ascii=False)  # 不抛即过
@@ -61,7 +61,7 @@ def test_event_is_json_serializable():
 def test_event_data_never_contains_token_plaintext():
     reg = _reg()
     plain = reg.issue_for_agent("agent_kaiwen", ttl_s=3600)
-    reg._tokens[plain].expires_at = time.time() - 1
+    reg._issued[_digest(plain)].expires_at = time.time() - 1
     reg._purge_expired_locked()
     ev = reg._audit.of_type(TOKEN_EXPIRED_PURGED)[0]
     dumped = json.dumps(ev.to_dict(), ensure_ascii=False)

@@ -235,7 +235,9 @@ def test_crash_during_persist_leaves_the_old_complete_file(tmp_path, monkeypatch
     registry = TokenRegistry(revoked_path=revoked)
     registry.revoke("tok-live-1")
     before = json.loads(revoked.read_text(encoding="utf-8"))
-    assert before == ["tok-live-1"]
+    # 批 2：revoked.json 落盘摘要，不是明文。
+    from autoforge.af_auth import _digest
+    assert before == [_digest("tok-live-1")]
 
     def boom(fd):
         raise OSError("simulated crash while flushing")

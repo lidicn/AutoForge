@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from autoforge.af_api import build_app
-from autoforge.af_auth import TokenExpired, TokenInfo, TokenRegistry
+from autoforge.af_auth import TokenExpired, TokenInfo, TokenRegistry, _digest
 
 # 受 _write 保护的端点（af_api.py: GET /api/credentials）
 AUTH_CODES = "/api/credentials"
@@ -47,7 +47,8 @@ def test_authenticate_unknown_token_is_none(reg: TokenRegistry):
 
 def test_authenticate_revoked_is_none(reg: TokenRegistry):
     reg._tokens = {"good": TokenInfo(subject="s", scopes={"read"})}
-    reg._revoked = {"good"}
+    # 批 2：撤销黑名单存摘要，不存明文。
+    reg._revoked = {_digest("good")}
     assert reg.authenticate("good") is None
 
 
