@@ -18,6 +18,47 @@ const savingCreds = ref(false)
 // ── subjects ──
 const subjects = ref<SubjectItem[]>([])
 const revokingSubject = ref('')
+// ── DB-09：一次性签发 developer 令牌 ──
+const devAgentName = ref('')
+const issuingDev = ref(false)
+const issuedDevToken = ref<{ token: string; subject: string } | null>(null)
+
+async function issueDeveloperToken() {
+  const name = devAgentName.value.trim()
+  if (!name) {
+    message.warning('请先填 Agent 名')
+    return
+  }
+  issuingDev.value = true
+  issuedDevToken.value = null
+  try {
+    const res = await facade.issueAgentToken(name)
+    // ⚠️ 返工 5.1：ok 是「签发后回读 authenticate」的派生值；HTTP 200 但 ok=false
+    // 意味着令牌签出但回读失败（等于没发），前端必须当失败处理——不渲染令牌。
+    if (!res.data.ok || !res.data.token) {
+      message.error('签发未确认（回读失败），请重试')
+      return
+    }
+    issuedDevToken.value = { token: res.data.token, subject: res.data.subject || name }
+    devAgentName.value = ''
+    message.success('已签发，令牌仅此一次可见')
+    await load()
+  } catch (e) {
+    message.error(`签发失败：${String(e)}`)
+  } finally {
+    issuingDev.value = false
+  }
+}
+
+async function copyDevToken() {
+  if (!issuedDevToken.value) return
+  try {
+    await navigator.clipboard.writeText(issuedDevToken.value.token)
+    message.success('令牌已复制')
+  } catch {
+    message.info('请手动选中文本复制')
+  }
+}
 
 const error = ref('')
 
@@ -178,6 +219,32 @@ onMounted(load)
       <n-text depth="3" style="margin-top: 8px; display: block">
         ⛔ 本表不展示令牌明文或摘要；「撤销」按主体吊销其名下全部令牌（owner 面可用）。
       </n-text>
+    </n-card>
+
+    <n-card title="签发开发者 Agent 令牌（一次性）" :bordered="false" class="block">
+      <n-space vertical :size="12">
+        <n-text depth="3">
+          给开发者用的长驻令牌（<code>principal_kind=developer</code>、全 scope、不过期）。
+          令牌只在下方显示一次，关闭/刷新后无法再次查看——复制后立即保存到客户端配置。
+        </n-text>
+        <n-input
+          v-model:value="devAgentName"
+          placeholder="Agent 名（如：书房主控-dev）"
+          style="max-width: 460px"
+          @keyup.enter="issueDeveloperToken"
+        />
+        <div>
+          <n-button type="primary" size="small" :loading="issuingDev" @click="issueDeveloperToken">
+            签发开发者令牌
+          </n-button>
+        </div>
+        <n-alert v-if="issuedDevToken" type="warning" :title="'仅此一次可见，关闭后无法再次查看'">
+          <code style="word-break: break-all">{{ issuedDevToken.token }}</code>
+          <div style="margin-top: 8px">
+            <n-button size="tiny" @click="copyDevToken">复制令牌</n-button>
+          </div>
+        </n-alert>
+      </n-space>
     </n-card>
   </div>
 </template>

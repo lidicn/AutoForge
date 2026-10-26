@@ -167,6 +167,11 @@ export const api = {
   // 批 3：owner 面按主体撤销该主体名下全部令牌。
   revokeBySubject: (subject: string) =>
     request<RevokeResponse>('POST', '/auth/revoke', { subject }),
+  // DB-09：owner 面一次性签发 developer 档长驻令牌（明文仅此一次返回，不进 store/localStorage）。
+  issueAgentToken: (agent_name: string) =>
+    request<{ ok: boolean; token?: string; subject?: string; principal_kind?: string }>(
+      'POST', '/user/agent-token', { agent_name },
+    ),
 
   // G 真机下发
   liveStatus: () => request<LiveStatusResponse>('GET', '/live/status'),

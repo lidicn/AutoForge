@@ -44,6 +44,7 @@ export const facade = {
   subjects: () => api.subjects(),
   revokeToken: (token: string) => api.revokeToken(token),
   revokeBySubject: (subject: string) => api.revokeBySubject(subject),
+  issueAgentToken: (agent_name: string) => api.issueAgentToken(agent_name),
   liveStatus: () => api.liveStatus(),
   liveRun: (ir: unknown, live_allow: string[], confirm: boolean, events?: unknown[], undo?: boolean) =>
     api.liveRun(ir, live_allow, confirm, events, undo),
