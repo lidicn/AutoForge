@@ -114,6 +114,46 @@ db 在"必须改但不能改"的矛盾下选择改，且只改一半——这是
 | 批 3 治理面看得见 D9 | `fbcbfde` | test_auth_governance_surface.py · 4 条 |
 | 批 4 RBAC 收口 + rename + 寿命 | `a7cbb73` | test_auth_governance_rbac.py · 13 条 |
 | 批 5 /pair 新链路 D10 | `8823d69` | test_pair_link_flow.py · 10 条 |
+| mimo PairingModal §6.3 | `bd0d528` | （前端改造，无新增 pytest 判据腿） |
+
+## 批 0：堵四把刀（D1–D4）
+- 判据腿：`tests/unit/test_auth_governance_batch0.py`（11 条，先红后绿）。
+- 改了哪些文件：`src/autoforge/af_service.py`（`_assert_archive_mutator`：已归属他人且非 owner ⇒ 403）、`src/autoforge/af_api.py`（`_require_owner_surface`/`_caller_is_owner`；授权码端点收 owner 面；未注册管理员登录改 401 + `need_register`）。
+- 必红既有测试：`tests/unit/test_dcd_20261004_auth_limits._login_token` 按消息修为先 register（口令 ≥6 用 secret123）再 login。
+- 门禁三连：trust_boundary / owner_subject / gates.sh 同笔通过；except:pass 门对 `src/autoforge` 跑，SSE 吞站点行漂已重冻结。
+- 顺序污染自检：测试一律 `monkeypatch.setenv`（不裸 `os.environ`）。
+- 我没做的事：未改 SCOPES 档位；未动 MCP 面默认拒绝；未把 env 访问密钥的 principal_kind 抬到 login。
+
+## 批 1：D5 af_apply 补 owner
+- 判据腿：`tests/unit/test_af_apply_owner_backfill.py`（5 条）。
+- 改了哪些文件：`src/autoforge/af_apply.py`（`apply()` 加 `authenticated_subject` 形参，`save_payload` 补 owner 字段）。
+- 必红既有测试：无（新增形参有默认值，老调用方不破）。
+- 门禁：process_model §三 af_service 登记行号随加参漂移已同笔对齐。
+- 顺序污染自检：`monkeypatch.setenv`。
+- 我没做的事：未改 save_payload 的其他字段顺序；未回填历史 payload。
+
+## 批 2：存储层摘要迁移 + principal_kind
+- 判据腿：`tests/unit/test_issued_tokens_digest_migration.py`（12 条）。
+- 改了哪些文件：
+  - `af_auth.py`：加 `_digest`/`_looks_digest`；TokenRegistry 拆 `_tokens`（env 明文键）与 `_issued`（摘要键）；revoke/revoke_by_subject/_persist_revoked 全改摘要口径；TokenInfo 加 `principal_kind`（默认 "agent"）；issue_for_agent 拒绝自助提 developer（落审计 `TOKEN_ISSUED_REJECTED`）；登录/注册签发点硬编码 kind=login。
+  - 迁移脚本 `scripts/migrate_issued_tokens_digest.py`。
+  - 8 个摸内部 `_tokens/_revoked` 的既有测试按消息修为摘要口径，未放宽断言。
+- 必红既有测试：按消息修，不放宽。
+- 门禁：trust_boundary 行数同笔重生成；process_model §三 af_auth 行号随加函数漂移对齐。
+- 顺序污染自检：`monkeypatch.setenv`。
+- 我没做的事：未回溯存量 developer 档；未把 env 池也改摘要键（env 明文键保留，authenticate 先查摘要 issued 再查 env 明文）。
+
+## 批 3：治理与审计面看得见（D9）
+- 判据腿：`tests/unit/test_auth_governance_surface.py`（4 条）。
+- 改了哪些文件：
+  - `af_auth.subjects()`：每条带 `principal_kind`+`expires_at`，不回令牌明文/摘要。
+  - `af_api`：`/api/auth/me` role 按 kind（login⇒admin、developer⇒developer、agent⇒agent）；`POST /api/auth/revoke` 加可选 subject（owner 面按主体撤销，非 owner 403）。
+  - `ui/src/views/GovernanceView.vue`：删长期 A 类密钥粘贴框、加身份族/TTL 列与按主体撤销按钮。
+  - `ui/src/api/client.ts` 新增 `revokeBySubject`。
+- 必红既有测试：`tests/unit/test_ui_api_paths_gate.py` 钉值 ui 59→60、sites 61→62、live 59→60 同批更新。
+- 门禁：vue-tsc --noEmit 干净；trust_boundary 行数同笔重生成。
+- 顺序污染自检：`monkeypatch.setenv`。
+- 我没做的事：未展示令牌明文/摘要；未给 SCOPES 加档；未动 mimo 树（留待 §6.3）。
 
 ## 批 4：RBAC 收口 + rename 三校验 + 令牌寿命（D7/D8/D11）
 - 判据腿：`tests/unit/test_auth_governance_rbac.py`（13 条全绿）。
@@ -143,7 +183,15 @@ db 在"必须改但不能改"的矛盾下选择改，且只改一半——这是
 - 我没做的事：
   - 未删 SSE 腿（`/api/mcp/pair-request` + openPairStream），它服务老的"agent 主动请求配对"路径；两条并存共用 `redeem_pair_code`。
   - 未硬编码 `192.168.2.200`；link 由 `request.base_url` + `UI_USER_PREFIX` 拼。
-  - mimo 侧 `PairingModal.vue` 文案改造（§6.3）未做——本批只落后端端点与判据腿，前端 UI 改造留待下一批。
+
+## mimo PairingModal 改造（路线图 §6.3，commit bd0d528）
+- 改了哪些文件：
+  - `ui-user-mimo/src/components/PairingModal.vue`：文案「生成 6 位配对码」→「生成配对链接」；新增 link 步显示可复制链接整串（不再裸显 8 位码 + 「在 Agent 端填入」老文案）；SSE 老路径 code 步保留不删。
+  - `ui-user-mimo/src/api/http.ts`：新增 `createPairLink` 调 `POST /api/user/pair-link`。
+  - `ui-user-mimo/src/stores/main.ts`：新增 `createPairLink` 动作并导出。
+  - `ui-user-mimo/src/types/api.ts`：新增 `PairLink` 类型。
+- 门禁：`tests/unit/test_ui_api_paths_gate.py` 同批更新钉值 mimo 22→23、反向读数 15→17（+POST /api/user/agent-token +GET /pair）、routes 94→97；50 条全绿。
+- 我没做的事：未删 SSE 腿（`/api/mcp/pair-request` + openPairStream 保留）；未动 `ui-user/` 与 `ui/` 两棵树的 PairingModal（路线图 §6.3 只点名 mimo）。
 
 ## 全量套件已知既有失败（非本批回归）
 - 全量 pytest 约 739 errors + `test_bash_syntax_smoke` 红 = 本地环境性既有失败（无 HA / WSL bash 路径），与本批身份层改动无关。
