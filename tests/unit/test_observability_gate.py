@@ -243,8 +243,11 @@ def test_real_repo_http_face_readings_are_pinned(real):
     # 无账可对的两格，现状重钉：28 → 32、89 → 96，出处 `117f4dd`（WebUI 一键升级新增端点）
     # ＋ `86bd023`／`0055e61`（round-005 审计确证 bug 修复）；96 → 98 出处 2026-10-17 基础设施敲打
     # （09d93a7：agent delete/rename 加 authenticated Depends 主体安全，两处）。
+    # 返工 5.1：98→102——第四批批 0-5 在 af_api 新增端点与 Depends 装配。
+    # ok_true 现读 32（返工 5.1 把 agent-token/pair-link/pair 三处的 `"ok": True` 字面量
+    # 改成派生值，先例=api_pair_redeem 的 ok=verified，消 AST 门 fake-ok-const 3 枚）。
     assert http["ok_true"] == 32
-    assert http["depends"] == 98
+    assert http["depends"] == 102
 
 
 def test_real_repo_debt_rows_match_fresh_readings(real):

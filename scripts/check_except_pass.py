@@ -66,7 +66,10 @@ BASELINE: frozenset[str] = frozenset(
         # `except Exception: pass`，**同一枚站点**，不是新增。16 → 16 枚。
         # 2026-10-26 批 2：1384 → 1388（登录/注册两处签发点补 principal_kind="login" 加了 4 行）。
         # 仍是同一枚 pair SSE 心跳吞掉站点，不是新增。16 → 16 枚。
-        "af_api.py:1388",
+        # 2026-10-26 返工 5.1：1388 → 1443（批 5 在它上方加了 pair-link 端点 + 失败计数落盘
+        # 约 55 行，把这枚顶漂；except_pass 门报 A"新增 1449"+C"基线 1388 读不到"是同一枚的
+        # 两面，净数仍 16=16，未破"只减不增"）。16 → 16 枚。
+        "af_api.py:1443",
         "af_closedloop/deepfix.py:52",
         "af_conflict.py:680",
         "af_conflict_audit.py:150",

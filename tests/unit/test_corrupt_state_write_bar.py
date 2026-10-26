@@ -68,7 +68,10 @@ def test_issued_registry_control_keeps_both_tokens(tmp_path):
     t1 = TokenRegistry(issued_path=p).issue_for_agent("alpha")
     t2 = TokenRegistry(issued_path=p).issue_for_agent("beta")
     data = json.loads(_read(p))
-    assert set(data) == {t1, t2}
+    # 返工 5.1（批 2 漏翻转）：issued_tokens.json 的键已改存 SHA-256 摘要（D6），
+    # 本腿钉的是"第二次签发不抹第一条"（两格都在、数量对），键的表示跟着存储口径走。
+    from autoforge.af_auth import _digest
+    assert set(data) == {_digest(t1), _digest(t2)}
 
 
 def test_issued_registry_refuses_when_file_corrupt(tmp_path):
@@ -95,7 +98,9 @@ def test_issued_registry_first_write_is_not_refused(tmp_path):
     p = tmp_path / "issued.json"
     assert not p.exists()
     tok = TokenRegistry(issued_path=p).issue_for_agent("alpha")
-    assert tok in json.loads(_read(p))
+    # 返工 5.1（批 2 漏翻转）：首写落盘的键是 SHA-256 摘要（D6），不是明文令牌。
+    from autoforge.af_auth import _digest
+    assert _digest(tok) in json.loads(_read(p))
 
 
 # ───────────────────────── 站 2：PairCodeStore._persist（F10②）─────────────────────────

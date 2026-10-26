@@ -354,9 +354,11 @@ def test_real_repo_is_green_and_pinned():
     # 读数：2026-10-17 对账 90→94（watch 生命周期 start/stop/list、insights 审批/待批 3 读
     # 4 写显式挂 read/write；DELETE/PATCH /api/user/agents 加 owner 鉴权）。新增均落在显式
     # scope 档，anon 仍 10、ungated 全登记 14，无裸奔。
-    assert info["rows"] == 95
-    assert info["ungated"] == 14
-    assert info["register"] == 14
+    # 返工 5.1：批 4 加 POST /api/user/agent-token（94→95），批 5 加 POST /api/user/pair-link
+    # （write）与 GET /pair（anon）⇒ 95→97、ungated 14→15（新匿名面 GET /pair 已进 §三 登记）。
+    assert info["rows"] == 97
+    assert info["ungated"] == 15
+    assert info["register"] == 15
     assert info["found_installers"] == [
         "src/autoforge/af_conflict_runtime.py",
         "src/autoforge/af_runtime_plugins.py",
@@ -371,10 +373,12 @@ def test_real_repo_tier_counts_are_the_batch_reading():
         counts[x["tier"]] = counts.get(x["tier"], 0) + 1
     # v1.13.0（2026-10-23 admin 运维档）：write 40→36（gap#6 四端点换 admin 门）、
     # admin 0→4（watch stop/start、system/update、DELETE automations）
-    # 批 4：+POST /api/user/agent-token（write）；批 5：+POST /api/user/pair-link（write）⇒ write 36→37
+    # 批 4：+POST /api/user/agent-token（write）；返工 5.1 补批 5：+POST /api/user/pair-link
+    # （write）⇒ write 36→38；+GET /pair（anon）⇒ anon 10→11。db 批 5 把清单 --write 刷到
+    # 97 却没同步本 pin（§1.9：台账 regen 与测试 pin 是两套），返工 5.1 对齐。
     assert counts == {
-        "scope:write": 37, "scope:read": 33, "scope:live": 3, "scope:admin": 4,
-        "anon": 10, "optional": 2, "bearer-in-handler": 2, "builtin": 4,
+        "scope:write": 38, "scope:read": 33, "scope:live": 3, "scope:admin": 4,
+        "anon": 11, "optional": 2, "bearer-in-handler": 2, "builtin": 4,
     }
 
 
@@ -388,12 +392,17 @@ def test_the_four_anonymous_posts_are_the_substance_of_the_batch():
 
 
 def test_two_reports_counts_reconciled_in_inventory_doc():
-    """执行记录要引这张表：read 33／write 36／live 3／admin 4 与第三轮报告+admin 收口逐条对上，"无鉴权"那一档本门读成 14。"""
+    """执行记录要引这张表：count 行档位数字与门现读逐条对上，"无鉴权"那一档本门读成 15。
+
+    返工 5.1：批 5 新增 `GET /pair`（anon 10→11）与 `POST /api/user/pair-link`（write 37→38）。
+    原末行锚的是 §五 **历史对账行**的字面（"14 条"＝2026-10-11 对账日的本门读数，那是当日
+    记录，不该跟着今天漂）⇒ 改锚 count 行的现读字面，历史对账行保持原样。
+    """
     text = (ROOT / mod.DOC_REL).read_text(encoding="utf-8")
-    assert "scope:read=33" in text and "scope:write=37" in text and "scope:live=3" in text
+    assert "scope:read=33" in text and "scope:write=38" in text and "scope:live=3" in text
     assert "scope:admin=4" in text
-    assert "anon=10" in text and "optional=2" in text and "bearer-in-handler=2" in text
-    assert "非鉴权档第一方端点 **14 条**" in text
+    assert "anon=11" in text and "optional=2" in text and "bearer-in-handler=2" in text
+    assert "97 条路由对象" in text
 
 
 # --------------------------------------------------------------------------------------

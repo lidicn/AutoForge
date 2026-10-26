@@ -402,12 +402,21 @@ class TokenRegistry:
             # 批 2：内存先把明文摘要一次，revoked 集合与 issued 索引都是摘要键——
             # 一次哈希代替 O(n) 逐钥 compare_digest（顺带修掉原线性扫）。
             dg = _digest(raw_token)
-            if dg in self._revoked:
-                return None
-            # 运行期签发令牌走摘要索引；env 访问密钥仍是明文键，原样查。
+            # 返工 5.1（P0-9）：撤销判定恢复逐条恒定时间比。批 2 改成 `dg in self._revoked`
+            # 把 revoked 侧也拆成了集合查找——dict 命中与否会在"这枚在不在黑名单"上留下
+            # 时序差（P0-9 登记的是同一族）。issued 侧维持摘要索引：落盘键是 sha256(160-bit
+            # 随机令牌)，摘要由请求方自选输入、命中与否不泄露任何可猜前缀，那条才是真安全。
+            for revoked in self._revoked:
+                if hmac.compare_digest(dg, revoked):
+                    return None
+            # 运行期签发令牌走摘要索引；env 访问密钥仍是明文键，恢复恒定时间逐钥比对
+            # （P0-9 登记过的修复不被存储改造顺手削弱）。
             info = self._issued.get(dg)
             if info is None:
-                info = self._tokens.get(raw_token)
+                for key, val in self._tokens.items():
+                    if hmac.compare_digest(raw_token, key):
+                        info = val
+                        break
             if info is None:
                 return None
             if info.invalid:

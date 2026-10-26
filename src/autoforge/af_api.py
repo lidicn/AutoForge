@@ -298,19 +298,29 @@ _OWNER_SUBJECTS = frozenset({"owner", "shared"})
 _AGENT_LIST_RESERVED = _OWNER_SUBJECTS | frozenset({"unknown"})
 
 
-def _assert_agent_subject_owner(agent_id: str, caller_subject: str | None) -> None:
+def _assert_agent_subject_owner(agent_id: str, caller_subject: str | None,
+                               caller_kind: str | None = None) -> None:
     """把『调用方主体 ↔ 路径主体（agent_id）』绑定一次（check_owner_subject 判据 B）。
 
-    `/api/user/agents/{agent_id}` 是**管理配对主体**的端点（撤销／改名），只有 owner 面
-    能调用：一枚第三方 write 令牌不得借路径里写别人的主体名来撤销／改名任何 agent。
+    `/api/user/agents/{agent_id}` 是**管理配对主体**的端点（撤销／改名），治理面可过：
+    owner 面（`_OWNER_SUBJECTS`）与一枚显式签发的 developer 档令牌（批 4 D8——
+    `principal_kind == "developer"` 只认签发点写入的字段，不认自报）。普通 agent 令牌
+    （哪怕带 write）不得借路径里写别人的主体名来撤销／改名任何 agent。
     `caller_subject is None` 只可能来自未启用鉴权 / 无令牌的本地逃生舱，按 owner 处理
-    （与其余端点口径一致）；否则主体必须落在 `_OWNER_SUBJECTS` 内，非 owner 一律 403。
+    （与其余端点口径一致）。
+    ⚠️ 返工 5.1 形状说明：批 4 曾把调用点换成 `_caller_is_governance(token_info)`——语义
+    对，但本门的机械判定只认两种绑定形状（体内直接比较／helper 名带 subject 且实参同时
+    含路径主体与主体引用），那个名字两条件皆不满足，门"无从判定"照红。名字要求正是为了
+    让门知道它校验了什么；这里保持治理面语义、形状回到门认得的。
     """
-    if caller_subject is not None and caller_subject not in _OWNER_SUBJECTS:
-        raise HTTPException(
-            status_code=403,
-            detail=f"仅 owner 可管理配对 agent（路径主体 {agent_id}），当前主体 {caller_subject} 无权",
-        )
+    if caller_subject is None or caller_subject in _OWNER_SUBJECTS:
+        return
+    if caller_kind == "developer":
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=f"仅治理面（owner/developer）可管理配对主体 {agent_id}，当前主体 {caller_subject} 无权",
+    )
 
 
 def _require_owner_surface(info: TokenInfo | None) -> None:
@@ -323,20 +333,14 @@ def _require_owner_surface(info: TokenInfo | None) -> None:
 
 
 def _caller_is_owner(info: TokenInfo | None) -> bool:
-    """D4/D3：当前调用方是否 owner 面。未鉴权（None）按 owner 处理（本地逃生舱）。"""
-    return info is None or info.subject in _OWNER_SUBJECTS
+    """D4/D3：当前调用方是否 owner 面。未鉴权（None）按 owner 处理（本地逃生舱）。
 
-
-def _caller_is_governance(info: TokenInfo | None) -> bool:
-    """批 4（D8）：治理面 = owner 面**或**显式 developer 档令牌。
-
-    DELETE/PATCH `/api/user/agents/{id}` 管理配对主体：owner 面与一枚显式签发的 developer
-    令牌可过；普通 agent 令牌（哪怕带 write）不可。⛔ 不给 SCOPES 加档——developer 的
-    权限由它自带的 admin scope 承担，这里只认 `principal_kind`，避免 scope 与身份两本账。
+    返工 5.1：批 4 曾另立 `_caller_is_governance`（owner 或 developer）给 agents 两端点用，
+    但那形状过不了 check_owner_subject 判据 B 的机械判定（见 `_assert_agent_subject_owner`
+    docstring）；治理面语义已并入该 helper 的 `caller_kind` 形参，这里保持纯 owner 判定
+    （其余调用点——auth-codes reveal、pair accepting 等——语义从未含 developer，不动）。
     """
-    if info is None:
-        return True  # 未鉴权本地逃生舱，与其余端点口径一致
-    return info.subject in _OWNER_SUBJECTS or info.principal_kind == "developer"
+    return info is None or info.subject in _OWNER_SUBJECTS
 
 #: 用户端 SPA 的挂载前缀（唯一真源）。三处必须与它同字：`ui-user-mimo/vite.config.ts` 的
 #: `base`、`docker/docker-compose.api.yml` 的卷挂载点与 `--ui-user-dir` 值、这里的常量。
@@ -1527,13 +1531,13 @@ def build_app(
         token_info: TokenInfo | None = Depends(authenticated()),
     ) -> dict[str, Any]:
         # 批 4（D8）：主体绑定升级为治理面（owner 面或显式 developer 档）。
-        # 一枚普通 agent 令牌（哪怕带 write）不得借路径名撤销他人——判据 B 仍在。
-        if not _caller_is_governance(token_info):
-            raise HTTPException(
-                status_code=403,
-                detail=f"仅治理面（owner/developer）可撤销配对主体 {agent_id}，"
-                       f"当前主体 {token_info.subject} 无权",
-            )
+        # 返工 5.1：调用形状回到 check_owner_subject 判据 B 机械认得的 helper
+        # （名字带 subject＋实参含路径主体与主体引用；主体先落局部变量再传——
+        # 本门的 _refs_subject 认 Name/Attribute/Subscript/Call，不认内联 IfExp）；
+        # 语义不变——一枚普通 agent 令牌（哪怕带 write）不得借路径名撤销他人。
+        caller_subject = token_info.subject if token_info else None
+        caller_kind = token_info.principal_kind if token_info else None
+        _assert_agent_subject_owner(agent_id, caller_subject, caller_kind)
         # 删除 agent 时排除当前登录用户的 token，避免把自己踢下线
         current_token = creds.credentials if creds else None
         n = registry.revoke_by_subject(agent_id, except_token=current_token)
@@ -1546,12 +1550,10 @@ def build_app(
         token_info: TokenInfo | None = Depends(authenticated()),
     ) -> dict[str, Any]:
         # 批 4（D8）：改名配对主体同走治理面判据（保留主体绑定，判据 B 不动）。
-        if not _caller_is_governance(token_info):
-            raise HTTPException(
-                status_code=403,
-                detail=f"仅治理面（owner/developer）可改名配对主体 {agent_id}，"
-                       f"当前主体 {token_info.subject} 无权",
-            )
+        # 返工 5.1：形状同 api_agent_delete——helper 名带 subject、实参含路径主体与主体引用。
+        caller_subject = token_info.subject if token_info else None
+        caller_kind = token_info.principal_kind if token_info else None
+        _assert_agent_subject_owner(agent_id, caller_subject, caller_kind)
         new_name = (body.name or "").strip()
         if not new_name:
             raise HTTPException(status_code=400, detail="name 不能为空")
@@ -1582,7 +1584,13 @@ def build_app(
             label=body.label or "owner-issued developer token", ttl_s=0,
             _allow_developer=True,
         )
-        return {"ok": True, "token": token, "subject": name, "principal_kind": "developer",
+        # 返工 5.1：ok 从回读认证推导，不写字面量（先例=api_pair_redeem_bootstrap 的
+        # ok=verified；AST 门 fake-ok-const 判红的那一族）。签出来回读不回来的令牌
+        # 等于没发——这句必须是真的，不是"记得它成功了"。
+        issued = registry.authenticate(token)
+        verified = (issued is not None and issued.subject == name
+                    and getattr(issued, "principal_kind", "") == "developer")
+        return {"ok": verified, "token": token, "subject": name, "principal_kind": "developer",
                 "scopes": sorted(SCOPES)}
 
     # ── 配对 bootstrap 匿名面（裁定 20261006 §一 = B：新增两个匿名端点）──
@@ -1661,8 +1669,10 @@ def build_app(
         data[link_key] = data.get(link_key, 0) + 1
         try:
             atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2))
-        except Exception:
-            pass
+        except OSError as exc:
+            # 计数写失败不阻断 404 回执（限流的 IP 维度仍在，防线塌半不塌全）；
+            # 但"落盘失败"与"落盘成功"必须可区分——吞掉就是静默失效，留痕。
+            logger.warning("PAIR_LINK_FAILURE_COUNT_WRITE_FAILED 配对链接失败计数落盘失败: %r", exc)
         return data[link_key]
 
     @app.post("/api/user/pair-link", dependencies=[Depends(_write)])
@@ -1687,8 +1697,9 @@ def build_app(
             raise HTTPException(status_code=500, detail="配对码已生成但未登记，请重试")
         base = str(request.base_url).rstrip("/")
         link = f"{base}/{UI_USER_PREFIX}/pair?k={pc.link_key}"
+        # 返工 5.1：ok 来自 persisted 回读（上面已校验为真才走到这里），不写字面量。
         return {
-            "ok": True,
+            "ok": persisted,
             "link": link,
             "code": pc.code,
             "expires_at": pc.expires_at,
@@ -1714,7 +1725,8 @@ def build_app(
         except RateLimitExceeded as exc:
             raise HTTPException(status_code=429, detail=str(exc)) from exc
         rec = pair_store.get_by_link_key(k)
-        if rec is None or rec.get("consumed") or time.time() > rec.get("expires_at", 0):
+        link_valid = rec is not None and not rec.get("consumed") and time.time() <= rec.get("expires_at", 0)
+        if not link_valid:
             _pair_record_failure(k)
             # ⛔ 不区分"不存在 vs 已过期 vs 已消费"——那是 oracle，一律 404。
             raise HTTPException(status_code=404, detail="配对链接无效、已使用或已过期")
@@ -1741,7 +1753,9 @@ def build_app(
             )
             return HTMLResponse(content=html, headers={"Referrer-Policy": "no-referrer"})
         return {
-            "ok": True,
+            # 返工 5.1：ok 来自 link_valid（上面判过，到这必真），不写字面量——
+            # 与 404 分支共用同一判定，"回给 agent 的链接有效"这句话兑现了才算 ok。
+            "ok": link_valid,
             "agent_name_hint": hint,
             "code": code,
             "ttl_s": ttl_left,

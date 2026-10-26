@@ -302,7 +302,13 @@ HTTP 与 MCP 是**两个进程**各持一份内存副本。不停机就会出现
 - `tests/unit/test_v0_8_auth.py:70`：`assert json.loads(revoked_path.read_text()) == ["secret"]`
   ——它**钉住了 revoked.json 的明文表示**。改摘要后必红，按新口径改成断言摘要，
   **并在改动处写清为什么改**（PM 要能复核这个翻转）。
-- 任何直接读 `issued_tokens.json` 键的测试/脚本，`grep -rn "issued_tokens" tests/ scripts/` 逐处确认。
+- 任何直接读 `issued_tokens.json` 键的测试/脚本，逐处确认。
+  ⚠️ **检索必须同时给 `issued_path`**（返工 5.1 PM 补）：`TokenRegistry` 的构造参数名是
+  `issued_path`，测试与脚本靠它注入落盘路径，文件里可能**一个字都不出现 `issued_tokens`**
+  ——实测受害：`tests/unit/test_corrupt_state_write_bar.py` 用 `issued_path=p` 断言
+  `set(data) == {t1, t2}`（明文令牌做键），批 2 改摘要键后它红，db 按单字符串 grep 扫不到、
+  漏进回执的"已知既有失败"里。正确姿势：
+  `grep -rn "issued_tokens\|issued_path\|_persist_issued\|_rewrite_issued" tests/ scripts/`
 
 ### 3.6 验收
 
