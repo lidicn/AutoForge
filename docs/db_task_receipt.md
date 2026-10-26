@@ -97,3 +97,56 @@ db 在"必须改但不能改"的矛盾下选择改，且只改一半——这是
 - DB-04 只加测试，**未改** af_executor.py / af_canary.py——修 d3→then 边是 PM 的活，测试钉住的是当前缺陷行为（d4 不跑），不为绿放宽断言。
 - 没 push origin master / 没打 tag；commit message 无真实令牌值。
 - 未合回 master，留待 PM review 统一合。
+
+---
+
+# 第四批 · 身份层一次治理回执（2026-10-26）
+
+路线图：`docs/db_START_HERE_20261026.md` + `docs/db_roadmap_batch4_identity_20261026.md`。
+工作分支 `db/task-01`（worktree busy-meninsky-653c24），6 笔单批提交。
+
+## 提交链
+| 批 | commit | 判据腿 |
+|---|---|---|
+| 批 0 堵四把刀 D1-D4 | `a2dd3f4` | test_auth_governance_batch0.py · 11 条 |
+| 批 1 D5 af_apply 补 owner | `9fc571c` | test_af_apply_owner_backfill.py · 5 条 |
+| 批 2 摘要迁移 + principal_kind | `91af5b8` | test_issued_tokens_digest_migration.py · 12 条 |
+| 批 3 治理面看得见 D9 | `fbcbfde` | test_auth_governance_surface.py · 4 条 |
+| 批 4 RBAC 收口 + rename + 寿命 | `a7cbb73` | test_auth_governance_rbac.py · 13 条 |
+| 批 5 /pair 新链路 D10 | `8823d69` | test_pair_link_flow.py · 10 条 |
+
+## 批 4：RBAC 收口 + rename 三校验 + 令牌寿命（D7/D8/D11）
+- 判据腿：`tests/unit/test_auth_governance_rbac.py`（13 条全绿）。
+- 改了哪些文件：
+  - `af_auth.py`：TokenInfo 加 `absolute_deadline`；authenticate 绝对上限先判（fail-closed）+ 登录令牌剩余<50% TTL 才滑动续期（钳在 absolute_deadline 内，仅续期真发生时 `_persist_renewal_locked` 落盘一次，不每请求整表重写）；`rename_subject` 服务层三校验（保留名 owner/shared/unknown 拒、与现有其他 subject 重名拒）；`issue_for_agent` 加 `_allow_developer` 内部放行形参。
+  - `af_api.py`：`_caller_is_governance`（治理面=owner 或显式 developer 档，不给 SCOPES 加档）；DELETE/PATCH `/api/user/agents/{id}` 收治理面但保留主体绑定（判据 B 不动）；新增 `POST /api/user/agent-token`（owner 面专属，developer 档唯一铸造口，ttl=0 全 scope）；`POST /api/auth/revoke` 非 owner 只能撤自己名下令牌。
+  - 台账：`docs/信任边界清单.md` §六 A/B 两格由"红/待补"订正为已收口；`docs/进程模型清单.md` §三 4 枚 af_service 登记行号随批 0/1 漂移重对齐；`docs/可观测性清单.md`、`docs/发布线清单.md` 自动段 `--write` 重生成。
+- 必红既有测试：`tests/unit/test_v0_8_auth.py` 未红（其 revoke 用例撤自己令牌，与"只能撤自己"兼容）。
+- 门禁三连：
+  - `python scripts/check_trust_boundary.py --write` → 95 条路由自动段；再 `check_trust_boundary.py` 干净。
+  - `python scripts/check_owner_subject.py` → 主体名单单一真源、`/api/user/agents/*` 带路径参数端点都做了主体绑定。
+  - `gates.sh`：进程模型/可观测性/发布线自动段已重生成；except:pass 门对 `src/autoforge` 跑（SSE 吞站点行漂已重冻结）。
+- 既有 pin 漂移同批更新：`test_trust_boundary_gate.py` rows 94→95、write 36→37；`test_owner_subject_gate.py` rename 注入锚点随 try/except 块缩进对齐。
+- 顺序污染自检：测试一律 `monkeypatch.setenv`（不裸 `os.environ`）。
+- 我没做的事：
+  - 未给 SCOPES 加 developer 档（developer 权限由自带 admin scope 承担，身份认 `principal_kind`）。
+  - 未做"每请求续期"（`_persist_issued` 整表重写会叠在热路径）。
+  - 未把 env 访问密钥的 principal_kind 抬到 login（env 默认 agent 档最窄）。
+
+## 批 5：/pair 新链路（链接配对，D10）
+- 判据腿：`tests/unit/test_pair_link_flow.py`（10 条全绿；端到端腿真跑通：生成链接→redeem→/me role=agent）。
+- 改了哪些文件：
+  - `af_auth.py`：`PairCode` 加 `link_key`（`secrets.token_urlsafe(16)`，128 位，与 code 一对一、同 TTL、同一次性、不单独续期）；`PairCodeStore.create` 生成 link_key；新增 `get_by_link_key` / `consume_by_link_key`。
+  - `af_api.py`：`POST /api/user/pair-link`（owner 面，复用 `request_pair_code`，受 `is_accepting()` 约束）；匿名 `GET /pair?k=`（Accept 协商 JSON 自描述 redeem 指引 vs HTML 只读静态页带 `Referrer-Policy: no-referrer`；双维度限速 IP + `key:{k}`；失败计数落盘 `.auth/pair_link_failures.json` 重启不归零；不区分不存在/已过期防 oracle）。
+  - 台账：`docs/信任边界清单.md` 自动段重生成（95 路由，write 36→37）。
+- 既有 pin 漂移同批更新：`test_trust_boundary_gate.py` rows 94→95、write 36→37。
+- 我没做的事：
+  - 未删 SSE 腿（`/api/mcp/pair-request` + openPairStream），它服务老的"agent 主动请求配对"路径；两条并存共用 `redeem_pair_code`。
+  - 未硬编码 `192.168.2.200`；link 由 `request.base_url` + `UI_USER_PREFIX` 拼。
+  - mimo 侧 `PairingModal.vue` 文案改造（§6.3）未做——本批只落后端端点与判据腿，前端 UI 改造留待下一批。
+
+## 全量套件已知既有失败（非本批回归）
+- 全量 pytest 约 739 errors + `test_bash_syntax_smoke` 红 = 本地环境性既有失败（无 HA / WSL bash 路径），与本批身份层改动无关。
+
+## 禁区
+- `docs/缺口登记_实测自动化_20261023.md`（PM 未提交在途工作）全程未 add、未改。
