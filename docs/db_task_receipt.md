@@ -198,3 +198,40 @@ db 在"必须改但不能改"的矛盾下选择改，且只改一半——这是
 
 ## 禁区
 - `docs/缺口登记_实测自动化_20261023.md`（PM 未提交在途工作）全程未 add、未改。
+
+---
+
+# 第五批 · 身份层收尾回执（2026-10-26）
+
+路线图：`docs/db_roadmap_batch5_finale_20261026.md`。3 笔单批提交。
+
+## 提交链
+| 任务 | commit | 判据腿 |
+|---|---|---|
+| DB-10 /pair CSP 纵深 | `4bcd41c` | test_pair_link_flow.py · 12 条（+2 新腿） |
+| DB-09 治理页签发卡 | `1a29bd6` | test_ui_api_paths_gate.py · 50 条 |
+| DB-08 登录残身清理 | `81dc4ec` | test_auth_governance_batch0.py · 12 条（+1 新腿） |
+
+## DB-10：/pair CSP 纵深（commit 4bcd41c）
+- 判据腿：`tests/unit/test_pair_link_flow.py` 12 条全绿（新增腿 11 HTML 头、腿 12 JSON 头；旧腿 `resp.json()` 不碎）。
+- 改了哪些文件：`src/autoforge/af_api.py` 的 `api_pair_link_open`。
+- 改法：共用 `pair_headers`（Referrer-Policy/no-referrer + X-Frame-Options:DENY + CSP `default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'`）；HTML 分支复用，JSON 分支改 `JSONResponse(content=..., headers=...)` 以带个头。
+- 我没做的事：未动函数逻辑（限流/404/oracle 形状保持返工 5.1 定稿）；未扩 CSP 到 `default-src` 放行资源。
+
+## DB-09：治理页签发开发者令牌卡（commit 1a29bd6）
+- 判据腿：`tests/unit/test_ui_api_paths_gate.py` 50 条全绿（同批更 pin：sites 62→63、live 60→61、ui 60→61；反向读数 17→16，agent-token 从「未被调用」名单移除）。
+- 改了哪些文件：
+  - `ui/src/api/client.ts`：加 `issueAgentToken(name)` → POST `/user/agent-token`。
+  - `ui/src/api/index.ts`：导出。
+  - `ui/src/views/GovernanceView.vue`：新增「签发开发者 Agent 令牌（一次性）」卡——输入 Agent 名 → 按钮 → 成功后只读框一次性展示明文 + 复制按钮 + 警示「仅此一次可见」；令牌不进 store/localStorage；`ok:false`（签发后回读失败）当失败处理，不渲染令牌。
+- 我没做的事：未动 mimo 树（治理卡只在 `ui/`）；未加 localStorage 持久化（路线图明文要求一次性）。
+
+## DB-08：登录残身清理（commit 81dc4ec）
+- 判据腿：`tests/unit/test_auth_governance_batch0.py` 12 条全绿（新增腿 `test_d2_login_docstring_does_not_promise_old_compat_branch`：旧 docstring 关键句「向后兼容：如果还没有管理员用户」「保持旧的「任意非空凭据可登录」行为」0 命中）。
+- 改了哪些文件：
+  - `src/autoforge/af_api.py` `api_auth_login` docstring 重写：未注册 ⇒ 401 fail-closed + `need_register`，指向注册端点；旧「任意非空凭据可登录」兼容分支已在 D2 堵死。
+  - `docs/信任边界清单.md` §三 login 行「理由」段：依据改 `src/autoforge/af_api.py`，理由删「全权限令牌/等裁/不动 af_api」过期口径，写明 D2 已裁并已修。
+  - 台账同批重生成：`docs/可观测性清单.md` 自动段 + §三 UPDATE_PREVIEW_READ_FAILED 行号 1316→1318（去重）；`docs/发布线清单.md` 自动段；`scripts/check_except_pass.py` 基线 `af_api.py:1443→1445`（SSE 心跳站点行号漂移）。
+- 门禁：`gates.sh` 终审「结论：门禁干净」。
+- 顺序污染自检：测试一律 `monkeypatch.setenv`。
+- 我没做的事：未改登录函数逻辑一行（need_register 形状、fail-closed 判据保持返工 5.1 定稿）；未做 need_register 前端提示文案（路线图 §1.2 标为可选项，额度留给 DB-09 功能缺口）。
