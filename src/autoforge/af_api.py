@@ -1693,17 +1693,22 @@ def build_app(
                 status_code=409,
                 detail="用户已暂停接受配对请求（恢复后再生成配对链接）",
             )
-        pc = request_pair_code(pair_store, body.agent_name_hint)
+        # ttl_s=600（出资人 2026-10-26 Q6）：链接要被复制转手给 agent，5 分钟不够；
+        # 只这一径放宽，匿名 bootstrap 面维持 create 默认 300s。一次性/消费语义不变。
+        pc = request_pair_code(pair_store, body.agent_name_hint, ttl_s=600)
         persisted = pair_store.get(pc.code) is not None
         if not persisted:
             raise HTTPException(status_code=500, detail="配对码已生成但未登记，请重试")
         base = str(request.base_url).rstrip("/")
         link = f"{base}/{UI_USER_PREFIX}/pair?k={pc.link_key}"
         # 返工 5.1：ok 来自 persisted 回读（上面已校验为真才走到这里），不写字面量。
+        # agent_name_hint 进返回体（返工 5.2）：弹窗标题显示「配对链接 · {hint}」，
+        # 不给就永远回退成光秃秃的 "Agent"。
         return {
             "ok": persisted,
             "link": link,
             "code": pc.code,
+            "agent_name_hint": pc.agent_name_hint,
             "expires_at": pc.expires_at,
             "ttl_s": int(pc.expires_at - pc.created_at),
         }

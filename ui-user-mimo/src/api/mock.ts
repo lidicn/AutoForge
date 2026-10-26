@@ -4,7 +4,7 @@
  * §1 只给了数据结构，没给 HTTP 契约，因此这里先定义「客户端接口」ApiClient：
  * 真实后端就绪后另写一个实现替换 mockApi 即可，视图 / store / 单测契约不变。
  */
-import type { Agent, AuthCode, Automation, PairRequest, PendingItem, User } from '../types/api.ts'
+import type { Agent, AuthCode, Automation, PairLink, PairRequest, PendingItem, User } from '../types/api.ts'
 import { PAIR_CODE_LENGTH, PAIR_TTL_MS, isPairCode, randomDigits } from '../logic/pairing.ts'
 import { SHORT_CODE_LENGTH, shortRemainMs, validateShortMinutes } from '../logic/authcodes.ts'
 
@@ -28,6 +28,7 @@ export interface ApiClient {
   renameAgent (agentId: string, name: string): Promise<Agent>
   deleteAgent (agentId: string): Promise<void>
   createPairRequest (agentNameHint: string): Promise<PairRequest>
+  createPairLink (agentNameHint: string): Promise<PairLink>
   resolvePair (code: string): Promise<Agent>
   listAutomations (): Promise<Automation[]>            // 含归档，客户端自行 splitByArchived
   setAutomationEnabled (id: string, enabled: boolean): Promise<Automation>
@@ -243,6 +244,25 @@ export const mockApi: ApiClient = {
       }
       db.pairRequests.push(req)
       return req
+    })
+  },
+
+  createPairLink (agentNameHint) {
+    // 与真后端 POST /api/user/pair-link 同形状（返工 5.2 补齐：批 5 只写了 http 侧，
+    // mock 漏了这个方法 ⇒ mock 模式点「生成配对链接」直接 undefined is not a function）。
+    // ttl 对齐后端 pair-link 径的 600s（出资人 Q6）；⛔ 不复用老码径的 300s 常数。
+    return call('createPairLink', () => {
+      const ttlS = 600
+      const code = randomDigits(8)   // 后端 _rand6 实际 8 位（函数名历史遗留）
+      const hint = (agentNameHint ?? '').trim() || '新 Agent'
+      const link: PairLink = {
+        link: `http://autoforge.mock/mimo/pair?k=${randomDigits(43)}`,  // 43 字符，与真链 link_key 同形
+        code,
+        agent_name_hint: hint,
+        expires_at: iso(now() + ttlS * 1000),
+        ttl_s: ttlS,
+      }
+      return link
     })
   },
 

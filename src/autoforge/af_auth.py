@@ -1073,13 +1073,20 @@ class PairCodeStore:
         return data.get("accepting") is True
 
 
-def request_pair_code(pair_store: PairCodeStore, agent_name_hint: str) -> PairCode:
-    """配对第 1 步的**唯一实现**：MCP 工具 `af_request_pair` 与匿名 HTTP bootstrap 端点共用。
+def request_pair_code(pair_store: PairCodeStore, agent_name_hint: str,
+                      ttl_s: int | None = None) -> PairCode:
+    """配对第 1 步的**唯一实现**：MCP 工具 `af_request_pair`、匿名 HTTP bootstrap 与
+    owner 面 `POST /api/user/pair-link` 三径共用。
 
     写两份的原因不会缺席这里——两份各自漂移之后，"码只显示给用户"这条不变量就会在其中一份里失效。
+    `ttl_s` 透传给 `create`：⛔ 不给默认值改老口径——None 走 `create` 自己的 300s；
+    只有 pair-link 径显式传 600（出资人 2026-10-26 裁定 Q6：链接要被复制转手，
+    5 分钟不够；一次性与消费语义不变）。
     """
     hint = (agent_name_hint or "").strip() or "未知 agent"
-    return pair_store.create(hint)
+    if ttl_s is None:
+        return pair_store.create(hint)
+    return pair_store.create(hint, ttl_s=ttl_s)
 
 
 def redeem_pair_code(

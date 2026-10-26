@@ -22,6 +22,7 @@ export interface PairRequest {
 export interface PairLink {
   link: string
   code: string
+  agent_name_hint: string
   expires_at: string
   ttl_s: number
 }

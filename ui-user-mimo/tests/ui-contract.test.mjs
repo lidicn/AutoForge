@@ -46,14 +46,21 @@ test('Agent Tab：MCP 卡片 + 复制按钮 + 删除配对 + 内联改名', () =
   has('src/views/AgentsView.vue', '最后活跃')
 })
 
-test('配对弹窗：6 位数字逐位翻入 + 呼吸光晕 + 倒计时 MM:SS', () => {
+test('配对弹窗：链接新路径 + SSE 老码路径两枚都在位（批5 改 UI 后返工重钉）', () => {
+  // 返工 5.2：db 批 5 把默认动作改成「生成配对链接」，但没同步这条契约腿——
+  // `PAIR_CODE_LENGTH` 已不被模态 import（digits 改从 pair.code.split('') 来）、
+  // 「生成配对码」字样已换成「生成配对链接」，旧钉法红。两径并存的形状重钉：
+  // 新链接径（按钮/复制/警示）+ 老 SSE 码径（逐位翻入/呼吸/倒计时）各自钉住。
   has('src/styles/main.css', '@keyframes flipIn')
   has('src/styles/main.css', 'animation: flipIn')               // 定义过不等于用过
-  has('src/components/PairingModal.vue', 'class="cell"')        // 组件与 CSS 的接合点是 .cell
   has('src/styles/main.css', '@keyframes breathe')
-  has('src/components/PairingModal.vue', 'formatCountdown')
-  has('src/components/PairingModal.vue', 'PAIR_CODE_LENGTH')
-  has('src/components/PairingModal.vue', '生成配对码')
+  has('src/components/PairingModal.vue', 'class="cell"')        // 组件与 CSS 的接合点是 .cell
+  has('src/components/PairingModal.vue', 'formatCountdown')     // 倒计时 MM:SS 两径共用
+  has('src/components/PairingModal.vue', '生成配对链接')         // 新径：批 5 主路径
+  has('src/components/PairingModal.vue', '复制配对链接')         // 新径：出资人复制转手的动作
+  has('src/components/PairingModal.vue', 'link?.link')          // 新径：链接整串渲染进 UI（不是裸 8 位码）
+  has('src/components/PairingModal.vue', 'step ===')            // 两径分步：form/link/code 三态机在位
+  has('src/logic/pairing.ts', 'export const PAIR_TTL_MS = 5 * 60_000')  // 老码径 TTL 常数（SSE bootstrap 仍 300s）
 })
 
 test('自动化 Tab：启用/归档子 Tab + 待批红角标置顶 + Agent 折叠分组 + 卡片要素', () => {
@@ -103,6 +110,18 @@ test('裁定 20261005 §一 Q3：mock 缺省档 = 真后端，且这条判定全
     assert.ok(!read(f).includes('import.meta'), `${f} 又自己读了一遍宿主注入的 env ⇒ 缺省档长出第二个真源`)
   }
   assert.ok(read('.env.production').includes('VITE_USE_MOCK=false'), '生产档没显式关掉 mock')
+})
+
+test('http.ts 的 POST body 一律 JSON.stringify——fetch 发对象会变成 "[object Object]"', () => {
+  // 生产实炸过一次（2026-10-26，mimo 生成配对链接）：批 5 的 createPairLink 写成
+  // `body: { agent_name_hint }`（对象），fetch 对非字符串 body 做 toString ⇒ 服务端
+  // 422 `JSON decode error`；其余 POST 都是 JSON.stringify 约定，mock 演不出这一炸
+  // （mock 不经过 fetch）⇒ 单测全绿、生产全断。钉形状不钉字面：对象字面量 body 0 命中。
+  const http = read('src/api/http.ts')
+  const objBody = http.match(/body:\s*\{/g) || []
+  assert.equal(objBody.length, 0, `http.ts 出现未 stringify 的对象 body：${objBody.join(' / ')}`)
+  assert.ok(http.includes("body: JSON.stringify({ agent_name_hint: agentNameHint })"),
+    'createPairLink 的 stringify 形状必须逐字在位（防改回对象字面量）')
 })
 
 test('判据跑法：store 与 API 层不碰 DOM（裸 node 里没有 document）', () => {

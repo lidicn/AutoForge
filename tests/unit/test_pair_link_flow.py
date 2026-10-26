@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import time
 import re
 
 import pytest
@@ -54,6 +55,25 @@ def test_1_owner_creates_pair_link(client):
     assert re.fullmatch(r"https?://.+/pair\?k=.{22,}", body["link"]), body["link"]
     assert re.fullmatch(r"\d{8}", body["code"]), body["code"]
     assert body["ttl_s"] > 0
+
+
+def test_1b_pair_link_ttl_is_600_and_carries_hint(client):
+    """返工 5.2：ttl_s 钉死 600（出资人 Q6「链接要复制转手，5 分钟不够」）——
+    只断 `>0` 是空门，漂回 300 也不会红；agent_name_hint 必须回（弹窗标题在用，
+    不给就永远显示光秃秃的 "Agent"）。"""
+    owner = _owner_token(client)
+    body = _make_link(client, owner)   # hint="书房助手" 在 helper 里
+    assert body["ttl_s"] == 600, f"链接 TTL 漂了：{body['ttl_s']}（出资人裁定 600）"
+    assert body["agent_name_hint"] == "书房助手", body
+
+
+def test_1c_bootstrap_pair_request_stays_300(client):
+    """匿名 bootstrap 面的码维持 create 默认 300s——只有 owner 面链接径被裁定放宽；
+    断 `expires_at - now` 的窗（该端点回 expires_at float，不回 ttl_s）。"""
+    r = client.post("/api/mcp/pair/request", json={"agent_name_hint": "x"})
+    assert r.status_code == 200, r.text
+    left = r.json()["expires_at"] - time.time()
+    assert 240 < left <= 301, f"bootstrap TTL 漂了：{left:.0f}s（应保持 300s 口径）"
 
 
 def test_2_agent_cannot_create_pair_link(client):

@@ -209,9 +209,11 @@ export const httpApi: ApiClient = {
 
   // 批 5：owner 面生成配对链接（用户先出码，agent 自行 redeem）
   async createPairLink (agentNameHint: string) {
+    // ⚠️ body 必须 stringify——fetch 对对象 body 做 toString 发成 "[object Object]"，
+    // 服务端报 JSON decode error（生产实炸过一次；全文件其余 POST 都是这个约定）。
     return req<PairLink>(
       '/api/user/pair-link',
-      { method: 'POST', body: { agent_name_hint: agentNameHint } },
+      { method: 'POST', body: JSON.stringify({ agent_name_hint: agentNameHint }) },
     )
   },
 

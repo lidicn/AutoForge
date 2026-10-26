@@ -28,7 +28,12 @@ const expired = computed(() => {
   const refTime = link.value ? Date.parse(link.value.expires_at) : (pair.value ? Date.parse(pair.value.expires_at) : 0)
   return Date.now() > refTime
 })
-const progress = computed(() => Math.max(0, Math.min(1, remainMs.value / PAIR_TTL_MS)))
+// 进度条分母：链接径用后端实发 ttl_s（600s，Q6 裁定），老 SSE 码径回退常数 5 分钟。
+// 写死分母会让 600s 的链接一打开进度条就从 83% 起跳（5/6），看着像"快过期了"。
+const progress = computed(() => {
+  const totalMs = link.value?.ttl_s ? link.value.ttl_s * 1000 : PAIR_TTL_MS
+  return Math.max(0, Math.min(1, remainMs.value / totalMs))
+})
 const hot = computed(() => remainMs.value > 0 && remainMs.value < 60000)
 
 watch(() => props.show, (v) => {
@@ -112,7 +117,7 @@ function onUpdateShow (v: boolean) { if (!v) close() }
         <p class="tip" :class="{ bad: expired }">
           {{ expired ? '链接已过期，请重新生成' : '把这段链接发给 Agent，它打开后自动完成配对' }}
         </p>
-        <p class="sub">生成于 {{ formatDateTime(link?.expires_at ?? null) }} · 有效期 5 分钟</p>
+        <p class="sub">生成于 {{ formatDateTime(link?.expires_at ?? null) }} · 有效期 {{ Math.round((link?.ttl_s ?? 300) / 60) }} 分钟</p>
 
         <div class="acts">
           <n-button type="primary" :loading="busy" :disabled="expired" @click="copyLink">
