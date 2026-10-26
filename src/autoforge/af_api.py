@@ -61,7 +61,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
@@ -185,6 +185,11 @@ class PairRedeemBody(BaseModel):
 
 class PairAcceptingBody(BaseModel):
     accepting: bool
+
+
+# ── 批 5：owner 面生成配对链接请求体 ──
+class PairLinkBody(BaseModel):
+    agent_name_hint: str = ""
 
 
 # ── Round 2-A：会话（ask 审批的人机回路）──
@@ -1632,6 +1637,124 @@ def build_app(
             "token": token,
             "subject": subject,
             "message": "配对成功：请将 token 作为 Bearer 调用 AutoForge API",
+        }
+
+    # ── 批 5：用户先出链接的配对路（与匿名 bootstrap 并存，共用 redeem_pair_code）──
+    def _pair_failure_count_path() -> Path:
+        return Path(store_root) / ".auth" / "pair_link_failures.json"
+
+    def _pair_record_failure(link_key: str) -> int:
+        """每次访问 GET /pair 都记一笔（按 link_key），落盘 .auth/ 下，重启不归零。
+
+        容器重建会把进程内限流器清零——这层计数就是那道防线的持久化壳子。
+        只记数、不回显、不落码值。
+        """
+        p = _pair_failure_count_path()
+        data: dict[str, int] = {}
+        if p.is_file():
+            try:
+                loaded = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    data = {str(k): int(v) for k, v in loaded.items()}
+            except (OSError, ValueError):
+                data = {}
+        data[link_key] = data.get(link_key, 0) + 1
+        try:
+            atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2))
+        except Exception:
+            pass
+        return data[link_key]
+
+    @app.post("/api/user/pair-link", dependencies=[Depends(_write)])
+    def api_pair_link_create(
+        body: PairLinkBody, request: Request,
+        info: TokenInfo | None = Depends(authenticated()),
+    ) -> dict[str, Any]:
+        """批 5：owner 面生成配对链接（link_key + 8 位码，同一 TTL、同一一次性）。
+
+        ⛔ 不是第二套签发：复用 request_pair_code（与 MCP/匿名 bootstrap 同一函数）。
+        受 pair_store.is_accepting() 约束，与匿名 bootstrap 同口径。
+        """
+        _require_owner_surface(info)
+        if not pair_store.is_accepting():
+            raise HTTPException(
+                status_code=409,
+                detail="用户已暂停接受配对请求（恢复后再生成配对链接）",
+            )
+        pc = request_pair_code(pair_store, body.agent_name_hint)
+        persisted = pair_store.get(pc.code) is not None
+        if not persisted:
+            raise HTTPException(status_code=500, detail="配对码已生成但未登记，请重试")
+        base = str(request.base_url).rstrip("/")
+        link = f"{base}/{UI_USER_PREFIX}/pair?k={pc.link_key}"
+        return {
+            "ok": True,
+            "link": link,
+            "code": pc.code,
+            "expires_at": pc.expires_at,
+            "ttl_s": int(pc.expires_at - pc.created_at),
+        }
+
+    @app.get("/pair")
+    def api_pair_link_open(k: str = "", request: Request = None) -> JSONResponse:  # type: ignore[assignment]
+        """批 5：匿名配对链接落地页。Accept 协商：
+
+        - `Accept: application/json`（curl/agent）⇒ 自描述 JSON（redeem 地址/参数/后续用法）。
+        - `Accept: text/html`（人点开）⇒ 只读静态页（码、剩余时间、redeem 方法、复制按钮），
+          带 `Referrer-Policy: no-referrer`（码会进浏览器历史）。
+        限流两条维度缺一不可：复用 bootstrap_redeem_limiter（按 IP）+ 按码维度 `key:{k}`；
+        失败次数落盘 .auth/，重启不归零。
+        """
+        if not k:
+            raise HTTPException(status_code=400, detail="缺少 k 参数")
+        # 双维度限速：IP 维度 + 按码维度（同一 link_key 跨 IP 试也拦得住）。
+        try:
+            bootstrap_redeem_limiter.check(f"ip:{_client_ip(request)}")
+            bootstrap_redeem_limiter.check(f"key:{k}")
+        except RateLimitExceeded as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        rec = pair_store.get_by_link_key(k)
+        if rec is None or rec.get("consumed") or time.time() > rec.get("expires_at", 0):
+            _pair_record_failure(k)
+            # ⛔ 不区分"不存在 vs 已过期 vs 已消费"——那是 oracle，一律 404。
+            raise HTTPException(status_code=404, detail="配对链接无效、已使用或已过期")
+        accept = (request.headers.get("accept") or "").lower()
+        code = rec.get("code", "")
+        hint = rec.get("agent_name_hint", "")
+        ttl_left = max(0, int(rec.get("expires_at", 0) - time.time()))
+        base = str(request.base_url).rstrip("/")
+        if "text/html" in accept and "application/json" not in accept:
+            html = (
+                "<!doctype html><html lang='zh'><head><meta charset='utf-8'>"
+                "<meta name='referrer' content='no-referrer'>"
+                "<title>AutoForge 配对</title></head><body style='font-family:system-ui;"
+                "max-width:560px;margin:40px auto;padding:0 16px'>"
+                f"<h1>配对请求待确认</h1>"
+                f"<p>Agent：<b>{hint or '（未命名）'}</b></p>"
+                f"<p>兑换码（8 位）：<code style='font-size:20px'>{code}</code></p>"
+                f"<p>剩余时间：约 {ttl_left} 秒</p>"
+                f"<p>在 Agent 端调用 <code>POST /api/mcp/pair/redeem</code>，"
+                f"body <code>{{'code':'{code}','agent_name':'<Agent 自己的名字>'}}</code>。</p>"
+                "<p style='color:#888;font-size:13px'>本页为只读展示，无需确认按钮。"
+                "令牌只在 redeem 响应里出现一次。</p>"
+                "</body></html>"
+            )
+            return HTMLResponse(content=html, headers={"Referrer-Policy": "no-referrer"})
+        return {
+            "ok": True,
+            "agent_name_hint": hint,
+            "code": code,
+            "ttl_s": ttl_left,
+            "redeem": {
+                "method": "POST",
+                "url": f"{base}/api/mcp/pair/redeem",
+                "body": {"code": code, "agent_name": "<Agent 自己的名字>"},
+            },
+            "after_pairing": {
+                "mcp_url": f"{base}/mcp",
+                "auth_header": "Authorization: Bearer <redeem 返回的 token>",
+                "warning": "token 只在 redeem 响应体里出现一次，请立即保存到客户端配置",
+            },
         }
 
     @app.post("/api/user/pair/accepting", dependencies=[Depends(_write)])

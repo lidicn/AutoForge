@@ -818,6 +818,10 @@ class PairCode:
     expires_at: float
     consumed: bool = False
     pushed: bool = False  # SSE 是否已推送给前端
+    #: 批 5：与 code 一对一的 128 位链接凭据（secrets.token_urlsafe(16)）。
+    #: 8 位数字码留给人手输；链接转发走这串高熵值，避免链接成为免费 oracle。
+    #: 同一 TTL、同一一次性语义；⛔ 不单独续期（随 code 同生同灭）。
+    link_key: str = ""
 
 
 def _purge_expired_codes(codes: dict[str, Any]) -> int:
@@ -939,6 +943,8 @@ class PairCodeStore:
     def create(self, agent_name_hint: str, ttl_s: int = 300) -> PairCode:
         now = time.time()
         code = _rand6()
+        # 批 5：与 code 一对一的高熵链接凭据（128 位，urlsafe base64 约 43 字符）。
+        link_key = secrets.token_urlsafe(16)
         rec = {
             "code": code,
             "agent_name_hint": agent_name_hint,
@@ -946,6 +952,7 @@ class PairCodeStore:
             "expires_at": now + ttl_s,
             "consumed": False,
             "pushed": False,
+            "link_key": link_key,
         }
         # 跨进程同步：**写前必须重读**。`_persist` 是全量覆盖写，不重读就会用陈旧快照
         # 把别的进程刚写入的码整片抹掉——用户看到弹窗里的 6 位码随即判无效，
@@ -961,6 +968,31 @@ class PairCodeStore:
         """只读按码取记录（不消费）；跨进程同步读（MCP 写、API 读）。"""
         self._load()
         return self._codes.get(code)
+
+    def get_by_link_key(self, link_key: str) -> dict[str, Any] | None:
+        """批 5：只读按链接凭据取记录（不消费）。线性扫当前活码（量级个位数），跨进程读。"""
+        self._load()
+        for rec in self._codes.values():
+            if rec.get("link_key") == link_key:
+                return rec
+        return None
+
+    def consume_by_link_key(self, link_key: str) -> PairCode | None:
+        """批 5：用链接凭据消费配对码（一次性）。无效/已消费/过期返回 None。"""
+        self._load()
+        with self._lock:
+            rec = None
+            for cand in self._codes.values():
+                if cand.get("link_key") == link_key:
+                    rec = cand
+                    break
+            if rec is None or rec.get("consumed"):
+                return None
+            if time.time() > rec.get("expires_at", 0):
+                return None
+            rec["consumed"] = True
+            self._persist()
+        return PairCode(**rec)
 
     def consume(self, code: str) -> PairCode | None:
         """校验并消费配对码；无效（不存在/已消费/过期）返回 None。"""
