@@ -18,6 +18,14 @@ export interface PairRequest {
   expires_at: string
 }
 
+// 批 5：owner 面生成配对链接（用户先出码）
+export interface PairLink {
+  link: string
+  code: string
+  expires_at: string
+  ttl_s: number
+}
+
 // ===== Automation =====
 export type AutomationStatus = 'pending' | 'enabled' | 'disabled' | 'anomaly'
 

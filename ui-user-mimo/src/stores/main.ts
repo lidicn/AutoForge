@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import type { Agent, AuthCode, Automation, PairRequest, PendingItem, User } from '../types/api.ts'
+import type { Agent, AuthCode, Automation, PairLink, PairRequest, PendingItem, User } from '../types/api.ts'
 import { api } from '../api/index.ts'
 import { USE_MOCK } from '../api/env.ts'
 import { closePairStream, onPairRequest, openPairStream, restoreSession } from '../api/http.ts'
@@ -119,6 +119,11 @@ export const useMainStore = defineStore('main', () => {
     const req = await api.createPairRequest(hint)     // fail-closed
     pair.value = req
     return req
+  }
+
+  // 批 5：owner 面生成配对链接（用户先出码，agent 自行 redeem）
+  async function createPairLink (hint: string): Promise<PairLink> {
+    return api.createPairLink(hint)
   }
 
   async function finishPair (): Promise<Agent> {
@@ -247,7 +252,7 @@ export const useMainStore = defineStore('main', () => {
     user, agents, automations, pendings, authCodes, pair, now, loading, booted, lastError, darkMode,
     split, enabledGroups, archivedGroups, archivedCount, pendingCount, longCodes, activeShort, shortRemain,
     bootstrap, login, logout, refresh, tick, toggleTheme, restore,
-    startPair, finishPair, cancelPair,
+    startPair, finishPair, cancelPair, createPairLink,
     renameAgent, deleteAgent,
     toggleAutomation, archiveAutomation, deleteAutomation,
     resolvePending, approvePending, rejectPending,

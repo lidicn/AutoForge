@@ -6,7 +6,7 @@
  * Token 由本层持有（localStorage），随请求带 Authorization；SSE 因 EventSource
  * 不能带自定义头，改用 ?token= 回退（后端已支持）。
  */
-import type { Agent, AuthCode, Automation, PairRequest, PendingItem, User } from '../types/api.ts'
+import type { Agent, AuthCode, Automation, PairLink, PairRequest, PendingItem, User } from '../types/api.ts'
 import { apiError, type ApiClient, type ApiErrorCode } from './mock.ts'
 import { API_BASE } from './env.ts'
 
@@ -205,6 +205,14 @@ export const httpApi: ApiClient = {
       { method: 'POST' },
     )
     return data.agent
+  },
+
+  // 批 5：owner 面生成配对链接（用户先出码，agent 自行 redeem）
+  async createPairLink (agentNameHint: string) {
+    return req<PairLink>(
+      '/api/user/pair-link',
+      { method: 'POST', body: { agent_name_hint: agentNameHint } },
+    )
   },
 
   async listAutomations () {
