@@ -422,8 +422,13 @@ ROW_KEYS = {
 
 
 def _login_token(client: TestClient) -> str:
-    """走真实登录面拿 owner JWT——"owner 面给明文"这条判据的主体由端点自己签，不在测试里伪造。"""
-    r = client.post("/api/auth/login", json={"username": "sp", "password": "x"})
+    """走真实登录面拿 owner JWT——"owner 面给明文"这条判据的主体由端点自己签，不在测试里伪造。
+
+    D2（第四批批 0）：未注册部署的登录已 fail-closed（401 + need_register），不再"任意凭据即 owner"。
+    故这里先 register 再 login，走的是与真机一致的新引导流程。
+    """
+    client.post("/api/auth/register", json={"username": "sp", "password": "secret123"})
+    r = client.post("/api/auth/login", json={"username": "sp", "password": "secret123"})
     assert r.status_code == 200, r.text
     return r.json()["token"]
 

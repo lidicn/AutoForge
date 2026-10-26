@@ -298,6 +298,20 @@ def _assert_agent_subject_owner(agent_id: str, caller_subject: str | None) -> No
             detail=f"仅 owner 可管理配对 agent（路径主体 {agent_id}），当前主体 {caller_subject} 无权",
         )
 
+
+def _require_owner_surface(info: TokenInfo | None) -> None:
+    """D1：授权码铸造/撤销只准 owner 面（owner/shared）。未鉴权（None，本地逃生舱）放行。"""
+    if info is not None and info.subject not in _OWNER_SUBJECTS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"仅 owner 面可签发/撤销授权码，当前主体 {info.subject} 无权",
+        )
+
+
+def _caller_is_owner(info: TokenInfo | None) -> bool:
+    """D4/D3：当前调用方是否 owner 面。未鉴权（None）按 owner 处理（本地逃生舱）。"""
+    return info is None or info.subject in _OWNER_SUBJECTS
+
 #: 用户端 SPA 的挂载前缀（唯一真源）。三处必须与它同字：`ui-user-mimo/vite.config.ts` 的
 #: `base`、`docker/docker-compose.api.yml` 的卷挂载点与 `--ui-user-dir` 值、这里的常量。
 #: 不同步的形状是"/mimo 出页面、资源全 404"或"深链刷出开发面板"，两档都不报错，
@@ -648,17 +662,32 @@ def build_app(
             result["items"] = [it for it in result["items"] if tag in it.get("tags", [])]
         return result
 
-    @app.post("/api/graphs/tags", dependencies=[Depends(_write)])
-    def api_graph_tags(body: TagBody) -> dict[str, Any]:
-        return svc.set_graph_tags(store, body.name, body.tags)
+    @app.post("/api/graphs/tags")
+    def api_graph_tags(
+        body: TagBody, info: TokenInfo | None = Depends(_write),
+    ) -> dict[str, Any]:
+        return _svc(
+            svc.set_graph_tags, store, body.name, body.tags,
+            caller=info.subject if info else "", caller_is_owner=_caller_is_owner(info),
+        )
 
-    @app.post("/api/graphs/enable", dependencies=[Depends(_write)])
-    def api_graph_enable(body: TagEnableBody) -> dict[str, Any]:
-        return svc.enable_by_tag(store, body.tag, True)
+    @app.post("/api/graphs/enable")
+    def api_graph_enable(
+        body: TagEnableBody, info: TokenInfo | None = Depends(_write),
+    ) -> dict[str, Any]:
+        return _svc(
+            svc.enable_by_tag, store, body.tag, True,
+            caller=info.subject if info else "", caller_is_owner=_caller_is_owner(info),
+        )
 
-    @app.post("/api/graphs/disable", dependencies=[Depends(_write)])
-    def api_graph_disable(body: TagEnableBody) -> dict[str, Any]:
-        return svc.enable_by_tag(store, body.tag, False)
+    @app.post("/api/graphs/disable")
+    def api_graph_disable(
+        body: TagEnableBody, info: TokenInfo | None = Depends(_write),
+    ) -> dict[str, Any]:
+        return _svc(
+            svc.enable_by_tag, store, body.tag, False,
+            caller=info.subject if info else "", caller_is_owner=_caller_is_owner(info),
+        )
 
     # ── v0.7.0 模板导出与备份恢复 ──
     @app.get("/api/store/export", dependencies=[Depends(_read)])
@@ -666,10 +695,18 @@ def build_app(
         """导出整个 store 为 bundle（含 tags + 校验和）。读端点，不强制鉴权。"""
         return svc.export_store(store)
 
-    @app.post("/api/store/import", dependencies=[Depends(_write)])
-    def api_store_import(body: ImportBody) -> dict[str, Any]:
-        """导入 bundle（写操作，需鉴权）。冲突策略 skip/overwrite/rename。"""
-        return _svc(svc.import_store, store, body.bundle, body.strategy)
+    @app.post("/api/store/import")
+    def api_store_import(
+        body: ImportBody, info: TokenInfo | None = Depends(_write),
+    ) -> dict[str, Any]:
+        """导入 bundle（写操作，需鉴权）。冲突策略 skip/overwrite/rename。
+
+        D3：传 owner=当前主体（与 MCP 面 af_mcp._t_import 同口径）；owner 面可 bypass 归属预检。
+        """
+        return _svc(
+            svc.import_store, store, body.bundle, body.strategy,
+            owner=info.subject if info else "", owner_surface=_caller_is_owner(info),
+        )
 
     @app.get("/api/graphs/{name}", dependencies=[Depends(_read)])
     def api_graph(name: str, version: int | None = Query(default=None)) -> dict[str, Any]:
@@ -1148,15 +1185,17 @@ def build_app(
         _login_limit(login_limiter, request)
         if not (body.username and body.password):
             raise HTTPException(status_code=401, detail="用户名或密码为空")
-        # 未注册时的兼容模式：任意非空凭据可登录（旧行为）
+        # D2：未注册管理员时 fail-closed——不再发一枚 owner 全权限令牌。
+        # 旧"任意非空凭据即 owner"是一把今天就能被利用的刀（部署起来、登录页一敲即全权限）。
         if not admin_store.has_admin:
-            token = registry.issue_for_agent("owner", ("read", "write", "live"), label=body.username)
-            return {
-                "ok": True,
-                "user": {"username": body.username, "role": "admin"},
-                "token": token,
-                "warning": "尚未设置管理员账号，建议立即注册",
-            }
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "ok": False,
+                    "need_register": True,
+                    "error": "尚未设置管理员账号，请先完成注册（register）",
+                },
+            )
         # 已注册：严格验证
         if not admin_store.verify(body.username, body.password):
             raise HTTPException(status_code=401, detail="用户名或密码错误")
@@ -1377,8 +1416,12 @@ def build_app(
         return StreamingResponse(_pair_event_gen(request), media_type="text/event-stream")
 
     # ── v1.9.0 用户 WebUI：授权码（部署授权，独立于配对）──
-    @app.post("/api/user/auth-code", dependencies=[Depends(_write)])
-    def api_auth_code_create(body: AuthCodeBody) -> dict[str, Any]:
+    @app.post("/api/user/auth-code")
+    def api_auth_code_create(
+        body: AuthCodeBody, info: TokenInfo | None = Depends(_write),
+    ) -> dict[str, Any]:
+        # D1：铸造授权码收 owner 面——一枚第三方 write 令牌不得再签发部署凭证。
+        _require_owner_surface(info)
         if body.kind not in ("long", "short"):
             raise HTTPException(status_code=400, detail="kind 仅支持 long / short")
         if body.kind == "short" and (body.ttl_minutes is None or not (5 <= body.ttl_minutes <= 30)):
@@ -1401,8 +1444,12 @@ def build_app(
         reveal = info is None or info.subject in _OWNER_SUBJECTS
         return {"ok": True, "codes": auth_store.list(reveal=reveal)}
 
-    @app.delete("/api/user/auth-code/{code}", dependencies=[Depends(_write)])
-    def api_auth_code_revoke(code: str) -> dict[str, Any]:
+    @app.delete("/api/user/auth-code/{code}")
+    def api_auth_code_revoke(
+        code: str, info: TokenInfo | None = Depends(_write),
+    ) -> dict[str, Any]:
+        # D1：撤销授权码同样收 owner 面。
+        _require_owner_surface(info)
         ok = auth_store.revoke(code)
         return {"ok": ok, "revoked": code if ok else None}
 
@@ -1600,18 +1647,28 @@ def build_app(
         card = svc.automation_card(store, name, rec, store.get_tags(name), _pending_map())
         return {"ok": True, "automation": card}
 
-    @app.post("/api/automations/{name}/enable", dependencies=[Depends(_write)])
-    def api_automation_enable(name: str) -> dict[str, Any]:
+    @app.post("/api/automations/{name}/enable")
+    def api_automation_enable(
+        name: str, info: TokenInfo | None = Depends(_write),
+    ) -> dict[str, Any]:
         if store.latest(name) is None:
             raise HTTPException(status_code=404, detail="未找到自动化")
-        v = _svc(svc.set_automation_enabled, store, name, True)
+        v = _svc(
+            svc.set_automation_enabled, store, name, True,
+            caller=info.subject if info else "", caller_is_owner=_caller_is_owner(info),
+        )
         return {"ok": True, "name": name, "enabled": True, "version": v}
 
-    @app.post("/api/automations/{name}/disable", dependencies=[Depends(_write)])
-    def api_automation_disable(name: str) -> dict[str, Any]:
+    @app.post("/api/automations/{name}/disable")
+    def api_automation_disable(
+        name: str, info: TokenInfo | None = Depends(_write),
+    ) -> dict[str, Any]:
         if store.latest(name) is None:
             raise HTTPException(status_code=404, detail="未找到自动化")
-        v = _svc(svc.set_automation_enabled, store, name, False)
+        v = _svc(
+            svc.set_automation_enabled, store, name, False,
+            caller=info.subject if info else "", caller_is_owner=_caller_is_owner(info),
+        )
         return {"ok": True, "name": name, "enabled": False, "version": v}
 
     @app.post("/api/automations/{name}/archive", dependencies=[Depends(_write)])

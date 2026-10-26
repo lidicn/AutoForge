@@ -370,8 +370,12 @@ def list_graphs(store: GraphStore) -> dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def set_graph_tags(store: GraphStore, name: str, tags: list[str]) -> dict[str, Any]:
-    """设置某归档名字的标签（覆盖式）。"""
+def set_graph_tags(
+    store: GraphStore, name: str, tags: list[str],
+    *, caller: str = "", caller_is_owner: bool = False,
+) -> dict[str, Any]:
+    """设置某归档名字的标签（覆盖式）。D4：改标签前做归属判定。"""
+    _assert_archive_mutator(store, name, caller=caller, caller_is_owner=caller_is_owner)
     store.set_tags(name, tags)
     return {"ok": True, "name": name, "tags": store.get_tags(name)}
 
@@ -405,7 +409,8 @@ def graphs_by_tag(store: GraphStore, tag: str) -> dict[str, Any]:
 
 
 def enable_by_tag(
-    store: GraphStore, tag: str, enabled: bool, allow_bulk: bool = False
+    store: GraphStore, tag: str, enabled: bool, allow_bulk: bool = False,
+    *, caller: str = "", caller_is_owner: bool = False,
 ) -> dict[str, Any]:
     """批量启停：对某标签下所有归档的最新版本，翻转其中全部自动化的 `enabled` 并保存新版本。
 
@@ -413,8 +418,11 @@ def enable_by_tag(
 
     v1.3.0：默认受**爆炸半径**约束——先把受影响自动化条数算出来再决定要不要做，
     **绝不做一半才报错**。显式传 `allow_bulk=True` 绕过（真正想批量时用）。
+    D4：先做归属判定（在 load/IR 校验之前）——无权动的归档即使 IR 读不出也先拒。
     """
     names = [n for n, ts in store.all_tags().items() if tag in ts]
+    for name in names:
+        _assert_archive_mutator(store, name, caller=caller, caller_is_owner=caller_is_owner)
     # 先算清影响面（不落盘），超阈值直接拒——避免"改了一半才失败"
     planned: list[tuple[str, int, Any]] = []
     failed: list[dict[str, Any]] = []
@@ -555,13 +563,18 @@ def automation_card(
     }
 
 
-def set_automation_enabled(store: GraphStore, name: str, enabled: bool) -> int:
+def set_automation_enabled(
+    store: GraphStore, name: str, enabled: bool,
+    *, caller: str = "", caller_is_owner: bool = False,
+) -> int:
     """翻转归档内**每一条自动化**的启停旗子，返回新版本号。
 
     写在 automation 级：运行期的读者是调度器（`af_scheduler.py:87-89` 不为禁用项注册触发、
     `:241-243` 不排空它的队列），容器层那个位置没有任何代码读取。落盘复用 `GraphStore.resave_raw`：
     锁、版本号、原子写与归属字段（owner / writer / note 之外的记录元数据）都留在 store 那一处，端点不碰。
+    D4：翻转前先做归属判定。
     """
+    _assert_archive_mutator(store, name, caller=caller, caller_is_owner=caller_is_owner)
 
     def flip(graph_raw: Any) -> None:
         items = graph_raw.get("automations") if isinstance(graph_raw, dict) else None
@@ -1407,6 +1420,29 @@ def _existing_owner(store: GraphStore, name: str) -> str:
         if str(record.get("name", "")) == name and record.get("owner"):
             return str(record["owner"])
     return ""
+
+
+def _assert_archive_mutator(
+    store: GraphStore, name: str, *, caller: str = "", caller_is_owner: bool = False
+) -> None:
+    """D4 归属判定：改标签/启停/批量按标签启停前，确认调用方有权动这条归档。
+
+    - 归档已归属他人：调用方须是归属人本人或 owner 面（`owner`/`shared`）；
+      未携带身份（旧调用方/MCP 未透传 `current`）不阻断，留给后续批次收口。
+    - 归档无归属：仅 owner 面可改（fail-closed，不因 D5 未修而漏）；未携带身份的旧调用方放行。
+    """
+    prev = _existing_owner(store, name)
+    if prev:
+        if caller and prev != caller and not caller_is_owner:
+            raise ServiceError(
+                f"归档 {name!r} 归属 {prev!r}，当前主体 {caller!r} 无权修改其标签/启停（所有权隔离）",
+                status=403,
+            )
+    elif caller and not caller_is_owner:
+        raise ServiceError(
+            f"归档 {name!r} 无归属，仅 owner 面可修改其标签/启停（所有权隔离）",
+            status=403,
+        )
 
 
 def _check_blast(count: int, what: str) -> None:
@@ -2268,6 +2304,7 @@ def import_store(
     strategy: str = "skip",
     allow_bulk: bool = False,
     owner: str = "",
+    owner_surface: bool = False,
 ) -> dict[str, Any]:
     """导入 bundle（v0.7.0）。冲突策略 skip/overwrite/rename，见 GraphStore.import_bundle。
 
@@ -2288,6 +2325,16 @@ def import_store(
         for entry in bundle.get("entries") or ():
             nm = str(entry.get("name", ""))
             if nm and nm in existing_names:
+                # D3：HTTP 导入面传 owner 后，非归属人 overwrite 他人归档直接 403
+                # （不等 store.import_bundle 把它折进 report["errors"] 回成 200）。
+                # owner 面（admin）或未携带身份（旧 CLI/MCP）不拦。
+                if owner and not owner_surface:
+                    prev = _existing_owner(store, nm)
+                    if prev and prev != owner:
+                        raise ServiceError(
+                            f"归档 {nm!r} 归属 {prev!r}，当前主体 {owner!r} 无权覆盖（所有权隔离）",
+                            status=403,
+                        )
                 clobbered += _existing_automation_count(store, nm)
     affected = count + clobbered
     if not allow_bulk:
