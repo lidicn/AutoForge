@@ -225,3 +225,14 @@ def test_d4_empty_owner_archive_non_owner_cannot_modify(tmp_path, monkeypatch):
         headers=_bearer("tok-bot"),
     )
     assert r.status_code == 403, r.text
+
+
+def test_d2_login_docstring_does_not_promise_old_compat_branch():
+    """DB-08·a：docstring 不得再描述「任意非空凭据可登录」这把已堵死的刀。"""
+    from pathlib import Path
+    here = Path(__file__).resolve()
+    af_api = here.parents[2] / "src" / "autoforge" / "af_api.py"
+    text = af_api.read_text(encoding="utf-8")
+    # 旧 docstring 关键句必须 0 命中；注释里允许引用历史（说明那把刀已堵死）。
+    assert "向后兼容：如果还没有管理员用户" not in text
+    assert "保持旧的「任意非空凭据可登录」行为" not in text

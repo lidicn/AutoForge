@@ -1232,10 +1232,12 @@ def build_app(
     # ── v1.9.0 用户 WebUI：登录（验证用户名密码）──
     @app.post("/api/auth/login")
     def api_auth_login(request: Request, body: LoginBody) -> dict[str, Any]:
-        """登录：验证用户名和密码，通过后签发 owner JWT。
+        """登录：验证用户名和密码，通过后签发 owner 登录令牌（principal_kind=login）。
 
-        向后兼容：如果还没有管理员用户（未注册），保持旧的「任意非空凭据可登录」行为，
-        避免升级后老用户被锁在外面。注册后切换为严格验证。
+        未注册管理员时 fail-closed：返回 401 + `{"ok": false, "need_register": true}`，
+        不签发任何令牌；首启引导走 `POST /api/auth/register`。
+        （旧「任意非空凭据可登录」兼容分支已在 D2 堵死，避免升级后老用户被锁在外面
+        这个历史顾虑，由前端 `/api/auth/has-admin` 探测直接跳注册页承担。）
         """
         _login_limit(login_limiter, request)
         if not (body.username and body.password):

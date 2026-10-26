@@ -69,7 +69,7 @@ BASELINE: frozenset[str] = frozenset(
         # 2026-10-26 返工 5.1：1388 → 1443（批 5 在它上方加了 pair-link 端点 + 失败计数落盘
         # 约 55 行，把这枚顶漂；except_pass 门报 A"新增 1449"+C"基线 1388 读不到"是同一枚的
         # 两面，净数仍 16=16，未破"只减不增"）。16 → 16 枚。
-        "af_api.py:1443",
+        "af_api.py:1445",
         "af_closedloop/deepfix.py:52",
         "af_conflict.py:680",
         "af_conflict_audit.py:150",
