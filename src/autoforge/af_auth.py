@@ -420,11 +420,20 @@ class TokenRegistry:
             return True
 
     def subjects(self) -> list[dict[str, Any]]:
-        """已注册令牌的主体摘要（不含明文令牌，供 `forge auth list` / 审计用）。"""
-        seen: dict[str, set[str]] = {}
+        """已注册令牌的主体摘要（⛔ 不含明文令牌/摘要，供治理页 / 审计用）。
+
+        批 3（D9）：每条带 `principal_kind`（login/agent/developer）与 `expires_at`
+        （None=不过期），治理页据此分三族、显示 TTL。env 访问密钥一并列出。
+        """
+        rows: list[dict[str, Any]] = []
         for info in list(self._tokens.values()) + list(self._issued.values()):
-            seen.setdefault(info.subject, set()).update(info.scopes)
-        return [{"subject": s, "scopes": sorted(sc)} for s, sc in sorted(seen.items())]
+            rows.append({
+                "subject": info.subject,
+                "principal_kind": info.principal_kind,
+                "scopes": sorted(info.scopes),
+                "expires_at": info.expires_at,
+            })
+        return rows
 
 
     # ── v1.9.0 用户 WebUI：运行时签发 agent 令牌（配对成功后调用）──

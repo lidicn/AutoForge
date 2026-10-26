@@ -164,6 +164,9 @@ export const api = {
   whoami: () => request<WhoamiResponse>('GET', '/auth/whoami'),
   subjects: () => request<SubjectsResponse>('GET', '/auth/subjects'),
   revokeToken: (token: string) => request<RevokeResponse>('POST', '/auth/revoke', { token }),
+  // 批 3：owner 面按主体撤销该主体名下全部令牌。
+  revokeBySubject: (subject: string) =>
+    request<RevokeResponse>('POST', '/auth/revoke', { subject }),
 
   // G 真机下发
   liveStatus: () => request<LiveStatusResponse>('GET', '/live/status'),

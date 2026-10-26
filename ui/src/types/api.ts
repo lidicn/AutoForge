@@ -421,6 +421,8 @@ export interface WhoamiResponse {
 export interface SubjectItem {
   subject: string
   scopes: string[]
+  principal_kind?: 'login' | 'agent' | 'developer'
+  expires_at?: number | null
 }
 
 export interface SubjectsResponse {

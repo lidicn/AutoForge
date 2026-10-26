@@ -235,7 +235,9 @@ class ImportBody(BaseModel):
 
 # ── v0.8.0 令牌管理 ──
 class RevokeBody(BaseModel):
-    token: str
+    token: str | None = None
+    # 批 3（D9 治理面）：owner 面可按主体撤销该主体名下全部令牌（新增能力，不替明文凭）。
+    subject: str | None = None
 
 
 # ── v1.1.0 实体事实内建 ──
@@ -1135,9 +1137,22 @@ def build_app(
         """已注册令牌的主体摘要（不含明文令牌），供审计/管理用。"""
         return {"ok": True, "subjects": registry.subjects()}
 
-    @app.post("/api/auth/revoke", dependencies=[Depends(_write)])
-    def api_auth_revoke(body: RevokeBody) -> dict[str, Any]:
-        """撤销令牌（即时生效并落盘 `{store_root}/.auth/revoked.json`）。"""
+    @app.post("/api/auth/revoke")
+    def api_auth_revoke(
+        body: RevokeBody, info: TokenInfo | None = Depends(_write)
+    ) -> dict[str, Any]:
+        """撤销令牌（即时生效并落盘 `{store_root}/.auth/revoked.json`）。
+
+        批 3：body 可给 `token`（自理，任意 write 面都能撤自己手里那枚）或 `subject`
+        （owner 面专属——撤销该主体名下全部令牌）。两者二选一。
+        """
+        if body.subject:
+            if not _caller_is_owner(info):
+                raise HTTPException(status_code=403, detail="按主体撤销需 owner 面；普通令牌只能撤自己")
+            n = registry.revoke_by_subject(body.subject)
+            return {"ok": True, "revoked": True, "count": n}
+        if not body.token:
+            raise HTTPException(status_code=400, detail="必须提供 token 或 subject")
         revoked = registry.revoke(body.token)
         return {"ok": True, "revoked": revoked}
 
@@ -1224,8 +1239,10 @@ def build_app(
         """登录态恢复：返回当前令牌主体；未登录/失效 401。"""
         if info is None:
             raise HTTPException(status_code=401, detail="未登录或令牌已失效")
-        #: owner 登录令牌 subject 固定 "owner"，真实登录用户名在 label；配对 agent 无 label 时回退 subject。
-        return {"ok": True, "user": {"username": info.label or info.subject, "role": "admin"}}
+        #: 批 3（D9）：role 按 principal_kind 回——login⇒admin、developer⇒developer、agent⇒agent。
+        #: 此前一律回 admin，让配对 agent 也"以为"自己是管理员。owner 登录令牌 kind=login ⇒ admin 不回归。
+        role = {"login": "admin", "developer": "developer"}.get(info.principal_kind, "agent")
+        return {"ok": True, "user": {"username": info.label or info.subject, "role": role}}
 
     # ── v1.10.0 系统自更新（宿主侧 sidecar 模式，参考 DCD 20261010 MA 裁定）──
     # 流程：WebUI 点更新 → 容器写标记文件 /data/.update_request.json → 宿主 cron 脚本

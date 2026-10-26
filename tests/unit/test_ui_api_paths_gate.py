@@ -469,9 +469,10 @@ def test_real_ui_and_src_are_clean_and_counted():
     assert unparsed == []
     assert mount_errs == []
     assert mod.check(sites, routes) == []
-    assert len(sites) == 61 and len(excluded) == 2
+    # 批 3：新增 revokeBySubject 一枚 /auth/revoke 调用点 ⇒ sites 61→62、live 59→60。
+    assert len(sites) == 62 and len(excluded) == 2
     live = [s for s in sites if "transport" not in s["kinds"]]
-    assert len(live) == 59 and len(sites) - len(live) == 2   # +2 = `api/client.ts` 的 `fetch`/`authRequest` 两枚包装
+    assert len(live) == 60 and len(sites) - len(live) == 2   # +2 = `api/client.ts` 的 `fetch`/`authRequest` 两枚包装
     mounted = sum(1 for r in routes if r["how"] == "add_api_route")
     assert mounted == 5                              # af_conflict_runtime._ROUTES
     assert len(routes) - mounted + len(excluded) == 91   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（现读 91 对 91；旧锚点 87 停在 `117f4dd` 之前）
@@ -653,7 +654,9 @@ def test_all_trees_of_this_repo_are_in_scope_and_green(capsys):
     mod = _module()
     assert mod.main(["check_ui_api_paths.py", "--all"]) == 0
     out = capsys.readouterr().out
-    for name in ("ui 59", "ui-user 19", "ui-user-mimo 22"):
+    # 批 3（D9）：GovernanceView 治理面按主体撤销新增一枚 /auth/revoke 调用点
+    # （client.ts revokeBySubject）⇒ ui 59 → 60。
+    for name in ("ui 60", "ui-user 19", "ui-user-mimo 22"):
         assert name in out, out
     assert "传输层包装 4 处" in out, out
     assert "SSE 建流 2 处" in out, out
