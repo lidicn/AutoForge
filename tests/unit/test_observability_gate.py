@@ -83,13 +83,16 @@ def test_real_repo_site_readings_are_pinned(real):
        文件数 32 不动（`af_live.py` 本来就在射程里）。
        ⚠️ 这两枚 1.13.4 发版时只更了 `docs/可观测性清单.md` 台账（门禁绿），**漏了本文件的 pin**，
        全量单测 3 failed 才发现——教训：台账 regen 与 pin 是两套，都得同批。
+    203 → 204（2026-10-26 返工 5.1③）：`af_api._pair_record_failure` 的裸 `except Exception: pass`
+       收窄为 `except OSError` + 带码 WARNING `PAIR_LINK_FAILURE_COUNT_WRITE_FAILED`——+1 站 +1 码
+       （warning 137→138）。**同因又漏了本 pin**，gates 绿而全量 4 failed，这笔补齐。
     """
     from collections import Counter
 
     lv = Counter(s["level"] for s in real["sites"])
-    assert len(real["sites"]) == 203
+    assert len(real["sites"]) == 204
     assert len({s["path"] for s in real["sites"]}) == 32
-    assert dict(lv) == {"debug": 22, "info": 9, "warning": 137, "error": 24, "exception": 11}
+    assert dict(lv) == {"debug": 22, "info": 9, "warning": 138, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -130,8 +133,9 @@ def test_real_repo_named_code_readings_are_pinned(real):
     from collections import Counter
 
     coded = real["coded"]
-    assert len(coded) == 89
-    assert len({s["code"] for s in coded}) == 86
+    # 89→90 站／86→87 枚：返工 5.1③ `PAIR_LINK_FAILURE_COUNT_WRITE_FAILED`（af_api），出处链见上两条腿
+    assert len(coded) == 90
+    assert len({s["code"] for s in coded}) == 87
     # 41 站／38 枚＝仓内三例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
     # ① `DEPLOY_AUDIT_PERSIST_FAILED` 同时出自「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」
     #    两条腿——同一句承诺（台账没落稳）；
@@ -202,7 +206,9 @@ def test_real_repo_every_named_code_is_registered(real):
     # 新码入 §三（af_api.api_system_version 吞错改具名），同上一批对齐钉针。
     # 84 → 86 枚／87 → 89 站（2026-10-24 AF-001 收口）：`INBOX_REJECT_NO_TS`／
     # `INBOX_REJECT_STALE` 两枚新码入 §三（af_live.read_answer_inbox），同上。
-    assert info["codes"] == 86 and info["coded"] == 89
+    # 86 → 87 枚／89 → 90 站（2026-10-26 返工 5.1③）：`PAIR_LINK_FAILURE_COUNT_WRITE_FAILED`
+    # 入 §三（af_api._pair_record_failure 吞异常改留痕），同上。
+    assert info["codes"] == 87 and info["coded"] == 90
 
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
@@ -268,7 +274,7 @@ def test_real_repo_debt_rows_match_fresh_readings(real):
     }
     for key, n in fresh.items():
         assert debt[key]["num"] == n, f"`{key}` 登记 {debt[key]['num']}，现读 {n}——账停在旧值"
-    assert debt["af_api-logger-sites"]["status"] == "账过期·待补码"
+    assert debt["af_api-logger-sites"]["status"] == "已还"   # 返工 5.1⑥：三枚站点全部具名码化，账过期档解除
     assert debt["af_api-ok-false-sites"]["status"] == "账过期·待补码"
     assert debt["envelope-trace-id-sites"]["status"] == "已还"
     assert debt["http-request-id-sites"]["status"] == "欠账"
