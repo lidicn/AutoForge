@@ -145,3 +145,29 @@ def test_10_failure_count_persisted(tmp_path, monkeypatch):
     assert cnt_file.is_file(), "失败计数应落盘"
     data = json.loads(cnt_file.read_text(encoding="utf-8"))
     assert any(v >= 3 for v in data.values()), data
+
+
+# ── DB-10：CSP 纵深防点击劫持 ──────────────────────────────────────────
+def test_11_html_branch_has_xfo_and_csp(client):
+    owner = _owner_token(client)
+    body = _make_link(client, owner)
+    k = body["link"].split("k=")[1]
+    r = client.get(f"/pair?k={k}", headers={"Accept": "text/html"})
+    assert r.status_code == 200, r.text
+    assert r.headers.get("x-frame-options") == "DENY", dict(r.headers)
+    csp = r.headers.get("content-security-policy", "")
+    assert "frame-ancestors 'none'" in csp, csp
+    assert "style-src 'unsafe-inline'" in csp, csp  # 页内联样式的最小口子
+
+
+def test_12_json_branch_has_xfo_and_csp(client):
+    owner = _owner_token(client)
+    body = _make_link(client, owner)
+    k = body["link"].split("k=")[1]
+    r = client.get(f"/pair?k={k}", headers={"Accept": "application/json"})
+    assert r.status_code == 200, r.text
+    assert r.headers.get("x-frame-options") == "DENY", dict(r.headers)
+    csp = r.headers.get("content-security-policy", "")
+    assert "frame-ancestors 'none'" in csp, csp
+    # 旧腿（读 resp.json()）不许碎
+    assert r.json()["redeem"]["url"].endswith("/api/mcp/pair/redeem")

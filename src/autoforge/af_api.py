@@ -1735,6 +1735,13 @@ def build_app(
         hint = rec.get("agent_name_hint", "")
         ttl_left = max(0, int(rec.get("expires_at", 0) - time.time()))
         base = str(request.base_url).rstrip("/")
+        # DB-10：纵深防点击劫持。页内有内联 style，故 style-src 放行 'unsafe-inline'（最小口子）；
+        # 其余全锁死——default-src 'none' + frame-ancestors 'none'，iframe 进不来。
+        pair_headers = {
+            "Referrer-Policy": "no-referrer",
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+        }
         if "text/html" in accept and "application/json" not in accept:
             html = (
                 "<!doctype html><html lang='zh'><head><meta charset='utf-8'>"
@@ -1751,8 +1758,8 @@ def build_app(
                 "令牌只在 redeem 响应里出现一次。</p>"
                 "</body></html>"
             )
-            return HTMLResponse(content=html, headers={"Referrer-Policy": "no-referrer"})
-        return {
+            return HTMLResponse(content=html, headers=pair_headers)
+        return JSONResponse(content={
             # 返工 5.1：ok 来自 link_valid（上面判过，到这必真），不写字面量——
             # 与 404 分支共用同一判定，"回给 agent 的链接有效"这句话兑现了才算 ok。
             "ok": link_valid,
@@ -1769,7 +1776,7 @@ def build_app(
                 "auth_header": "Authorization: Bearer <redeem 返回的 token>",
                 "warning": "token 只在 redeem 响应体里出现一次，请立即保存到客户端配置",
             },
-        }
+        }, headers=pair_headers)
 
     @app.post("/api/user/pair/accepting", dependencies=[Depends(_write)])
     def api_pair_accepting(body: PairAcceptingBody) -> dict[str, Any]:
