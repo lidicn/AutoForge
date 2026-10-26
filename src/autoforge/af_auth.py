@@ -193,6 +193,15 @@ class TokenInfo:
     #: 默认落在最窄档 `agent`——只有签发点能把它抬到 login/developer，调用方不能从
     #: 请求体自助提权（见 issue_for_agent 的 principal_kind 形参校验）。
     principal_kind: str = "agent"
+    #: 批 4（D11）：登录令牌的绝对有效期上限（epoch 秒）。空闲续期把 expires_at 往后推，
+    #: 但永不越过这条线（owner 7 天）；None = 无绝对上限（agent/developer 不过期）。
+    absolute_deadline: float | None = None
+
+
+#: 批 4（D7）：rename_subject 的保留名（服务层拦所有调用点，不只端点）。
+#: owner 面 `{owner, shared}` ＋ 未认证占位 `unknown`——与 af_api._AGENT_LIST_RESERVED
+#: 同口径，但服务层独立定义（af_auth 不反向依赖 af_api），改一处要同步两处。
+_RESERVED_SUBJECT_NAMES = frozenset({"owner", "shared", "unknown"})
 
 
 class TokenRegistry:
@@ -203,6 +212,10 @@ class TokenRegistry:
     #: 凭证库只增不减（新增审计 BUG-19）。给默认 TTL，令牌到期即失效并被清理。
     #: env `AF_LOGIN_TOKEN_TTL_S` 可覆盖默认值（部署侧调长/调短，不用改码）。
     ISSUED_TTL_S = 86400.0
+    #: 批 4（D11）：登录令牌的**绝对有效期上限**（owner 7 天）。空闲续期把 `expires_at`
+    #: 往后推（滑动），但永不越过 `absolute_deadline` 这条线——一枚登录令牌哪怕持续活跃，
+    #: 也最迟 7 天必须重新登录一次（回收长期不换的会话）。agent/developer 不过期。
+    LOGIN_ABSOLUTE_CAP_S = 7 * 86400.0
     #: 已签发令牌条数硬上限（兜底）：与同文件 `RateLimiter._MAX_KEYS` 同一纪律。
     MAX_ISSUED = 10000
 
@@ -399,10 +412,30 @@ class TokenRegistry:
                 return None
             if info.invalid:
                 return None  # 配置非法（expires_at 无法解析/naive）→ fail-closed 拒绝
-            if info.expires_at is not None and time.time() > info.expires_at:
+            now = time.time()
+            # 批 4（D11）：绝对上限先判——越过即死，滑动续期方向也不许翻案（fail-closed）。
+            if info.absolute_deadline is not None and now > info.absolute_deadline:
+                raise TokenExpired(
+                    f"登录令牌已达绝对有效期上限（subject={info.subject}），请重新登录"
+                )
+            if info.expires_at is not None and now > info.expires_at:
                 raise TokenExpired(
                     f"令牌已过期（subject={info.subject}）"
                 )
+            # 批 4（D11）：登录令牌**空闲续期**——剩余 < 50% TTL 才把 expires_at 往后推
+            # 到 now+ISSUED_TTL_S，但钳在 absolute_deadline 内；不每请求续（热路径不整表重写）。
+            if (
+                info.principal_kind == "login"
+                and info.expires_at is not None
+                and (info.expires_at - now) < self.ISSUED_TTL_S * 0.5
+            ):
+                new_exp = min(
+                    now + self.ISSUED_TTL_S,
+                    info.absolute_deadline if info.absolute_deadline else now + self.ISSUED_TTL_S,
+                )
+                if new_exp > info.expires_at:
+                    info.expires_at = new_exp
+                    self._persist_renewal_locked(dg, new_exp)
             return info
 
     def revoke(self, token: str) -> bool:
@@ -445,6 +478,8 @@ class TokenRegistry:
         ttl_s: float | None = None,
         label: str | None = None,
         principal_kind: str = "agent",
+        *,
+        _allow_developer: bool = False,
     ) -> str:
         """运行时为 agent 签发 Bearer 令牌（配对成功后调用）。返回明文令牌。
 
@@ -456,8 +491,10 @@ class TokenRegistry:
         端点硬编码 `"login"`、配对兑换走默认 `"agent"`；调用方传 `"developer"` 视为自助
         提权，直接拒绝（developer 档只能由批 4 专用端点落盘，不经此入口）。
         """
-        if principal_kind == "developer":
+        if principal_kind == "developer" and not _allow_developer:
             # 腿 11：签发点是唯一能定身份的地方；从这里递 developer = 自己给自己发身份码。
+            # 仅批 4 专用端点（POST /api/user/agent-token，已收 owner 面）显式传
+            # `_allow_developer=True` 落盘 developer 档；其余调用路径一律拒绝。
             from .af_audit import AuditEvent, TOKEN_ISSUED_REJECTED
 
             self._audit.add(
@@ -469,7 +506,10 @@ class TokenRegistry:
                 )
             )
             raise ValueError("签发点不接受 principal_kind=developer（developer 档须由专用端点签发）")
-        if principal_kind not in ("login", "agent"):
+        # developer 档仅在专用端点显式放行后保留；其余未知档一律压回最窄档 agent。
+        if principal_kind not in ("login", "agent") and not (
+            principal_kind == "developer" and _allow_developer
+        ):
             principal_kind = "agent"
         token = token or ("af_" + secrets.token_hex(20))
         scopes_set = {s for s in scopes if s in SCOPES} or {"read"}
@@ -479,11 +519,16 @@ class TokenRegistry:
         # TTL 默认值在调用时刻读 env（`AF_LOGIN_TOKEN_TTL_S`），部署侧可调；显式 ttl_s 优先。
         ttl = float(ttl_s) if ttl_s is not None else _login_token_ttl_s()
         expires_at = (time.time() + ttl) if ttl > 0 else None
+        # 批 4（D11）：登录令牌带 7 天绝对上限锚点；agent/developer 不过期（None）。
+        absolute_deadline = (
+            time.time() + self.LOGIN_ABSOLUTE_CAP_S if principal_kind == "login" else None
+        )
         with self._lock:
             # 批 2：运行期签发令牌进摘要索引（不再混进 env 的明文 self._tokens）。
             self._issued[_digest(token)] = TokenInfo(
                 subject=agent_name, scopes=scopes_set, expires_at=expires_at,
                 label=label, principal_kind=principal_kind,
+                absolute_deadline=absolute_deadline,
             )
             self._purge_expired_locked()
             if len(self._issued) > self.MAX_ISSUED:
@@ -568,9 +613,21 @@ class TokenRegistry:
         return n
 
     def rename_subject(self, old: str, new: str) -> int:
-        """给 agent 改名：更新其名下全部令牌的 subject；返回受影响数量。"""
-        n = 0
+        """给 agent 改名：更新其名下全部令牌的 subject；返回受影响数量。
+
+        批 4（D7）：三条校验放在**服务层**（守住所有调用点，不只 HTTP 端点）：
+          1. new 不得落在保留名 `{owner, shared, unknown}` —— 防把 agent 改成 owner 面提权；
+          2. new 不得与**现有其他 subject** 重名 —— 防静默合并两族令牌（权限串族）。
+        违反抛 ValueError，由端点翻成 403/400。
+        """
+        new = (new or "").strip()
+        if new in _RESERVED_SUBJECT_NAMES:
+            raise ValueError(f"禁止改名为系统保留主体：{new!r}")
         with self._lock:
+            existing = {info.subject for pool in (self._tokens, self._issued) for info in pool.values()}
+            if new in existing and new != old:
+                raise ValueError(f"主体名 {new!r} 已被占用，禁止合并两族令牌")
+            n = 0
             for pool in (self._tokens, self._issued):
                 for info in pool.values():
                     if info.subject == old:
@@ -712,6 +769,30 @@ class TokenRegistry:
                 Path(self._issued_path),
                 json.dumps(data, ensure_ascii=False, indent=2),
             )
+
+    def _persist_renewal_locked(self, dg: str, new_expires_at: float) -> None:
+        """批 4（D11）：把一枚登录令牌续期后的 expires_at 落盘（按摘要键就地改一格）。
+
+        与 `_rewrite_issued` 同纪律：文件损坏即拒写抛错，不静默复活旧 expires_at。
+        只在续期**真的发生**时调用（authenticate 里 `new_exp > expires_at` 才走到），
+        因此热路径上不会每请求整表重写——连续两次请求只落盘一次。
+        """
+        if not self._issued_path:
+            return
+        p = Path(self._issued_path)
+        if not p.is_file():
+            return
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"{p.name} 已损坏，拒绝落盘续期；请修复或隔离该文件后重试（{type(exc).__name__}）"
+            ) from exc
+        if not isinstance(data, dict):
+            raise ValueError(f"{p.name} 形状不是对象，拒绝落盘续期")
+        if isinstance(data.get(dg), dict):
+            data[dg]["expires_at"] = new_expires_at
+            _atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 # ─────────────────────────────────────────────────────────────────────

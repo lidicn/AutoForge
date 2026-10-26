@@ -79,6 +79,7 @@ from .af_auth import (
     PairCodeStore,
     RateLimitExceeded,
     RateLimiter,
+    SCOPES,
     TokenExpired,
     TokenInfo,
     TokenRegistry,
@@ -152,6 +153,12 @@ class AuthCodeBody(BaseModel):
 
 class AgentRenameBody(BaseModel):
     name: str = ""
+
+
+# ── 批 4（D8）：owner 显式签发 developer 档长驻令牌请求体 ──
+class AgentTokenBody(BaseModel):
+    agent_name: str = ""
+    label: str = ""
 
 
 # ── v1.9.0 用户 WebUI：轻量单 owner 登录请求体 ──
@@ -313,6 +320,18 @@ def _require_owner_surface(info: TokenInfo | None) -> None:
 def _caller_is_owner(info: TokenInfo | None) -> bool:
     """D4/D3：当前调用方是否 owner 面。未鉴权（None）按 owner 处理（本地逃生舱）。"""
     return info is None or info.subject in _OWNER_SUBJECTS
+
+
+def _caller_is_governance(info: TokenInfo | None) -> bool:
+    """批 4（D8）：治理面 = owner 面**或**显式 developer 档令牌。
+
+    DELETE/PATCH `/api/user/agents/{id}` 管理配对主体：owner 面与一枚显式签发的 developer
+    令牌可过；普通 agent 令牌（哪怕带 write）不可。⛔ 不给 SCOPES 加档——developer 的
+    权限由它自带的 admin scope 承担，这里只认 `principal_kind`，避免 scope 与身份两本账。
+    """
+    if info is None:
+        return True  # 未鉴权本地逃生舱，与其余端点口径一致
+    return info.subject in _OWNER_SUBJECTS or info.principal_kind == "developer"
 
 #: 用户端 SPA 的挂载前缀（唯一真源）。三处必须与它同字：`ui-user-mimo/vite.config.ts` 的
 #: `base`、`docker/docker-compose.api.yml` 的卷挂载点与 `--ui-user-dir` 值、这里的常量。
@@ -1153,6 +1172,16 @@ def build_app(
             return {"ok": True, "revoked": True, "count": n}
         if not body.token:
             raise HTTPException(status_code=400, detail="必须提供 token 或 subject")
+        # 批 4（D8）：非 owner 面**只能撤自己手里那枚**令牌——不得拿别人的 token 串名撤销。
+        # owner 面（含本地逃生舱）保留任意撤销权。
+        if not _caller_is_owner(info):
+            try:
+                target = registry.authenticate(body.token)
+            except Exception:
+                target = None
+            target_subject = target.subject if target else None
+            if target_subject != (info.subject if info else None):
+                raise HTTPException(status_code=403, detail="普通令牌只能撤销自己名下的令牌")
         revoked = registry.revoke(body.token)
         return {"ok": True, "revoked": revoked}
 
@@ -1492,9 +1521,14 @@ def build_app(
         creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
         token_info: TokenInfo | None = Depends(authenticated()),
     ) -> dict[str, Any]:
-        # 主体绑定：仅 owner 面可撤销配对主体（一枚第三方 write 令牌不得借路径名撤销他人）
-        caller_subject = token_info.subject if token_info else None
-        _assert_agent_subject_owner(agent_id, caller_subject)
+        # 批 4（D8）：主体绑定升级为治理面（owner 面或显式 developer 档）。
+        # 一枚普通 agent 令牌（哪怕带 write）不得借路径名撤销他人——判据 B 仍在。
+        if not _caller_is_governance(token_info):
+            raise HTTPException(
+                status_code=403,
+                detail=f"仅治理面（owner/developer）可撤销配对主体 {agent_id}，"
+                       f"当前主体 {token_info.subject} 无权",
+            )
         # 删除 agent 时排除当前登录用户的 token，避免把自己踢下线
         current_token = creds.credentials if creds else None
         n = registry.revoke_by_subject(agent_id, except_token=current_token)
@@ -1506,14 +1540,45 @@ def build_app(
         body: AgentRenameBody,
         token_info: TokenInfo | None = Depends(authenticated()),
     ) -> dict[str, Any]:
-        # 主体绑定：仅 owner 面可改名配对主体
-        caller_subject = token_info.subject if token_info else None
-        _assert_agent_subject_owner(agent_id, caller_subject)
+        # 批 4（D8）：改名配对主体同走治理面判据（保留主体绑定，判据 B 不动）。
+        if not _caller_is_governance(token_info):
+            raise HTTPException(
+                status_code=403,
+                detail=f"仅治理面（owner/developer）可改名配对主体 {agent_id}，"
+                       f"当前主体 {token_info.subject} 无权",
+            )
         new_name = (body.name or "").strip()
         if not new_name:
             raise HTTPException(status_code=400, detail="name 不能为空")
-        n = registry.rename_subject(agent_id, new_name)
+        try:
+            n = registry.rename_subject(agent_id, new_name)
+        except ValueError as exc:
+            # 批 4（D7）：服务层三条保留名/重名校验 ⇒ 403（防提权/合并两族）。
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         return {"ok": True, "renamed": n, "from": agent_id, "to": new_name}
+
+    @app.post("/api/user/agent-token", dependencies=[Depends(_write)])
+    def api_issue_agent_token(
+        body: AgentTokenBody,
+        token_info: TokenInfo | None = Depends(authenticated()),
+    ) -> dict[str, Any]:
+        """批 4（D8）：owner 面**显式**签发一枚 developer 档令牌（带 admin scope）。
+
+        ⛔ 不能让普通 agent 令牌自调 `issue_for_agent(principal_kind=developer)`——
+        issue_for_agent 已拒绝自助提权；本端点是 developer 档唯一合法铸造口，且只准 owner。
+        developer 令牌 ttl=0（不过期），用于长驻运维 agent。
+        """
+        _require_owner_surface(token_info)
+        name = (body.agent_name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="agent_name 不能为空")
+        token = registry.issue_for_agent(
+            name, scopes=sorted(SCOPES), principal_kind="developer",
+            label=body.label or "owner-issued developer token", ttl_s=0,
+            _allow_developer=True,
+        )
+        return {"ok": True, "token": token, "subject": name, "principal_kind": "developer",
+                "scopes": sorted(SCOPES)}
 
     # ── 配对 bootstrap 匿名面（裁定 20261006 §一 = B：新增两个匿名端点）──
     @app.post("/api/mcp/pair/request")

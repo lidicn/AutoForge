@@ -191,8 +191,10 @@ def test_real_repo_gets_green_when_the_two_faces_are_landed(tmp_path):
         "        n = registry.revoke_by_subject(agent_id, except_token=current_token)",
         "        if agent_id != token_info.subject:\n            raise HTTPException(403, \"只能操作自己名下的 agent\")\n        n = registry.revoke_by_subject(agent_id, except_token=None)",
     ).replace(
-        "        n = registry.rename_subject(agent_id, new_name)",
-        "        if agent_id != token_info.subject:\n            raise HTTPException(403, \"只能操作自己名下的 agent\")\n        n = registry.rename_subject(agent_id, new_name)",
+        # 批 4：rename_subject 已包进 try/except（服务层 ValueError ⇒ 403），
+        # 锚点与注入体都用 12 空格缩进，否则落在 try 块里破坏缩进。
+        "            n = registry.rename_subject(agent_id, new_name)",
+        "            if agent_id != token_info.subject:\n                raise HTTPException(403, \"只能操作自己名下的 agent\")\n            n = registry.rename_subject(agent_id, new_name)",
     )
     assert patched != src, "注入没生效（真仓文本漂了锚点）——先确认端点写法还在"
     ast.parse(patched)
