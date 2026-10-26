@@ -75,6 +75,7 @@ def apply(
     stage: str = "save",
     store: Any = None,
     premiere_code: str | None = None,
+    authenticated_subject: str = "",
 ) -> dict[str, Any]:
     """一次走完 校验→仿真→入队（v2 M1：可选首演码闸门）。
 
@@ -196,12 +197,19 @@ def apply(
                 "would_enqueue": True, "pending_ref": None}
 
     # 4. save（入待批队列）
-    save_payload = {"ir": ir_payload, "name": staged.get("summary", "")}
+    # D5：save_payload 补 owner——审批该条目落盘后归档 record["owner"] == authenticated_subject，
+    # 与 af_mcp._t_save（af_save）写同一枚 owner 键对齐；此前 apply 路径产出的归档归属是空串。
+    save_payload = {
+        "ir": ir_payload,
+        "name": staged.get("summary", ""),
+        "owner": authenticated_subject,
+    }
     save_result = af_service.submit_pending(
         store,
         "af_apply",
         save_payload,
         submitted_by="af_apply",
+        authenticated_subject=authenticated_subject or None,
     )
     result["save"] = save_result
     result["stage"] = "save"
