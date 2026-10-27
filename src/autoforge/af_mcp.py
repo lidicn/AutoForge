@@ -560,7 +560,7 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
             "properties": {
                 "intent": {
                     "type": "object",
-                    "description": "意图 JSON，如 {name, mode, when, if, do}",
+                    "description": "意图 JSON（各字段必须是对象，写错形状返回 DraftError+fix 不是崩溃）：{name, when:{entity,to}, if:{and/or/not/比较/一元谓词}, do:[{action,target,params}]}；action 用裸 domain.service（如 climate.set_hvac_mode）或中文名（开灯/开空调），带 ha./ha: 前缀会被归一剥除",
                 },
                 "session_id": {
                     "type": "string",

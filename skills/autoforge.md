@@ -21,16 +21,63 @@ version: 1.0.0
     ↓
 1. af_resolve_entity(name="设备名", area="房间") → 拿真实 entity_id
     ↓
-2. 写 AF-Spec 文本（语法见下方）
+2. 生成 IR —— 两条路任选（见下「两条起草路」）
+   路 A：af_draft(intent=<意图 JSON>) → 返回 ref（推荐，条件表达力强）
+   路 B：af_compile_spec(text=<AF-Spec 文本>) → 返回 ir
     ↓
-3. af_compile_spec(text=<AF-Spec>) → 编译成 IR
+3. af_apply(ref=<ref>, stage="dry_run")  ← 路 A 走这个：一次跑完 校验→仿真，不入队
+   或  af_build(ir=<IR>) + af_simulate(ir=<IR>, seed, events)  ← 路 B 走这两个
     ↓
-4. af_build(ir=<IR>) → 安全闸校验
+4. af_apply(ref=<ref>, stage="save")  ← 路 A 入待批队列
+   或  af_save(ir=<IR>)                ← 路 B 入待批队列
     ↓
-5. af_simulate(ir=<IR>, seed={...}, events=[...]) → 仿真验证
-    ↓
-6. af_save(ir=<IR>) → 进待批队列，等人审批
+5. 人在 WebUI 批准 → 自动生效并起 watch（金丝雀/预演由图内 canary 字段控制）
 ```
+
+## 两条起草路怎么选
+
+| | 路 A `af_draft`（意图 JSON） | 路 B `af_compile_spec`（AF-Spec 文本） |
+|---|---|---|
+| 适合 | 多条件、and/or/not 嵌套、设备用**中文名** | 结构线性、要精确控制每个节点/边 |
+| 实体 | 写中文名即可，服务端查目录解析 | **必须写真实 entity_id**（先 af_resolve_entity） |
+| 后续步骤 | af_apply(dry_run) → af_apply(save) | af_build → af_simulate → af_save |
+
+### 路 A：意图 JSON 的形状（写错形状会得到 DraftError + fix，不会崩）
+
+```json
+{
+  "name": "书房空调自动制冷",
+  "when": {"entity": "书房门", "to": "off"},
+  "if":   {"and": [
+             {"gt":   {"var": "书房温度", "const": 26.5}},
+             {"is_on": {"var": "书房电脑"}},
+             {"or":  [{"is_on": {"var": "书房射灯"}}, {"is_on": {"var": "书房吊灯"}}]}
+           ]},
+  "do":   [{"action": "climate.turn_on",       "target": "书房空调"},
+           {"action": "climate.set_hvac_mode",  "target": "书房空调", "params": {"hvac_mode": "cool"}},
+           {"action": "climate.set_temperature","target": "书房空调", "params": {"temperature": 26}}]
+}
+```
+
+形状铁律（都带服务端报错示例，撞了照 fix 改即可）：
+- `when` / `if` / `ask` / 每个 `do` 项 / `params` 都必须是**对象**，不能是字符串。
+- `when` 的实体字段是 `entity`（中文名或完整 entity_id 都可）+ `to`（目标状态）；
+  时间/太阳触发用 `{"type":"time","at":"22:00:00"}` 形态。
+- `do[].action` 写**裸 `<domain>.<service>`**（`climate.set_hvac_mode`），或中文动作名
+  （开灯/关灯/开空调/关空调）。⛔ 不要写 `ha.` / `ha:` 前缀——那是 AF-Spec 的写法；
+  意图侧写了会被剥掉归一，但请直接用对的形式。
+- 参数走 `params`（`{"hvac_mode":"cool"}`）或平铺 `temperature`/`hvac_mode` 两枚快捷字段。
+
+### 路 B：AF-Spec 的动作子句长什么样（体验者常问）
+
+```
+do d1 ha.climate.set_hvac_mode {"entity_id": "climate.lumi_cn_84159632_v2", "hvac_mode": "cool"} name "制冷"
+do d2 ha.climate.set_temperature {"entity_id": "climate.lumi_cn_84159632_v2", "temperature": 26} name "设26度"
+```
+
+要点：`do <id> <adapter>.<service> <params JSON> [result <var>] [name "<名称>"]`——
+一行一个节点，`name` 是**节点尾随子句**不是独立行；自动化标题 `name "…"` 才独占一行。
+条件节点 `if <id> <expr JSON>`，expr 用 `{"op": "gt", "left": {"var": "entity.sensor.x", "type": "numeric"}, "right": {"const": 26.5}}` 形态。
 
 ## AF-Spec 语法
 

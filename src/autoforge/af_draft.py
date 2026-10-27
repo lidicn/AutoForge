@@ -269,6 +269,34 @@ def draft_intent(
     if not do and not do_list and not ask:
         raise DraftError("E_MISSING_DO", "意图必须包含 do（动作）或 ask（询问）")
 
+    # 字段形状闸（体验者崩溃 2026-10-27）：`when`/`if`/`ask`/`wait` 写错形状时，
+    # 下游（_resolve_trigger/_resolve_expr/_resolve_do、`wait in item`）会对 str 成员
+    # 运算崩成 ADM_ERR_INTERNAL —— G5 在顶层修过同族（intent 本身不许是字符串），
+    # 字段级漏网。一律收 DraftError + 可机读 fix + 最小例子。
+    if not isinstance(when, dict):
+        raise DraftError(
+            "E_INVALID_WHEN",
+            f"`when` 必须是对象，收到 {type(when).__name__}：{when!r}",
+            fix={"example": {"when": {"entity": "书房门", "to": "off"}, "do": {"action": "开空调", "target": "书房空调"}}},
+        )
+    if if_cond is not None and not isinstance(if_cond, dict):
+        raise DraftError(
+            "E_INVALID_EXPR",
+            f"`if` 必须是条件对象（and/or/not/比较/一元谓词），收到 {type(if_cond).__name__}：{if_cond!r}",
+            fix={"example": {"if": {"gt": {"var": "书房温度", "const": 26.5}}}},
+        )
+    if ask is not None and not isinstance(ask, dict):
+        raise DraftError(
+            "E_INVALID_ASK",
+            f"`ask` 必须是对象（prompt/room/timeout），收到 {type(ask).__name__}：{ask!r}",
+            fix={"example": {"ask": {"prompt": "要执行吗？", "room": "书房"}}},
+        )
+    if wait is not None and not isinstance(wait, str):
+        raise DraftError(
+            "E_INVALID_WAIT",
+            f"`wait` 必须是时长字符串（如 \"10m\"），收到 {type(wait).__name__}：{wait!r}",
+        )
+
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     counter = [0]
@@ -331,6 +359,23 @@ def draft_intent(
         raw_actions = do
     elif do:
         raw_actions = [do]
+
+    # 同上族：动作项形状（`do` 写成字符串、list 里混字符串）——G5 只修了顶层 intent
+    # 是 str 的那一档，list 内的 str 项在体验者现场同样崩成 INTERNAL。
+    for _i, _item in enumerate(raw_actions):
+        if not isinstance(_item, dict):
+            raise DraftError(
+                "E_INVALID_DO",
+                f"动作 #{_i + 1} 必须是对象，收到 {type(_item).__name__}：{_item!r}",
+                fix={"action_fields": ["action", "target", "temperature", "hvac_mode", "params",
+                                        "requires_confirm", "canary", "conf", "priority"],
+                     "known_actions": ["开灯", "关灯", "开空调", "关空调", "turn_on", "turn_off",
+                                        "light.turn_on", "light.turn_off", "climate.turn_on",
+                                        "climate.turn_off"],
+                     "action_format": "裸 <domain>.<service>（如 climate.set_hvac_mode）；⛔ 不带 ha./ha: 前缀——动作映射的兜底分支会原样透传，带前缀会产出坏服务名（体验者现场实测）",
+                     "example": {"do": [{"action": "开空调", "target": "书房空调",
+                                         "hvac_mode": "cool", "temperature": 26}]}},
+            )
 
     do_ids = []
     # G10 实施（PM 裁决 2026-10-24）：带 canary.duration 的 do 节点，观察期超时恢复时
@@ -567,6 +612,17 @@ def _resolve_do(do: dict[str, Any], resolved: dict[str, str], catalog: Any) -> d
     entity_id = _resolve_entity(target, catalog)
     resolved[target] = entity_id
 
+    # 兜底分支会把 action 原样透传成服务名 ⇒ 体验者按 AF-Spec 的习惯写 `ha.`/`ha:`
+    # 前缀时，产出 `adapter=ha, action=ha.climate.turn_on` 这种双前缀坏服务名——
+    # 静默编译过、运行时才炸。这里把前缀剥掉归一（AF-Spec 侧由 spec 解析自己拆
+    # adapter/action，不经此路），剥完再走映射表。
+    action_str = action if isinstance(action, str) else ""
+    for _pfx in ("ha.", "ha:"):
+        if action_str.startswith(_pfx):
+            action_str = action_str[len(_pfx):]
+            break
+    action = action_str
+
     # 动作映射：开灯/turn_on → light.turn_on
     action_map = {
         "开灯": ("ha", "light.turn_on"),
@@ -587,6 +643,19 @@ def _resolve_do(do: dict[str, Any], resolved: dict[str, str], catalog: Any) -> d
         params["temperature"] = do["temperature"]
     if "hvac_mode" in do:
         params["hvac_mode"] = do["hvac_mode"]
+    # 泛用参数透传：显式 params dict 最后合并（同名以意图侧为准）。要 preset_mode
+    # 这类字段不必等动作映射扩表；⛔ 非 dict 拒——字符串 params 会一路带到 HA
+    # 调用面变 INTERNAL，与上面几族形状闸同一个道理。
+    extra = do.get("params")
+    if extra is not None:
+        if not isinstance(extra, dict):
+            raise DraftError(
+                "E_INVALID_DO",
+                f"动作的 `params` 必须是对象，收到 {type(extra).__name__}：{extra!r}",
+                fix={"example": {"action": "climate.set_hvac_mode", "target": "书房空调",
+                                 "params": {"hvac_mode": "cool"}}},
+            )
+        params.update(extra)
 
     node = {
         "adapter": adapter,
