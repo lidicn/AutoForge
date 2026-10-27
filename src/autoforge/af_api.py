@@ -361,6 +361,34 @@ def update_marker_path(root: str | None) -> str:
     return os.path.join(base, ".update_request.json")
 
 
+#: 静态资源扩展名白名单（返工 5.4）：SPA 兜底**不得**把这些请求回成 index.html。
+#: 只列构建产物真正会用的类型；⛔ 不要写成"凡带点都算"——`/mimo/v1.2` 这类无扩展名深链
+#: 是 history 路由，必须回壳。取值与 vite build 的实际产物面一致（js/css/图/字体/manifest）。
+_ASSET_EXT_RE = re.compile(
+    r"\.(?:js|mjs|css|map|json|webmanifest|manifest|svg|png|jpe?g|gif|webp|avif|"
+    r"ico|woff2?|ttf|otf|eot|txt|xml|wasm)$",
+    re.I,
+)
+
+
+def _looks_like_static_asset(rel: str) -> bool:
+    """路径末段带已知资源扩展名 ⇒ 它是资源请求，不是 SPA 路由。缺失就该 404。"""
+    return bool(rel) and bool(_ASSET_EXT_RE.search(rel.rsplit("/", 1)[-1]))
+
+
+#: 固定名、内容会随发版变的入口文件 ⇒ 每次回源比对（ETag/304）。⛔ 带 hash 的 chunk
+#: （`index-DQZic5gc.js`、`workbox-9c191d2f.js`）不在其列——内容寻址，可长缓存，
+#: 列进来反而是浪费。`sw.js`/`index.html`/`manifest` 是固定名：缓存住它们＝缓存住
+#: 旧 precache 清单或旧壳，升级后"旧壳引用已被替换的 hash chunk"必坏（出资人 2026-10-27 现场）。
+_NO_STORE_ASSETS = ("index.html", "sw.js", "manifest.webmanifest", "manifest.json")
+
+
+def _is_no_store_asset(rel: str) -> bool:
+    """壳与 SW 每次回源：vite-plugin-pwa 的 autoUpdate 也要求 sw.js 可即时更新。"""
+    last = rel.rsplit("/", 1)[-1].lower()
+    return last in _NO_STORE_ASSETS
+
+
 def update_result_path(root: str | None) -> str:
     return os.path.join(root if root else "/data", ".update_result.json")
 
@@ -1990,7 +2018,19 @@ def build_app(
             # `root=/mimo` 与兄弟目录 `/mimo-secret` 当成同一棵树（字符串前缀相同），
             # 于是 `../mimo-secret/x` 解析出树外路径仍被放行。
             if rel and candidate.is_file() and candidate.is_relative_to(root):
-                return FileResponse(str(candidate))
+                resp = FileResponse(str(candidate))
+                if _is_no_store_asset(rel):
+                    # sw.js / manifest 必须每次回源比对：缓存住它们 = 缓存住旧 precache 清单，
+                    # 升级后新资源永不接管（出资人 2026-10-27 现场：升级后旧壳取不到 chunk）。
+                    resp.headers["Cache-Control"] = "no-cache"
+                return resp
+            if _looks_like_static_asset(rel):
+                # 返工 5.4：静态资源形状的请求（`/assets/*`、末段带扩展名）**绝不回 index.html**。
+                # 旧的无差别兜底把"文件不存在"伪装成 200 + HTML：浏览器拿 HTML 当 ES 模块解析 ⇒
+                # 「Failed to fetch dynamically imported module」，且 PWA precache 会把这份 HTML
+                # 按 JS 的 URL 缓存下来，毒住到强刷才恢复。404 才是诚实回执——它让浏览器与 SW
+                # 都能识别"这一份没了"，配合下面的 index.html no-cache，正常刷新即可自愈。
+                raise HTTPException(status_code=404, detail="Not Found")
             if not (root / "index.html").is_file():
                 # dist 挂了但里面没有 index.html（构建产物空/卷挂错目录）：这是 503 而不是
                 # FileResponse 抛的 500 —— 部署面缺文件要让运维一眼看见，别伪装成程序崩溃。
@@ -1998,6 +2038,8 @@ def build_app(
                     status_code=503,
                     detail=f"{UI_USER_PREFIX if root is mimo_dist else 'ui'} 的 dist 里没有 index.html：{str(root)}",
                 )
-            return FileResponse(str(root / "index.html"))
+            # HTML5 history 路由的深链（无扩展名）才落到壳；壳必须每次回源比对，
+            # 否则升级后浏览器拿着旧壳去引用已被替换的 hash chunk——正是上面那条 bug 的源头。
+            return FileResponse(str(root / "index.html"), headers={"Cache-Control": "no-cache"})
 
     return app

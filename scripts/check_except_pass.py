@@ -69,7 +69,12 @@ BASELINE: frozenset[str] = frozenset(
         # 2026-10-26 返工 5.1：1388 → 1443（批 5 在它上方加了 pair-link 端点 + 失败计数落盘
         # 约 55 行，把这枚顶漂；except_pass 门报 A"新增 1449"+C"基线 1388 读不到"是同一枚的
         # 两面，净数仍 16=16，未破"只减不增"）。16 → 16 枚。
-        "af_api.py:1445",
+        # （DB-08 曾把这枚重冻结到 1445，注释当时没续——本行起补上，链不再断。）
+        # 2026-10-27 返工 5.4：1445 → 1473（SPA 兜底修复在它上方加了 _ASSET_EXT_RE/两个
+        # 辅助函数（含 _NO_STORE_ASSETS 常量）+ handler 内 404/no-cache 分支。中途一度冻结到
+        # 1467，最后补 index.html 直接请求的 no-cache 又 +6 行 → 终值 1473）。同一枚 pair SSE
+        # 心跳吞掉站点，不是新增；门报 A"新增"+C"基线读不到"仍是同一枚两面。净 16 → 16。
+        "af_api.py:1473",
         "af_closedloop/deepfix.py:52",
         "af_conflict.py:680",
         "af_conflict_audit.py:150",

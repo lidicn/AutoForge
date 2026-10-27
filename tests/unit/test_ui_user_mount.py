@@ -125,14 +125,52 @@ def test_mimo_deep_link_falls_back_to_user_index(two_dists):
     assert USER_MARKER in r.text and DEV_MARKER not in r.text
 
 
-def test_unknown_mimo_asset_falls_back_to_user_index(two_dists):
-    """请求一个不存在的资源 ⇒ 落 index.html（历史模式），不 500、也不串到开发面板。"""
+def test_unknown_mimo_asset_reads_404_not_index_html(two_dists):
+    """⚠️ 返工 5.4 断言翻转（改前改后逐条写明）：
+    改前＝本腿钉「不存在的 .js 落 index.html、200」。那**正是出资人 2026-10-27 现场的根因**：
+    升级后旧壳引用的 hash chunk 已不在盘上，200+HTML 被浏览器当 ES 模块解析 ⇒
+    「Failed to fetch dynamically imported module」，且 PWA precache 会把这份 HTML 按 JS 的
+    URL 缓存下来 ⇒ 不硬刷不恢复。把错误行为钉成了规范。
+    改后＝资源形状的缺失必须诚实 404；深链（无扩展名）才允许落壳。
+    变异自证：把 handler 里的 `_looks_like_static_asset` 分支删掉 ⇒ 本腿红。"""
     client = _client(
         two_dists["tmp"], ui_dir=str(two_dists["dev"]), ui_user_dir=str(two_dists["user"])
     )
     r = client.get(f"/{UI_USER_PREFIX}/assets/nope-does-not-exist.js")
-    assert r.status_code == 200
-    assert USER_MARKER in r.text and DEV_MARKER not in r.text
+    assert r.status_code == 404, r.status_code
+    assert "<!doctype" not in r.text.lower(), "缺失资源仍被伪装成壳"
+    # 对照腿：真在盘上的资源照常 200，扩展名判据不是"凡带点都杀"
+    ok = client.get(f"/{UI_USER_PREFIX}/assets/index-b.js")
+    assert ok.status_code == 200 and USER_MARKER in ok.text
+    # 对照腿：无扩展名深链仍落壳（HTML5 history 不能被 404 掉）
+    deep = client.get(f"/{UI_USER_PREFIX}/insights/deep-link")
+    assert deep.status_code == 200 and USER_MARKER in deep.text
+
+
+def test_spa_shell_and_service_worker_are_no_cache(two_dists):
+    """返工 5.4 第二层：壳与 sw.js 必须 `Cache-Control: no-cache`。
+
+    升级后浏览器若拿着缓存旧壳，它引用的还是**已被替换的 hash chunk**——旧壳+新盘=必坏，
+    这正是出资人现场的另一半（资源 404 了还要能自愈）。no-cache 不是 no-store：
+    每次回源比对（ETag/304 归 Starlette FileResponse），正常刷新即拿到新壳。
+    变异自证：删掉 no-cache 赋值 ⇒ 本腿红。"""
+    client = _client(
+        two_dists["tmp"], ui_dir=str(two_dists["dev"]), ui_user_dir=str(two_dists["user"])
+    )
+    for path in (f"/{UI_USER_PREFIX}/", f"/{UI_USER_PREFIX}/insights/deep-link"):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        assert r.headers.get("cache-control") == "no-cache", f"{path} 壳可被缓存＝旧壳配新盘"
+    sw = client.get(f"/{UI_USER_PREFIX}/sw.js")
+    assert sw.headers.get("cache-control") == "no-cache", "sw.js 可被缓存＝precache 清单停在旧版"
+    # 直接请求 index.html 走的是文件分支（不是兜底分支）——两处都要 no-cache，
+    # 漏一处等于"旧壳配新盘"还有一条路。
+    shell = client.get(f"/{UI_USER_PREFIX}/index.html")
+    assert shell.status_code == 200 and shell.headers.get("cache-control") == "no-cache", \
+        "index.html 文件分支没带上 no-cache"
+    # 对照：普通 chunk 内容寻址（hash 在文件名里），不强制 no-cache——别把缓存全杀了
+    asset = client.get(f"/{UI_USER_PREFIX}/assets/index-b.js")
+    assert asset.headers.get("cache-control") != "no-cache"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -217,20 +255,31 @@ def test_traversal_cannot_read_a_sibling_of_the_user_dist(two_dists):
     # 百分号编码的 `..`：实测 `/mimo/../x` 这种裸点段在客户端就被归一化成 `/x`（根本到不了
     # handler），只有 `%2e%2e` 会以字面 `..` 落进 `full_path`。用裸点段写这条判据 = 空门。
     r = client.get(f"/{UI_USER_PREFIX}/%2e%2e/{UI_USER_PREFIX}-secret/leak.txt")
-    assert r.status_code == 200
+    # ⚠️ 返工 5.4 断言翻转：改前钉 200+用户端 index；静态资源形状（.txt/.js…）自本批起
+    # 诚实 404，不再回 index.html。核心不变量不变＝**读不到兄弟树**，下面两行才是这条腿
+    # 存在的理由，变异腿 L4（摘 is_relative_to）仍然红：404 与「泄漏成功」在 status/text
+    # 两个断言上同时红。翻转的只是次要断言（落点），不是安全判据本身。
     assert "OUT-OF-TREE" not in r.text
-    assert USER_MARKER in r.text          # 落回用户端 index，而不是别的树
+    assert r.status_code == 404
     r2 = client.get(f"/{UI_USER_PREFIX}/%2e%2e%2f{UI_USER_PREFIX}-secret%2fleak.txt")
     assert "OUT-OF-TREE" not in r2.text
+    # 对照腿：无扩展名的兄弟树目录段仍走兜底（落用户端壳、不串树）——兜底本身还在
+    r3 = client.get(f"/{UI_USER_PREFIX}/%2e%2e/{UI_USER_PREFIX}-secret")
+    assert "OUT-OF-TREE" not in r3.text and USER_MARKER in r3.text
 
 
 def test_traversal_cannot_read_outside_the_dev_dist(two_dists):
     tmp = two_dists["tmp"]
     (tmp / "outside.txt").write_text("OUTSIDE\n", encoding="utf-8")
     client = _client(tmp, ui_dir=str(two_dists["dev"]), ui_user_dir=str(two_dists["user"]))
+    # ⚠️ 返工 5.4 断言翻转（同 sibling 腿）：核心不变量＝树外文件读不到；形状从
+    # 「200+开发面板壳」翻成「404」（.txt 是资源形状）。变异腿（摘 is_relative_to）下
+    # OUTSIDE 会被读出 ⇒ 两条断言同时红。无扩展名对照腿证明兜底没被整个杀掉。
     r = client.get("/%2e%2e/outside.txt")
     assert "OUTSIDE" not in r.text
-    assert DEV_MARKER in r.text           # 落回开发面板 index
+    assert r.status_code == 404
+    r2 = client.get("/%2e%2e/outside")    # 无扩展名 → 仍落开发面板壳，不串到用户端
+    assert "OUTSIDE" not in r2.text and DEV_MARKER in r2.text and USER_MARKER not in r2.text
 
 
 # ─────────────────────────────────────────────────────────────────────
