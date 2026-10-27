@@ -1195,18 +1195,32 @@ def build_app(
 
     @app.post("/api/auth/revoke")
     def api_auth_revoke(
-        body: RevokeBody, info: TokenInfo | None = Depends(_write)
+        body: RevokeBody,
+        info: TokenInfo | None = Depends(_write),
+        creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
     ) -> dict[str, Any]:
         """撤销令牌（即时生效并落盘 `{store_root}/.auth/revoked.json`）。
 
-        批 3：body 可给 `token`（自理，任意 write 面都能撤自己手里那枚）或 `subject`
-        （owner 面专属——撤销该主体名下全部令牌）。两者二选一。
+        批 3：body 可给 `token`（自理）或 `subject`（owner 面专属）。两者二选一。
+
+        按主体撤销分两族（出资人 2026-10-27 现场：owner 行一点就把自己的会话撤了＝
+        「删不动 + 误登出」；旧实现还会连 env 里人配的 owner 部署密钥一起吊销）：
+        - owner 面主体 ⇒ `rotate_login_tokens(keep_token=当前 bearer)`：只清运行期
+          登录令牌、保住调用者自己那枚、⛔ 不碰 env 密钥与 agent/developer 档。
+        - 其他主体（配对 agent、developer）⇒ 维持 `revoke_by_subject` 语义——那是
+          「删这个 agent」，名下全撤是对的；except 当前 bearer 只防自杀式登出。
         """
         if body.subject:
             if not _caller_is_owner(info):
                 raise HTTPException(status_code=403, detail="按主体撤销需 owner 面；普通令牌只能撤自己")
-            n = registry.revoke_by_subject(body.subject)
-            return {"ok": True, "revoked": True, "count": n}
+            current_token = creds.credentials if creds else None
+            if body.subject in _OWNER_SUBJECTS:
+                n = registry.rotate_login_tokens(body.subject, keep_token=current_token)
+            else:
+                n = registry.revoke_by_subject(body.subject, except_token=current_token)
+            # ok 从撤销数量派生（fake-ok-const 门 + 诚实回执双口径：撤到 0 枚的
+            # "成功"不是成功，两分支各写字面量 True 还会给 AST 棘轮添账）。
+            return {"ok": n > 0, "revoked": n > 0, "count": n}
         if not body.token:
             raise HTTPException(status_code=400, detail="必须提供 token 或 subject")
         # 批 4（D8）：非 owner 面**只能撤自己手里那枚**令牌——不得拿别人的 token 串名撤销。
@@ -1249,6 +1263,8 @@ def build_app(
             raise HTTPException(status_code=409, detail="已有管理员，不允许重复注册")
         #: WebUI 注册即登录，签发的是 owner 面令牌（subject 固定 owner），登录用户名进 label 仅供显示。
         #: 批 2：身份族标 login（与配对 agent、批4 developer 三族可分辨）。
+        #: 注册同样换代（出资人 2026-10-27：一个 owner 只留当下一个活登录态，表不堆）。
+        registry.rotate_login_tokens("owner")
         token = registry.issue_for_agent("owner", ("read", "write", "live"), label=body.username,
                                         principal_kind="login")
         return {
@@ -1284,7 +1300,9 @@ def build_app(
         # 已注册：严格验证
         if not admin_store.verify(body.username, body.password):
             raise HTTPException(status_code=401, detail="用户名或密码错误")
-        # 批 2：身份族 login。
+        # 登录即换代（出资人 2026-10-27 现场：每登一次堆一行登录态、删不动）：
+        # 签发新令牌**之前**清掉全部旧登录令牌 ⇒ 单会话语义，owner 表不再增长。
+        registry.rotate_login_tokens("owner")
         token = registry.issue_for_agent("owner", ("read", "write", "live"), label=body.username,
                                         principal_kind="login")
         return {

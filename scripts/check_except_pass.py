@@ -74,7 +74,9 @@ BASELINE: frozenset[str] = frozenset(
         # 辅助函数（含 _NO_STORE_ASSETS 常量）+ handler 内 404/no-cache 分支。中途一度冻结到
         # 1467，最后补 index.html 直接请求的 no-cache 又 +6 行 → 终值 1473）。同一枚 pair SSE
         # 心跳吞掉站点，不是新增；门报 A"新增"+C"基线读不到"仍是同一枚两面。净 16 → 16。
-        "af_api.py:1473",
+        # 2026-10-27 登录态换代（v1.14.4）：1473 → 1489（revoke 端点分型 + creds 依赖、
+        # register/login 两处 rotate 调用，共 +16 行都在它上方）。同一枚，净 16 → 16。
+        "af_api.py:1491",
         "af_closedloop/deepfix.py:52",
         "af_conflict.py:680",
         "af_conflict_audit.py:150",

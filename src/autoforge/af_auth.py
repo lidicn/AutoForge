@@ -461,6 +461,39 @@ class TokenRegistry:
             self._persist_revoked()
             return True
 
+    def rotate_login_tokens(self, subject: str, *, keep_token: str | None = None) -> int:
+        """吊销该主体名下全部**运行期签发的登录令牌**（`principal_kind=="login"`），返回数量。
+
+        出资人现场（2026-10-27）：v1.9 起登录"只签发不换代" ⇒ 每登一次多一行登录态，
+        且按主体撤销会把调用者自己一起杀掉（=删不动 + 误登出）。两个用途同一实现：
+
+        - 登录成功时（keep_token=None）：签发新令牌**之前**清掉全部旧登录令牌
+          ——单会话语义：一次登录只留一个活登录态，表不再堆。
+        - 治理页按主体撤销 owner 时（keep_token=当前 bearer）：保住调用者自己的会话，
+          其余登录令牌全撤。
+
+        只作用于 `_issued`（运行期签发池）里的 login 档 ⇒ env 静态密钥（`_tokens` 池）与
+        agent/developer 令牌一律不碰。⛔ 治理页撤 owner 不得走 `revoke_by_subject`：
+        那会连人配的 env owner 密钥一起吊销（部署凭据不是会话），且它不分 principal_kind。
+        """
+        keep_dg = _digest(keep_token) if keep_token else None
+        n = 0
+        with self._lock:
+            for dg, info in list(self._issued.items()):
+                if info.principal_kind != "login" or info.subject != subject:
+                    continue
+                if keep_dg is not None and dg == keep_dg:
+                    continue
+                self._issued.pop(dg, None)
+                self._revoked.add(dg)
+                n += 1
+            if n:
+                self._persist_revoked()
+                if self._issued_path:
+                    self._rewrite_issued(subject, drop=True, except_token=keep_token,
+                                         only_kind="login")
+        return n
+
     def subjects(self) -> list[dict[str, Any]]:
         """已注册令牌的主体摘要（⛔ 不含明文令牌/摘要，供治理页 / 审计用）。
 
@@ -741,7 +774,8 @@ class TokenRegistry:
         data[_digest(token)] = entry
         _atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2))
 
-    def _rewrite_issued(self, subject: str, new_name: str | None = None, drop: bool = False, except_token: str | None = None) -> None:
+    def _rewrite_issued(self, subject: str, new_name: str | None = None, drop: bool = False,
+                        except_token: str | None = None, only_kind: str | None = None) -> None:
         if not self._issued_path or not Path(self._issued_path).is_file():
             return
         p = Path(self._issued_path)
@@ -767,6 +801,10 @@ class TokenRegistry:
             if except_dg is not None and tok == except_dg:
                 continue
             if isinstance(meta, dict) and meta.get("subject") == subject:
+                # only_kind：换代只动登录档。⛔ 整主体删盘会把 owner 名下的
+                # agent/developer 盘籍一并抹掉（重启后它们"复活成从未存在"，比残留更糟）。
+                if only_kind is not None and meta.get("principal_kind", "agent") != only_kind:
+                    continue
                 if drop:
                     data.pop(tok, None)
                     changed = True

@@ -13,4 +13,4 @@
 # 的 update_check、v1.13.0 的 update/update_status、bd0a1b5 的 _t_deploy/_t_deploy_status、
 # 敲打 P0 的 stop_watch、v1.13.3 的 api_system_version）；③ 3 条 STALE 过期指纹按
 # cee6a3a 口径删除。上调这 3 条全部是「发版时未同步基线」的积欠认领，不是新豁免。
-100 # 2026-10-24 收账登记（AST 全量口径，`--no-baseline --no-smoke`）
+99 # 2026-10-27 下调（登录态换代 v1.14.4）：revoke 端点两枚 ok:True 字面量合并为一枚 n>0 派生，fake-ok-const 85→84。只降不升，非新豁免。
