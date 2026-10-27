@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autoforge"
-version = "1.14.2"
+version = "1.14.3"
 description = "AutoForge — Agent 为中心的智能家居自动化平台（G1 最小可运行闭环）"
 readme = "README.md"
 requires-python = ">=3.11"
