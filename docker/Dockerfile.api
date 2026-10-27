@@ -36,7 +36,10 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY examples ./examples
-COPY skills ./skills   # af_guide 的正文来源；缺这行 ⇒ 工具在生产读不到文件（静默降级成 ok:False）
+# af_guide 的正文来源：缺这行 ⇒ 工具在生产读不到文件（诚实回 ok:False，但等于没指引）。
+# ⚠️ Dockerfile 的行内 `#` 不是注释（只有行首才算），会被当成 COPY 的额外源路径 ⇒
+#    `docker build` 报 "not found"、升级失败回滚。注释一律独立成行放上面。
+COPY skills ./skills
 # 窗后验收与门禁脚本随镜像走：`docker compose exec autoforge python scripts/verify_adm_window.py`
 # 是停机窗当天的验收入口，它必须和被测服务在同一台机器上可执行。
 COPY scripts ./scripts
