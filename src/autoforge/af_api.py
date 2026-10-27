@@ -1700,7 +1700,11 @@ def build_app(
         if not persisted:
             raise HTTPException(status_code=500, detail="配对码已生成但未登记，请重试")
         base = str(request.base_url).rstrip("/")
-        link = f"{base}/{UI_USER_PREFIX}/pair?k={pc.link_key}"
+        # 链接必须指向内容协商端点 GET /pair（注册在服务根，见 @app.get("/pair")）。
+        # ⚠️ 返工 5.3：这里曾拼成 `{base}/{UI_USER_PREFIX}/pair`＝/mimo/pair——那是 mimo SPA
+        # 的挂载前缀 + 兜底路由，返回的是控制台 HTML，agent 打开链接拿到的是页面不是配对协议。
+        # UI_USER_PREFIX 只属于静态资源面，⛔ 不得进 API 链接。判据腿同批收紧（钉死 /pair?k= 段）。
+        link = f"{base}/pair?k={pc.link_key}"
         # 返工 5.1：ok 来自 persisted 回读（上面已校验为真才走到这里），不写字面量。
         # agent_name_hint 进返回体（返工 5.2）：弹窗标题显示「配对链接 · {hint}」，
         # 不给就永远回退成光秃秃的 "Agent"。

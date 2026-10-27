@@ -52,9 +52,33 @@ def _make_link(client, owner_tok):
 def test_1_owner_creates_pair_link(client):
     owner = _owner_token(client)
     body = _make_link(client, owner)
-    assert re.fullmatch(r"https?://.+/pair\?k=.{22,}", body["link"]), body["link"]
+    # ⚠️ 正则收紧（返工 5.3）：旧式 `https?://.+/pair\?k=` 的 `.+` 会吞掉 `/mimo`，
+    # 把链接拼成 /mimo/pair（SPA 兜底页，返回控制台 HTML）也判绿——生产实炸过一次。
+    # 现在钉死 host 之后**紧跟** /pair，中间不许有任何前缀段。
+    assert re.fullmatch(r"https?://[^/]+/pair\?k=.{22,}", body["link"]), body["link"]
+    assert "/mimo/pair" not in body["link"], f"链接串进了 SPA 前缀：{body['link']}"
     assert re.fullmatch(r"\d{8}", body["code"]), body["code"]
     assert body["ttl_s"] > 0
+
+
+def test_1d_opening_the_issued_link_yields_pairing_instructions(client):
+    """端到端（返工 5.3 的真验收）：拿生成出来的那条 link 原样去 GET，
+    必须以 JSON 回 redeem 指引。只钉字符串形状拦不住"路径缝错面"——
+    生产上链接返回的是控制台 HTML，agent 按设计"打开链接即配对"就是完不成。"""
+    owner = _owner_token(client)
+    body = _make_link(client, owner)
+    # 从**返回的绝对 URL** 里取 path/query 再打回去（urlsplit）——不猜拼接，也不给
+    # bug 留"我把前缀手动去掉再测"的退路：测的就是 agent 拿到的那一条。
+    from urllib.parse import urlsplit
+
+    u = urlsplit(body["link"])
+    r = client.get(u.path + ("?" + u.query if u.query else ""), headers={"Accept": "application/json"})
+    assert r.status_code == 200, f"打开自己生成的链接失败 {r.status_code}：{r.text[:120]}"
+    assert "application/json" in r.headers.get("content-type", ""), r.headers.get("content-type")
+    got = r.json()
+    assert got["ok"] is True, got
+    assert got["redeem"]["url"].endswith("/api/mcp/pair/redeem"), got
+    assert got["code"] == body["code"], "打开链接回读的码与签发时不一致"
 
 
 def test_1b_pair_link_ttl_is_600_and_carries_hint(client):
