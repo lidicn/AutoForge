@@ -473,6 +473,60 @@ def _t_whoami(store: GraphStore, args: dict[str, Any], current: dict[str, Any] |
     }
 
 
+def _guide_path() -> Path:
+    """指引文档位置：环境变量 > 包内 skills/ > 仓库根 skills/（开发态）。
+
+    ⛔ 不依赖 cwd —— 容器里 `forge mcp` 的工作目录不一定是 /app。
+    """
+    env = (os.environ.get("AF_GUIDE_PATH") or "").strip()
+    if env:
+        return Path(env)
+    pkg_dir = Path(__file__).resolve().parent          # .../autoforge
+    for cand in (pkg_dir / "skills" / "autoforge.md",
+                 pkg_dir.parent.parent / "skills" / "autoforge.md"):
+        if cand.is_file():
+            return cand
+    return pkg_dir / "skills" / "autoforge.md"
+
+
+def _t_guide(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
+    """取 AF 起草指引（skills/autoforge.md 全文）。参数：section(str 可选，按小节标题过滤)。
+
+    存在的理由（体验者 2026-10-27）：AF-Spec / 意图 JSON 的语法此前只有人肉交接单能拿到，
+    MCP 工具面不含语法 ⇒ agent 靠猜写 `then <动作>` 这类不存在的写法，第一步就卡住。
+    工具是所有 MCP 客户端都支持的唯一通道（prompts/resources 轻量客户端常不实现），
+    所以把指引做成 `tools/list` 里可见的一个工具，而不是等客户端支持别的机制。
+    """
+    NL = chr(10)  # 换行常量：本函数的分隔符不写字面量，避免生成链上的转义歧义
+    path = _guide_path()
+    if not path.is_file():
+        return {"ok": False, "code": ADM_ERR_INTERNAL,
+                "error": f"指引文件不在：{path}（部署镜像缺 skills/，或 AF_GUIDE_PATH 指错）"}
+    text = path.read_text(encoding="utf-8")
+    # ok 从"真读到非空正文"派生（fake-ok-const 门抓字面量；这里也确实该读回才算数）。
+    delivered = bool(text.strip())
+    section = (args.get("section") or "").strip()
+    if not section:
+        return {"ok": delivered, "source": str(path), "content": text}
+
+    # 按 `## ` 小节切块：命中关键词回那一节；未命中回全文 + 目录（agent 自己挑，
+    # ⛔ 不抛错——抛错等于把"猜小节名"的负担丢回给刚学会用这个工具的 agent）。
+    blocks: list[tuple[str, list[str]]] = []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            blocks.append((line[3:].strip(), []))
+        elif blocks:
+            blocks[-1][1].append(line)
+    want = section.lower()
+    hit = [name + NL + NL.join(body) for name, body in blocks if want in name.lower()]
+    toc = [name for name, _ in blocks]
+    if hit:
+        return {"ok": delivered, "source": str(path), "section": section,
+                "content": (NL + NL).join(hit), "sections": toc}
+    return {"ok": delivered, "source": str(path), "section": None, "content": text,
+            "sections": toc, "note": f"没找到小节 {section!r}，回全文 + 目录供你挑"}
+
+
 def _t_experience(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     """v1.5.0：实体共现经验摘要（只在成功落盘后采集）。参数：limit(int 可选，默认 10)。"""
     return svc.get_experience(store, limit=int(args.get("limit", 10) or 10))
@@ -969,6 +1023,17 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
         "自检当前 MCP 会话的鉴权身份（subject/scopes）。无参数。用于排查 scope 不足导致的写工具被拒。",
         {"type": "object", "properties": {}},
         _t_whoami,
+        None,
+    ),
+    (
+        "af_guide",
+        "【指引·起草前必读】返回 AF 自动化起草指引全文（两条起草路：af_draft 意图 JSON 的形状铁律"
+        " + af_compile_spec 的 AF-Spec 行语法，含书房级完整示例、trigger/expr 形态、七种节点、边类型、排错）。"
+        "不知道 action 怎么写、条件怎么嵌套时先调本工具，⛔ 不要凭猜试语法。"
+        "参数：section(str 可选，按小节名过滤，如 \"AF-Spec 语法\"/\"排错\"；不给则回全文)。无鉴权。",
+        {"type": "object", "properties": {
+            "section": {"type": "string", "description": "小节标题关键词，可选；未命中回全文+目录"}}},
+        _t_guide,
         None,
     ),
     (
