@@ -65,15 +65,65 @@ def clock_now(clock: Any) -> float:
 
 
 def audit_write(audit: Any, **fields: Any) -> Any:
-    """写审计日志。兼容 ``AuditLog.append / .record / .add``。"""
+    """写审计日志。兼容 ``AuditLog.append / .record / .add``。
+
+    生产崩溃（2026-10-28 体验者预演现场）归因：本函数旧实现把**裸 dict** 塞进
+    ``AuditLog.add``，而 ``AuditLog.events`` 的读者（``af_service`` 三处
+    ``[e.to_dict() for e in runtime.audit]``）只认 ``AuditEvent``——conf 分级
+    （``AUTOFORGE_CONF_GRADING=1``）开着时 ShadowRunner 拦截动作会走本函数，
+    于是 simulate 带 events 触发动作即崩 ``'dict' object has no attribute
+    'to_dict'``。3.13/3.14 都崩，与 Python 版本无关；本地不崩只因没开分级。
+
+    修在源头一处：这里统一把 dict 形状归一成 ``AuditEvent``（``kind``→``type``、
+    ``at`` 接受 datetime/ISO 字符串、其余杂字段收进 ``data``），25 处调用点零改动，
+    ``AuditLog`` 里从此只有一种对象。返回值保持原 dict 兼容形状（有些调用方读返回）。
+    """
     entry = dict(fields)
     if audit is None:
         return entry
     for name in ("append", "record", "add"):
         fn = getattr(audit, name, None)
         if callable(fn):
-            return fn(entry)
+            # 接收者决定形状：真 AuditLog.add 只认 AuditEvent（生产崩溃的根），
+            # 测试替身（conftest.FakeAudit 等）的契约是收 dict。按接收者探测，
+            # 不按调用方猜——两种消费者都不破。
+            from .af_audit import AuditLog
+            fn(_as_audit_event(entry) if isinstance(audit, AuditLog) else entry)
+            return entry
     return entry
+
+
+def _as_audit_event(entry: dict[str, Any]) -> "AuditEvent":
+    """audit_write 的 dict 形状 → AuditEvent。
+
+    - ``kind``/``type``：二选一（conf 分级族全用 ``kind``），映射到 ``AuditEvent.type``；
+    - ``at``：datetime 原样、ISO 字符串解析、缺省取 UTC now（旧调用全传 now，防御缺省）；
+    - 其余键（automation_id/instance_id/node_id/entity_id 有同名字段直达；
+      params/verdict/record_id/... 进 ``data``）。
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    from .af_audit import AuditEvent
+
+    known = {"kind", "type", "at", "automation_id", "instance_id", "node_id", "entity_id"}
+    etype = str(entry.get("type") or entry.get("kind") or "UNKNOWN")
+    at = entry.get("at")
+    if isinstance(at, _dt):
+        at_val = at
+    elif isinstance(at, str) and at:
+        try:
+            at_val = _dt.fromisoformat(at)
+        except ValueError:
+            at_val = _dt.now(_tz.utc)
+    else:
+        at_val = _dt.now(_tz.utc)
+    direct = {k: entry[k] for k in ("automation_id", "instance_id", "node_id", "entity_id")
+              if entry.get(k) is not None}
+    data = {k: v for k, v in entry.items() if k not in known}
+    return AuditEvent(
+        type=etype, at=at_val, message=str(entry.get("message", etype)),
+        data=data, **direct,
+    )
 
 
 def read_state(states: Any, entity_id: str) -> str | None:
