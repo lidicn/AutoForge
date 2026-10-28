@@ -721,7 +721,9 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
     ),
     (
         "af_health",
-        "服务健康自检：返回版本、契约版本、里程碑、只读标记。无参数。",
+        "服务健康自检：返回版本、契约版本、里程碑、联动状态、写闸真值。无参数。"
+        "⚠️ 判'现在能不能写'只读 `write_gate`（open/blocked/no_lease）；`readonly` 是 v1.x"
+        "遗留身份声明、不反映运行期闸态（体验者 AF-010 就是被这两枚键绊住的）。",
         {"type": "object", "properties": {}},
         _t_health,
         None,

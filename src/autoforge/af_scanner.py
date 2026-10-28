@@ -42,6 +42,8 @@ CHECKS: dict[str, str] = {
     "HTTP_NOT_WHITELISTED": "① HTTP 出站主机不在白名单",
     "MISSING_TIMEOUT_OR_DEFAULT": "② ask 缺 on_timeout 或 default（杜绝永久挂起）；wait 到期自动走 then",
     "ENTITY_DEP_CYCLE": "③ 跨自动化实体读写依赖成环",
+    "UNRESOLVED_ENTITY": "⑬ 实体引用仍是未解析占位符（`?名字`）——目录里查不到这个实体",
+    "SELF_TRIGGER_LOOP": "⑭ 同自动化写回自己的触发源（自激风险按效果表判定，非跨自动化）",
     "STATIC_LOOP": "④ 静态图内循环且无终止条件",
     "CANCEL_SPAWNS_INSTANCE": "⑤ on_cancel 分支产生新实例",
     "HIGH_RISK_AFTER_SUSPEND": "⑥ 挂起分支内执行高风险动作",
@@ -130,6 +132,8 @@ CODE_HINT: dict[str, str] = {
     "RESERVED_NOT_IMPLEMENTED": "`fn` 仍为保留位；把自定义逻辑改写成内置表达式或拆成多个节点。",
     "EXPR_INVALID": "检查算子名/函数名拼写、参数个数，以及嵌套深度（上限 32）/节点数（上限 256）。",
     "EXPR_NS_INVALID": "把 var 改成 entity.<完整entity_id>（如 entity.sensor.study_temp）；属性读取写 entity.<id>.<attr>。裸写 sensor.x 会在运行期求值失败，而 if 的失败只走兜底边——图上表现为\"条件永不成立\"的死自动化。",
+    "UNRESOLVED_ENTITY": "先用 af_resolve_entity(name=\"书房温度\") 拿真实 entity_id（中文名按 friendly_name 子串匹配，命不中就是 0 候选，见体验者 AF-003）；查到多个就选一个把完整 id 写进意图。⛔ 不要指望 `?占位符` 能过闸——它过去只在依赖环那一站被动露出，报的是误导性的「跨自动化成环」。",
+    "SELF_TRIGGER_LOOP": "同自动化写回自己的触发源不阻断（合法的自动关停就长这样）。要自查两点：① 动作写入后的状态是否等于触发目标（等于就有自激形态，靠 HA 状态去重与总线熔断收敛，建议加 `for`/`debounce`）；② 若本意是跨自动化协作，请改用 emit 事件解耦。",
     "TRIGGER_INVALID": "把 group 触发源改平（一层 `or`/`and` 列出全部条件），别让 group 套 group，也别自引用。",
     "PARAMS_TOO_DEEP": "把参数摊平成正常层级；嵌套到这种深度，通常是引用写错成了自引用。",
     "INBOX_PARAM_TOO_LONG": "把该字段裁短到上限以内，或把长文拆成多条 `inbox.*` 投递后先做摘要。上限不在 AF 里写死，"
@@ -406,6 +410,7 @@ class StaticScanner:
             # default 边＝"条件不成立" → 实例正常 done、动作永不执行。build 零诊断、
             # 仿真 ok=True——三道关全绿但自动化是死的。编译期就拦在这里。
             self._check_expr_namespaces(auto, node, out)
+            self._check_unresolved(auto, node, out)
             self._check_trigger_depth(auto, node, out)
             # 参数容器是**闸门口径**：运行期的泛容器遍历腿（版本投影 / 冲突内省 / NL 渲染）
             # 都接了同一份预算，但闸门原本不查，于是"build 放行、运行期内省必失败"的 IR
@@ -702,6 +707,35 @@ class StaticScanner:
                     "EXPR_INVALID",
                     ERROR,
                     f"表达式校验失败：{exc}",
+                    auto.id,
+                    node.id,
+                )
+            )
+
+    # 未解析占位符（体验者 AF-013：`?书房不存在的实体` 一路过闸，最后只在依赖环那一站
+    # 被动露出，报的还是「跨自动化成环」——既误导排查，又让测试通道成了橡皮图章）
+    def _check_unresolved(self, auto: Automation, node: Node, out: ScanResult) -> None:
+        refs: set[str] = set()
+        if node.trigger is not None:
+            try:
+                refs |= node.trigger.entity_ids()
+            except (TriggerDepthError, ParamDepthError):
+                pass  # 深度/预算由 _check_trigger_depth 那一站负责，这里不重复报
+        for eid in (node.params.get("entity_id"), node.params.get("target")):
+            if isinstance(eid, str):
+                refs.add(eid)
+        if node.expr is not None:
+            try:
+                refs |= {r for r in collect_var_refs(node.expr) if r.startswith("entity.")}
+            except ExprError:
+                pass
+        for ref in sorted(r for r in refs if "?" in r):
+            out.diagnostics.append(
+                Diagnostic(
+                    "UNRESOLVED_ENTITY",
+                    ERROR,
+                    f"实体引用仍是未解析占位符 {ref!r}：目录里查不到这个实体，"
+                    f"先用 af_resolve_entity 拿真实 entity_id（多候选要人工选定）",
                     auto.id,
                     node.id,
                 )
@@ -1235,6 +1269,20 @@ class StaticScanner:
                 code = "EMIT_SELF_LOOP"
                 msg = "跨自动化事件发布成环（仅事件、无设备回灌）：" + " → ".join(cycle) + "；已放行"
                 level = WARNING
+            elif len(set(cycle)) <= 1:
+                # 体验者 AF-011：单自动化"触发源 = 自己写的实体"被报成 error 级
+                # **「跨自动化」**成环、链路写成 `probe1 → probe1`——文案与判级都不实。
+                # 这条边能不能真自激，取决于"写入结果状态是否重新满足自己的触发目标"：
+                #   触发 to=on + turn_off（写 off）⇒ 不会再触发，是合法的自动关停写法；
+                #   触发 to=on + turn_on（写 on）⇒ 状态回灌，真自激风险。
+                # 因此降级为 WARNING 并如实写"同自动化"，风险细节由 proof 给出。
+                code = "SELF_TRIGGER_LOOP"
+                proof = _self_oscillation_proof(next(a for a in autos if a.id == cycle[0]))
+                msg = (
+                    f"同自动化写回自己的触发源（非跨自动化）：{cycle[0]} → {cycle[0]}"
+                    + (f"；{proof}" if proof else "；写入结果状态不重新满足触发目标，不构成自激")
+                )
+                level = WARNING
             else:
                 # 纯实体环：无 emit 解耦，多自动化直接互写同一实体，无状态收敛保障，
                 # 静态保守拦截（code hint 引导改用 emit 解耦写法）。
@@ -1326,6 +1374,49 @@ def _find_cycles(auto: Automation) -> list[list[str]]:
                 path.append(nxt)
                 stack.append((nxt, iter(auto.outgoing(nxt))))
     return cycles
+
+
+def _self_oscillation_proof(auto: Automation) -> str:
+    """同自动化自激证明：写入结果状态（`SERVICE_STATE` 单一真值源）是否等于触发目标。
+
+    返回人类可读结论；查不到效果（非 turn_* 类服务）时如实说"无法判定"，
+    ⛔ 不假装"一定安全"也不假装"一定危险"。
+    """
+    from .af_vhass.fake import SERVICE_STATE  # 效果真值表：vhass/FakeHA/这里共用一份
+
+    watched: dict[str, set[str | None]] = {}
+    for node in auto.entry_nodes():
+        if node.trigger is None:
+            continue
+        try:
+            leaves = list(node.trigger.leaf_triggers())
+        except (TriggerDepthError, ParamDepthError):
+            leaves = []
+        for leaf in leaves:
+            if leaf.entity_id:
+                watched.setdefault(leaf.entity_id, set()).add(leaf.to)
+    risky: list[str] = []
+    unknown: list[str] = []
+    for node in auto.nodes.values():
+        if node.kind != "do" or not node.action:
+            continue
+        eid = str(node.params.get("entity_id") or "")
+        if not eid or eid not in watched:
+            continue
+        domain = eid.split(".", 1)[0]
+        service = node.action.split(".", 1)[1] if "." in node.action else node.action
+        written = SERVICE_STATE.get((domain, service))
+        if written is None:
+            unknown.append(f"{eid}←{node.action}")
+        elif any(to is None or to == written for to in watched[eid]):
+            risky.append(f"{eid} 写入后状态={written}，与自身触发目标一致")
+    if risky:
+        # 措辞要准：写入同一状态在 HA 侧不产生 state_changed（加上总线去重/熔断），
+        # 因此不是"必然死循环"，而是"依赖收敛机制的自激形态"——降 warning 与此判断一致。
+        return "自激形态（靠状态去重/熔断收敛，仍需复核）：" + "；".join(risky)
+    if unknown:
+        return "写入结果状态不在效果表内，无法判定是否自激：" + "；".join(unknown)
+    return ""
 
 
 def _cycles_in(deps: Mapping[str, set[str]]) -> list[list[str]]:

@@ -40,6 +40,9 @@ _NON_LITERAL_KEYS = {
     "CROSS_DEP_CYCLE",
     "EMIT_SELF_LOOP",
     "ENTITY_DEP_CYCLE",
+    # 体验者 AF-011（2026-10-28）新增：`code = "SELF_TRIGGER_LOOP"` 赋值式发出
+    #: af_scanner.py:1278（同自动化写回自己触发源；判级/文案见该站注释）
+    "SELF_TRIGGER_LOOP",
     "LIVE_CONFIRM_REQUIRED",
     "LIVE_ENTITY_NOT_WHITELISTED",
     "LIVE_TOKEN_REQUIRED",
@@ -171,5 +174,8 @@ def test_confirm_and_canary_are_two_distinct_branches():
 
 def test_catalog_size_reading_is_pinned():
     """目录枚数现读（文档里那句"44 项"的对账位）：漂了就红，逼记账同步。"""
-    assert len(CHECKS) == 44, f"CHECKS 现读 {len(CHECKS)} 枚，两份架构文档那句读数要跟着改"
+    # 44 → 47：v1.14.11 的 EXPR_NS_INVALID +v1.14.12 的 UNRESOLVED_ENTITY / SELF_TRIGGER_LOOP。
+    # ⚠️ 上一笔（1.14.11）我改了码表却没动这枚 pin 与文档读数——当时 `-k` 选择罩不到本文件，
+    #    CI 才会红。教训：加诊断码必查这三处（本 pin／两份架构文档／_NON_LITERAL_KEYS）。
+    assert len(CHECKS) == 47, f"CHECKS 现读 {len(CHECKS)} 枚，两份架构文档那句读数要跟着改"
     assert set(CHECKS) == set(CODE_HINT), "两份目录的键集要同源：只进一份就是半张脸"

@@ -46,7 +46,7 @@ def fake_pipeline(monkeypatch):
     called: dict = {}
 
     monkeypatch.setattr(af_service, "build", lambda ir, store=None, use_catalog=True: {"ok": True})
-    monkeypatch.setattr(af_service, "simulate", lambda ir, store=None: {"ok": True})
+    monkeypatch.setattr(af_service, "simulate", lambda ir, seed=None, events=None, store=None: {"ok": True, "instances": [{"state": "done", "current_node": "p1"}]})
 
     def fake_submit(store, source, payload, submitted_by="", authenticated_subject=None):
         captured.update(payload)
@@ -99,7 +99,7 @@ def test_payload_owner_key_matches_mcp_t_save(fake_pipeline):
 def test_approved_archive_owner_matches_subject(tmp_path, monkeypatch):
     """端到端：apply 写出的 payload 经真 approve_pending 回放，归档 record['owner'] == alice。"""
     monkeypatch.setattr(af_service, "build", lambda ir, store=None, use_catalog=True: {"ok": True})
-    monkeypatch.setattr(af_service, "simulate", lambda ir, store=None: {"ok": True})
+    monkeypatch.setattr(af_service, "simulate", lambda ir, seed=None, events=None, store=None: {"ok": True, "instances": [{"state": "done", "current_node": "p1"}]})
     store = GraphStore(str(tmp_path / "store"))
 
     payload_seen: dict = {}

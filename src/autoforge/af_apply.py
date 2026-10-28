@@ -70,6 +70,69 @@ def issue_premiere(ref: str, store: Any = None, ttl_s: int = 300) -> dict[str, A
     return {"ok": True, "code": code, "store_diff_sha256": store_diff_sha}
 
 
+#: 合成触发的上限（防御：几百条自动化的图别一口气造几千个事件）
+_MAX_SYNTH_EVENTS = 64
+#: 反向种子哨兵：只要求**不等于**目标状态；FakeHA 对未知实体接受任意字符串状态
+_PRE_STATE = "__af_pre_state__"
+
+
+def _synth_triggers(
+    ir_payload: dict[str, Any],
+) -> tuple[dict[str, str], list[dict[str, Any]], list[str], int]:
+    """从图自身的触发源合成 seed + events，让金色路径的仿真**真的跑一遍**。
+
+    返回 `(seed, events, time_based_ids, state_target_count)`：
+
+    - **state 触发**：先把实体置成哨兵旧值、再抛目标值，制造一次真实跳变。
+      不这么做的后果是 FakeHA 的默认态可能已经等于目标态，去重把事件吞掉＝没测。
+    - **time / sun 触发**：追加一次 24h 时钟推进（够跨过一个日内时点），并把该自动化
+      记进 `time_based_ids`——回执要如实说"这类触发没有被逐条验证"。
+    - `state_target_count` 只数可合成的状态触发项：判定"空跑"只对它们成立。
+      ⛔ 一张纯时间触发的图不该被误判成 `simulate_noop`（那是判据过头，不是严格）。
+
+    分组触发（group）递归展开叶子；坏 IR 在这里不报错——它过不了前面 build 那一站。
+    """
+    seed: dict[str, str] = {}
+    events: list[dict[str, Any]] = []
+    time_based: list[str] = []
+    state_targets = 0
+    for auto in ir_payload.get("automations") or []:
+        if not isinstance(auto, dict):
+            continue
+        refs: list[tuple[str, str]] = []
+        temporal = False
+        for node in auto.get("nodes") or []:
+            if not isinstance(node, dict) or node.get("kind") != "on":
+                continue
+            stack: list[Any] = [node.get("trigger") or {}]
+            while stack:
+                trig = stack.pop()
+                if not isinstance(trig, dict):
+                    continue
+                t_type = trig.get("type")
+                if t_type == "group":
+                    stack.extend(trig.get("sources") or [])
+                    continue
+                if t_type in ("time", "sun"):
+                    temporal = True
+                    continue
+                eid = trig.get("entity_id")
+                if isinstance(eid, str) and eid:
+                    to = trig.get("to")
+                    refs.append((eid, to if isinstance(to, str) and to else "on"))
+        for eid, target in refs:
+            if len(events) >= _MAX_SYNTH_EVENTS:
+                break
+            seed.setdefault(eid, "on" if target == _PRE_STATE else _PRE_STATE)
+            events.append({"entity_id": eid, "state": target})
+            state_targets += 1
+        if temporal:
+            events.append({"advance_s": 86400})
+            if not refs:
+                time_based.append(str(auto.get("id", "")))
+    return seed, events, time_based, state_targets
+
+
 def apply(
     ref: str,
     stage: str = "save",
@@ -179,12 +242,34 @@ def apply(
     if stage == "check":
         return result
 
-    # 3. simulate（仿真回放）
-    sim_result = af_service.simulate(ir_payload, store=store)
+    # 3. simulate（仿真回放）——见 `_synth_triggers`：金色路径必须自己造触发
+    # 体验者 AF-008（2026-10-28）：旧实现这里 `simulate(ir_payload)` 不带 seed/events，
+    # 于是 `instances: []`、`bus.counts.accepted: 0`——图根本没跑，却回 `ok:true`。
+    # 预演（dry_run）与测试通道（af_test 走 stage="simulate"）据此入队，等于
+    # 拿着零有效验证的"通过"当真。金色路径必须自己合成触发。
+    seed, synth_events, time_based, state_targets = _synth_triggers(ir_payload)
+    sim_result = af_service.simulate(ir_payload, seed or None, synth_events or None, store=store)
     result["simulate"] = sim_result
+    fired = len(sim_result.get("instances") or [])
+    result["sim_coverage"] = {
+        "synthesized_events": len(synth_events),
+        "state_triggers": state_targets,
+        "instances": fired,
+        "time_based_automations": time_based,
+    }
     if not sim_result.get("ok"):
         result["ok"] = False
         result["stage"] = "simulate"
+        return result
+    if fired == 0 and state_targets:
+        # 合成过触发还是零实例 = 仿真没跑到任何东西。⛔ 不许当"通过"。
+        result["ok"] = False
+        result["stage"] = "simulate"
+        result["reason"] = "simulate_noop"
+        result["error"] = (
+            f"仿真没有跑到任何实例（合成事件 {len(synth_events)} 个、instances=[]）——"
+            f"这不代表自动化是对的，只代表这一闸没验到。请检查触发源实体与条件。"
+        )
         return result
 
     if stage == "simulate":

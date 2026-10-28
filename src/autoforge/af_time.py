@@ -392,6 +392,47 @@ _UNIT_SECONDS = {
 }
 
 
+#: ISO-8601 时长：`P` + 日期段（W/D）+ `T` + 时间段（H/M/S）。
+#: ⛔ 年（Y）与月（M，日期段那个）不在此表内——它们的秒数依赖日历，
+#: 静默按 365/30 天算是发明假数值，宁可明确拒绝。
+_ISO_RE = re.compile(
+    r"p(?:(?P<weeks>[0-9]+(?:\.[0-9]+)?)w)?"
+    r"(?:(?P<days>[0-9]+(?:\.[0-9]+)?)d)?"
+    r"(?:t(?:(?P<hours>[0-9]+(?:\.[0-9]+)?)h)?"
+    r"(?:(?P<minutes>[0-9]+(?:\.[0-9]+)?)m)?"
+    r"(?:(?P<seconds>[0-9]+(?:\.[0-9]+)?)s)?)?",
+    re.IGNORECASE,
+)
+
+
+def _iso8601_seconds(body: str, original: object) -> float:
+    """ISO-8601 时长（已 lower）→ 秒。`PT5S` / `P1DT2H30M15S` / `PT0.5S` 都吃。
+
+    三条 fail-closed 边界，⛔ 都不许静默当 0：
+    - `P` / `PT` 这种空壳（没有任何数字）；
+    - `T` 之后什么都没有（`P1DT`）视为 0 秒也要报错——那多半是手写漏了；
+    - 含 `Y`/日期段 `M` 的日历型时长（上面正则不匹配，走这里显式拒绝）。
+    """
+    if "y" in body or re.search(r"p[0-9.]+m", body):
+        raise ValueError(
+            f"日历型时长不支持（年/月的秒数依赖日历，不猜）：{original!r}——请换算成 W/D/H/M/S"
+        )
+    m = _ISO_RE.fullmatch(body)
+    if not m or not any(m.groupdict().values()):
+        raise ValueError(f"无法解析 ISO-8601 时长：{original!r}（需要 PT5S / P1DT2H 这类带数字的形态）")
+    if "t" in body and not any(m.group(key) for key in ("hours", "minutes", "seconds")):
+        # `P1DT`（T 写了但时间段空着）多半是手写漏了后缀——按 0 秒放行等于把 typo 变成静默行为
+        raise ValueError(f"ISO-8601 的 `T` 之后没有时长成分：{original!r}")
+    g = m.groupdict()
+    return (
+        float(g["weeks"] or 0) * 7 * 86400.0
+        + float(g["days"] or 0) * 86400.0
+        + float(g["hours"] or 0) * 3600.0
+        + float(g["minutes"] or 0) * 60.0
+        + float(g["seconds"] or 0)
+    )
+
+
 def parse_duration(value: str | int | float) -> float:
     """解析时长字面量为秒。
 
@@ -409,6 +450,18 @@ def parse_duration(value: str | int | float) -> float:
     text = str(value).strip().lower()
     if not text:
         raise ValueError("时长不能为空")
+
+    # 体验者 AF-012（2026-10-28）：`wait "PT5S"` 与 `sun.offset "-PT30M"` 都是 ISO-8601
+    # 写法（后者还是仓内 af_spec 头注释与 skill 指引自己给的例子），旧实现只认朴素后缀
+    # ⇒ 抛 ValueError 冒成 ADM_ERR_INTERNAL，报"内部错误"而不是"这格式我不认"。
+    iso_sign, iso_body = 1.0, text
+    if iso_body[:1] in ("-", "+"):
+        iso_sign, iso_body = (-1.0 if iso_body[0] == "-" else 1.0), iso_body[1:]
+    if iso_body.startswith("p"):
+        seconds = iso_sign * _iso8601_seconds(iso_body, value)
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError(f"时长必须是非负有限值：{value!r}")
+        return seconds
     # P1-9：支持 HH:MM:SS 格式
     if ":" in text:
         parts = text.split(":")

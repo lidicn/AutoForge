@@ -1,9 +1,9 @@
 # AutoForge 完整知识文档
 
 > **更新时间**：2026-10-09　**鲜度基准**：`master` HEAD `e5b3fd5`
-> **本文是"面与清单"**：IR 语言、31 个 MCP 工具、90 条 HTTP 路由、18 个 CLI 命令、44 项安全闸、测试通道与预演怎么用、两棵 WebUI 怎么用、部署与排障。
+> **本文是"面与清单"**：IR 语言、34 个 MCP 工具、90 条 HTTP 路由、18 个 CLI 命令、47 项安全闸、测试通道与预演怎么用、两棵 WebUI 怎么用、部署与排障。
 > **机制与不变量在**《AF完整架构与运行时说明.md》（同一份代码、同一个基准；那里讲"为什么这档不碰真机"，这里讲"这档怎么调"）。
-> **清单不是手抄**：工具表来自 `len(af_mcp.TOOLS)=31` 的注册表、路由表来自 `build_app().routes`（90 条含 methods）、CLI 表来自 `typer` 命令注册表、检查项来自 `af_scanner.CHECKS`（44 项）、枚举来自 `af_ir/schema/ir.schema.json`。这四份都是**系统自己的信号**，改代码后重取即可，别信任何一处散文副本。
+> **清单不是手抄**：工具表来自 `len(af_mcp.TOOLS)=34` 的注册表、路由表来自 `build_app().routes`（90 条含 methods）、CLI 表来自 `typer` 命令注册表、检查项来自 `af_scanner.CHECKS`（47 项）、枚举来自 `af_ir/schema/ir.schema.json`。这四份都是**系统自己的信号**，改代码后重取即可，别信任何一处散文副本。
 
 ---
 
@@ -14,7 +14,7 @@
 核心能力（现状，非计划）：
 
 - 自然语言 → 意图 JSON → IR（`af_draft`，服务端解析中文设备名）
-- 编译期安全闸 **44 项**（`af_scanner.CHECKS`）
+- 编译期安全闸 **47 项**（`af_scanner.CHECKS`）
 - 双轨仿真 + 后置条件断言（`simulate` / `simulate_track`，`expect`）
 - **预演档 `dry_run`**：校验 + 仿真，零写入（§八）
 - **测试通道 `af_test_*`**：批量跑题、自动放行、与正式区隔离（§九）

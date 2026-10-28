@@ -37,7 +37,7 @@ def _group():
 
 
 def _patch_sim_ok(monkeypatch):
-    monkeypatch.setattr(af_service, "simulate", lambda ir, store=None: {"ok": True})
+    monkeypatch.setattr(af_service, "simulate", lambda ir, seed=None, events=None, store=None: {"ok": True, "instances": [{"state": "done", "current_node": "p1"}]})
 
 
 class _Rejects:

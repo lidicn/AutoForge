@@ -209,6 +209,11 @@ class TestChannel:
             record["error"] = {
                 "build_errors": build.get("errors", []),
                 "build_warnings": build.get("warnings", []),
+                # apply 层面的失败（如 `simulate_noop`：合成过触发仍零实例）不带 build 明细，
+                # 旧实现只抄 build ⇒ 测试通道报"失败"却说不出为什么，等于又一个橡皮图章的反面。
+                "apply_error": apply_result.get("error"),
+                "reason": apply_result.get("reason"),
+                "sim_coverage": apply_result.get("sim_coverage"),
             }
             return record
 

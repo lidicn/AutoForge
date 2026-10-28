@@ -541,7 +541,8 @@ def _resolve_expr(
       - 组合：``{"and": [...]}``、``{"or": [...]}``、``{"not": <expr>}``
       - 比较：``{"lt": {"var": "照度", "const": 200}}``（eq/ne/lt/lte/gt/gte）
       - 一元：``{"is_on": {"var": "书房灯"}}``（is_on/is_off/is_home/is_not_home/
-        truthy/not_is_on/not_is_off，**无 const**）
+        truthy/not_is_on/not_is_off，**无 const**）；``{"is_on": {"entity": "书房灯"}}``
+        同义（`entity` 是 `var` 的起草侧别名，与 when/do 的字段名对齐）
 
     深度用 `MAX_EXPR_DEPTH` 那份单一真值源，超限抛本模块声明的 DraftError。
     """
@@ -553,12 +554,16 @@ def _resolve_expr(
     for op in _UNARY:
         if op in expr:
             val = expr[op]
-            if not isinstance(val, dict) or "var" not in val:
+            # 体验者 AF-009：意图里 `when`/`do` 用 `{"entity": ...}`，一元谓词却只认
+            # `{"var": ...}`——同一份意图两套字段名。这里接受 `entity` 作为别名
+            # （语义完全相同：都是"要解析的实体名/ID"），⛔ 不扩 IR 词汇表：
+            # 编译器仍只认 `value={"var": ...}`，别名只活在起草入口。
+            if not isinstance(val, dict) or ("var" not in val and "entity" not in val):
                 raise DraftError(
                     "E_INVALID_EXPR",
-                    f"一元条件 `{op}` 需要 {{\"var\": \"实体名\"}}，收到 {val!r}",
+                    f"一元条件 `{op}` 需要 {{\"var\": \"实体名\"}}（或 {{\"entity\": \"实体名\"}}），收到 {val!r}",
                 )
-            var_name = val["var"]
+            var_name = val.get("var") or val.get("entity")
             entity_id = _resolve_entity(var_name, catalog)
             resolved[var_name] = entity_id
             vtype = val.get("type", "string")

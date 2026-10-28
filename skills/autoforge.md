@@ -67,6 +67,11 @@ version: 1.0.0
   （开灯/关灯/开空调/关空调）。⛔ 不要写 `ha.` / `ha:` 前缀——那是 AF-Spec 的写法；
   意图侧写了会被剥掉归一，但请直接用对的形式。
 - 参数走 `params`（`{"hvac_mode":"cool"}`）或平铺 `temperature`/`hvac_mode` 两枚快捷字段。
+- `if` 里的实体引用：`when`/`do` 用 `{"entity": ...}`，一元谓词两种都收——
+  `{"is_on": {"var": "书房灯"}}` 与 `{"is_on": {"entity": "书房灯"}}` 同义（体验者 AF-009）。
+  编译进 IR 后统一是 `value={"var": "entity.<id>"}`，别名不外泄。
+- 比较键是封闭词表：`eq/ne/lt/lte/gt/gte`（⛔ 没有 `ge`/`le`，≥/≤ 写 `gte`/`lte`）；
+  组合用 `and/or/not`。全集见下方「常用 expr 形式」。
 
 ### 路 B：AF-Spec 的动作子句长什么样（体验者常问）
 
@@ -134,12 +139,23 @@ edge d1 -> p1 then
 
 ### 常用 expr 形式
 
+**算子是封闭词表**（写错的报错只说"不合 schema"，所以这里把全集列全）：
+
+| 类别 | 可用 |
+|---|---|
+| 逻辑 | `and` / `or` / `not`（`{"op":"and","args":[...]}`） |
+| 比较 | `eq` / `ne` / `lt` / `lte` / `gt` / `gte` |
+| 一元 | `is_on` / `is_off` / `is_home` / `is_not_home` / `truthy` / `not_is_on` / `not_is_off` |
+
 ```json
 // 数值比较
 {"op": "lt", "left": {"var": "entity.sensor.x", "type": "numeric"}, "right": {"const": 23.5}}
 
 // 状态等于
 {"op": "eq", "left": {"var": "entity.sensor.x", "type": "string"}, "right": {"const": "on"}}
+
+// ≥ 与 ≤ 没有 ge / le —— 写 gte / lte（体验者 AF-007 就撞在这）
+{"op": "gte", "left": {"var": "entity.sensor.temp", "type": "numeric"}, "right": {"const": 26.5}}
 ```
 
 ### 常用 do 动作
@@ -209,6 +225,18 @@ pass p1 name "结束"
 edge t1 -> d1 then
 edge d1 -> p1 then
 ```
+
+## 判读写权限：读 `write_gate`，不要读 `readonly`
+
+`/api/health` 与 `af_health` 里有两枚键，语义不同（体验者 AF-010 把后者当成了矛盾）：
+
+- `readonly`：**遗留身份声明**（v1.x 只读服务层的身份），已有读方按它判读，值不反映运行期闸态；
+- `write_gate`：**运行期真值**，取值 `open` / `blocked` / `no_lease`——
+  想知道"现在能不能写"只看这一枚。`blocked` 有两类成因：装配期就降级（抢不到单写者租约，
+  HTTP 写端点 503），或运行期租约被别的进程持有。`no_lease` = 无从判断，⛔ 不许读成"能写"。
+
+注意 MCP 写工具走的是令牌 scope + 归档侧的闸，与 HTTP 的 `_write` 不是同一条路：
+`readonly:true` 时 MCP 的 `af_save` 仍可能成功，这不是 bug 而是两把闸各管一面（要判"这台能不能落盘"，看 `write_gate`）。
 
 ## 工具速查
 
