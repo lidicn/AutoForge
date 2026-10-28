@@ -165,9 +165,33 @@ def _t_compile(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     return svc.compile_text(text)
 
 
+def _coerce_json_arg(value: Any, name: str) -> Any:
+    """客户端边界兜底（体验者 2026-10-28 现场）：部分桥接层把"可选+嵌套复杂"参数
+    （object / 含 object 的 array）json.dumps 成**字符串**再转发——必填复杂参数与
+    纯字符串数组反而原生。seed/events 恰好都是前者 ⇒ AF 端 dict() 崩成 INTERNAL。
+
+    收到字符串就解一层（fail-closed：解不出报可读错误，不猜内容）；已解析形状
+    原样透传。⛔ 放在 MCP 边界而不是 svc.simulate：四面共用 svc，容错是客户端
+    契约层的事，HTTP 面的 pydantic schema 已挡住字符串，svc 不该松。
+    """
+    if not isinstance(value, str):
+        return value
+    import json as _json
+    try:
+        parsed = _json.loads(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"参数 {name!r} 收到的是字符串且不是合法 JSON（桥接层序列化问题）："
+            f"{value[:80]!r}…——请按原生对象/数组转发，或检查桥接层不要 json.dumps"
+        ) from exc
+    return parsed
+
+
 def _t_simulate(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     # v1.5.0：传 store → `_telemetry` 落遥测（token/断言结果）
-    return svc.simulate(args["ir"], args.get("seed"), args.get("events"), store=store)
+    seed = _coerce_json_arg(args.get("seed"), "seed")
+    events = _coerce_json_arg(args.get("events"), "events")
+    return svc.simulate(args["ir"], seed, events, store=store)
 
 
 def _t_list_graphs(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
