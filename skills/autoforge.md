@@ -79,6 +79,14 @@ do d2 ha.climate.set_temperature {"entity_id": "climate.lumi_cn_84159632_v2", "t
 一行一个节点，`name` 是**节点尾随子句**不是独立行；自动化标题 `name "…"` 才独占一行。
 条件节点 `if <id> <expr JSON>`，expr 用 `{"op": "gt", "left": {"var": "entity.sensor.x", "type": "numeric"}, "right": {"const": 26.5}}` 形态。
 
+> ⚠️ **路 B 的 `var` 必须带命名空间前缀**（`entity.` / `vars.` / `context.`）——这是路 B 与路 A
+> 最容易踩的差别：`af_resolve_entity` 返回的是**裸 entity_id**（如 `sensor.duka_th2_temperature`），
+> 直接粘进 `var` 会求值失败；要写成 `entity.sensor.duka_th2_temperature`。
+> 路 A（af_draft 意图 JSON）不用管：那边 `var` 写中文名，服务端查目录后自动补 `entity.` 前缀。
+> 读实体属性写 `entity.<id>.<attr>`（如 `entity.climate.ac.temperature`）。
+> 写错前缀的图过去会**静默假绿**（build 放行、仿真 ok=True、实例正常 done、动作永不执行）；
+> 现在扫描器以 `EXPR_NS_INVALID` 当场拒收，运行期也只认显式 `on_error` 边、否则实例 `failed`。
+
 ## AF-Spec 语法
 
 ### 基本结构

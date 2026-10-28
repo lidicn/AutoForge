@@ -597,7 +597,7 @@ class NodeExecutor:
                 logger.debug("[IF] %s expr=%s → value=%r", node.id, node.expr, value)
             except (UnknownEntity, ExprError, KeyError, ValueError) as exc:
                 logger.warning("IF_NODE_EXEC_ERROR [IF] %s ERROR: %r", node.id, exc)
-                return self._soft_fail(instance, node, exc)
+                return self._if_eval_fail(instance, node, exc)
             return {"then"} if value else {"no", "default"}
 
         if node.kind == "set":
@@ -769,6 +769,33 @@ class NodeExecutor:
             self._fail(instance, f"{node.action} 失败且无 on_error/default 兜底：{result.error}")
             return None
         return set(kinds)
+
+    def _if_eval_fail(self, instance: Instance, node: Node, exc: BaseException) -> Iterable[str] | None:
+        """if 求值抛错：**不许**走 `default`/`no` 冒充"条件不成立"。
+
+        体验者现场（2026-10-28）：`var` 写裸 entity_id（`sensor.duka_x`）⇒
+        `split_namespace` ValueError ⇒ 旧口径 `_soft_fail` 返回 {on_error, default}
+        ⇒ 挂了 default 边的图把"求值失败"当成"条件为假"继续走 **done**——
+        build 零诊断、仿真 ok=True、实例正常终态，动作却永不执行（静默死图）。
+        求值失败是**执行失败**不是布尔假值：只认显式 `on_error` 边，无边即 failed
+        （实例状态如实 FAILED + 审计留痕，仿真/运维两面都看得见）。
+        """
+        entity_id = exc.args[0] if isinstance(exc, UnknownEntity) and exc.args else ""
+        self.audit.add(
+            AuditEvent(
+                type=ENTITY_DRIFT,
+                at=self.clock.now(),
+                message=f"if 节点 {node.id} 求值失败（命名空间/类型/实体缺失）：{exc}",
+                automation_id=instance.automation.id,
+                instance_id=instance.instance_id,
+                node_id=node.id,
+                entity_id=str(entity_id),
+            )
+        )
+        if instance.automation.pick_edge(node.id, {"on_error"}) is None:
+            self._fail(instance, f"if 节点 {node.id} 求值失败且无 on_error 边：{exc}")
+            return None
+        return {"on_error"}
 
     def _soft_fail(self, instance: Instance, node: Node, exc: BaseException) -> Iterable[str] | None:
         """实体漂移 / 表达式错误 → 软失效：走 `on_error`，无则 failed（**不直接 failed**）。"""

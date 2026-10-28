@@ -176,22 +176,43 @@ def _coerce_json_arg(value: Any, name: str) -> Any:
     """
     if not isinstance(value, str):
         return value
-    import json as _json
     try:
-        parsed = _json.loads(value)
+        return json.loads(value)
     except ValueError as exc:
         raise ValueError(
             f"参数 {name!r} 收到的是字符串且不是合法 JSON（桥接层序列化问题）："
             f"{value[:80]!r}…——请按原生对象/数组转发，或检查桥接层不要 json.dumps"
         ) from exc
-    return parsed
+
+
+def _normalize_args_by_schema(schema: dict[str, Any], args: Any, tool_name: str) -> Any:
+    """按 inputSchema 声明的形状归一顶层参数（体验者现场：`ir` 被桥接层字符串化，
+    `_load_ir` 的 dict(ir) 抛 `dictionary update sequence element #0 has length 1`
+    ——崩的其实是 ir 不是 seed/events，只是报出来的形状随 IR 而异显得"IR 相关"）。
+
+    - 只对 schema 声明为 object/array 的参数解串——str/int/bool 参数的值**本来就该**
+      是字符串，不许被误伤（如 `"7"` 不能变成 7）。
+    - 解不出合法 JSON ⇒ 抛 ValueError（调用方 dispatch 转成 ADM_ERR_PAYLOAD_INVALID
+      可读拒收）。不原样放行：放行的结局就是 `dict(字符串)` 那类 INTERNAL 崩，
+      错误信息指不到"参数被字符串化"这个真因。
+    - HTTP 面不经此路：pydantic 模型对类型是硬拒绝，容错只属于 MCP 客户端边界。
+    """
+    if not isinstance(args, dict):
+        return args
+    props = schema.get("properties") or {}
+    out = dict(args)
+    for key, spec in props.items():
+        if not isinstance(spec, dict):
+            continue
+        if spec.get("type") in ("object", "array") and key in out:
+            out[key] = _coerce_json_arg(out[key], key)
+    return out
 
 
 def _t_simulate(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     # v1.5.0：传 store → `_telemetry` 落遥测（token/断言结果）
-    seed = _coerce_json_arg(args.get("seed"), "seed")
-    events = _coerce_json_arg(args.get("events"), "events")
-    return svc.simulate(args["ir"], seed, events, store=store)
+    # ir/seed/events 的字符串化归一已在 dispatch 的 schema 闸完成，这里拿到的就是原生形状。
+    return svc.simulate(args["ir"], args.get("seed"), args.get("events"), store=store)
 
 
 def _t_list_graphs(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
@@ -1169,6 +1190,17 @@ def dispatch(
                         ),
                         ensure_ascii=False,
                     )
+                )
+            ], True
+        # 桥接层字符串化兜底（体验者 2026-10-28）：schema 声明 object/array 的参数收到
+        # 字符串 ⇒ 解一层 JSON；解不出 ⇒ 可读拒收（此前直穿到 dict(字符串) 崩成
+        # ADM_ERR_INTERNAL，报错信息 "dictionary update sequence element…" 完全指不到病灶）。
+        try:
+            args = _normalize_args_by_schema(_schema, args, _name)
+        except ValueError as exc:
+            return [
+                _text(
+                    json.dumps(_failure_payload(ADM_ERR_PAYLOAD_INVALID, str(exc)), ensure_ascii=False)
                 )
             ], True
         if fn in _TOOLS_WITH_CONTEXT:

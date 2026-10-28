@@ -9,6 +9,7 @@ G1 十项（KICKOFF §4.7）+ 与 IR §8.2 十四项的对齐补充，见 `CHECK
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -67,6 +68,7 @@ CHECKS: dict[str, str] = {
     "RESERVED_NOT_IMPLEMENTED": "G1 保留字段未实现（fn）",
     # ── v1.0.0 表达力收口 ──
     "EXPR_INVALID": "表达式校验失败（未知算子/函数、参数个数、深度/节点上限）",
+    "EXPR_NS_INVALID": "表达式 var 命名空间非法（只允许 entity./vars./context.；裸 entity_id 须写 entity.<id>）",
     "TRIGGER_INVALID": "触发源校验失败（group 嵌套超预算或自引用，实体集无法展开）",
     "PARAMS_TOO_DEEP": "动作参数容器嵌套超预算或自引用（运行期遍历腿必然失败，编译期先拒）",
     "INBOX_PARAM_TOO_LONG": "契约 §1.3 收件箱载荷超长（text/title/body/content，上限现读库侧常量）：DB 侧对超长 fail-closed 丢弃 ⇒ 这条投递永远到不了音箱",
@@ -127,6 +129,7 @@ CODE_HINT: dict[str, str] = {
                      "并把它用 then 边接到首个动作；一条没有入口的自动化永远不会运行。",
     "RESERVED_NOT_IMPLEMENTED": "`fn` 仍为保留位；把自定义逻辑改写成内置表达式或拆成多个节点。",
     "EXPR_INVALID": "检查算子名/函数名拼写、参数个数，以及嵌套深度（上限 32）/节点数（上限 256）。",
+    "EXPR_NS_INVALID": "把 var 改成 entity.<完整entity_id>（如 entity.sensor.study_temp）；属性读取写 entity.<id>.<attr>。裸写 sensor.x 会在运行期求值失败，而 if 的失败只走兜底边——图上表现为\"条件永不成立\"的死自动化。",
     "TRIGGER_INVALID": "把 group 触发源改平（一层 `or`/`and` 列出全部条件），别让 group 套 group，也别自引用。",
     "PARAMS_TOO_DEEP": "把参数摊平成正常层级；嵌套到这种深度，通常是引用写错成了自引用。",
     "INBOX_PARAM_TOO_LONG": "把该字段裁短到上限以内，或把长文拆成多条 `inbox.*` 投递后先做摘要。上限不在 AF 里写死，"
@@ -397,6 +400,12 @@ class StaticScanner:
             self._check_cancel_branch(auto, node, out)
             self._check_duplicate_edges(auto, node, out)
             self._check_expr(auto, node, out)
+            # 命名空间是 `split_namespace` 的硬前提，也是体验者现场（2026-10-28）的静默
+            # 假绿源头：`var` 写成裸 entity_id（`sensor.duka_x`）时 `_check_expr` 放行
+            # （它只查算子/深度），运行期 if 求值抛 ValueError → `_soft_fail` 走
+            # default 边＝"条件不成立" → 实例正常 done、动作永不执行。build 零诊断、
+            # 仿真 ok=True——三道关全绿但自动化是死的。编译期就拦在这里。
+            self._check_expr_namespaces(auto, node, out)
             self._check_trigger_depth(auto, node, out)
             # 参数容器是**闸门口径**：运行期的泛容器遍历腿（版本投影 / 冲突内省 / NL 渲染）
             # 都接了同一份预算，但闸门原本不查，于是"build 放行、运行期内省必失败"的 IR
@@ -693,6 +702,32 @@ class StaticScanner:
                     "EXPR_INVALID",
                     ERROR,
                     f"表达式校验失败：{exc}",
+                    auto.id,
+                    node.id,
+                )
+            )
+
+    # 变量命名空间（体验者 2026-10-28：裸 entity_id 写法运行期被吞成"条件假"→ 假绿死图）
+    def _check_expr_namespaces(self, auto: Automation, node: Node, out: ScanResult) -> None:
+        if node.expr is None:
+            return
+        try:
+            refs = collect_var_refs(node.expr)
+        except ExprError:
+            return  # 深度/规模超支：_check_expr 已记 EXPR_INVALID，这里不重复遍历坏表达式
+        for ref in sorted(refs):
+            ns = ref.split(".", 1)[0]
+            if ns in ("entity", "vars", "context"):
+                continue
+            hint = ""
+            if re.match(r"^[a-z_][a-z0-9_]*\.[a-z0-9_]+$", ref):
+                hint = f"——形如 entity_id，请写 entity.{ref}"
+            out.diagnostics.append(
+                Diagnostic(
+                    "EXPR_NS_INVALID",
+                    ERROR,
+                    f"变量 `{{\"var\": \"{ref}\"}}` 的命名空间 {ns!r} 非法"
+                    f"（只允许 entity/vars/context）{hint}",
                     auto.id,
                     node.id,
                 )
