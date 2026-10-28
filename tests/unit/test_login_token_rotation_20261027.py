@@ -44,12 +44,27 @@ def _who(client, token):
 
 # ── 1 · 登录即换代 ─────────────────────────────────────────────────────
 
-def test_second_login_revokes_the_first_session(tmp_path, monkeypatch):
+def test_beyond_keep_window_old_sessions_are_revoked(tmp_path, monkeypatch):
+    """有界换代（v1.14.10 收口）：保留最近 N 枚，超出窗口的旧登录态仍必须被清
+    ——出资人原始现场「每登一次堆一行」不许回来；N 之内互不顶号见下一条。"""
+    client = _fresh_client(tmp_path, monkeypatch)
+    reg = client.app.state.test_registry if hasattr(client.app.state, "test_registry") else None
+    tokens = [_register(client)]
+    for _ in range(TokenRegistry.LOGIN_SESSION_KEEP + 2):
+        tokens.append(_login(client))
+    alive = [tk for tk in tokens if _who(client, tk).status_code == 200]
+    assert len(alive) <= TokenRegistry.LOGIN_SESSION_KEEP + 1,         f"活会话 {len(alive)} 超过保留窗口 {TokenRegistry.LOGIN_SESSION_KEEP + 1}（含最新一枚）"
+    assert tokens[-1] in alive, "最新会话必须活"
+
+
+def test_second_login_keeps_previous_session(tmp_path, monkeypatch):
+    """多面不顶号（2026-10-28 现场）：第二面登录不许踢掉第一面——
+    旧版「登录即全清」把 mimo/管理端做成互踢，表现为「每次都要重新登陆」。"""
     client = _fresh_client(tmp_path, monkeypatch)
     t1 = _register(client)
     t2 = _login(client)
     assert _who(client, t2).status_code == 200, "新会话必须活"
-    assert _who(client, t1).status_code == 401, "旧登录态必须随换代失效（堆行的根源）"
+    assert _who(client, t1).status_code == 200, "窗口内的旧会话不许被顶掉"
 
 
 def test_rotate_keeps_agent_and_other_subjects(tmp_path):
@@ -108,3 +123,37 @@ def test_agent_subject_revoke_still_kills_all_its_tokens(tmp_path):
     assert n == 2, f"dsh 名下两枚都该撤，实撤 {n}"
     assert reg.authenticate(t1) is None and reg.authenticate(t2) is None
     assert reg.authenticate(keeper) is not None, "except_token 保的不是 dsh 的令牌，不受牵连"
+
+
+def test_dropped_sessions_do_not_resurrect_on_restart(tmp_path):
+    """换代剔盘精准性：被 drop 的摘要必须从 issued_tokens.json 消失——
+    只删内存不删盘 = 重启原样复活（AF50c-R 同族病灶）。"""
+    reg = TokenRegistry(revoked_path=tmp_path / "revoked.json", issued_path=tmp_path / "issued.json")
+    toks = [reg.issue_for_agent("owner", ("read",), principal_kind="login") for _ in range(6)]
+    assert reg.rotate_login_tokens("owner", keep_newest=TokenRegistry.LOGIN_SESSION_KEEP) == 3 - 0
+    import json
+    on_disk = set(json.loads((tmp_path / "issued.json").read_text(encoding="utf-8")).keys())
+    from autoforge.af_auth import _digest
+    for tk in toks:
+        assert ((_digest(tk) in on_disk) == (reg.authenticate(tk) is not None)),             f"{tk[:6]}… 内存/盘上状态不一致"
+    # 重启（新实例读同一份盘）：被 drop 的不许复活
+    reg2 = TokenRegistry(revoked_path=tmp_path / "revoked.json", issued_path=tmp_path / "issued.json")
+    for tk in toks:
+        assert (reg2.authenticate(tk) is not None) == (reg.authenticate(tk) is not None)
+
+
+def test_abs_cap_env_override(tmp_path, monkeypatch):
+    """绝对上限 env 覆盖生效（AF_LOGIN_ABSOLUTE_CAP_S），缺省 30 天。"""
+    monkeypatch.delenv("AF_LOGIN_ABSOLUTE_CAP_S", raising=False)
+    reg = TokenRegistry()
+    assert abs(TokenRegistry.LOGIN_ABSOLUTE_CAP_S - 30 * 86400.0) < 1
+    tk = reg.issue_for_agent("owner", ("read",), principal_kind="login")
+    info = reg.authenticate(tk)
+    assert info is not None
+    ttl = info.absolute_deadline - info.issued_at
+    assert abs(ttl - 30 * 86400.0) < 60, f"缺省上限应 30 天，实得 {ttl/86400:.1f} 天"
+    monkeypatch.setenv("AF_LOGIN_ABSOLUTE_CAP_S", "86400")
+    tk2 = reg.issue_for_agent("owner", ("read",), principal_kind="login")
+    info2 = reg.authenticate(tk2)
+    assert info2 is not None
+    assert abs(info2.absolute_deadline - info2.issued_at - 86400.0) < 60

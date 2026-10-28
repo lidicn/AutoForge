@@ -77,6 +77,19 @@ def _longcode_ttl_days() -> float:
 LONGCODE_TTL_DAYS_DEFAULT = 180.0
 
 
+def _login_abs_cap_s(reg: "TokenRegistry") -> float:
+    """登录令牌绝对上限：env `AF_LOGIN_ABSOLUTE_CAP_S` 覆盖，坏值/缺省回落类常量。"""
+    raw = (os.environ.get("AF_LOGIN_ABSOLUTE_CAP_S") or "").strip()
+    if raw:
+        try:
+            v = float(raw)
+            if v > 0:
+                return v
+        except ValueError:
+            pass
+    return float(reg.LOGIN_ABSOLUTE_CAP_S)
+
+
 def _login_token_ttl_s() -> float:
     """WebUI 登录令牌的默认存活期（秒）。env `AF_LOGIN_TOKEN_TTL_S` 可覆盖，默认 86400（24h）。
 
@@ -194,8 +207,12 @@ class TokenInfo:
     #: 请求体自助提权（见 issue_for_agent 的 principal_kind 形参校验）。
     principal_kind: str = "agent"
     #: 批 4（D11）：登录令牌的绝对有效期上限（epoch 秒）。空闲续期把 expires_at 往后推，
-    #: 但永不越过这条线（owner 7 天）；None = 无绝对上限（agent/developer 不过期）。
+    #: 但永不越过这条线；None = 无绝对上限（agent/developer 不过期）。
     absolute_deadline: float | None = None
+    #: 签发时刻（epoch 秒）。换代保留"最近 N 枚"按它排序——多浏览器/多设备互不顶号
+    #: （出资人现场 2026-10-28）。存量记录无此字段 ⇒ 装载补 0.0（视作最老，下次登录
+    #: 被优先换代，语义与旧版"全清"一致）。
+    issued_at: float = 0.0
 
 
 #: 批 4（D7）：rename_subject 的保留名（服务层拦所有调用点，不只端点）。
@@ -212,10 +229,13 @@ class TokenRegistry:
     #: 凭证库只增不减（新增审计 BUG-19）。给默认 TTL，令牌到期即失效并被清理。
     #: env `AF_LOGIN_TOKEN_TTL_S` 可覆盖默认值（部署侧调长/调短，不用改码）。
     ISSUED_TTL_S = 86400.0
-    #: 批 4（D11）：登录令牌的**绝对有效期上限**（owner 7 天）。空闲续期把 `expires_at`
-    #: 往后推（滑动），但永不越过 `absolute_deadline` 这条线——一枚登录令牌哪怕持续活跃，
-    #: 也最迟 7 天必须重新登录一次（回收长期不换的会话）。agent/developer 不过期。
-    LOGIN_ABSOLUTE_CAP_S = 7 * 86400.0
+    #: 批 4（D11）：登录令牌的**绝对有效期上限**。滑动续期永不越过这条线；到期必须重登
+    #: （回收长期不换的会话）。agent/developer 不过期。2026-10-28 出资人现场：7 天上限
+    #: 对天天用的人等于每周强制重登，放宽到 30 天；env `AF_LOGIN_ABSOLUTE_CAP_S` 可覆盖。
+    LOGIN_ABSOLUTE_CAP_S = 30 * 86400.0
+    #: 换代保留的活跃登录会话数上限：登录时清掉比"最近 N 枚"更旧的登录令牌。
+    #: N=3 覆盖"mimo + 管理端 + 手机"三个常开面互不顶号；表仍严格有界。
+    LOGIN_SESSION_KEEP = 3
     #: 已签发令牌条数硬上限（兜底）：与同文件 `RateLimiter._MAX_KEYS` 同一纪律。
     MAX_ISSUED = 10000
 
@@ -461,7 +481,8 @@ class TokenRegistry:
             self._persist_revoked()
             return True
 
-    def rotate_login_tokens(self, subject: str, *, keep_token: str | None = None) -> int:
+    def rotate_login_tokens(self, subject: str, *, keep_token: str | None = None,
+                            keep_newest: int | None = None) -> int:
         """吊销该主体名下全部**运行期签发的登录令牌**（`principal_kind=="login"`），返回数量。
 
         出资人现场（2026-10-27）：v1.9 起登录"只签发不换代" ⇒ 每登一次多一行登录态，
@@ -477,22 +498,60 @@ class TokenRegistry:
         那会连人配的 env owner 密钥一起吊销（部署凭据不是会话），且它不分 principal_kind。
         """
         keep_dg = _digest(keep_token) if keep_token else None
+        # keep_newest：按签发时刻保留最近 N 枚登录令牌（出资人现场 2026-10-28：
+        # "登录即全清"把 mimo/管理端/手机 做成互相顶号）。keep_token 恒在保留集内。
+        # 不给 keep_newest（治理页撤销）⇒ 语义不变：除 keep_token 外全清。
+        keep_dgs: set[str] = set()
+        if keep_newest and keep_newest > 0:
+            with self._lock:
+                live = sorted(
+                    (info.issued_at, dg)
+                    for dg, info in self._issued.items()
+                    if info.principal_kind == "login" and info.subject == subject
+                    and dg != keep_dg
+                )
+            keep_dgs = {dg for _, dg in live[-keep_newest:]}
+        if keep_dg is not None:
+            keep_dgs.add(keep_dg)
         n = 0
+        dropped: list[str] = []
         with self._lock:
             for dg, info in list(self._issued.items()):
                 if info.principal_kind != "login" or info.subject != subject:
                     continue
-                if keep_dg is not None and dg == keep_dg:
+                if dg in keep_dgs:
                     continue
                 self._issued.pop(dg, None)
                 self._revoked.add(dg)
+                dropped.append(dg)
                 n += 1
             if n:
                 self._persist_revoked()
-                if self._issued_path:
-                    self._rewrite_issued(subject, drop=True, except_token=keep_token,
-                                         only_kind="login")
+                self._rewrite_issued_dropped(dropped)
         return n
+
+    def _rewrite_issued_dropped(self, digests: list[str]) -> None:
+        """按摘要清单精准剔盘——换代保留 N 枚后不能再按主体整删。
+        与 _rewrite_issued 同纪律：文件损坏拒写抛错，不许"内存删了、盘上复活"。"""
+        if not self._issued_path or not Path(self._issued_path).is_file() or not digests:
+            return
+        p = Path(self._issued_path)
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"{p.name} 已损坏，拒绝改写已签发令牌名单；"
+                f"请修复或隔离该文件后重试（{type(exc).__name__}）"
+            ) from exc
+        if not isinstance(data, dict):
+            raise ValueError(f"{p.name} 形状不是对象，拒绝改写已签发令牌名单")
+        changed = False
+        for dg in digests:
+            if dg in data:
+                data.pop(dg)
+                changed = True
+        if changed:
+            _atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2))
 
     def subjects(self) -> list[dict[str, Any]]:
         """已注册令牌的主体摘要（⛔ 不含明文令牌/摘要，供治理页 / 审计用）。
@@ -563,7 +622,7 @@ class TokenRegistry:
         expires_at = (time.time() + ttl) if ttl > 0 else None
         # 批 4（D11）：登录令牌带 7 天绝对上限锚点；agent/developer 不过期（None）。
         absolute_deadline = (
-            time.time() + self.LOGIN_ABSOLUTE_CAP_S if principal_kind == "login" else None
+            time.time() + _login_abs_cap_s(self) if principal_kind == "login" else None
         )
         with self._lock:
             # 批 2：运行期签发令牌进摘要索引（不再混进 env 的明文 self._tokens）。
@@ -571,6 +630,7 @@ class TokenRegistry:
                 subject=agent_name, scopes=scopes_set, expires_at=expires_at,
                 label=label, principal_kind=principal_kind,
                 absolute_deadline=absolute_deadline,
+                issued_at=time.time(),
             )
             self._purge_expired_locked()
             if len(self._issued) > self.MAX_ISSUED:
@@ -716,6 +776,7 @@ class TokenRegistry:
                     expires_at=float(exp) if isinstance(exp, (int, float)) else None,
                     label=meta.get("label"),
                     principal_kind=self._infer_principal_kind(meta),
+                    issued_at=float(meta.get("issued_at") or 0.0),
                 )
 
     @staticmethod
@@ -766,6 +827,7 @@ class TokenRegistry:
             if isinstance(exp, (int, float)) and exp <= now:
                 data.pop(tok, None)
         entry: dict[str, Any] = {"subject": subject, "scopes": scopes, "principal_kind": principal_kind}
+        entry["issued_at"] = time.time()
         if expires_at is not None:
             entry["expires_at"] = expires_at
         if label is not None:

@@ -1263,8 +1263,8 @@ def build_app(
             raise HTTPException(status_code=409, detail="已有管理员，不允许重复注册")
         #: WebUI 注册即登录，签发的是 owner 面令牌（subject 固定 owner），登录用户名进 label 仅供显示。
         #: 批 2：身份族标 login（与配对 agent、批4 developer 三族可分辨）。
-        #: 注册同样换代（出资人 2026-10-27：一个 owner 只留当下一个活登录态，表不堆）。
-        registry.rotate_login_tokens("owner")
+        #: 注册同样换代（有界保留，同 login 口径）。
+        registry.rotate_login_tokens("owner", keep_newest=registry.LOGIN_SESSION_KEEP)
         token = registry.issue_for_agent("owner", ("read", "write", "live"), label=body.username,
                                         principal_kind="login")
         return {
@@ -1301,8 +1301,10 @@ def build_app(
         if not admin_store.verify(body.username, body.password):
             raise HTTPException(status_code=401, detail="用户名或密码错误")
         # 登录即换代（出资人 2026-10-27 现场：每登一次堆一行登录态、删不动）：
-        # 签发新令牌**之前**清掉全部旧登录令牌 ⇒ 单会话语义，owner 表不再增长。
-        registry.rotate_login_tokens("owner")
+        # 签发新令牌**之前**清掉旧登录令牌。2026-10-28 收口：有界保留最近 N 枚
+        # （mimo/管理端/手机 三个面互不顶号——"全清"做过头成了"每次都要重登"），
+        # 表仍严格有界。
+        registry.rotate_login_tokens("owner", keep_newest=registry.LOGIN_SESSION_KEEP)
         token = registry.issue_for_agent("owner", ("read", "write", "live"), label=body.username,
                                         principal_kind="login")
         return {
