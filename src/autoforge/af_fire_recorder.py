@@ -17,7 +17,7 @@ import json
 import logging
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -163,6 +163,34 @@ class JsonFireStore:
             ]
 
 
+def _local_day(clock: Any) -> date:
+    """本地日历日（审计 2026-10-28：落盘防重放的"当日"桶要用哪把尺子）。
+
+    旧实现用 `clock.now().date()`，而 `SystemTimeSource.now()` 返回 **UTC**
+    （`af_time.py:284`）；调度器判"今天是否已触发"用的是 `local_now().date()`
+    （`af_scheduler.py:441`）⇒ UTC+8 部署下本地 00:00–08:00 落进**前一个 UTC 日**桶，
+    该窗口内重启时 `recover()` 认不到当天既有记录，已执行过的触发可能被重放。
+    两把尺子必须同一口径，这里向调度器对齐。
+
+    取法容错三档（与 `af_scheduler.py:441` 同姿势）：`today()` >
+    `local_now().date()` > `now().date()`——测试注入的轻量假时钟常只实现 `now`。
+    返回 `date` 而不是字符串：调用点有 `- timedelta(keep_days)` 的日期算术，
+    字符串会把那一步变成运行时崩（我第一版就踩在这）。
+    """
+    for getter in ("today", "local_now"):
+        fn = getattr(clock, getter, None)
+        if not callable(fn):
+            continue
+        val = fn()
+        if isinstance(val, datetime):
+            return val.date()
+        if isinstance(val, date):
+            return val
+        if isinstance(val, str):  # 假时钟直接给 ISO 串
+            return date.fromisoformat(val)
+    return clock.now().date()
+
+
 class FireLease:
     """一次「当天一次」记账的租约。with 块异常退出自动 release。"""
 
@@ -218,7 +246,7 @@ class FireRecorder:
         self._last_sweep_mono = 0.0
 
     def try_begin(self, rule_key: str) -> FireLease | None:
-        day = self._clock.now().date().isoformat()
+        day = _local_day(self._clock).isoformat()
         now = self._clock.now()
         res = self._store.try_claim(
             rule_key, day, now.isoformat(),
@@ -250,13 +278,13 @@ class FireRecorder:
         if not force and now_m - self._last_sweep_mono < 3600:
             return 0
         self._last_sweep_mono = now_m
-        before = (self._clock.now().date() - timedelta(days=self._keep_days)).isoformat()
+        before = (_local_day(self._clock) - timedelta(days=self._keep_days)).isoformat()
         return self._store.sweep(before)
 
     def recover(self, *, stale_as_fired: bool = False) -> int:
         if not stale_as_fired:
             return 0
-        day = self._clock.now().date().isoformat()
+        day = _local_day(self._clock).isoformat()
         n = 0
         for key in self._store.claimed_keys(day):
             self._store.confirm(key, day, self._clock.now().isoformat(), None)

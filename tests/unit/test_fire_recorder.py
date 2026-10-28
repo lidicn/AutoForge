@@ -161,3 +161,34 @@ def test_fire_exactly_once_failure_retryable(recorder):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_day_bucket_uses_local_calendar_day():
+    """审计 2026-10-28：旧实现按 `now().date()`（UTC）分桶，调度器判"当日"用本地日期。
+
+    UTC+8 下本地 01:00 = UTC 前一日 17:00 ⇒ 落盘记录进**前一天**的桶；该窗口内重启时
+    `recover()` 认不到当天记录，已执行过的触发可能被重放。这里钉两把尺子同口径。
+    """
+    from datetime import date, datetime, timedelta, timezone
+
+    class OffsetClock:
+        """now()=UTC、local_now()=本地（UTC+8）：与 SystemTimeSource 同形状。"""
+        def __init__(self):
+            self._utc = datetime(2026, 9, 22, 17, 0, tzinfo=timezone.utc)  # 本地已是 09-23 01:00
+        def now(self): return self._utc
+        def local_now(self): return self._utc + timedelta(hours=8)
+        def today(self): return self.local_now().date()
+        def monotonic(self): return 1000.0
+        def advance(self, s): pass
+
+    with tempfile.TemporaryDirectory() as d:
+        store = JsonFireStore(Path(d))
+        rec = FireRecorder(store, OffsetClock(), max_attempts_per_day=3)
+        lease = rec.try_begin("rule-x")
+        assert lease is not None
+        assert lease.day == "2026-09-23", f"当日桶该是本地日（UTC+8 的 01:00），实得 {lease.day}"
+        lease.confirm(inst_id="i1")
+        # 同一本地日内再 claim 必须被拒：UTC 日界（09-22）落在桶名之外，
+        # 若仍用 UTC 日期，这里会被放行为"新的一天"＝重放已执行过的触发。
+        assert rec.try_begin("rule-x") is None, "确认过的当日再触发被放行＝日桶尺子不一致"
+        assert rec.fired_today("rule-x") is True

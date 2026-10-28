@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,14 @@ class Quota:
     queue_limit: int = 10
 
 
+#: 排队事件的归属：`node_id` 是**入队那一刻匹配上的入口节点**。
+#: 用 NamedTuple 而非裸元组：本模块刚修掉的缺陷就是"位置索引代替归属"，
+#: 元组 `(a, b)` 读起来谁都不知道谁是谁，具名字段才拦得住下一次重犯。
+class QueuedTrigger(NamedTuple):
+    node_id: str
+    event: BusEvent
+
+
 @dataclass
 class _PendingFor:
     """一个尚未满足时长要求的持续条件（`for`）。"""
@@ -78,7 +86,7 @@ class Scheduler:
 
     def __post_init__(self) -> None:
         self._pending: dict[tuple[str, str, str], _PendingFor] = {}
-        self._queues: dict[str, deque[BusEvent]] = {}
+        self._queues: dict[str, deque[QueuedTrigger]] = {}
         self._debounce: dict[tuple[str, str], float] = {}
         self._time_fired: set[tuple[str, str, str]] = set()
         self.rejections: list[str] = []
@@ -256,7 +264,12 @@ class Scheduler:
                 if len(queue) >= self.quota.queue_limit:
                     self._reject(auto, "queued 队列已满")
                     return None
-                queue.append(event or BusEvent.of(node.id, "manual", source="manual"))
+                # 归属节点必须随事件一起排队：queued 模式的语义是"并发满了先排队、
+                # 稍后**照原样**执行"，而"原样"包含"是哪个入口点亮的它"。旧实现只存
+                # 事件、出队时 `entry_nodes()[0]` 硬取第一个 ⇒ 双入口以上自动化排在
+                # 第二个入口的事件会被派到第一个分支（审计 2026-10-28 实测复现：
+                # binary_sensor.n 触发的实例起点成了 q1）。
+                queue.append(QueuedTrigger(node.id, event or BusEvent.of(node.id, "manual", source="manual")))
                 return None
         elif mode == PARALLEL:
             if len(active) >= self.quota.per_automation:
@@ -310,8 +323,14 @@ class Scheduler:
                 continue  # v0.6.0 启停：禁用项队列不排空；已删除的同样不排空
             if len(self.instances.active_of(auto_id)) >= self.quota.per_automation:
                 continue
-            event = queue.popleft()
-            instance = self._try_fire(auto, auto.entry_nodes()[0], event)
+            node_id, event = queue.popleft()
+            # ⛔ 不许退回 `entry_nodes()[0]`：那正是本缺陷的原始形状。节点查不到
+            # （图被换过/手工构造的坏 id）时**可见地丢弃**，而不是静默走错分支。
+            node = auto.nodes.get(node_id)
+            if node is None or node.kind != "on":
+                self._reject(auto, f"排队事件的入口节点 {node_id!r} 已不存在或非 on 节点，丢弃该事件")
+                continue
+            instance = self._try_fire(auto, node, event)
             if instance is not None:
                 fired.append(instance)
         return fired

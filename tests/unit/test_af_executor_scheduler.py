@@ -292,3 +292,71 @@ def test_snapshot_boundary_do_result_does_not_rewrite_snapshot():
     instance = runtime.instances.all()[0]
     assert ha.get("light.main") == "on", "设备真的开了"
     assert instance.ctx.vars.get("still_off") == 1, "同一求值段内仍读到旧快照（灯还是 off）"
+
+
+# ── 审计缺陷 2026-10-28：`_drain_queues` 出队写死第一个入口节点 ─────────
+# 旧实现 `self._try_fire(auto, auto.entry_nodes()[0], event)`：入队时保留的事件
+# 到了出队丢了归属 ⇒ 双入口以上的 queued 自动化，排在第二个入口的事件被派到第一个
+# 分支（静默执行错误动作）。相邻两条触发路径都是按节点取的（handle_event 用匹配
+# 到的 node、_fire_for_due 用 `auto.node(pending.node_id)`），只有这一站用位置索引。
+
+def _two_entry_ir(mode: str = "queued") -> dict:
+    """两个入口各挂一个 ask：a1←binary_sensor.m→q1、a2←binary_sensor.n→q2。"""
+    return _ir(
+        mode=mode,
+        nodes=[
+            ON_M,
+            {"id": "q1", "kind": "ask", "prompt": "M 要开吗", "room": "study", "timeout": "60s"},
+            {"id": "a2", "kind": "on", "trigger": {"type": "state", "entity_id": "binary_sensor.n", "to": "on"}},
+            {"id": "q2", "kind": "ask", "prompt": "N 要开吗", "room": "study", "timeout": "60s"},
+            P1,
+        ],
+        edges=[
+            {"from": "a1", "to": "q1", "kind": "then"},
+            {"from": "q1", "to": "p1", "kind": "on_timeout"},
+            {"from": "a2", "to": "q2", "kind": "then"},
+            {"from": "q2", "to": "p1", "kind": "on_timeout"},
+        ],
+    )
+
+
+def test_queued_drain_dispatches_to_the_entry_that_matched():
+    """排在第二个入口上的事件，出队后必须仍走第二个分支（queued 的核心承诺）。"""
+    runtime = _rt(_two_entry_ir(), states={"binary_sensor.m": "off", "binary_sensor.n": "off"},
+                  quota=Quota(per_automation=1))
+    runtime.emit("binary_sensor.m", "on", last_changed="t1")
+    runtime.clock.advance(1)
+    runtime.emit("binary_sensor.n", "on", last_changed="t2")   # 并发满 → 进队列
+
+    queue = runtime.scheduler._queues["demo"]
+    assert len(queue) == 1 and queue[0].node_id == "a2", "入队时必须记住归属入口节点"
+
+    runtime.advance(61)  # 第一个超时结束 → 出队
+    latest = sorted(runtime.instances.all(), key=lambda i: i.created_monotonic)[-1]
+    assert latest.ctx.current_node == "q2", (
+        f"出队实例被派到 {latest.ctx.current_node}（应为 q2）——静默执行错误分支"
+    )
+
+
+def test_queued_drain_drops_event_with_unknown_entry_visibly():
+    """归属节点查不到时要**可见地丢弃**，⛔ 不许退回 entry_nodes()[0] 走错分支。"""
+    from autoforge.af_bus import BusEvent
+    from autoforge.af_scheduler import QueuedTrigger
+    runtime = _rt(_two_entry_ir(), states={"binary_sensor.m": "off"}, quota=Quota(per_automation=1))
+    runtime.scheduler._queues["demo"] = __import__("collections").deque(
+        [QueuedTrigger("a_gone", BusEvent.of("binary_sensor.m", "on", last_changed="t0"))])
+    runtime.advance(1)
+    assert runtime.instances.count_active() == 0, "坏归属不该凭位置索引 spawn 出错分支的实例"
+    assert any("已不存在" in e.message or "入口节点" in e.message for e in runtime.audit),         "丢弃必须留审计，不能静默"
+
+
+def test_queued_single_entry_still_works():
+    """护栏：单入口 queued 不受影响（旧行为不能因为这次改动退化）。"""
+    runtime = _rt(_ask_ir("queued"), states={"binary_sensor.m": "off"}, quota=Quota(per_automation=1))
+    runtime.emit("binary_sensor.m", "on", last_changed="t1")
+    runtime.clock.advance(1)
+    runtime.emit("binary_sensor.m", "on", last_changed="t2")
+    assert len(runtime.scheduler._queues["demo"]) == 1
+    runtime.advance(61)
+    assert len(runtime.scheduler._queues["demo"]) == 0
+    assert runtime.instances.count_active() == 1
