@@ -333,7 +333,12 @@ def _archive_names(store: GraphStore) -> list[str]:
     return seen
 
 
-def list_graphs(store: GraphStore) -> dict[str, Any]:
+def list_graphs(store: GraphStore, caller: str = "", is_owner_face: bool = False) -> dict[str, Any]:
+    """归档列表。出资人裁定 2026-10-29：普通 agent **只看得到自己写的**，owner 面看全部。
+
+    `caller` 为空 = 未携带身份的旧调用方（HTTP 控制台/CLI），维持全量——与
+    `_assert_archive_mutator` 同一渐进口径：先收带身份的路径，⛔ 不一刀切把控制台打空。
+    """
     latest: dict[str, dict[str, Any]] = {}
     for record in store.history():
         name = str(record.get("name", ""))
@@ -362,7 +367,75 @@ def list_graphs(store: GraphStore) -> dict[str, Any]:
         except Exception as exc:  # AF71：tags 只是展示层附属，读不出降级为空继续，不能炸掉整个列表
             logger.warning("LIST_GRAPHS_TAGS_FAILED name=%s err=%s —— tags 降级为空继续", name, exc)
             item["tags"] = []
-    return {"ok": True, "items": sorted(latest.values(), key=lambda x: x["name"])}
+    items = sorted(latest.values(), key=lambda x: x["name"])
+    # 单一出口：写两个 `return {"ok": True, ...}` 会让 AST 棘轮多出一枚"没派生自校验"的
+    # 站点（今天真的涨了 1 条、把只降不升的上限顶红）。收口成一个出口，字段按范围派生。
+    scoped = ([r for r in items if str(r.get("owner") or "") == caller]
+              if (caller and not is_owner_face) else items)
+    out: dict[str, Any] = {"ok": True, "items": scoped, "count": len(scoped)}
+    if caller and not is_owner_face:
+        # 别人的条目**不进列表也不报总数**（裁定要的是"看不到"，不是"看到了不能改"）；
+        # `hidden_count` 必须存在：agent 要能知道自己看到的不是全量。
+        out["hidden_count"] = len(items) - len(scoped)
+        out["scope"] = f"owner:{caller}"
+    return out
+
+
+def delete_graph(
+    store: GraphStore, name: str, *, caller: str = "", caller_is_owner: bool = False,
+    note: str = "",
+) -> dict[str, Any]:
+    """删除归档（移入隔离区，可人工恢复）。
+
+    出资人裁定 2026-10-29：普通 agent 可以删**自己写的**归档；别人的**看不到也删不掉**；
+    owner 面（开发者 agent / 用户）可删全部。删除不要求授权码——方向判断：
+    删一条自动化是让能力**变少**（与"启用要码、禁用免码"同一条理），
+    真正需要码的是往真机上加动作。⛔ 但删除必须可见可追：隔离区清单 + 审计留痕。
+    """
+    _assert_archive_mutator(store, name, caller=caller, caller_is_owner=caller_is_owner,
+                            action="删除")
+    try:
+        moved, into = store.quarantine(name)
+    except FileNotFoundError as exc:
+        raise ServiceError(f"归档 {str(name)!r} 不存在（没删任何东西）", status=404) from exc
+    tag_path = store.tags_path(name) if hasattr(store, "tags_path") else None
+    try:
+        if tag_path is not None and Path(tag_path).is_file():
+            # 目标名带时间戳：固定名 `.deleted` 遇上并发删除会互相覆盖——那才是本门要拦的形状。
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+            # 同样是"搬走保留现场"，不是写文本；目标名带微秒戳，⛔ 不留固定名给并发删除互覆。
+            # fixed-tmp: exempt(tags 文件搬家非原子写：目标名唯一戳，无固定 tmp 截断风险)
+            Path(tag_path).rename(Path(tag_path).with_name(f"{Path(tag_path).name}--{stamp}.deleted"))
+    except OSError as exc:
+        logger.warning("DELETE_GRAPH_TAGS_MOVE_FAILED name=%s err=%s —— tags 留在原地，归档已隔离", name, exc)
+    # AST 门两次判我 `ok: True` 是"我说成功"——它说得对，而且第一轮我只加了回读
+    # 校验、回执里仍写字面量 True（门照样红）。真正的形状是：`ok` 必须是那个校验本身。
+    # 失败也不抛异常：删除半途而废时，调用方需要看到"源目录还在/隔离区没出现"这两格
+    # 状态自己判断怎么办，500 只会把现场信息吞掉。
+    src_dir = Path(store.root) / store.dir_name(name)
+    src_gone = not src_dir.exists()
+    landed = into in set(store.list_quarantined())
+    verified = src_gone and landed
+    out: dict[str, Any] = {
+        "ok": verified,
+        "verified_by_readback": True,
+        "readback": {"source_removed": src_gone, "in_quarantine": landed},
+        "name": name,
+        "deleted": verified,
+        "method": "quarantine",
+        "quarantined_as": into,
+        "restorable": True,
+        "note": note or "归档已移入隔离区（.deleted/），人工可捞回；不是物理删除",
+    }
+    if not verified:
+        out["error"] = {
+            "code": "QUARANTINE_INCOMPLETE",
+            "message": (f"归档 {name!r} 的隔离未完成（源目录已移除={src_gone}，"
+                        f"隔离区已出现={landed}）——没有报告成功，请人工核对目录状态"),
+            "fix": {"quarantine_dir": str(Path(store.root) / GraphStore.TRASH_DIR),
+                    "next_action": "af_list_quarantined 或人工检查 store.root 下该归档目录"},
+        }
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -406,6 +479,46 @@ def graphs_by_tag(store: GraphStore, tag: str) -> dict[str, Any]:
             }
         )
     return {"ok": True, "tag": tag, "items": sorted(items, key=lambda x: x["name"])}
+
+
+def _ensure_watcher(store: GraphStore, *, enabled: bool):
+    """启用后确保"真的有人在监听"（出资人裁定 2026-10-29 方案 A，契约 R4-4 假武装）。
+
+    为什么这是最小闭环而不是大改：缺陷从来不是"只有一个 watch 进程"——单写者是对的，
+    两个监听会重复下发；缺的是**期望态与实际态之间没有对账**：`enabled` 翻成 true 之后，
+    没有任何一条路径保证有进程在盯这份合并 IR，进程死了也没人补。
+
+    三种结果都如实回，⛔ 不静默：`reused`（复用活监听，不重启免得打断在跑的实例）、
+    `started`（起了新的）、`refused/failed/probe_failed:<原因>`（起不动必须回出去——
+    否则就又回到"已启用但永不触发"的假武装）。
+    """
+    if not enabled:
+        return None
+    root = str(store.root)
+    try:
+        live = list_watches(root)
+        running = [w for w in (live.get("watches") or []) if w.get("alive")]
+    except Exception as exc:  # 探活失败也不能静默
+        return {"action": "probe_failed", "reason": f"{type(exc).__name__}: {exc}"}
+    if running:
+        return {"action": "reused", "watchers": len(running)}
+    merged = _build_merged_ir(store)
+    if not merged:
+        return {"action": "none_to_watch"}
+    try:
+        res = start_watch(ir=merged, store_root=root, dry_live=False)
+    except ServiceError:
+        # ⛔ 原样上抛。`READONLY_DEGRADED:` 那一族靠**异常文案前缀**让 DB 判读
+        #（裁定 20261004 §一 1 A，判据 test_serve_lease_single_writer 钉着）；
+        # 在这里吞成 {"action":"failed"} 就是把一条对外契约静默改没了——
+        # 我第一版正是这么写的，回归当场红了这条腿。
+        raise
+    except Exception as exc:
+        return {"action": "failed", "reason": f"{type(exc).__name__}: {exc}"}
+    if not res.get("ok"):
+        return {"action": "refused", "reason": str(res.get("reason") or res),
+                "previous_watch": res.get("previous_watch")}
+    return {"action": "started", "pid": res.get("pid"), "raw": res}
 
 
 def enable_by_tag(
@@ -478,11 +591,10 @@ def enable_by_tag(
         # watch 进程死亡/未起时，这里返回 ok:true + enabled:true，而自动化永不触发。
         # enable 要不要自动拉 watch 是单写者租约语义的裁定（待裁），但"armed 无人监听"
         # 必须在这一步说出来，⛔ 别让调用方以为生效了。
-        "watch_note": (
-            "本工具只翻转 enabled 标志，不启动/不检查 watch 运行时。"
-            "enabled:true 而无活 watch = 假武装（永不触发）；"
-            "确认监听状态看部署面 watch 进程与 /api/health 的 tick_* 字段"
-            if enabled else None),
+        "watch_note": (None if enabled else
+                       "禁用不触碰监听；启用时的实际监听动作看 watch_reconcile"),
+        # R4-4 收口（裁定方案 A）：启用后做对账——有活监听就复用、没有就起、起不动就回原因。
+        "watch_reconcile": _ensure_watcher(store, enabled=enabled),
     }
 
 
@@ -1463,7 +1575,8 @@ def _existing_owner(store: GraphStore, name: str) -> str:
 
 
 def _assert_archive_mutator(
-    store: GraphStore, name: str, *, caller: str = "", caller_is_owner: bool = False
+    store: GraphStore, name: str, *, caller: str = "", caller_is_owner: bool = False,
+    action: str = "修改其标签/启停",
 ) -> None:
     """D4 归属判定：改标签/启停/批量按标签启停前，确认调用方有权动这条归档。
 
@@ -1475,12 +1588,12 @@ def _assert_archive_mutator(
     if prev:
         if caller and prev != caller and not caller_is_owner:
             raise ServiceError(
-                f"归档 {name!r} 归属 {prev!r}，当前主体 {caller!r} 无权修改其标签/启停（所有权隔离）",
+                f"归档 {name!r} 归属 {prev!r}，当前主体 {caller!r} 无权{action}（所有权隔离）",
                 status=403,
             )
     elif caller and not caller_is_owner:
         raise ServiceError(
-            f"归档 {name!r} 无归属，仅 owner 面可修改其标签/启停（所有权隔离）",
+            f"归档 {name!r} 无归属，仅 owner 面可{action}（所有权隔离）",
             status=403,
         )
 

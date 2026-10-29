@@ -241,12 +241,57 @@ def _t_simulate(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     return svc.simulate(args["ir"], args.get("seed"), args.get("events"), store=store)
 
 
-def _t_list_graphs(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    return svc.list_graphs(store)
+def _owner_face(current: dict[str, Any] | None) -> bool:
+    """当前令牌是否 owner 面（开发者 agent / 用户）。单一真源在 `af_api._OWNER_SUBJECTS`。"""
+    from .af_api import _OWNER_SUBJECTS
+    return str((current or {}).get("subject") or "") in _OWNER_SUBJECTS
 
 
-def _t_get_graph(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    return svc.get_graph(store, args["name"], args.get("version"))
+def _t_list_graphs(store: GraphStore, args: dict[str, Any],
+                   current: dict[str, Any] | None = None) -> dict[str, Any]:
+    # 裁定 2026-10-29：普通 agent 只看自己写的归档（svc 侧过滤，⛔ 不在这里筛第二遍）
+    return svc.list_graphs(store, caller=str((current or {}).get("subject") or ""),
+                           is_owner_face=_owner_face(current))
+
+
+def _t_get_graph(store: GraphStore, args: dict[str, Any],
+                 current: dict[str, Any] | None = None) -> dict[str, Any]:
+    """按归属收口：非 owner 面读别人的归档时，回执与"不存在"**逐字相同**。
+
+    ⛔ 不能回"无权查看"——那等于告诉对方"这条存在、只是你的"，把列表上看不到的
+    信息又从错误消息漏回去了。
+    """
+    name = args["name"]
+    caller = str((current or {}).get("subject") or "")
+    if caller and not _owner_face(current):
+        if svc._existing_owner(store, name) != caller:
+            return {
+                "ok": False,
+                "code": ADM_ERR_PAYLOAD_INVALID,
+                "error": {"code": "ARCHIVE_NOT_FOUND",
+                          "message": f"没找到归档 {name!r}（或它不属于你）",
+                          "fix": {"next_action": "af_list_graphs 看你能看到的归档"}},
+            }
+    return svc.get_graph(store, name, args.get("version"))
+
+
+def _t_delete_graph(store: GraphStore, args: dict[str, Any],
+                    current: dict[str, Any] | None = None) -> dict[str, Any]:
+    """【写】删除归档 → 隔离区（可人工恢复）。裁定 2026-10-29：自己的随便删，
+    别人的看不到也删不掉，owner 面可删全部。删除不要求授权码——它让能力变少，
+    与"启用要码、禁用免码"同一条理；要码的是往真机上加动作。"""
+    caller = str((current or {}).get("subject") or "")
+    try:
+        return svc.delete_graph(store, args["name"], caller=caller,
+                                caller_is_owner=_owner_face(current),
+                                note=str(args.get("note") or ""))
+    except svc.ServiceError as exc:
+        # ⚠️ 必须捕 `svc.ServiceError`：af_mcp 自己也有一个叫 ServiceError 的类
+        #（守卫用），捕错就等于让异常冒到 dispatch 的 catch-all 变成 INTERNAL。
+        return {"ok": False, "code": (ADM_ERR_AUTH_REQUIRED if exc.status == 403
+                                      else ADM_ERR_PAYLOAD_INVALID),
+                "error": {"code": "FORBIDDEN" if exc.status == 403 else "ARCHIVE_NOT_FOUND",
+                          "message": str(exc)}}
 
 
 def _t_by_tag(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
@@ -771,7 +816,8 @@ def _t_deploy_status(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 
 #: 需要注入当前令牌主体（`current`）的工具：用于归档归属 / 所有权隔离（v1.3.0）
 #: ＋ 部署请求的 requested_by 归属（v1.13.3 af_deploy）
-_TOOLS_WITH_CONTEXT = frozenset({_t_whoami, _t_save, _t_import, _t_enable, _t_deploy})
+_TOOLS_WITH_CONTEXT = frozenset({
+    _t_delete_graph, _t_list_graphs, _t_get_graph,_t_whoami, _t_save, _t_import, _t_enable, _t_deploy})
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1044,6 +1090,22 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
         {"type": "object", "properties": {}},
         _t_list_graphs,
         None,
+    ),
+    (
+        "af_delete_graph",
+        "【写】删除归档：移入隔离区 .deleted/（可人工恢复，⛔ 不是物理删）。"
+        "参数：name(str 必填)，note(str 可选)。归属规则：普通 agent 只能删自己写的；"
+        "别人的看不到也删不掉；owner 面可删全部。不需要授权码（删除让能力变少，不往真机加动作）。",
+        {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "归档名"},
+                "note": {"type": "string", "description": "为什么删（进回执，便于事后追查）"},
+            },
+            "required": ["name"],
+        },
+        _t_delete_graph,
+        "write",
     ),
     (
         "af_get_graph",

@@ -103,19 +103,35 @@ def test_dispatch_build_rejects_l3(tmp_path):
 
 
 def test_dispatch_read_tools_touch_store(tmp_path):
+    """读工具确实碰了 store。主体用 owner 面：裁定 2026-10-29 后普通 agent 只能看到
+    自己写的归档，而 `_seed` 走 store.save 直建 ⇒ 归档**无归属**，按"无归属仅 owner 面
+    可见/可改"的既有口径对 `test-all` 不可见。这条腿要量的是取数，不是归属。"""
+    store = GraphStore(tmp_path)
+    _seed(store)
+    owner = {"subject": "owner", "scopes": sorted(_ALL_SCOPES)}
+    content, _ = dispatch("af_list_graphs", {}, store, owner)
+    assert _load(content[0]["text"])["items"][0]["name"] == "demo"
+
+    content, _ = dispatch("af_get_graph", {"name": "demo", "version": 2}, store, owner)
+    assert _load(content[0]["text"])["version"] == 2
+
+    content, _ = dispatch("af_graphs_by_tag", {"tag": "lighting"}, store, owner)
+    assert _load(content[0]["text"])["items"][0]["name"] == "demo"
+
+    content, _ = dispatch("af_diff", {"name": "demo", "old": 1, "new": 2}, store, owner)
+    assert "render" in _load(content[0]["text"])
+
+
+def test_read_tools_hide_unowned_archives_from_plain_agents(tmp_path):
+    """裁定 2026-10-29 的正向判据：无归属/他人归档对普通 agent 不可见（看不到，不是不能改）。"""
     store = GraphStore(tmp_path)
     _seed(store)
     content, _ = dispatch("af_list_graphs", {}, store, _ALL)
-    assert _load(content[0]["text"])["items"][0]["name"] == "demo"
-
-    content, _ = dispatch("af_get_graph", {"name": "demo", "version": 2}, store, _ALL)
-    assert _load(content[0]["text"])["version"] == 2
-
-    content, _ = dispatch("af_graphs_by_tag", {"tag": "lighting"}, store, _ALL)
-    assert _load(content[0]["text"])["items"][0]["name"] == "demo"
-
-    content, _ = dispatch("af_diff", {"name": "demo", "old": 1, "new": 2}, store, _ALL)
-    assert "render" in _load(content[0]["text"])
+    payload = _load(content[0]["text"])
+    assert payload["items"] == [], "无归属归档不该出现在普通 agent 的列表里"
+    assert payload["hidden_count"] >= 1, "必须让它知道自己看的不是全量"
+    content, _ = dispatch("af_get_graph", {"name": "demo"}, store, _ALL)
+    assert _load(content[0]["text"])["ok"] is False
 
 
 def test_dispatch_export_import_roundtrip(tmp_path):

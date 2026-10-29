@@ -109,6 +109,18 @@ def gate(monkeypatch, tmp_path):
     return transports
 
 
+def _code(root: Path) -> str:
+    """R4-3 起 `af_live_run` 必须有授权码。这三条腿测的是设备闸/载荷上限，
+    不是码闸——就给它们一枚真码，让断言继续量它们原本要量的东西。"""
+    from autoforge.af_auth import AuthCodeStore
+    rec = AuthCodeStore(Path(root) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    return getattr(rec, "code", None) or rec["code"]
+
+
+def _live_args(root: Path) -> dict:
+    return {**ARGS, "auth_code": _code(root)}
+
+
 def _protect(root: Path, entity_id: str) -> None:
     """Tier-0 = 必须人审：scanner 侧是 ERROR，`live_run` 的第一道闸就该拒收。"""
     rules = [{"match": {"type": "entity", "value": entity_id}, "tier": 0, "perm": "-"}]
@@ -118,7 +130,7 @@ def _protect(root: Path, entity_id: str) -> None:
 def test_control_without_acl_the_mcp_path_really_dispatches(tmp_path, gate):
     """对照组：不设 ACL 时 MCP 这条路确实会下发，否则下面的"被拦住"可以是 harness 坏了。"""
     store = GraphStore(tmp_path)
-    content, is_error = dispatch("af_live_run", ARGS, store, _ALL)
+    content, is_error = dispatch("af_live_run", _live_args(tmp_path), store, _ALL)
     assert is_error is False, content[0]["text"]
     assert [a for t in gate for a, _ in t.dispatched] == ["light.turn_off"]
 
@@ -128,7 +140,7 @@ def test_mcp_live_run_honours_the_store_device_guard(tmp_path, gate):
     store = GraphStore(tmp_path)
     _protect(tmp_path, "light.study")
 
-    content, is_error = dispatch("af_live_run", ARGS, store, _ALL)
+    content, is_error = dispatch("af_live_run", _live_args(tmp_path), store, _ALL)
 
     assert is_error is True, "受保护设备被 Agent 面放行 ⇒ 闸门只装了 HTTP 一面"
     assert "ENTITY_GUARD_TIER0" in content[0]["text"]
@@ -150,7 +162,8 @@ def test_http_live_run_honours_the_same_guard(tmp_path, gate):
 def test_mcp_live_run_refuses_oversized_events(tmp_path, gate):
     """上限挪进服务层后，MCP 面也拦得住整场回放（HTTP 侧的 422 判据由 test_af_api 钉）。"""
     store = GraphStore(tmp_path)
-    args = {**ARGS, "events": [{"advance_s": 1}] * (svc.MAX_REPLAY_EVENTS + 1)}
+    # R4-3 之后真机下发要有码；这条腿量的是"事件数上限"，给它码，别让它去撞码闸
+    args = {**_live_args(tmp_path), "events": [{"advance_s": 1}] * (svc.MAX_REPLAY_EVENTS + 1)}
 
     content, is_error = dispatch("af_live_run", args, store, _ALL)
 

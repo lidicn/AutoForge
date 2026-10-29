@@ -267,6 +267,32 @@ class GraphStore:
         """归档目录名（校验后的形态）。公开给回执用：清洗必须**可见**（体验者 P0-2）。"""
         return normalize_archive_name(name)[0]
 
+    #: 隔离区目录名。删除=移进去而非物理删——agent 面开删除能力的前提是"删错还能捞回来"，
+    #: 也避开本文件 rollback 那族老问题（rmtree 失败被抹平后，正式目录撞进半死的备份目录）。
+    TRASH_DIR = ".deleted"
+
+    def quarantine(self, name: str) -> tuple[str, str]:
+        """把某归档整体移入隔离区，返回 (原目录名, 隔离后目录名)。不存在抛 FileNotFoundError。"""
+        src = self._dir(name)
+        if not src.is_dir():
+            raise FileNotFoundError(f"未找到归档 {name!r} 的目录")
+        trash = self.root / GraphStore.TRASH_DIR
+        trash.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+        dst = trash / f"{src.name}--{stamp}"
+        # 语义是"把整个现场挪走保留可恢复性"，正是本门自己举的那例；助手写文本内容，
+        # 这里搬的是目录树，不适用。多行说明在此，豁免标记必须紧邻站点（门只往站点 ±2 行找）。
+        # fixed-tmp: exempt(目录搬家非原子写：目标名带微秒戳唯一，无固定 tmp 截断风险)
+        src.rename(dst)
+        return src.name, dst.name
+
+    def list_quarantined(self) -> list[str]:
+        """隔离区清单（审计与人工恢复都要看得见，⛔ 不能把删除做成第二个黑箱）。"""
+        trash = self.root / GraphStore.TRASH_DIR
+        if not trash.is_dir():
+            return []
+        return sorted(p.name for p in trash.iterdir() if p.is_dir())
+
     def _dir(self, name: str) -> Path:
         safe, _changed = normalize_archive_name(name)
         return self.root / safe

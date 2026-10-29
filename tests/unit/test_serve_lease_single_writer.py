@@ -249,7 +249,13 @@ def test_mcp_face_text_starts_with_the_prefix(tmp_path, gate):
     """
     store = GraphStore(tmp_path)
     with _other_process_holding(tmp_path):
-        content, is_error = dispatch("af_live_run", ARGS, store, _ALL)
+        # R4-3：授权码闸排在只读降级闸之前，无码就先吃 AUTH_REQUIRED，
+        # 这条腿要量的前缀契约根本走不到——给它一枚有效码。
+        from autoforge.af_auth import AuthCodeStore
+        _rec = AuthCodeStore(Path(store.root) / ".auth" / "auth_codes.json").create(
+            "short", ttl_minutes=30)
+        _code = getattr(_rec, "code", None) or _rec["code"]
+        content, is_error = dispatch("af_live_run", {**ARGS, "auth_code": _code}, store, _ALL)
 
     assert is_error is True
     text = content[0]["text"]

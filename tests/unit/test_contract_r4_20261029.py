@@ -134,10 +134,14 @@ def test_enable_by_tag_warns_about_fake_armed(tmp_path):
     store.save(Graph([load_automation(raw)]), "r4arm", tags=["qa_r4"])
     out = enable_by_tag(store, "qa_r4", True, allow_bulk=False)
     assert out["ok"] is True, out
-    assert out.get("watch_note") and "假武装" in out["watch_note"]
-    # 禁用时是 None（没有假武装问题）
+    # 裁定方案 A 之后语义变了：启用时不再只是"提醒可能假武装"，而是**真去做对账**，
+    # 结果落在 watch_reconcile；watch_note 只在禁用时说话。
+    assert "watch_reconcile" in out, "启用必须回报监听对账结果"
+    assert out["watch_reconcile"] is not None and out["watch_reconcile"]["action"]
+    # 禁用方案 A 后的契约：不碰监听 ⇒ `watch_reconcile` 必为 None（"没做"要说没做），
+    # watch_note 转为解释"禁用不触碰监听"。旧断言（禁用时 note 为 None）已被裁定 A 取代。
     out2 = enable_by_tag(store, "qa_r4", False, allow_bulk=False)
-    assert out2.get("watch_note") is None
+    assert out2.get("watch_reconcile") is None, "禁用不该去动监听，也不该假装动了"
 
 
 def test_live_run_uses_unified_token_not_env_only(tmp_path, monkeypatch):
@@ -216,6 +220,7 @@ def test_enable_needs_code_disable_does_not(tmp_path):
     assert on["ok"] is False and on["code"] == "ADM_ERR_AUTH_REQUIRED"
     off = _gate_call("af_enable_by_tag", {"tag": "qa", "enabled": False}, tmp_path)
     assert off["ok"] is True, "禁用被码闸挡住＝故障时无法止损"
+    assert off.get("watch_reconcile") is None, "禁用不该去动监听（也不该假装动了）"
 
 
 def test_bad_code_is_refused_without_revealing_why(tmp_path):
