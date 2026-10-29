@@ -163,6 +163,27 @@ def is_destructive(action: str) -> bool:
     return any(k in lowered for k in _DESTRUCTIVE_KEYWORDS)
 
 
+#: 可识别的服务域并集（`<domain>.<service>` 里 domain 那一截）。
+KNOWN_SERVICE_DOMAINS: frozenset[str] = _L0_DOMAINS | _L1_DOMAINS | _L2_DOMAINS | _L3_DOMAINS
+
+
+def unrecognized_service(action: str) -> str | None:
+    """动作名不是可识别的 `<domain>.<service>` 时给一句诊断，认得则 None。
+
+    契约 R2-5（2026-10-29）：`classify_action` 对认不出的动作**保守判 L2**（缺省档本身
+    是对的——宁可多要一次确认），但扫描器的文案把它说成"属于 L2（门锁/窗帘/空调）"。
+    那是把"我不认识这个名字"谎报成"这是高危设备"：agent 照文案去补 `requires_confirm`，
+    而不是去改动作名，越修越偏。区分这两件事，文案才能给对下一步。
+    """
+    a = str(action or "").strip()
+    if "." not in a:
+        return f"动作名 {a!r} 不是 `<domain>.<service>` 形态"
+    domain = a.split(".", 1)[0].lower()
+    if domain not in KNOWN_SERVICE_DOMAINS:
+        return f"动作名 {a!r} 的域 {domain!r} 不在已知服务域表内"
+    return None
+
+
 def classify_action(adapter: str, action: str, params: Mapping[str, Any] | None = None) -> str:
     """动作风险分级（IR §8.1）。未知 domain 保守按 L2。
 

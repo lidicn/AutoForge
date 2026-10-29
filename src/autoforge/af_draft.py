@@ -661,6 +661,18 @@ def _resolve_do(do: dict[str, Any], resolved: dict[str, str], catalog: Any) -> d
         "climate.turn_on": "climate.turn_on",
         "climate.turn_off": "climate.turn_off",
     }
+    # 中文动作短语不在别名表 ⇒ 过去被**原样当服务名**塞进 IR（`关射灯` → action="关射灯"），
+    # 于是分级器认不出域、保守判 L2、文案还说"属于门锁/窗帘/空调"（契约 R2-5 的完整链路）。
+    # 起草是这条链最早的 honest 点：认不出的中文动作名在这里就拒，并给出两种正确写法。
+    if action not in action_map and any("\u4e00" <= ch <= "\u9fff" for ch in str(action or "")):
+        raise DraftError(
+            "E_UNKNOWN_ACTION",
+            f"动作名 {action!r} 不是 AF 认识的中文动作名",
+            fix={"known_zh_actions": sorted(k for k in action_map if any(
+                    "\u4e00" <= ch <= "\u9fff" for ch in k)),
+                 "or_write_service": "<domain>.<service>，如 switch.turn_off",
+                 "tip": "目标实体是什么域就用什么服务；开关插座写 switch.turn_on/turn_off"},
+        )
     adapter, action_name = "ha", action_map.get(action, action)
     # 体验者 AF-014（2026-10-29 复验）：旧别名表是**域盲**的——`开灯` 配 `switch.abc`
     # 编出 `light.turn_on` + `entity_id=switch.abc`，真机 HA 直接拒（实体不属于该域），

@@ -96,15 +96,35 @@ def test_missing_scope_reads_auth_required(tmp_path):
     assert "write" in p["message"], p
 
 
-def test_uncaught_exception_reads_internal_without_traceback(tmp_path):
-    """实现体抛出的非业务异常 ⇒ INTERNAL，且 traceback 不外传（R-57）。"""
-    # af_experience 的 limit 走 `int(args["limit"])`：给它一枚不可转换的值就是天然异常腿。
-    content, is_err = dispatch("af_experience", {"limit": "not-a-number"}, GraphStore(tmp_path), _READ)
+def test_uncaught_exception_reads_internal_without_traceback(tmp_path, monkeypatch):
+    """实现体抛出的非业务异常 ⇒ INTERNAL，且 traceback 不外传（R-57）。
+
+    ⚠️ 旧探针 `limit="not-a-number"` 在契约 R3-1 收口后不再落 INTERNAL：参数校验
+    提到 MCP 边界（`_positive_int`），那类输入现在得 PAYLOAD_INVALID——这是修好，
+    不是回归。要测"实现体抛非业务异常"这条出口，就 monkeypatch 让实现体真崩。
+    """
+    import autoforge.af_service as _svc
+
+    def _boom(*a, **k):
+        raise RuntimeError("探针：实现体内部崩")
+
+    monkeypatch.setattr(_svc, "get_experience", _boom)
+    content, is_err = dispatch("af_experience", {"limit": 3}, GraphStore(tmp_path), _READ)
     assert is_err is True
     p = _payload(content)
     assert p["code"] == ADM_ERR_INTERNAL
     assert "Traceback" not in p["message"] and "af_mcp.py" not in p["message"], p
     assert p["message"].startswith("工具执行出错："), p
+    assert "探针：实现体内部崩" in p["message"]
+
+
+def test_bad_param_value_is_payload_invalid_not_internal(tmp_path):
+    """R3-1 收口后的新口径：参数类型/取值错误走 400 类，不占 5xx（旧探针曾把它当 INTERNAL 样本）。"""
+    content, is_err = dispatch("af_experience", {"limit": "not-a-number"}, GraphStore(tmp_path), _READ)
+    assert is_err is True
+    p = _payload(content)
+    assert p["code"] == ADM_ERR_PAYLOAD_INVALID, p
+    assert "整数" in p["message"]
 
 
 def test_service_layer_rejection_reads_internal_and_keeps_its_prefix(tmp_path, monkeypatch):
@@ -147,12 +167,21 @@ def test_every_failure_exit_has_a_real_adm_code(tmp_path, monkeypatch):
         if n.startswith("ADM_ERR_") and isinstance(getattr(adm_errors, n), str)
     }
     store = GraphStore(tmp_path)
+    # R3-1 收口后 `limit=0` 落 400 类；INTERNAL 样本改用"实现体真崩"的受控探针
+    # （monkeypatch af_service.get_experience 抛 RuntimeError）。
+    import autoforge.af_service as _svc
+
+    def _boom(*a, **k):
+        raise RuntimeError("探针：实现体内部崩")
+
+    monkeypatch.setattr(_svc, "get_experience", _boom)
     probes = [
         ("af_不存在", {}, _WRITE),
         ("af_experience", {"zz_not_declared": 1}, _WRITE),
         (_by_scope("write"), {}, None),
         (_by_scope("live"), {}, _READ),
-        ("af_experience", {"limit": "not-a-number"}, _READ),
+        ("af_experience", {"limit": 0}, _READ),   # 400 类样本
+        ("af_experience", {"limit": 3}, _READ),   # INTERNAL 样本（实现体崩）
     ]
     codes = []
     for name, args, current in probes:

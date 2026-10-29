@@ -451,14 +451,23 @@ class StaticScanner:
                 )
             )
         # P1-2：L2 动作服务端策略表——requires_confirm=true 必须配 canary 灰度，不可免费豁免
+        from .af_adapters.base import unrecognized_service as _unrec
+        _unrecognized = _unrec(node.action) if node.kind == "do" else None
         if level == "L2":
             if not node.requires_confirm:
                 out.diagnostics.append(
                     Diagnostic(
                         "L2_NEEDS_CONFIRM",
                         ERROR,
-                        f"动作 {node.adapter}.{node.action} 属于 L2（门锁/窗帘/空调），"
-                        f"必须显式标记 requires_confirm=true（IR §8.1）",
+                        # 两种 L2 要说两种话：真高危域（该补确认）vs 动作名认不出
+                        # （该改动作名）。见 af_adapters.base.unrecognized_service。
+                        (f"动作 {node.adapter}.{node.action} 属于 L2（门锁/窗帘/空调），"
+                         f"必须显式标记 requires_confirm=true（IR §8.1）"
+                         if _unrecognized is None else
+                         f"{_unrecognized}；因此按保守档要求确认——"
+                         f"⛔ 补 requires_confirm 不是修法，改动作名才是："
+                         f"HA 服务写 `<domain>.<service>`（如 switch.turn_off），"
+                         f"或用意图别名 开灯/关灯/开空调/关空调"),
                         auto.id,
                         node.id,
                     )

@@ -735,6 +735,12 @@ def submit_pending(
         "submitted_at": op.submitted_at,
         "agent": op.agent,
         "note": "待人工审批（approve 后才会落盘）",
+        # 契约 R2-4（P1，2026-10-29）：`ok:true` + `pending` 被 agent 读成"已保存"，
+        # 转头就去 `af_get_graph` / `af_diff` 取它 ⇒ 全部未找到（实测）。写闸 `open`
+        # 只表示"能提交"，不表示"已落盘"——提交与落盘是两件事，⛔ 别让调用方自己猜。
+        "persisted": False,
+        "landing": "pending_approval",
+        "next_action": "在 WebUI/mimo 待批队列人工批准；批准前 af_get_graph / af_diff / af_conf 都读不到它",
     }
 
 

@@ -133,18 +133,23 @@ edge d1 -> p1 then
 
 ### 常用 trigger 类型
 
+> ⚠️ trigger 是**封闭字段集**（`type` / `entity_id` / `to` / `from` / `at` / `event` /
+> `offset` / `sources` / `op`），schema `additionalProperties: false` —— 多写的键不是
+> "被忽略"而是**整条被拒**。已踩的两个假写法：`today_only`（不存在）、`event_name`
+> （该写 `event`）。另外 `ask` 节点必须带 `on_timeout` 或 `default` 出边。
+
 ```json
 // 状态变化
 {"type": "state", "entity_id": "binary_sensor.xxx", "to": "on"}
 
 // 时间触发
-{"type": "time", "at": "22:00:00", "today_only": true}
+{"type": "time", "at": "22:00:00"}
 
 // 太阳触发
 {"type": "sun", "event": "sunset", "offset": "-PT30M"}
 
 // 自定义事件
-{"type": "event", "event_name": "my_event"}
+{"type": "event", "event": "my_event"}        # 字段叫 event，不是 event_name
 ```
 
 ### 常用 expr 形式
@@ -210,7 +215,7 @@ edge d1 -> p1 then
 automation night_off
 name "晚上10点提醒关灯"
 
-on t1 {"type": "time", "at": "22:00:00", "today_only": true} name "晚上10点"
+on t1 {"type": "time", "at": "22:00:00"} name "晚上10点"
 ask a1 "要关显示器挂灯吗？" room "书房" timeout "30s" name "询问"
 do d1 ha.light.turn_off {"entity_id": "light.desk_lamp"} result r1 name "关灯"
 pass p1 name "结束"

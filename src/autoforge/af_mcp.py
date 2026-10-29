@@ -168,6 +168,29 @@ def _t_compile(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     return svc.compile_text(text)
 
 
+def _positive_int(value: Any, name: str, default: int) -> int:
+    """可选正整数参数：缺省→default，0/负/非数→**具名拒绝**。
+
+    契约 R3-1（2026-10-29）：旧写法 `int(args.get("days", 30) or 30)` 里那个 `or 30`
+    把 `days=0` 静默换成 30，回执却继续回显 `"days": 0` ——参数没生效、回执假装生效，
+    下一个 agent 会拿这个"0 天窗"的数据做判断。负数同样不 clamp 也不拒（`days=-5`
+    返回 111 条，语义不明）。静默替换比报错坏：报错最多难听，替换是让人信假数。
+    """
+    from .af_service import ServiceError as _SvcErr  # 400 走 PAYLOAD_INVALID 分派
+
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return int(default)
+    try:
+        n = int(value)
+    except (TypeError, ValueError) as exc:
+        raise _SvcErr(f"参数 {name!r} 必须是整数，收到 {value!r}", status=400) from exc
+    if n <= 0:
+        raise _SvcErr(f"参数 {name}={n} 非法：必须是 1 以上的正整数"
+                      f"（0/负数不会被静默换成缺省值 {default}——那会让回执与实际窗口不一致）",
+                      status=400)
+    return n
+
+
 def _coerce_json_arg(value: Any, name: str) -> Any:
     """客户端边界兜底（体验者 2026-10-28 现场）：部分桥接层把"可选+嵌套复杂"参数
     （object / 含 object 的 array）json.dumps 成**字符串**再转发——必填复杂参数与
@@ -521,8 +544,24 @@ def _t_test_clear(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "cleared": False, "code": e.code, "error": str(e)}
 
 
+def _mask_endpoint(text: Any) -> Any:
+    """把 `http(s)://host:port` 的 host 换成占位符（只用于 MCP agent 面）。
+
+    契约 R3-8：`af_catalog` 回执带内网 HA 地址。它不是凭据，但**交出内网拓扑**没必要——
+    agent 要用端点找 HA 是集成侧的事，不是起草侧的事。HTTP 面读数保持原样
+    （DB/运维侧有读方按它判读，⛔ 不在服务层动）。
+    """
+    import re as _re
+    if not isinstance(text, str) or "://" not in text:
+        return text
+    return _re.sub(r"://(https?://)?[^/\s]+", "://<内网端点已隐去>", text)
+
+
 def _t_catalog(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    return svc.catalog_snapshot(store)
+    out = svc.catalog_snapshot(store)
+    if isinstance(out, dict) and "ha_url" in out:
+        out["ha_url"] = _mask_endpoint(out["ha_url"])
+    return out
 
 
 def _t_whoami(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -596,12 +635,21 @@ def _t_guide(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 
 def _t_experience(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     """v1.5.0：实体共现经验摘要（只在成功落盘后采集）。参数：limit(int 可选，默认 10)。"""
-    return svc.get_experience(store, limit=int(args.get("limit", 10) or 10))
+    lim = _positive_int(args.get("limit"), "limit", 10)
+    out = svc.get_experience(store, limit=lim)
+    # 回显生效值（R3-2：该回显的不回显，调用方只能猜服务端到底用了多少）
+    if isinstance(out, dict):
+        out["effective_limit"] = lim
+    return out
 
 
 def _t_telemetry(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     """v1.5.0：token/结果遥测 + 错误类别分布。参数：days(int 可选，默认 30)。"""
-    return svc.get_telemetry(store, days=int(args.get("days", 30) or 30))
+    days = _positive_int(args.get("days"), "days", 30)
+    out = svc.get_telemetry(store, days=days)
+    if isinstance(out, dict):
+        out["days"] = days  # 回显的是**生效**窗口，不是调用方传来的原值
+    return out
 
 
 def _t_deploy(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1305,8 +1353,27 @@ def dispatch(
                     _failure_payload(
                         ADM_ERR_PAYLOAD_INVALID,
                         _redact_paths(str(exc)),
-                        sub_code=str(getattr(exc, "code", None) or type(exc).__name__),
+                        sub_code=("IR_SCHEMA_INVALID" if isinstance(exc, IRValidationError)
+                                  else str(getattr(exc, "code", None) or type(exc).__name__)),
                         fix=getattr(exc, "fix", None) or {},
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+        ], True
+    except FileNotFoundError as exc:
+        # 契约 R2-1：`af_get_graph` / `af_conf` / `af_diff` 这类只读图工具对不存在的归档
+        # 直接抛 FileNotFoundError ⇒ 被 catch-all 包成 ADM_ERR_INTERNAL。"找不到"是
+        # **对端可自纠**的输入问题（名字/版本写错），不是 AF 坏了；且它和 af_resolve_entity
+        # 的"查不到就空结果"是同一语义，码必须一致。
+        return [
+            _text(
+                json.dumps(
+                    _failure_payload(
+                        ADM_ERR_PAYLOAD_INVALID,
+                        f"没找到该归档/版本：{str(exc)[:160]}",
+                        sub_code="ARCHIVE_NOT_FOUND",
+                        fix={"next_action": "af_list_graphs 看现有归档名与版本"},
                     ),
                     ensure_ascii=False,
                 )
