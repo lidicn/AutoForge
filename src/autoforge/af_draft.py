@@ -630,18 +630,33 @@ def _resolve_do(do: dict[str, Any], resolved: dict[str, str], catalog: Any) -> d
 
     # 动作映射：开灯/turn_on → light.turn_on
     action_map = {
-        "开灯": ("ha", "light.turn_on"),
-        "关灯": ("ha", "light.turn_off"),
-        "开空调": ("ha", "climate.turn_on"),
-        "关空调": ("ha", "climate.turn_off"),
-        "turn_on": ("ha", "light.turn_on"),
-        "turn_off": ("ha", "light.turn_off"),
-        "light.turn_on": ("ha", "light.turn_on"),
-        "light.turn_off": ("ha", "light.turn_off"),
-        "climate.turn_on": ("ha", "climate.turn_on"),
-        "climate.turn_off": ("ha", "climate.turn_off"),
+        "开灯": "light.turn_on",
+        "关灯": "light.turn_off",
+        "开空调": "climate.turn_on",
+        "关空调": "climate.turn_off",
+        "turn_on": "light.turn_on",
+        "turn_off": "light.turn_off",
+        "light.turn_on": "light.turn_on",
+        "light.turn_off": "light.turn_off",
+        "climate.turn_on": "climate.turn_on",
+        "climate.turn_off": "climate.turn_off",
     }
-    adapter, action_name = action_map.get(action, ("ha", action))
+    adapter, action_name = "ha", action_map.get(action, action)
+    # 体验者 AF-014（2026-10-29 复验）：旧别名表是**域盲**的——`开灯` 配 `switch.abc`
+    # 编出 `light.turn_on` + `entity_id=switch.abc`，真机 HA 直接拒（实体不属于该域），
+    # 而仿真器从不比对服务域与实体域、照样把状态翻过去 ⇒ 预演绿、真机死（静默错执行）。
+    # 修法：别名只提供缺省域，**真实域跟着目标实体走**——(目标域, 服务) 在效果真值表里
+    # 存在才改判（`switch.turn_on` 有 ⇒ 用它；`vacuum.turn_on` 没有 ⇒ 保留缺省域，
+    # 让 AF-005 那一站去报"服务不存在"，⛔ 不在这里悄悄换个域把问题挪走）。
+    # 只有**别名**（中文动作名 / 裸 turn_on / turn_off）才跟目标域走；显式写
+    # `light.turn_on` 是作者的明确决定，⛔ 不"好心"改域（判据 test_explicit_domain_action_not_rewritten 钉住）。
+    _ALIAS_KEYS = ("开灯", "关灯", "开空调", "关空调", "turn_on", "turn_off")
+    if action in _ALIAS_KEYS and "." in action_name:
+        _dom, _svc = action_name.split(".", 1)
+        target_domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+        from .af_vhass.fake import SERVICE_STATE  # 效果真值表单一真源，不抄第二份
+        if target_domain and target_domain != _dom and (target_domain, _svc) in SERVICE_STATE:
+            action_name = f"{target_domain}.{_svc}"
 
     params = {"entity_id": entity_id}
     if "temperature" in do:

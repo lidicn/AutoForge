@@ -261,6 +261,22 @@ def apply(
         result["ok"] = False
         result["stage"] = "simulate"
         return result
+    # L2 的 do 带 `requires_confirm` ⇒ 仿真实例会**合法地**挂在确认闸上
+    # （体验者 AF-001 2026-10-29 把这件事读成"if 卡住、do 永不执行"）。它不是 bug：
+    # 生产上那条动作本就该要人同意。但预演必须把它说清楚，否则"停在 suspended"
+    # 在调用方眼里跟"链断了"长得一模一样。
+    held = [
+        {"instance_id": i.get("instance_id"), "node": i.get("current_node")}
+        for i in (sim_result.get("instances") or [])
+        if i.get("state") == "suspended"
+    ]
+    if held:
+        result["held_at_confirm"] = held
+        result["confirm_note"] = (
+            f"{len(held)} 个实例停在人工确认闸（L2 的 requires_confirm，生产行为如此）。"
+            f"要看整条链跑通，用 af_simulate 的事件注入应答："
+            f'events=[{{"entity_id": ..., "state": ...}}, {{"answer": "yes"}}]'
+        )
     if fired == 0 and state_targets:
         # 合成过触发还是零实例 = 仿真没跑到任何东西。⛔ 不许当"通过"。
         result["ok"] = False

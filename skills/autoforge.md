@@ -70,6 +70,16 @@ version: 1.0.0
 - `if` 里的实体引用：`when`/`do` 用 `{"entity": ...}`，一元谓词两种都收——
   `{"is_on": {"var": "书房灯"}}` 与 `{"is_on": {"entity": "书房灯"}}` 同义（体验者 AF-009）。
   编译进 IR 后统一是 `value={"var": "entity.<id>"}`，别名不外泄。
+- 动作名与目标实体的**域**要匹配：中文动作名（开灯/关灯/开空调）与裸 `turn_on`/`turn_off`
+  是**别名**，服务端按目标实体的域归一服务名——`开灯` 配 `switch.abc` 编成 `switch.turn_on`
+  （体验者 AF-014：旧实现是域盲的，编出 `light.turn_on` 打 switch，真机必拒而仿真器照样翻状态）。
+  显式写 `light.turn_on` 则**不改**（那是你的明确决定）。目标域在效果表里没有该服务时
+  保留缺省域，交给 build 那一站报错——不悄悄换个域把问题挪走。
+- 条件为真时动作会**自动执行**；但若动作带 `requires_confirm`（L2 门锁/窗帘/空调强制），
+  实例会合法地停在确认闸等人工同意。`af_apply(dry_run)` 的回执用 `held_at_confirm` +
+  `confirm_note` 明说这件事（⛔ 不静默停在 suspended 让人以为链断了）。
+  要在仿真里看整条链跑通，给 `af_simulate` 的 events 追加一条应答：
+  `events=[{"entity_id":"binary_sensor.门","state":"off"}, {"answer":"yes"}]`。
 - 比较键是封闭词表：`eq/ne/lt/lte/gt/gte`（⛔ 没有 `ge`/`le`，≥/≤ 写 `gte`/`lte`）；
   组合用 `and/or/not`。全集见下方「常用 expr 形式」。
 
@@ -238,6 +248,12 @@ edge d1 -> p1 then
 注意 MCP 写工具走的是令牌 scope + 归档侧的闸，与 HTTP 的 `_write` 不是同一条路：
 `readonly:true` 时 MCP 的 `af_save` 仍可能成功，这不是 bug 而是两把闸各管一面（要判"这台能不能落盘"，看 `write_gate`）。
 
+## 测试通道（af_test_submit）与正式通道同口径
+
+批量提交（draft → build → simulate → 自动 approve → 落 `/data/test/`）里的中文名**与
+`af_draft` 一样走主 store 的设备目录**（体验者 AF-015：旧实现没传目录，同一个
+"书房灯"在正式通道能解析、测试通道全变 `?占位符`）。只读解析，不写主 store。
+
 ## 工具速查
 
 | 工具 | 用途 |
@@ -251,6 +267,11 @@ edge d1 -> p1 then
 
 ## 排错
 
+- **IR_SCHEMA_INVALID / `id` 校验失败**：自动化与节点 id 必须匹配 `^[a-z][a-z0-9_]*$`
+  （**小写**，首次提交起就是这条规则，不是新加的）；中文/大写/带空格的标题请写进 `name`，
+  `id` 用 ascii 蛇形。
+- **EXPR_NS_INVALID**：IR 里 `var` 少了命名空间前缀——见上文路 B 铁律，写 `entity.<完整id>`
+  （`ge`/`le` 同理改成 `gte`/`lte`）。
 - **SpecError**：AF-Spec 语法错，检查 JSON 格式和节点边是否完整
 - **ENTITY_NOT_FOUND**：entity_id 不存在，用 af_resolve_entity 重新查
 - **DEVICE_ACL_DENIED**：高风险设备（锁/热水器）被拦截，不可绕过

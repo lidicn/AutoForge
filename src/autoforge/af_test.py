@@ -132,6 +132,25 @@ class TestChannel:
         """获取测试区 GraphStore。"""
         return GraphStore(root=str(self.test_root))
 
+    def _resolve_catalog(self):
+        """名称解析用的设备目录——来自**主 store**，不是测试区那一份。
+
+        体验者 AF-015（2026-10-29）：同一个中文设备名，正式 `af_draft` 能解析、
+        测试通道解析不出来。根因是 `draft_intent(intent)` 在这里**根本没传 catalog**，
+        而 `svc._catalog(store)` 的目录缓存与 HA 凭据都挂在主 store 根（`/data`）上；
+        测试区 `/data/test` 是空目录 ⇒ 零候选 ⇒ 全部落成 `?占位符`。
+        v1.14.12 之前这些占位符能静默过闸（AF-013 橡皮图章），现在会被
+        `UNRESOLVED_ENTITY` 响亮拒绝——拒绝是对的，但**测试通道本来就该能解析名字**。
+
+        只读解析：测试区的隔离性体现在归档/队列/报告，不体现在设备目录（那是全局事实）。
+        构造失败退回 None——此时中文名退化成 `?占位符`，由 build 闸拒绝，⛔ 不静默。
+        """
+        from . import af_service as svc
+        try:
+            return svc._catalog(GraphStore(root=str(Path(self.test_root).parent)))
+        except Exception:  # 目录拿不到（HA 未配/凭据缺失）时不阻断测试通道
+            return None
+
     def submit_batch(
         self,
         intents: list[dict[str, Any]],
@@ -174,9 +193,9 @@ class TestChannel:
             "graph_ref": None,
         }
 
-        # 1. draft
+        # 1. draft（名称解析走主 store 目录，见 `_resolve_catalog`）
         try:
-            draft_result = draft_intent(intent)
+            draft_result = draft_intent(intent, catalog=self._resolve_catalog())
         except DraftError as e:
             record["stage"] = "draft"
             record["error"] = {"code": e.code, "message": str(e)}
