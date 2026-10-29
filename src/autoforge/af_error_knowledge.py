@@ -148,9 +148,11 @@ KNOWN_CATEGORIES: tuple[str, ...] = tuple(c for c in CATEGORY_ADVICE if c != "UN
 HINT_TO_CATEGORY = {
     "E_REF_NOT_FOUND": "REF_NOT_FOUND",
     "FILENOTFOUNDERROR": "ARCHIVE_NOT_FOUND",
-    "INVALIDARCHIVENAME": "PAYLOAD_INVALID",
-    "SERVICEERROR": "PAYLOAD_INVALID",
 }
+# ⛔ 表里不留走不到的条目：审计 AF-308 指出 `INVALIDARCHIVENAME`/`SERVICEERROR` 两条
+# 映射成对都存在，却被 classify 的 `mapped != "PAYLOAD_INVALID"` 判据挡死——
+# 读代码的人会以为"给了 hint 一定短路"，实际这两条永远不生效。
+# 输入类错误的分类本来就由顶层 ADM 码表达，不在"根因分类"里造伪类别。
 
 
 def classify(message: str, *, hint_code: str | None = None) -> str:
@@ -161,7 +163,7 @@ def classify(message: str, *, hint_code: str | None = None) -> str:
     """
     if hint_code:
         mapped = HINT_TO_CATEGORY.get(str(hint_code).strip().upper().replace(":", "_"))
-        if mapped and mapped != "PAYLOAD_INVALID":
+        if mapped:
             return mapped
     text = str(message or "")
     if not text:

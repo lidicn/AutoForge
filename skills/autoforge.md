@@ -149,7 +149,7 @@ edge d1 -> p1 then
 {"type": "sun", "event": "sunset", "offset": "-PT30M"}
 
 // 自定义事件
-{"type": "event", "event": "my_event"}        # 字段叫 event，不是 event_name
+{"type": "event", "event": "my_event"}
 ```
 
 ### 常用 expr 形式
@@ -162,8 +162,8 @@ edge d1 -> p1 then
 | 比较 | `eq` / `ne` / `lt` / `lte` / `gt` / `gte` |
 | 一元 | `is_on` / `is_off` / `is_home` / `is_not_home` / `truthy` / `not_is_on` / `not_is_off` |
 
-```json
-// 数值比较
+```jsonc
+// 数值比较（jsonc：这两块含注释，标 json 会被编辑器/复制粘贴当语法错）
 {"op": "lt", "left": {"var": "entity.sensor.x", "type": "numeric"}, "right": {"const": 23.5}}
 
 // 状态等于

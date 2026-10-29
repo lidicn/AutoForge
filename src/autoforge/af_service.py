@@ -2164,8 +2164,14 @@ def _dispatch_verdict(runtime) -> dict[str, Any]:
     audit = [e.to_dict() if hasattr(e, "to_dict") else dict(e) for e in runtime.audit]
     dispatched = [a for a in audit if a.get("type") == "af_action_dispatched"]
     failed = [a for a in audit if a.get("type") == "action_failed"]
-    if failed:
-        verdict = "failed" if dispatched else "failed"
+    # 审计 AF-301：我上一版写出 `"failed" if dispatched else "failed"` 这种两支同值的
+    # 退化三元——读起来像有分支、实际没有，而且注释承诺过 partially 档却永远出不了。
+    # 真语义：有成有败=partially_failed（⛔ 不许被成功那半掩盖）；全败=failed；
+    # 只成无败=executed；两者皆空=nothing_dispatched。
+    if failed and dispatched:
+        verdict = "partially_failed"
+    elif failed:
+        verdict = "failed"
     elif dispatched:
         verdict = "executed"
     else:
@@ -2639,22 +2645,28 @@ def _catalog(store: GraphStore, **kwargs: Any) -> DeviceCatalog:
     """从 store 根目录构造设备目录（缓存与归档同根，便于整体搬运）。"""
     # 巡检 #4：DeviceCatalog 只读环境变量，不读 credentials.json——WebUI 填的 token
     # 写进 credentials.json 但 catalog 拿不到。这里从 Config 读 token/url 传进去。
+    # 审计 AF-304：`store` 会是 None（build/CLI/测试面不接 store 的调用形状），
+    # 旧写法在 `Config(store.root)` 抛错后被 except 吞掉、却在 try **外面**直接
+    # `DeviceCatalog(store.root)` → AttributeError 冒成 ADM_ERR_INTERNAL。
+    # 一把崩点分两处写（一处有兜底一处没有）正是它活了这么久的原因。
+    root = getattr(store, "root", None) or DEFAULT_STORE_ROOT
     if "ha_token" not in kwargs:
         try:
             from .af_config import Config
-            cfg = Config(store.root)
+            cfg = Config(root)
             tok = cfg.get_ha_token()
             if tok:
                 kwargs["ha_token"] = tok
-            url = os.getenv("AUTOFORGE_HA_URL", "")
-            if not url:
-                url = "http://192.168.2.200:8123"
-            kwargs.setdefault("ha_url", url)
+            # 审计 AF-303：这里曾回落硬编码 `http://192.168.2.200:8123`——
+            # P0-11 在 `af_adapters/ha.py` 收了默认地址硬编码，这一处是漏网的第二真源
+            # （内网拓扑写进代码，且与 ha.py 的 env 口径分叉）。统一走 DEFAULT_HA_URL
+            # （它本身就是 env 读数），⛔ 不在这里再写一个字面量。
+            kwargs.setdefault("ha_url", DEFAULT_HA_URL)
         except Exception:
             # ARCH-01（关键模块不许 except-pass-broad）：读不出就退回 env/缺省行为，
             # 但必须留痕——静默吞会让"WebUI 填的 token 为什么没生效"无从查起。
             logger.debug("CATALOG_TOKEN_SOURCE_SKIPPED", exc_info=True)
-    return DeviceCatalog(store.root, **kwargs)
+    return DeviceCatalog(root, **kwargs)
 
 
 def catalog_refresh(

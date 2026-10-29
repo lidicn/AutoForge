@@ -191,6 +191,25 @@ def _positive_int(value: Any, name: str, default: int) -> int:
     return n
 
 
+def _non_negative_int(value: Any, name: str, default: int) -> int:
+    """可选非负整数：`0` 是**合法值**（分页首页），⛔ 不能套 `_positive_int`。
+
+    审计 AF-307 提醒的正是这一族：`int(args.get("offset", 0) or 0)` 里那个 `or 0`
+    对 offset 无害（0 or 0 == 0），但同一形状用在 limit 上就把 `limit=0` 静默换成缺省值。
+    分成两个助手，语义各自明确，别再靠一个函数覆盖两种数。
+    """
+    from .af_service import ServiceError as _SvcErr
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return int(default)
+    try:
+        n = int(value)
+    except (TypeError, ValueError) as exc:
+        raise _SvcErr(f"参数 {name!r} 必须是整数，收到 {value!r}", status=400) from exc
+    if n < 0:
+        raise _SvcErr(f"参数 {name}={n} 非法：不能为负（0 是合法值，表示首页）", status=400)
+    return n
+
+
 def _coerce_json_arg(value: Any, name: str) -> Any:
     """客户端边界兜底（体验者 2026-10-28 现场）：部分桥接层把"可选+嵌套复杂"参数
     （object / 含 object 的 array）json.dumps 成**字符串**再转发——必填复杂参数与
@@ -519,7 +538,7 @@ def _t_resolve_entity(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]
         args["name"],
         area=args.get("area", "") or "",
         domain=args.get("domain", "") or "",
-        top_n=int(args.get("top_n", 8) or 8),
+        top_n=_positive_int(args.get("top_n"), "top_n", 8),
     )
 
 
@@ -534,8 +553,8 @@ def _t_list_entities(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
         domain=args.get("domain", "") or "",
         area=args.get("area", "") or "",
         keyword=args.get("keyword", "") or "",
-        limit=int(args.get("limit", 50) or 50),
-        offset=int(args.get("offset", 0) or 0),
+        limit=_positive_int(args.get("limit"), "limit", 50),
+        offset=_non_negative_int(args.get("offset"), "offset", 0),
     )
 
 
@@ -1497,7 +1516,10 @@ def dispatch(
                 json.dumps(
                     _failure_payload(
                         ADM_ERR_PAYLOAD_INVALID,
-                        f"没找到该归档/版本：{str(exc)[:160]}",
+                        # 审计 AF-302：同函数其它出口都过了 _redact_paths，只有这一支直写
+                        # str(exc)[:160]——FileNotFoundError 原文就带绝对路径。"已修"结论
+                        # 在同族其它分支上不算数，这类漏网比当初没修更难发现。
+                        f"没找到该归档/版本：{_redact_paths(str(exc))[:160]}",
                         sub_code="ARCHIVE_NOT_FOUND",
                         fix={"next_action": "af_list_graphs 看现有归档名与版本"},
                     ),

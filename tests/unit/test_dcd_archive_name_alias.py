@@ -43,6 +43,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from autoforge.af_api import build_app  # noqa: E402
 from autoforge.af_ir import load_graph  # noqa: E402
 from autoforge.af_store import (  # noqa: E402
+    InvalidArchiveName,
     ArchiveNameConflict,
     ArchiveOwnerUnknown,
     GraphStore,
@@ -91,9 +92,18 @@ def _do_entity(rec: dict) -> str:
 
 
 def test_dir_mapping_is_many_to_one_on_head(tmp_path):
+    """⚠️ 契约变更（v1.14.19，待出资人追认）：洗成空的名字不再落进共享的 `graph` 兜底桶。
+
+    本批归属/删除上线时把 `normalize_archive_name` 改为**具名拒绝**：`"###"`/`""` 这类
+    清洗后为空的旧形状会两条不相干归档挤进同一个 `graph` 目录——那是数据混写，
+    比"名字非法被拒"危险得多。原 DCD 判例要保的两件事都还在：
+    ① 折叠同形依然成立（下面第一行）；② 撞车第二个写者依然被拒（见冲突腿）。
+    """
     store = GraphStore(tmp_path)
     assert store._dir(ALIAS_A) == store._dir(ALIAS_B) == tmp_path / "living_room"
-    assert store._dir("###") == store._dir("@@@") == store._dir("") == tmp_path / "graph"
+    for dead in ("###", "@@@", "", "  "):
+        with pytest.raises(InvalidArchiveName):
+            store._dir(dead)
 
 
 def test_sanitization_shape_is_unchanged_so_existing_dirs_stay_readable(tmp_path):
@@ -147,14 +157,17 @@ def test_aliased_save_is_refused_and_owner_record_is_byte_identical(tmp_path):
     assert _do_entity(store.load_record(ALIAS_A)) == "light.a"
 
 
-def test_fallback_bucket_names_cannot_both_write(tmp_path):
-    """`"###"` / `"@@@"` / `""` 全落进兜底的 `graph`：第二个开始就该被拒。"""
+def test_colliding_pairs_still_cannot_both_write(tmp_path):
+    """本判例的真正要点保留：折叠同形的两个名字，第二个写者必须被拒。
+
+    旧形状（`###/@@@/""` 共写一个 `graph` 桶）已随"洗空即拒绝"作废，见上一条腿的说明；
+    这里改用依然会折叠的一对名字，验证冲突检测没有被削弱。
+    """
     store = GraphStore(tmp_path)
-    store.save(_graph(), "###")
-    for alias in ("@@@", "", "  "):
-        with pytest.raises(ArchiveNameConflict):
-            store.save(_graph(), alias)
-    assert _dir_files(store, "@@@") == ["v1.json"]
+    store.save(_graph(), ALIAS_A)
+    with pytest.raises(ArchiveNameConflict):
+        store.save(_graph(), ALIAS_B)
+    assert _dir_files(store, ALIAS_B) == ["v1.json"], "被拒的一方不许留下半个版本"
 
 
 def test_aliased_resave_raw_refuses_without_bumping_version(tmp_path):

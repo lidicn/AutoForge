@@ -19,10 +19,16 @@ from autoforge.af_mcp import _t_apply, _t_draft
 from autoforge.af_pending import PendingStore
 from autoforge.af_store import GraphStore
 
+# 夹具用**完整 entity_id** 而不是中文设备名：本文件的四条契约量的是队列语义
+# （dry_run 不入队 / 未知 stage 被拒 / save 只落一条 / 首演码不被预演消费）。
+# v1.14.17 起「未解析实体不许冒领 ok」（裁定自体验者 P0-3），而契约 store 是空目录
+# ——中文名必然大面积解析不出，draft 这一步先红，四条腿根本没机会量它们要量的东西。
+# 真实 DB 调用面上，实体名是要先经 af_resolve_entity/目录命中的；这里给可解析形状，
+# ⛔ 不回退收紧，也不放松下面任何一条断言。
 INTENT = {
     "name": "开门亮灯",
-    "when": {"type": "state", "entity": "前门", "to": "on"},
-    "do": {"action": "开灯", "target": "客厅灯"},
+    "when": {"type": "state", "entity": "binary_sensor.front_door", "to": "on"},
+    "do": {"action": "开灯", "target": "light.living_room"},
 }
 
 
