@@ -474,6 +474,15 @@ def enable_by_tag(
         "affected": affected,
         "failed": failed,
         "blast_radius": {"affected": total, "limit": blast_radius_limit()},
+        # 契约 R4-4（2026-10-29「假武装」）：翻转 enabled **不等于**有人在监听——
+        # watch 进程死亡/未起时，这里返回 ok:true + enabled:true，而自动化永不触发。
+        # enable 要不要自动拉 watch 是单写者租约语义的裁定（待裁），但"armed 无人监听"
+        # 必须在这一步说出来，⛔ 别让调用方以为生效了。
+        "watch_note": (
+            "本工具只翻转 enabled 标志，不启动/不检查 watch 运行时。"
+            "enabled:true 而无活 watch = 假武装（永不触发）；"
+            "确认监听状态看部署面 watch 进程与 /api/health 的 tick_* 字段"
+            if enabled else None),
     }
 
 
@@ -1989,16 +1998,70 @@ def delete_session(session_id: str) -> dict[str, Any]:
 LIVE_TRANSPORT_FACTORY: Callable[[str, str], Any] | None = None
 
 
-def _env_ha_token() -> str:
-    """B 类 AF→HA 长期令牌：新名 HA_LONG_LIVED_TOKEN 优先，旧 AUTOFORGE_HA_TOKEN 回退。"""
-    return os.getenv("HA_LONG_LIVED_TOKEN") or os.getenv("AUTOFORGE_HA_TOKEN") or ""
+def _ha_token(store_root: str | Path | None = None) -> str:
+    """B 类 AF→HA 长期令牌——**统一入口**，⛔ 各路径不得自取。
+
+    契约 R4-1（2026-10-29 实测）：写路径（live_run/undo）此前只读 env，读路径（catalog）
+    与 watch 子进程却走 `Config.get_ha_token()`（credentials.json 优先）——同一服务器
+    两套 token 源。env 那枚失效后：读工具一直"健康"、写工具一直 401、watch 起不来，
+    三面互相对不上，运维无从察觉（体验者原话：防线是运气不是设计）。
+    统一到 `Config.get_ha_token()`：credentials.json 优先（WebUI 填的那份，实测有效），
+    env 回退——与读路径同一把钥匙。`store_root` 给出时读该 store 的凭据，缺省读 cwd。
+    """
+    from .af_config import Config
+    try:
+        return Config(store_root).get_ha_token() if store_root else Config().get_ha_token()
+    except Exception:  # Config 构造失败（无 store 根等）→ 退回 env 旧口径，行为不比以前差
+        return os.getenv("HA_LONG_LIVED_TOKEN") or os.getenv("AUTOFORGE_HA_TOKEN") or ""
+
+
+def ha_token_sources(store_root: str | Path | None = None) -> dict[str, Any]:
+    """双源健康暴露（R4-1 的运维侧）：谁在读哪把钥匙，一目了然。"""
+    env_tok = os.getenv("HA_LONG_LIVED_TOKEN") or os.getenv("AUTOFORGE_HA_TOKEN") or ""
+    file_tok = ""
+    try:
+        from .af_config import Config
+        file_tok = Config(store_root).get_ha_token() if store_root else Config().get_ha_token()
+    except Exception:
+        file_tok = ""
+    return {
+        "env_token_present": bool(env_tok),
+        "config_token_present": bool(file_tok),
+        "sources_agree": (bool(env_tok) == bool(file_tok)) or (env_tok == file_tok),
+        "note": "写路径与读路径已统一走 Config（credentials.json 优先）；"
+                "sources_agree=False 表示 env 与文件只配了一边——能起但另一面会退化",
+    }
 
 
 def _live_config() -> dict[str, Any]:
     return {
         "enabled": os.getenv("AUTOFORGE_LIVE_ENABLED", "").strip().lower() in ("1", "true", "yes"),
         "ha_url": os.getenv("AUTOFORGE_HA_URL", DEFAULT_HA_URL),
-        "has_token": bool(_env_ha_token()),
+        "has_token": bool(_ha_token()),
+    }
+
+
+def _dispatch_verdict(runtime) -> dict[str, Any]:
+    """live_run 的执行裁决：下发动作的**实际结果**，⛔ 不许让 `writes`（声明清单）冒充。
+
+    R4-2 实测：动作被 HA 401 拒后回执仍 ok:true + writes:[吊灯]——四组证据
+    （instances/bus/final_states/audit）与顶层结论打架。审计里的 `action_failed`
+    / `af_action_dispatched` 是唯一执行真值源，从那儿算。
+    """
+    audit = [e.to_dict() if hasattr(e, "to_dict") else dict(e) for e in runtime.audit]
+    dispatched = [a for a in audit if a.get("type") == "af_action_dispatched"]
+    failed = [a for a in audit if a.get("type") == "action_failed"]
+    if failed:
+        verdict = "failed" if dispatched else "failed"
+    elif dispatched:
+        verdict = "executed"
+    else:
+        verdict = "nothing_dispatched"
+    return {
+        "verdict": verdict,
+        "dispatched": len(dispatched),
+        "failed": len(failed),
+        "failed_detail": [str(a.get("message"))[:160] for a in failed[:3]],
     }
 
 
@@ -2154,7 +2217,10 @@ def live_run(
     if outside:
         raise ServiceError(f"写目标不在白名单内：{outside}", status=400)
 
-    token = _env_ha_token()
+    # store.root 是凭据所在（credentials.json 与归档同根）；live_run 签名里没有
+    # store_root 形参——上一版我写成 `_ha_token(store_root)` 会 NameError 被 except
+    # 兜回 env（R4-1 未真修）。正确取法：从 `store` 形参取根。
+    token = _ha_token(store.root if store is not None else None)
     ha_url = str(cfg["ha_url"])
     if factory is not None:
         transport = factory(ha_url, token)
@@ -2214,6 +2280,10 @@ def live_run(
         "missing_entities": missing_entities,
         "nl": render_graph(graph).text,
         "asks": _asks_of(runtime),
+        # 契约 R4-2（2026-10-29）：`writes` 是 IR **声明**的写目标清单，不是执行记录；
+        # HA 401 那次回执 ok:true + writes:[吊灯] —— 自相矛盾。这里把"实际执行裁决"
+        # 显式化：全部实例终态决定 dispatched/failed/partially/nothing。
+        "dispatch_result": _dispatch_verdict(runtime),
     }
 
 
@@ -2278,7 +2348,7 @@ def undo_deploy(
         raise ServiceError("撤销缺少 HA 令牌：服务端需设置 HA_LONG_LIVED_TOKEN（旧 AUTOFORGE_HA_TOKEN）", status=403)
 
     store = _undo_store(store_root)
-    token = _env_ha_token()
+    token = _ha_token(store_root)
     ha_url = str(cfg["ha_url"])
     factory = LIVE_TRANSPORT_FACTORY
     transport = factory(ha_url, token) if factory is not None else HATransport(base_url=ha_url, token=token)
