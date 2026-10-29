@@ -1283,7 +1283,32 @@ def simulate_track(
     }
     # v2 M4 诚实报告分层：强制三栏，绝不把「没验到」当「验过了」
     out["report"] = honest_report(out)
-    # v1.5.0：sim 的 `ok` 恒 True（失败以 `expect` 报告）；`_telemetry.ok` 反映**断言是否通过**。
+    # 契约泳道 B3/B4（2026-10-29）：`ok` 恒 True 的旧口径把两件不同的事混成一件——
+    # 「仿真过程没抛异常」被读成「这条自动化是好的」。实例 `state:"failed"`（求值失败、
+    # 无 on_error 兜底）时回执照样 ok:true，而 af_apply 顶层又直接继承它 ⇒ 预演假绿。
+    # 现在 ok 派生自实例终态；「压根没跑出实例」是另一档，用 verdict 明说（⛔ 不混成失败，
+    # 也不许继续冒充通过——那是 D 类：回执缺"没验到"这一档）。
+    inst_states = [str(i.get("state") or "") for i in (out.get("instances") or [])]
+    failed_insts = [i for i in (out.get("instances") or [])
+                    if str(i.get("state") or "") in ("failed", "cancelled")]
+    if failed_insts:
+        out["ok"] = False
+        out["verdict"] = "failed"
+        out["failed_instances"] = [
+            {"instance_id": i.get("instance_id"),
+             "node": i.get("current_node"),
+             "reason": str(((i.get("context") or {}).get("fail_reason")) or "")[:220]}
+            for i in failed_insts
+        ]
+    elif not inst_states:
+        out["ok"] = True          # 没跑出失败，但也没验到任何东西
+        out["verdict"] = "nothing_triggered"
+        out["nothing_verified"] = True
+        out["note"] = ("仿真没产生任何实例（多半是没合成触发事件）。这不等于通过："
+                       "要验链路过调用 af_apply(stage=dry_run)，它会从图自身触发源合成事件。")
+    else:
+        out["ok"] = True
+        out["verdict"] = "ran"
     return attach_telemetry(
         out,
         tool=f"simulate:{track}",
@@ -1548,9 +1573,25 @@ def _record_note(store: GraphStore, name: str, version: int) -> str:
         return ""
 
 
+def _load_or_404(store: GraphStore, name: str, version: int):
+    """归档读不到 ⇒ 类型化 404，⛔ 不让 FileNotFoundError 冲到工具面。
+
+    体验者 P0-2 实测：`af_diff` 对不存在的名字直接崩成 `ADM_ERR_INTERNAL`，
+    message 里还回显了服务器绝对路径（`/data/<name>/v1.json`）——把部署布局
+    交给了对端。这里两处一起堵：错误分类正确 + 文案不含路径。
+    """
+    try:
+        return store.load(name, version)
+    except FileNotFoundError as exc:
+        raise ServiceError(
+            f"归档 {str(name)!r} 没有版本 v{version}（原始错误：{type(exc).__name__}）",
+            status=404,
+        ) from exc
+
+
 def diff(store: GraphStore, name: str, old: int, new: int) -> dict[str, Any]:
-    old_graph = store.load(name, old)
-    new_graph = store.load(name, new)
+    old_graph = _load_or_404(store, name, old)
+    new_graph = _load_or_404(store, name, new)
     result = diff_graphs(old_graph, new_graph)
     return {
         "ok": True,

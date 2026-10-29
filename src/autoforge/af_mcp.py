@@ -22,6 +22,7 @@ import logging
 # ADM B-07: MCP stdio single-line size limit (10MB), reject oversized to prevent OOM
 MAX_STDIN_LINE = 10 * 1024 * 1024
 import os
+import re
 from pathlib import Path
 import sys
 import traceback
@@ -34,6 +35,8 @@ from homesdk.adm.errors import (
 )
 
 from . import af_service as svc
+from .af_draft import DraftError
+from .af_ir import IRValidationError
 from .af_auth import (
     AuthCodeStore,
     PairCodeStore,
@@ -42,7 +45,7 @@ from .af_auth import (
     redeem_pair_code,
     request_pair_code,
 )
-from .af_store import DEFAULT_STORE_ROOT, GraphStore
+from .af_store import DEFAULT_STORE_ROOT, GraphStore, InvalidArchiveName
 from .af_telemetry import record_failure
 
 __all__ = ["serve_mcp", "dispatch", "TOOLS", "PROTOCOL_VERSION"]
@@ -427,11 +430,30 @@ def _t_draft(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     """
     from .af_draft import draft_intent, DraftError
     try:
-        return draft_intent(
+        body = draft_intent(
             args["intent"],
             catalog=svc._catalog(store),
             session_id=args.get("session_id"),
         )
+        # 契约泳道 P0-3（2026-10-29）：IR 编出来了但实体名一个没解析，此前照样回
+        # `ok:true`，agent 拿着 `?占位符` 往下走三跳才被 build 拒——"通过了一步"的假象
+        # 就这么来的。上一轮我判断"draft 属提案阶段、编译期必红就够"，那个判断不对：
+        # **能看出来就该在这一步说**。
+        # 分层：库层 `ok` 仍只管"编译成功"（CLI/直调没有目录是常态，不动其历史语义）；
+        # **对 agent 的回执**在这里升成失败。ref 照给，便于查 IR 或直接续跑。
+        unresolved = body.get("unresolved") or []
+        if unresolved:
+            body.pop("_unresolved_hint", None)
+            msg = (f"{len(unresolved)} 个实体名没解析出来：{unresolved}——"
+                   f"用 af_resolve_entity 拿真实 entity_id（多候选要选定），"
+                   f"或 af_remember_entity 沉淀别名后重跑 af_draft")
+            body.update(_failure_payload(
+                ADM_ERR_PAYLOAD_INVALID, msg,
+                sub_code="E_UNRESOLVED_ENTITY",
+                fix={"unresolved": unresolved, "next_action": "af_resolve_entity"},
+            ))
+            body["next_action"] = "af_resolve_entity"
+        return body
     except DraftError as e:
         # 意图是 DB/MA 递过来的载荷，被拒就是"载荷校验失败"这一档（契约 §7.2）；
         # `error.code` 保留 AF 自己的细粒度子码，对端两级都能读。
@@ -1140,7 +1162,8 @@ def _undeclared_args(schema: dict[str, Any], args: Any) -> list[str]:
     return sorted(str(k) for k in args if k not in props)
 
 
-def _failure_payload(code: str, message: str) -> dict[str, Any]:
+def _failure_payload(code: str, message: str, *, sub_code: str | None = None,
+                     fix: dict[str, Any] | None = None) -> dict[str, Any]:
     """失败响应体的形状（契约 §7.2 落点② + 裁定 20261007 §二 戊A）。
 
     戊A 授权的原话是"异常路径也是 MCP 响应体，不该例外"：此前工具**主动拒**已经带 `code`，
@@ -1149,7 +1172,13 @@ def _failure_payload(code: str, message: str) -> dict[str, Any]:
     分不出"请求格式错 / 没权限 / AF 自己的病"。散文照旧进 `message`（信息不丢），
     但外面必须有能被机器读的 `code`。
     """
-    return {"ok": False, "code": code, "message": message}
+    out: dict[str, Any] = {"ok": False, "code": code, "message": message}
+    # 两级码（契约 §7.2 落点②）：顶层 `code` 是联动口径、`error.code` 是 AF 细粒度子码。
+    # 子码要能被机器读，所以它进**这个唯一的形状写手**，⛔ 不在出口处手拼第二套形状
+    # （test_envelope_helper_is_the_only_shape_writer 拦的就是那个）。
+    if sub_code:
+        out["error"] = {"code": sub_code, "message": message, "fix": fix or {}}
+    return out
 
 
 def dispatch(
@@ -1233,12 +1262,65 @@ def dispatch(
         # 那层壳，前缀就不在文本开头了。
         # 裁定 20261007 §二 戊A 之后：前缀现在位于 `message` 这个**字符串值的开头**，
         # 不再位于整段 text 的开头——DB 侧读数口径的变化随交接单同步，不是本面偷偷改的。
+        # 按 status 分派，⛔ 不再一律 ADM_ERR_INTERNAL。契约泳道 P1「同一语义四种答法」
+        # 的制度原因就在这条 catch-all：404 的「不存在」与 500 的「我们坏了」共用一个码，
+        # 对端无法据此决定「改参数重试」还是「报障」。
+        # status>=500 保留 INTERNAL：READONLY_DEGRADED 那条 503 必须原样外传
+        # （DB 侧按 message 前缀判读，裁定 20261004 §一 1 A / 20261007 §二 戊A）。
+        # 裁定 20261004 §一 1 A / 20261007 §二 戊A 的既有口径优先：`READONLY_DEGRADED:`
+        # 那一族必须**仍读成 INTERNAL**，且前缀留在 message 开头（DB 侧按前缀判读，
+        # 判据 test_service_layer_rejection_reads_internal_and_keeps_its_prefix 钉着）。
+        # `ServiceError` 的 status 缺省是 400，所以不能用 status 当唯一判据——
+        # 那是把裁定要保的那条一起改掉的错误做法。
+        text = str(exc)
+        status = int(getattr(exc, "status", 400) or 400)
+        if text.startswith(svc.READONLY_DEGRADED_PREFIX) or status >= 500:
+            code = ADM_ERR_INTERNAL
+        elif status == 403:
+            code = ADM_ERR_AUTH_REQUIRED
+        else:
+            code = ADM_ERR_PAYLOAD_INVALID
         return [
             _text(
                 json.dumps(
                     _failure_payload(
-                        ADM_ERR_INTERNAL,
-                        _annotate_failure(store, name, str(exc)),
+                        code,
+                        _annotate_failure(store, name, _redact_paths(text),
+                                          hint_code=type(exc).__name__),
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+        ], True
+    except (DraftError, IRValidationError) as exc:
+        # 契约泳道 B1/B7（2026-10-29）：坏输入此前经这一层塌成 `ADM_ERR_INTERNAL`
+        # （"工具执行出错：IRValidationError: …"）——**拿 5xx 的壳装 4xx 的事**：
+        # agent 读到 INTERNAL 的默认动作是重试或报障，正确答案是"改你传的东西"。
+        # 同一个 `ge` 在 af_build 得 IR_SCHEMA_INVALID、在 af_draft 得 INTERNAL，
+        # 口径分裂正是这条 catch-all 造成的。顶层按 ADM 归位，AF 子码进 error.code
+        # （契约 §7.2 落点②的既有两级分工，不新发明）。
+        return [
+            _text(
+                json.dumps(
+                    _failure_payload(
+                        ADM_ERR_PAYLOAD_INVALID,
+                        _redact_paths(str(exc)),
+                        sub_code=str(getattr(exc, "code", None) or type(exc).__name__),
+                        fix=getattr(exc, "fix", None) or {},
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+        ], True
+    except InvalidArchiveName as exc:
+        # 归档名会进文件系统 ⇒ 对端可自纠的输入错误。落 INTERNAL 会让 agent 以为
+        # 服务坏了、拿同一个坏名字继续重试（契约泳道 P0-2 的第二半）。
+        return [
+            _text(
+                json.dumps(
+                    _failure_payload(
+                        ADM_ERR_PAYLOAD_INVALID,
+                        _annotate_failure(store, name, str(exc), hint_code="InvalidArchiveName"),
                     ),
                     ensure_ascii=False,
                 )
@@ -1247,21 +1329,50 @@ def dispatch(
     except Exception as exc:  # 业务异常（IRValidationError/KeyError 等）转 isError
         # R-57：完整 traceback 只落服务端日志，不回传 MCP 客户端（防文件路径/行号/堆栈外泄）
         logger.exception("MCP tool %s failed", name)
-        msg = f"工具执行出错：{type(exc).__name__}: {exc}"
+        # R-57 挡住的是 traceback，**没挡住异常消息本身**：FileNotFoundError 的原文
+        # 就带着 `/data/<归档名>/v1.json`（契约泳道 P0-2 实测回显）——绝对路径外发给
+        # 任何持令牌的 agent 等于交代部署布局。类型名同时作归因 hint 递进去。
+        msg = f"工具执行出错：{type(exc).__name__}: {_redact_paths(str(exc))}"
         return [
             _text(
                 json.dumps(
-                    _failure_payload(ADM_ERR_INTERNAL, _annotate_failure(store, name, msg)),
+                    _failure_payload(
+                        ADM_ERR_INTERNAL,
+                        _annotate_failure(store, name, msg, hint_code=type(exc).__name__),
+                    ),
                     ensure_ascii=False,
                 )
             )
         ], True
 
 
-def _annotate_failure(store: GraphStore, tool: str, message: str) -> str:
+#: 只隐去**绝对**文件系统路径：Windows 盘符 + 至少一段、POSIX 绝对路径 + 至少两段。
+#: ⛔ 不收单斜杠与相对片段——那是调用方**自己要看见的输入**（如它传来的
+#: `../../../etc/passwd`），隐掉等于换了个看不清的错；宽正则还会把我方错误文案里的
+#: 「含 `/`、反斜杠」一起吃掉。
+_PATH_RE = re.compile(
+    r"[A-Za-z]:[\\/]{1,2}(?:[\w.\-@+ ]+[\\/]){1,}[\w.\-@+ ]*"
+    r"|(?<![\w.\-])(?:[\\/][\w.\-@+ ]{1,}){2,}"
+)
+
+
+def _redact_paths(text: str) -> str:
+    """回执脱敏：文件系统路径 → `<路径已隐去>`。
+
+    这不是美化：这条 message 外发给任何持令牌的 agent，还会进 af_telemetry 与知识库
+    的 `history` 摘要——路径进了历史聚合就被反复回显，事后洗不掉。
+    """
+    s = str(text or "")
+    if "/" not in s and "\\" not in s:
+        return s
+    return _PATH_RE.sub("<路径已隐去>", s)
+
+
+def _annotate_failure(store: GraphStore, tool: str, message: str,
+                      *, hint_code: str | None = None) -> str:
     """v1.5.0：异常回执附**归因 + 建议**（并落知识库/遥测）；附属容错，绝不掩盖原错误。"""
     try:
-        tel = record_failure(store.root, tool=tool, message=message)
+        tel = record_failure(store.root, tool=tool, message=message, hint_code=hint_code)
     except Exception:  # 遥测失败不影响错误回执本身
         return message
     if not tel.get("category") or tel["category"] == "UNKNOWN":

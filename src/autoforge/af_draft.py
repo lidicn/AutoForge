@@ -479,12 +479,32 @@ def draft_intent(
     if session_id is not None:
         _compose_metrics.record(session_id)
 
-    return {
+    # 体验者 P0-3（2026-10-29）：未解析实体此前也回 `ok: true`——agent 拿着一个
+    # 已知坏的东西继续往下走，到 build 才撞墙（三跳之后才拿到真原因，且它已"通过"过一步）。
+    # 上一轮我判断"draft 是提案阶段，编译期必红就够"，这个判断不对：**能看出来就该在
+    # 这一步说**。ref 照给（便于查 IR），但 ok 由"是否全部解析成功"派生。
+    unresolved = sorted(k for k, v in resolved.items() if str(v).startswith("?"))
+    # `ok` 在**库层**仍表示"编译成功"（CLI/直调场景下没有目录是常态，历史语义不改）；
+    # "有没有没解析出来的名字"由 `unresolved` 明说——对端不必再去 resolved 里捞 `?`。
+    # 对 agent 的"不许冒领 ok"由 MCP 边界执行（`af_mcp._t_draft`），分层见那里注释。
+    out: dict[str, Any] = {
         "ok": True,
         "ref": ref,
         "summary": summary,
         "resolved": resolved,
     }
+    if unresolved:
+        out["unresolved"] = unresolved
+        out["warnings"] = (out.get("warnings") or []) + [f"未解析实体：{unresolved}"]
+        out["next_action"] = "af_resolve_entity"
+        # 库层不给 error（那不是"失败"）；MCP 边界会把它升成 ok:false + 子码
+        out["_unresolved_hint"] = {
+            "code": "E_UNRESOLVED_ENTITY",
+            "message": f"{len(unresolved)} 个实体名没解析出来：{unresolved}——"
+                       f"先用 af_resolve_entity 拿真实 entity_id（多候选要选定），"
+                       f"或用 af_remember_entity 沉淀别名后重跑 af_draft",
+    }
+    return out
 
 
 def _resolve_trigger(when: dict[str, Any], resolved: dict[str, str], catalog: Any) -> dict[str, Any]:

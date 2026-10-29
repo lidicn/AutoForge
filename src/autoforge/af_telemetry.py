@@ -122,12 +122,13 @@ def record_failure(
     tool: str,
     message: str,
     context: dict[str, Any] | None = None,
+    hint_code: str | None = None,
 ) -> dict[str, Any]:
     """记录一条失败（归因 + 落库 + usage）——供异常路径（无返回 dict）调用。
 
     返回 `_telemetry` 形状的 dict（不含 `history`/`advice` 以外的字段亦可直接外露）。
     """
-    info = explain(message)
+    info = explain(message, hint_code=hint_code)
     kb = ErrorKnowledge(root)
     history = kb.similar(message, limit=3)
     kb.record(message, context=context)

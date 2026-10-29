@@ -44,6 +44,8 @@ _MAX_MESSAGE = 600
 CATEGORY_LABEL: dict[str, str] = {
     "GATEWAY_HTTP": "网关/出站 HTTP 异常",
     "UPSTREAM_HA": "上游 Home Assistant 不可用",
+    "REF_NOT_FOUND": "staging 引用（ref）不存在或已过期",
+    "ARCHIVE_NOT_FOUND": "归档的 Graph 或版本不存在",
     "TOKEN_EXPIRED": "令牌已过期",
     "SCOPE_DENIED": "权限不足（scope）",
     "PENDING_LIMIT": "待批队列熔断",
@@ -65,7 +67,10 @@ CATEGORY_LABEL: dict[str, str] = {
 CATEGORY_ADVICE: dict[str, str] = {
     "GATEWAY_HTTP": "出站网关/网络异常：先确认服务与网络连通（网关 5xx、连接被拒），再重试；不要改 IR。",
     "UPSTREAM_HA": "上游 HA 不可用：确认 HA 地址/令牌与连通性（`forge credentials show`），恢复后重试；不要改 IR。",
-    "TOKEN_EXPIRED": "访问密钥已过期：更新 `AF_ACCESS_TOKENS`（旧 AUTOFORGE_TOKENS）的 `expires_at` 或换新密钥（`forge credentials update`）。",
+    "TOKEN_EXPIRED": "密钥已失效（过期/撤销/无效）：核对 `AF_ACCESS_TOKENS`（旧 AUTOFORGE_TOKENS）里这把的 `expires_at` 与 `revoked`；过期改 `expires_at`，被撤销则换新密钥（`forge credentials update`）。",
+    "REF_NOT_FOUND": "重跑 af_draft 拿新 ref（ref 是**进程内暂存**，服务重启必失效，"
+                      "拿旧 ref 重试不会成功）；或核对 ref 拼写。⛔ 与你的令牌无关。",
+    "ARCHIVE_NOT_FOUND": "用 af_list_graphs 确认归档名与版本号；名字含正斜杠、反斜杠、`..` 等路径字符会被**拒绝**（不再静默清洗）。",
     "SCOPE_DENIED": "当前令牌缺少所需 scope：用含 `write`/`live` 的令牌访问（见 v0.8.0 多令牌主体模型）。",
     "PENDING_LIMIT": "该提交者待批条数达上限：先 `forge pending list` 审批/拒绝清理，再提交。",
     "BLAST_RADIUS": "一次归档的自动化条数超爆炸半径：拆小或显式 `allow_bulk=true`（确认是批量操作）。",
@@ -96,8 +101,27 @@ RULES: tuple[tuple[re.Pattern[str], str], ...] = (
                    r"upstream|max retries|timed out|timeout|超时)", re.I),
         "UPSTREAM_HA",
     ),
+    # ── 找不到东西（体验者 P0：这类此前全被下面的 TOKEN_EXPIRED 吞掉）──
+    # 「已过期」是**跨域常用词**：staging 引用失效、审批单超时、缓存过期都会说它。
+    # 旧规则拿裸「已过期」判 TOKEN_EXPIRED，建议还是"去换访问密钥"——指错方向；
+    # 再经 `history` 同类聚合自我强化，af_telemetry 里凭空多出 TOKEN_EXPIRED 计数。
+    # 规则表顺序即真值：具体类必须排在宽词之前。
+    (re.compile(r"(\bref\b.{0,26}(不存在|已过期|失效)|staging.{0,26}(不存在|已过期)|E_REF_NOT_FOUND)", re.I),
+     "REF_NOT_FOUND"),
+    (re.compile(r"(未找到.{0,14}(版本|归档|自动化|graph)|归档.{0,10}不存在|no such (graph|archive))", re.I),
+     "ARCHIVE_NOT_FOUND"),
     # ── 鉴权/治理 ──
-    (re.compile(r"(令牌已过期|已过期|token expired)", re.I), "TOKEN_EXPIRED"),
+    # 收窄：必须有令牌/密钥/凭据语境才算鉴权失效。裸「已过期」不再是鉴权证据。
+    # 撤销/无效与过期同族不同因，但都属"这把钥匙不行了"，归一类给一份共同建议：
+    # B8 实测「无效或已撤销的 API 令牌」整句落 UNKNOWN——而它是生产最常见的鉴权失败
+    # 文案（本次排查过程中我自己就撞到过一次）。宽词「已过期」仍不算证据：必须有
+    # 令牌/密钥/凭据语境。
+    (re.compile(r"((令牌|密钥|access[ _]?token|token|凭据|credentials)[^。\n]{0,14}"
+                r"(过期|expired|失效|撤销|revoked|无效|invalid))"
+                r"|(token (expired|revoked|invalid))|(invalid or revoked)"
+                # 反向语序：「无效或已撤销的 API 令牌」是生产原文，状态词在名词之前
+                r"|((已撤销|撤销|无效|过期|失效|revoked|expired|invalid)[^。\n]{0,14}"
+                r"(的\s*)?(API\s*)?(令牌|密钥|token|凭据|credentials))", re.I), "TOKEN_EXPIRED"),
     (re.compile(r"(缺少\s*'?(write|live|read)'?|缺少.{0,4}scope|权限不足|无权|越权|\bdenied\b)", re.I), "SCOPE_DENIED"),
     (re.compile(r"(待批|pending.{0,6}(上限|过多|熔断)|熔断)", re.I), "PENDING_LIMIT"),
     (re.compile(r"(爆炸半径|blast.?radius)", re.I), "BLAST_RADIUS"),
@@ -119,8 +143,26 @@ RULES: tuple[tuple[re.Pattern[str], str], ...] = (
 KNOWN_CATEGORIES: tuple[str, ...] = tuple(c for c in CATEGORY_ADVICE if c != "UNKNOWN")
 
 
-def classify(message: str) -> str:
-    """**有序正则**归因：首个命中即返回；无命中 → `"UNKNOWN"`。"""
+#: 调用方已知的类型化错误码 → 类别。给了就直接采信，⛔ 不再走正则猜措辞
+#: （归因靠文本匹配是本轮 TOKEN_EXPIRED 误判的制度原因，不是那一条正则的运气）。
+HINT_TO_CATEGORY = {
+    "E_REF_NOT_FOUND": "REF_NOT_FOUND",
+    "FILENOTFOUNDERROR": "ARCHIVE_NOT_FOUND",
+    "INVALIDARCHIVENAME": "PAYLOAD_INVALID",
+    "SERVICEERROR": "PAYLOAD_INVALID",
+}
+
+
+def classify(message: str, *, hint_code: str | None = None) -> str:
+    """**有序正则**归因：首个命中即返回；无命中 → `"UNKNOWN"`。
+
+    `hint_code`：调用方已知的类型化错误码（`DraftError.code` / 异常类名）。给了且能映射
+    就直接采信——正则只留给"没人知道自己是什么错"的兜底。
+    """
+    if hint_code:
+        mapped = HINT_TO_CATEGORY.get(str(hint_code).strip().upper().replace(":", "_"))
+        if mapped and mapped != "PAYLOAD_INVALID":
+            return mapped
     text = str(message or "")
     if not text:
         return "UNKNOWN"
@@ -130,9 +172,9 @@ def classify(message: str) -> str:
     return "UNKNOWN"
 
 
-def explain(message: str) -> dict[str, Any]:
+def explain(message: str, *, hint_code: str | None = None) -> dict[str, Any]:
     """归因 + 类别化建议。`matched` 标明是否命中规则（便于自检归因覆盖率）。"""
-    category = classify(message)
+    category = classify(message, hint_code=hint_code)
     return {
         "category": category,
         "label": CATEGORY_LABEL.get(category, category),

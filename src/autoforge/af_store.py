@@ -104,6 +104,45 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+#: 归档名里**绝不允许**出现的形状：路径分隔、`..`、NUL、前导点、超长。
+#: 这些不是"清洗对象"而是"拒绝对象"——把 `../../etc/passwd` 折叠成 `etc_passwd`
+#: 虽然逃不出去，但调用方会以为自己的名字被正常接受了（静默改写＝另一种谎报）。
+_NAME_MAX = 120
+_PATH_HOSTILE = ("/", "\\", "..", "\x00")
+
+
+class InvalidArchiveName(ValueError):
+    """归档名会改变落盘位置 ⇒ 直接拒绝。message **不含路径**（回执会外发给 agent）。"""
+
+    def __init__(self, name: str, reason: str) -> None:
+        self.name = name
+        super().__init__(f"归档名非法（{reason}）：{name!r}——"
+                         f"名字要写进文件系统，含 `/`、`\\`、`..`、前导点或超过 {_NAME_MAX} 字符一律拒绝")
+
+
+def normalize_archive_name(name: str) -> tuple[str, bool]:
+    """→ (安全目录名, 是否被清洗过)。危险形状抛 `InvalidArchiveName`。
+
+    保留 P1-18 的清洗（非 `[字母数字-_]` → `_`）——`isalnum()` 是 Unicode 感知的，
+    中文名照常保留，历史目录名不变；但**路径级字符改为拒绝**，且清洗结果通过
+    `dir_name` 回给调用方，不再静默。
+    """
+    raw = str(name or "").strip()
+    if not raw:
+        raise InvalidArchiveName(str(name), "空名字")
+    if len(raw) > _NAME_MAX:
+        raise InvalidArchiveName(raw[:24] + "…", f"超过 {_NAME_MAX} 字符")
+    for bad in _PATH_HOSTILE:
+        if bad in raw:
+            raise InvalidArchiveName(raw, f"含路径字符 {bad!r}")
+    if raw.startswith(".") or raw in {".", ".."}:
+        raise InvalidArchiveName(raw, "以点开头或为相对路径标记")
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in raw).strip("_")
+    if not safe:
+        raise InvalidArchiveName(raw, "清洗后为空（全是分隔符）")
+    return safe, safe != raw
+
+
 def _graph_raw(graph: Graph) -> dict[str, Any]:
     """把 Graph 转回 IR 原始 JSON（统一用 `{"automations": [...]}` 容器形态）。"""
     return {"automations": [dict(auto.raw) for auto in graph]}
@@ -224,9 +263,12 @@ class GraphStore:
         #: R10-02：tags.json 损坏毒化标志——置位后 set_tags 拒写，避免 RMW 抹掉全部标签
         self._tags_broken = False
 
+    def dir_name(self, name: str) -> str:
+        """归档目录名（校验后的形态）。公开给回执用：清洗必须**可见**（体验者 P0-2）。"""
+        return normalize_archive_name(name)[0]
+
     def _dir(self, name: str) -> Path:
-        # P1-18 修复：白名单只允许字母数字、-、_，不允许 "."（防止 ../ 目录逃逸）
-        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name).strip("_") or "graph"
+        safe, _changed = normalize_archive_name(name)
         return self.root / safe
 
     def _dir_owner(self, name: str) -> str | None:
