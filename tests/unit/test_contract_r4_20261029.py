@@ -12,6 +12,7 @@ R4-2：HA 401 拒收动作后回执仍 ok:true + writes:[吊灯]——`writes` �
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 
 from autoforge.af_service import (
@@ -177,3 +178,73 @@ def test_live_run_uses_unified_token_not_env_only(tmp_path, monkeypatch):
     except Exception:
         pass  # 下发本身可能因假 transport 失败——我们只看**到达** transport 的 token
     assert seen.get("token") == "file-side-token",         f"live_run 到达 transport 的 token 是 {seen.get('token')!r}——仍在用 env 那枚（R4-1 未修）"
+
+
+# ── R4-3 授权码闸（出资人裁定「补上」2026-10-29）─────────────────────
+
+def _gate_call(tool, args, tmp, store_root=None):
+    """默认新开 store；需要预置授权码的腿必须传同一个 store_root
+    （第一版没传：码签在 A 目录、验证发生在 B 目录的临时 store ⇒ 假红）。"""
+    from autoforge.af_mcp import dispatch
+    from autoforge.af_store import GraphStore
+    adm = {"subject": "owner", "scopes": ["read", "write", "live", "admin"]}
+    if store_root is not None:
+        content, is_err = dispatch(tool, args, GraphStore(str(store_root)), adm)
+        return json.loads(content[0]["text"])
+    with tempfile.TemporaryDirectory() as td:
+        content, is_err = dispatch(tool, args, GraphStore(td), adm)
+    return json.loads(content[0]["text"])
+
+
+_LIVE_IR = {"ir_version": "0.3.0", "id": "g", "name": "g", "version": 1, "mode": "single",
+            "nodes": [{"id": "a", "kind": "on", "trigger": {"type": "state",
+                                                            "entity_id": "binary_sensor.m", "to": "on"}},
+                      {"id": "p", "kind": "pass"}],
+            "edges": [{"from": "a", "to": "p", "kind": "then"}]}
+
+
+def test_live_run_without_code_is_refused(tmp_path):
+    body = _gate_call("af_live_run", {"ir": _LIVE_IR, "live_allow": ["light.x"], "confirm": True}, tmp_path)
+    assert body["ok"] is False and body["code"] == "ADM_ERR_AUTH_REQUIRED"
+    assert (body.get("error") or {}).get("code") == "AUTH_CODE_REQUIRED"
+    assert "auth_code" in json.dumps(body, ensure_ascii=False), "要告诉怎么补"
+
+
+def test_enable_needs_code_disable_does_not(tmp_path):
+    """启用=要码（开安全阀）；禁用=免码（出事时 agent 必须能自己止损）。"""
+    on = _gate_call("af_enable_by_tag", {"tag": "qa", "enabled": True}, tmp_path)
+    assert on["ok"] is False and on["code"] == "ADM_ERR_AUTH_REQUIRED"
+    off = _gate_call("af_enable_by_tag", {"tag": "qa", "enabled": False}, tmp_path)
+    assert off["ok"] is True, "禁用被码闸挡住＝故障时无法止损"
+
+
+def test_bad_code_is_refused_without_revealing_why(tmp_path):
+    """坏码要拒，但⛔ 不外传"不存在/已消耗/已过期/已锁定"具体哪一因（授权码枚举面）。"""
+    body = _gate_call("af_live_run", {"ir": _LIVE_IR, "live_allow": ["light.x"],
+                                      "confirm": True, "auth_code": "0" * 8}, tmp_path)
+    assert body["ok"] is False and body["code"] == "ADM_ERR_AUTH_REQUIRED"
+    msg = str((body.get("error") or {}).get("message"))
+    assert "之一" in msg, f"必须保持四因合一：{msg}"
+
+
+def test_valid_code_passes_the_gate(tmp_path):
+    """有效码过闸后，后面的闸（LIVE_ENABLED 等）才轮得到——证明闸不是无脑拒绝。"""
+    from autoforge.af_auth import AuthCodeStore
+    td = tmp_path / "s"
+    td.mkdir()
+    rec = AuthCodeStore(td / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    code = getattr(rec, "code", None) or (rec.get("code") if isinstance(rec, dict) else None)
+    assert code
+    body = _gate_call("af_live_run", {"ir": _LIVE_IR, "live_allow": ["light.x"],
+                                      "confirm": True, "auth_code": code},
+                      tmp_path, store_root=td)
+    assert (body.get("error") or {}).get("code") != "AUTH_CODE_REQUIRED"
+    assert "LIVE_ENABLED" in json.dumps(body, ensure_ascii=False) or body.get("ok") is True
+
+
+def test_gate_helper_returns_explicit_pair():
+    """形状判据：不许用 None 当"拒绝"哨兵（第一版因此闸永远不拦，肉眼还看不出来）。"""
+    from autoforge.af_mcp import _auth_code_gate
+    with tempfile.TemporaryDirectory() as td:
+        allowed, note = _auth_code_gate(GraphStore(td), {}, action="探针")
+    assert allowed is False and isinstance(note, str) and note

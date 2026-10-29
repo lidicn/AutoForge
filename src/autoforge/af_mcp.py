@@ -262,8 +262,26 @@ def _t_set_tags(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _t_enable(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
+    # R4-3（出资人裁定）：**启用**要授权码，**禁用**不要——
+    # "关安全阀"不该被一把钥匙挡住（故障时 agent 必须能自己止损）；"开"才要人给过凭据。
+    enabled = bool(args["enabled"])
+    # 单一分支：`enabled` 既是取码的条件也是拒码的条件——
+    # 上一版把两者拆开写（初始化 True 再各自判），变异一处都不改行为，
+    # 说明这种形状允许"禁用也被要求授权码"悄悄溜进来。合成一个分支后没这个缝。
+    if enabled:
+        _gate_ok, _gate_note = _auth_code_gate(store, args.get("auth_code"),
+                                                action="启用自动化（af_enable_by_tag）")
+        if not _gate_ok:
+            return {
+            "ok": False,
+            "code": ADM_ERR_AUTH_REQUIRED,
+            "error": {"code": "AUTH_CODE_REQUIRED",
+                      "message": _gate_note or "启用自动化需要有效授权码（禁用不需要）",
+                          "fix": {"how": "WebUI/mimo 生成授权码 → 参数 auth_code 带上",
+                                 "note": "enabled=false 的禁用随时可做，无需码"}},
+            }
     return svc.enable_by_tag(
-        store, args["tag"], bool(args["enabled"]), allow_bulk=bool(args.get("allow_bulk", False))
+        store, args["tag"], enabled, allow_bulk=bool(args.get("allow_bulk", False))
     )
 
 
@@ -391,7 +409,48 @@ def _t_pair(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _auth_code_gate(store: GraphStore, auth_code: Any, *,
+                    action: str) -> tuple[bool, str]:
+    """授权码闸 → `(是否放行, 说明)`：放行时说明是脱敏凭证标签，拒绝时是**可执行的原因**。
+
+    ⚠️ 形状教训（我第一版就踩了）：⛔ 不许用 `None` 当"拒绝"的哨兵而三种分支都返回
+    字符串——调用点 `if gate is None` 于是永远不拦，闸形同虚设且**单靠肉眼看代码发现不了**。
+    显式二元组让"过没过"成为一个必须被读到的字段。
+
+    出资人裁定 2026-10-29「补上」（契约 R4-3）：授权模型此前是
+    save→部署=要码、arm(enable)=只要 write、手动下发=只 confirm——
+    **能直接动真机的两条路反而没码**。token 双源统一后，原先那道"env token 恰好失效"
+    的偶然防线也没了，缺口从假设变成事实。
+
+    与 `af_save` 的差别是刻意的：save 无码可**降级入待批队列**（"等人点批准"是天然出口）；
+    live_run / 启用**没有"待批"这个中间态**——下发就是下发，所以只能硬拒。
+    """
+    code = str(auth_code or "").strip()
+    if not code:
+        return False, (f"{action} 需要授权码：在 WebUI/mimo 生成一枚（短期一次性和长期均可），"
+                       f"随参数 auth_code 传入")
+    acs = _MCP_AUTH_STORE or AuthCodeStore(Path(store.root) / ".auth" / "auth_codes.json")
+    if not acs.validate(code):
+        acs.record_failure(code)   # 连续 10 错锁定走既有机制，不另发明
+        # ⛔ 不外传具体是哪一因（不存在/已消耗/已过期/已锁定）——那是授权码枚举面
+        return False, f"授权码无效（不存在/已消耗/已过期/已锁定之一），{action} 已拒绝"
+    return True, f"auth_code:{code[:2]}***"
+
+
 def _t_live(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
+    # R4-3（出资人裁定 2026-10-29）：真机下发补授权码闸。此前只要令牌带 live scope +
+    # confirm=true 就能动真机；HTTP 面有码、MCP 面没码＝同一条能力两个门槛。
+    _gate_ok, _gate_note = _auth_code_gate(store, args.get("auth_code"),
+                                           action="真机下发（af_live_run）")
+    if not _gate_ok:
+        return {
+            "ok": False,
+            "code": ADM_ERR_AUTH_REQUIRED,
+            "error": {"code": "AUTH_CODE_REQUIRED",
+                      "message": _gate_note,
+                      "fix": {"how": "WebUI/mimo 生成授权码 → 参数 auth_code 带上",
+                              "why": "af_live_run 会真的操作设备，与 af_save 部署同级"}},
+        }
     # `store` 必须递进去：Tier-0 设备保护（`device_acl.json`）与实体健康视图都从 store 根目录读。
     # 漏掉它，Agent 这条路径就能写入人类点同一个按钮会被拦下的设备——闸门只装了 HTTP 一面。
     return svc.live_run(
@@ -1031,12 +1090,14 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
     (
         "af_enable_by_tag",
         "【写】批量启停某标签下所有自动化（翻转 enabled 并保存新版本）。参数：tag(str 必填)，enabled(bool 必填)，"
-        "allow_bulk(bool 可选，确认批量、绕过爆炸半径护栏)。需 write 权限。",
+        "auth_code(str：**启用必填**，禁用不需要)，allow_bulk(bool 可选，确认批量、绕过爆炸半径护栏)。需 write 权限。",
         {
             "type": "object",
             "properties": {
                 "tag": {"type": "string"},
                 "enabled": {"type": "boolean"},
+                "auth_code": {"type": "string",
+                              "description": "授权码：enabled=true（启用）必填；enabled=false（禁用）不需要（裁定 R4-3）"},
                 "allow_bulk": {
                     "type": "boolean",
                     "description": "true=确认这是一次批量操作，绕过爆炸半径护栏（默认 false）",
@@ -1120,8 +1181,9 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
     ),
     (
         "af_live_run",
-        "【live】真机下发（三重闸：服务端开关+令牌、confirm、白名单）。参数：ir(dict 必填)，"
-        "live_allow(list[str] 必填：可写白名单)，events(list 可选)，confirm(bool 必填，必须显式 true)。需 live 权限。",
+        "【live】真机下发（四重闸：服务端开关+令牌、confirm、白名单、**授权码**）。参数：ir(dict 必填)，"
+        "live_allow(list[str] 必填：可写白名单)，events(list 可选)，confirm(bool 必填，必须显式 true)，"
+        "auth_code(str 缺码即拒)。需 live 权限。",
         {
             "type": "object",
             "properties": {
@@ -1129,6 +1191,8 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
                 "live_allow": {"type": "array", "items": {"type": "string"}, "description": "允许写入的实体白名单"},
                 "events": {"type": "array", "items": {"type": "object"}},
                 "confirm": {"type": "boolean", "description": "必须显式 true 才允许下发"},
+                "auth_code": {"type": "string",
+                              "description": "授权码（缺码即拒）：真机下发与 af_save 部署同级（裁定 R4-3）"},
             },
             "required": ["ir", "live_allow", "confirm"],
         },
