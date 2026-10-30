@@ -55,7 +55,11 @@ jobs:
     name: quality-gates
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0：台账同批门对 HEAD^ 对撞（浅克隆上 rev-parse HEAD^ 失败 ⇒
+      # 被当成"根提交"报射程塌红，2026-10-30 CI #258 实测）。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
