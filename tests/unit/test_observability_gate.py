@@ -92,9 +92,13 @@ def test_real_repo_site_readings_are_pinned(real):
     lv = Counter(s["level"] for s in real["sites"])
     # 204 → 205（2026-10-30 v1.14.21 归属收口批）：`list_quarantined` 隔离区清单
     # 新增 1 枚带码站点（warning 138→139）。AF-507 两轮未动的账，这笔随 v1.14.22 补齐。
-    assert len(real["sites"]) == 205
+    # 205 → 208（2026-10-30 v1.14.23 DCD 旁门批）：记账失败告警三枚带码 WARNING
+    # （LIVE_RUN_AUDIT_RECORD_FAILED / UNDO_AUDIT_RECORD_FAILED / WATCH_START_AUDIT_RECORD_FAILED，
+    # warning 139→142）。⚠️ 又是"台账 regen 与 pin 两套"的坑——上一笔只更了本 pin 的 sites 格，
+    # coded 格漏更，CI 红。教训再记一次：新增留痕站点，本文件**三枚 pin 一起查**。
+    assert len(real["sites"]) == 208
     assert len({s["path"] for s in real["sites"]}) == 32
-    assert dict(lv) == {"debug": 22, "info": 9, "warning": 139, "error": 24, "exception": 11}
+    assert dict(lv) == {"debug": 22, "info": 9, "warning": 142, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -138,8 +142,11 @@ def test_real_repo_named_code_readings_are_pinned(real):
     # 89→90 站／86→87 枚：返工 5.1③ `PAIR_LINK_FAILURE_COUNT_WRITE_FAILED`（af_api），出处链见上两条腿
     # 90→91 站／87→88 枚（2026-10-30 v1.14.21）：`af_service.list_quarantined` 隔离区归属
     # 读不出的降级留痕（AF-501 批），同因同形状，+1 站 +1 码。
-    assert len(coded) == 91
-    assert len({s["code"] for s in coded}) == 88
+    # 91→94 站／88→91 枚（2026-10-30 v1.14.23 DCD 旁门批）：审计流水三事件
+    # LIVE_RUN_EXECUTED / UNDO_DEPLOYED / WATCH_STARTED + 三枚记账失败告警（同批，
+    # AF-403 后半 authorized_by 落流水），+3 站 +3 码。
+    assert len(coded) == 94
+    assert len({s["code"] for s in coded}) == 91
     # 41 站／38 枚＝仓内三例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
     # ① `DEPLOY_AUDIT_PERSIST_FAILED` 同时出自「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」
     #    两条腿——同一句承诺（台账没落稳）；
@@ -212,7 +219,7 @@ def test_real_repo_every_named_code_is_registered(real):
     # `INBOX_REJECT_STALE` 两枚新码入 §三（af_live.read_answer_inbox），同上。
     # 86 → 87 枚／89 → 90 站（2026-10-26 返工 5.1③）：`PAIR_LINK_FAILURE_COUNT_WRITE_FAILED`
     # 入 §三（af_api._pair_record_failure 吞异常改留痕），同上。
-    assert info["codes"] == 88 and info["coded"] == 91
+    assert info["codes"] == 91 and info["coded"] == 94
 
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):

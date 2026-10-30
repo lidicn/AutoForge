@@ -261,8 +261,15 @@ def test_cli_undo_risk_requires_confirm(tmp_path):
     did = "dep-cli-risk"
     store.record(did, {"climate.bedroom": {"state": "heat", "attributes": {"temperature": 22}}})
 
+    # DCD 裁定 2026-10-30（AF-601 CLI 侧）：撤销要码——这条腿量的是风险域确认闸，
+    # 签一枚同根真码过码闸（拒收语义另有 test_dcd_side_door_gates 钉着）。
+    from pathlib import Path as _P
+    from autoforge.af_auth import AuthCodeStore
+    _rec = AuthCodeStore(_P(tmp_path) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    _code = getattr(_rec, "code", None) or _rec["code"]
+
     runner = CliRunner()
-    r = runner.invoke(app, ["undo", did, "--root", str(tmp_path)])
+    r = runner.invoke(app, ["undo", did, "--root", str(tmp_path), "--auth-code", _code])
     assert r.exit_code != 0
     assert "risk_domain_requires_confirm" in r.output
 
@@ -281,8 +288,15 @@ def test_cli_undo_happy_path(tmp_path, monkeypatch):
     rec = RecordingAdapter()
     monkeypatch.setattr("autoforge.af_adapters.HAAdapter", lambda *a, **k: rec)
 
+    # 同上：AF-601 CLI 撤销要码——量的是恢复链路，带同根真码。
+    from pathlib import Path as _P
+    from autoforge.af_auth import AuthCodeStore
+    _rec = AuthCodeStore(_P(tmp_path) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    _code = getattr(_rec, "code", None) or _rec["code"]
+
     runner = CliRunner()
-    r = runner.invoke(app, ["undo", did, "--root", str(tmp_path), "--ha-url", "http://127.0.0.1:8123"])
+    r = runner.invoke(app, ["undo", did, "--root", str(tmp_path),
+                            "--ha-url", "http://127.0.0.1:8123", "--auth-code", _code])
     assert r.exit_code == 0, r.output
     assert "switch.a" in r.output
     assert rec.calls and rec.calls[0][0] == "switch.turn_on"
