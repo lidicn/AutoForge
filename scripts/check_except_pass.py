@@ -78,7 +78,10 @@ BASELINE: frozenset[str] = frozenset(
         # register/login 两处 rotate 调用，共 +16 行都在它上方）。同一枚，净 16 → 16。
         # 2026-10-28 有界换代（v1.14.10）：1491 → 1493（login/register 两处 rotate 调用
         # 各 +1 行注释）。同一枚，净 16 → 16。
-        "af_api.py:1493",
+        # 2026-10-30 AF-401 授权码闸下移服务层：1493 → 1502（LiveRunBody/TagEnableBody
+        # 加 auth_code 字段在它上方 +9 行）。同一枚 pair SSE 心跳吞掉站点，不是新增，
+        # 门报 A"新增 1502"+C"基线 1493 读不到"是同一枚的两面。净 16 → 16。
+        "af_api.py:1502",
         "af_closedloop/deepfix.py:52",
         "af_conflict.py:680",
         "af_conflict_audit.py:150",

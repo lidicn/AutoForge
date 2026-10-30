@@ -12,6 +12,7 @@ R4-2：HA 401 拒收动作后回执仍 ok:true + writes:[吊灯]——`writes` �
 from __future__ import annotations
 
 import json
+import pytest
 import tempfile
 from pathlib import Path
 
@@ -95,8 +96,9 @@ def test_verdict_nothing_when_no_do_ran():
 
 def test_verdict_counts_both_when_partial():
     out = _dispatch_verdict(_FakeRuntime(["af_action_dispatched", "action_failed"]))
-    assert out["verdict"] == "failed" and out["dispatched"] == 1 and out["failed"] == 1, \
-        "部分失败必须显出来，⛔ 不许被成功的那半掩盖"
+    # AF-301（审计）后：部分失败是独立档。旧断言期望 "failed"——那是退化三元
+    # 时代的形状（两支同值把 mixed 吞进 failed）。
+    assert out["verdict"] == "partially_failed" and out["dispatched"] == 1 and out["failed"] == 1
 
 
 def test_service_error_still_carries_status():
@@ -132,7 +134,12 @@ def test_enable_by_tag_warns_about_fake_armed(tmp_path):
     raw = graph_to_raw(get_staged(ref)["graph"])[0]
     raw["tags"] = ["qa_r4"]
     store.save(Graph([load_automation(raw)]), "r4arm", tags=["qa_r4"])
-    out = enable_by_tag(store, "qa_r4", True, allow_bulk=False)
+    # AF-401 后启用闸在服务层——这条腿量的是对账/假武装形状，先给它一枚真码过闸。
+    from pathlib import Path as _P
+    from autoforge.af_auth import AuthCodeStore
+    _rec = AuthCodeStore(_P(store.root) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    out = enable_by_tag(store, "qa_r4", True, allow_bulk=False,
+                        auth_code=getattr(_rec, "code", None) or _rec["code"])
     assert out["ok"] is True, out
     # 裁定方案 A 之后语义变了：启用时不再只是"提醒可能假武装"，而是**真去做对账**，
     # 结果落在 watch_reconcile；watch_note 只在禁用时说话。
@@ -168,8 +175,12 @@ def test_live_run_uses_unified_token_not_env_only(tmp_path, monkeypatch):
         return type("T", (), {"base_url": url, "token": token})()
 
     monkeypatch.setattr(svc, "LIVE_TRANSPORT_FACTORY", fake_factory)
-    # 三重闸的前两道（LIVE_ENABLED / has_token）也要过：缺了就走不到 transport
+    # 闸序（AF-408 后）：LIVE_ENABLED → has_token → confirm → 租约 → **码** → transport。
+    # 探针带真码——服务层闸在 transport 之前，无码到不了要量的那一站。
     monkeypatch.setenv("AUTOFORGE_LIVE_ENABLED", "1")
+    from autoforge.af_auth import AuthCodeStore
+    _rec = AuthCodeStore(store_root / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    auth_code = getattr(_rec, "code", None) or _rec["code"]
     ir = {"ir_version": "0.3.0", "id": "r4tok", "name": "t", "version": 1, "mode": "single",
           "nodes": [{"id": "a", "kind": "on", "name": "t",
                      "trigger": {"type": "state", "entity_id": "binary_sensor.m", "to": "on"}},
@@ -178,7 +189,7 @@ def test_live_run_uses_unified_token_not_env_only(tmp_path, monkeypatch):
           "edges": [{"from": "a", "to": "d", "kind": "then"}]}
     try:
         svc.live_run(ir, ["light.x"], events=[{"entity_id": "binary_sensor.m", "state": "on"}],
-                     confirm=True, store=GraphStore(str(store_root)))
+                     confirm=True, store=GraphStore(str(store_root)), auth_code=auth_code)
     except Exception:
         pass  # 下发本身可能因假 transport 失败——我们只看**到达** transport 的 token
     assert seen.get("token") == "file-side-token",         f"live_run 到达 transport 的 token 是 {seen.get('token')!r}——仍在用 env 那枚（R4-1 未修）"
@@ -207,11 +218,17 @@ _LIVE_IR = {"ir_version": "0.3.0", "id": "g", "name": "g", "version": 1, "mode":
             "edges": [{"from": "a", "to": "p", "kind": "then"}]}
 
 
-def test_live_run_without_code_is_refused(tmp_path):
+def test_live_run_without_code_is_refused(tmp_path, monkeypatch):
+    # 闸序（AF-408 后）：LIVE_ENABLED → has_token → confirm → allow → 租约 → **码**。
+    # 这条腿量的是码闸——前几站先放行（配齐前置≠致盲哨兵；哨兵量的就是码这一站，
+    # 不配前置它永远撞 LIVE_ENABLED 提前退场，码闸 0 覆盖）。
+    monkeypatch.setenv("AUTOFORGE_LIVE_ENABLED", "1")
+    monkeypatch.setenv("HA_LONG_LIVED_TOKEN", "probe-token")
     body = _gate_call("af_live_run", {"ir": _LIVE_IR, "live_allow": ["light.x"], "confirm": True}, tmp_path)
     assert body["ok"] is False and body["code"] == "ADM_ERR_AUTH_REQUIRED"
-    assert (body.get("error") or {}).get("code") == "AUTH_CODE_REQUIRED"
-    assert "auth_code" in json.dumps(body, ensure_ascii=False), "要告诉怎么补"
+    # AF-401 后闸在服务层：拒绝经 dispatch 的 ServiceError(403)→AUTH_REQUIRED 映射
+    # （MCP 层不再手拼 error.code；message 里"授权码"即新的可判读形状）。
+    assert "授权码" in str(body.get("message") or ""), "要告诉怎么补"
 
 
 def test_enable_needs_code_disable_does_not(tmp_path):
@@ -223,12 +240,15 @@ def test_enable_needs_code_disable_does_not(tmp_path):
     assert off.get("watch_reconcile") is None, "禁用不该去动监听（也不该假装动了）"
 
 
-def test_bad_code_is_refused_without_revealing_why(tmp_path):
+def test_bad_code_is_refused_without_revealing_why(tmp_path, monkeypatch):
     """坏码要拒，但⛔ 不外传"不存在/已消耗/已过期/已锁定"具体哪一因（授权码枚举面）。"""
+    # 同 test_live_run_without_code_is_refused：前几站先放行，哨兵量的才是码闸。
+    monkeypatch.setenv("AUTOFORGE_LIVE_ENABLED", "1")
+    monkeypatch.setenv("HA_LONG_LIVED_TOKEN", "probe-token")
     body = _gate_call("af_live_run", {"ir": _LIVE_IR, "live_allow": ["light.x"],
                                       "confirm": True, "auth_code": "0" * 8}, tmp_path)
     assert body["ok"] is False and body["code"] == "ADM_ERR_AUTH_REQUIRED"
-    msg = str((body.get("error") or {}).get("message"))
+    msg = str(body.get("message") or "")
     assert "之一" in msg, f"必须保持四因合一：{msg}"
 
 
@@ -248,8 +268,15 @@ def test_valid_code_passes_the_gate(tmp_path):
 
 
 def test_gate_helper_returns_explicit_pair():
-    """形状判据：不许用 None 当"拒绝"哨兵（第一版因此闸永远不拦，肉眼还看不出来）。"""
-    from autoforge.af_mcp import _auth_code_gate
+    """形状判据（AF-401 改写）：闸已下移 `svc._auth_code_check`——拒绝抛 ServiceError(403)
+    而非返回哨兵；store=None 抛**可读** 403 而非 AttributeError（AF-404 的形状）。
+    旧 MCP 层 `_auth_code_gate` 已随闸下移删除。
+    """
+    import autoforge.af_service as svc_mod
+    with pytest.raises(ServiceError) as no_store:
+        svc_mod._auth_code_check(None, "", action="探针")
+    assert no_store.value.status == 403 and "store" in str(no_store.value)
     with tempfile.TemporaryDirectory() as td:
-        allowed, note = _auth_code_gate(GraphStore(td), {}, action="探针")
-    assert allowed is False and isinstance(note, str) and note
+        with pytest.raises(ServiceError) as no_code:
+            svc_mod._auth_code_check(GraphStore(td), "", action="探针")
+        assert no_code.value.status == 403 and "授权码" in str(no_code.value)

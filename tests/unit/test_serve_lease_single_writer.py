@@ -269,7 +269,8 @@ def test_mcp_face_text_starts_with_the_prefix(tmp_path, gate):
 def test_live_run_dispatches_when_the_lease_is_free(tmp_path, gate):
     """锁空闲（开发机 / 独立 MCP 进程）照常下发：只 check 不 acquire 的另一半是"别把自己人拦光"。"""
     out = svc.live_run(
-        LIVE_IR, ["light.study"], ARGS["events"], confirm=True, store=GraphStore(tmp_path)
+        LIVE_IR, ["light.study"], ARGS["events"], confirm=True, store=GraphStore(tmp_path),
+        auth_code=_live_code(tmp_path),
     )
 
     assert out["ok"] is True
@@ -282,7 +283,8 @@ def test_serve_holding_its_own_lease_still_dispatches(tmp_path, gate):
     lease.acquire()
     try:
         out = svc.live_run(
-            LIVE_IR, ["light.study"], ARGS["events"], confirm=True, store=GraphStore(tmp_path)
+            LIVE_IR, ["light.study"], ARGS["events"], confirm=True, store=GraphStore(tmp_path),
+            auth_code=_live_code(tmp_path),
         )
     finally:
         lease.release()
@@ -387,3 +389,9 @@ def test_health_route_hands_the_gate_flag_to_the_readout():
         and any(k.arg == "readonly" for k in node.keywords)
     ]
     assert calls, "af_api 的 health 调用没把 readonly 递进去（读数与闸会分叉）"
+
+def _live_code(root: Path) -> str:
+    """AF-401 后闸在服务层（租约之后）：测"锁空闲照常下发"的腿需要码才能走到下发。"""
+    from autoforge.af_auth import AuthCodeStore
+    rec = AuthCodeStore(Path(root) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    return getattr(rec, "code", None) or rec["code"]

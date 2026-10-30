@@ -523,7 +523,7 @@ def _ensure_watcher(store: GraphStore, *, enabled: bool):
 
 def enable_by_tag(
     store: GraphStore, tag: str, enabled: bool, allow_bulk: bool = False,
-    *, caller: str = "", caller_is_owner: bool = False,
+    *, caller: str = "", caller_is_owner: bool = False, auth_code: str = "",
 ) -> dict[str, Any]:
     """批量启停：对某标签下所有归档的最新版本，翻转其中全部自动化的 `enabled` 并保存新版本。
 
@@ -556,6 +556,11 @@ def enable_by_tag(
         total += len(list(graph))
     if not allow_bulk:
         _check_blast(total, f"按标签 {tag!r} 批量{'启用' if enabled else '禁用'}")
+
+    # AF-401/403：启用要码、禁用免码（关安全阀不该被钥匙挡住）。闸在服务层 ⇒
+    # REST（/api/graphs/enable）与 MCP 同闸；放行凭据标签写进回执。
+    code_tag = ("" if not enabled else
+                _auth_code_check(store, auth_code, action=f"启用自动化（tag={tag!r}）"))
 
     affected: list[dict[str, Any]] = []
     for name, _version, graph in planned:
@@ -591,6 +596,7 @@ def enable_by_tag(
         # watch 进程死亡/未起时，这里返回 ok:true + enabled:true，而自动化永不触发。
         # enable 要不要自动拉 watch 是单写者租约语义的裁定（待裁），但"armed 无人监听"
         # 必须在这一步说出来，⛔ 别让调用方以为生效了。
+        "authorized_by": code_tag or None,
         "watch_note": (None if enabled else
                        "禁用不触碰监听；启用时的实际监听动作看 watch_reconcile"),
         # R4-4 收口（裁定方案 A）：启用后做对账——有活监听就复用、没有就起、起不动就回原因。
@@ -2269,6 +2275,44 @@ def _single_writer_check(store: "GraphStore | None") -> None:
         )
 
 
+def _auth_code_check(store: "GraphStore | None", code: str, *, action: str) -> str:
+    """服务层授权码闸（审计 AF-401/408，2026-10-30）。
+
+    为什么从 af_mcp 的 dispatch 下移到这层：闸装在工具层时 REST 直连
+    （`/api/live/run`、`/api/graphs/enable`）不收 auth_code ⇒ 换条路就绕过；
+    而且它排在 `svc.live_run` 外层最先跑，把两条既有不变量打穿了——
+    ① events 形状检查（422「形状先于策略」）读不到；② 单写者租约的
+    `READONLY_DEGRADED:` 前缀（DB 按前缀判读，裁定 20261004 §一 1 A）被抢先。
+    测试红了，当时的"修法"是给测试配码让它过——那是致盲哨兵，不是修问题。
+
+    位置纪律（调用方遵守）：排在 `_check_events_cap` 与 `_single_writer_check`
+    **之后**——形状错误与"服务不可写"比"缺凭据"更早该被看见。
+    返回脱敏凭据标签（`auth_code:xx***`），调用方必须写进回执与审计
+    （AF-403：过闸无痕 = 事后查不到哪把凭据放行）。
+    """
+    from .af_auth import AuthCodeStore
+    code = str(code or "").strip()
+    root = getattr(store, "root", None)
+    if root is None:
+        # AF-404：store=None（CLI/测试形状）——闸不能因缺根而 AttributeError
+        # （AF-121 误因族新证例），也不该静默放行：没有账本就没有凭据。
+        raise ServiceError(
+            f"{action} 需要授权码，但本调用未携带 store（无凭据账本可查）——"
+            f"HTTP/MCP 面都会带 store；CLI 直调请传入 store 或改走服务面",
+            status=403,
+        )
+    if not code:
+        raise ServiceError(f"{action} 需要授权码：在 WebUI/mimo 生成一枚，随 auth_code 传入",
+                           status=403)
+    acs = AuthCodeStore(Path(root) / ".auth" / "auth_codes.json")
+    if not acs.validate(code):
+        acs.record_failure(code)  # 连续 10 错锁定走既有机制
+        # ⛔ 四因合一（不存在/已消耗/已过期/已锁定）：外传具体哪一因是授权码枚举面
+        raise ServiceError(f"授权码无效（不存在/已消耗/已过期/已锁定之一），{action} 已拒绝",
+                           status=403)
+    return f"auth_code:{code[:2]}***"
+
+
 def live_run(
     ir: Mapping[str, Any],
     live_allow: Sequence[str],
@@ -2277,6 +2321,7 @@ def live_run(
     store: "GraphStore | None" = None,
     undo: bool = False,
     clock: Any | None = None,
+    auth_code: str = "",
 ) -> dict[str, Any]:
     """受闸门的真机下发：三重闸全通过才执行。
 
@@ -2312,6 +2357,11 @@ def live_run(
     # ★ 单写者租约：生产 serve 在线时，进程外的真机写一律拒收（裁定 20261004 §一 1 A）。
     # 放在构造传输层之前——拒收的那条路径必须**根本不碰设备**。
     _single_writer_check(store)
+
+    # ★ 授权码闸（AF-401/408 下移服务层）：位置刻意在租约**之后**——只读降级的
+    # `READONLY_DEGRADED:` 前缀必须先于缺凭据被看见（DB 按前缀判读）；events 形状
+    # 检查在本函数更早。放行凭据写进回执（AF-403：过闸无痕=事后查不到哪把放行）。
+    code_tag = _auth_code_check(store, auth_code, action="真机下发（live_run）")
 
     graph = _load_ir(ir)
 
@@ -2383,6 +2433,7 @@ def live_run(
         "ok": True,
         "mode": "live",
         "live": True,
+        "authorized_by": code_tag,
         "ha_url": ha_url,
         "allowlist": sorted(allow),
         "writes": sorted(targets),

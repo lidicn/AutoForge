@@ -134,7 +134,13 @@ def test_enable_reports_watcher_reconciliation(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "list_watches", lambda root=None: {"ok": True, "watches": []})
     monkeypatch.setattr(svc, "_build_merged_ir", lambda store: None)
     store = GraphStore(str(tmp_path / "s"))
-    out = svc.enable_by_tag(store, "any", True, allow_bulk=True)
+    # AF-401 后启用闸在服务层——这条腿要量的是对账形状，先给它一枚真码过闸
+    # （不是给拒收腿配码：那才是致盲哨兵）。
+    from pathlib import Path as _P
+    from autoforge.af_auth import AuthCodeStore
+    _rec = AuthCodeStore(_P(store.root) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    out = svc.enable_by_tag(store, "any", True, allow_bulk=True,
+                            auth_code=getattr(_rec, "code", None) or _rec["code"])
     rec = out.get("watch_reconcile")
     assert rec is not None, "启用回执必须带监听对账结果"
     assert rec["action"] in {"reused", "started", "refused", "failed",

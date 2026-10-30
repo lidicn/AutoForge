@@ -152,7 +152,7 @@ def test_http_live_run_honours_the_same_guard(tmp_path, gate):
     _protect(tmp_path, "light.study")
     client = TestClient(build_app(store_root=str(tmp_path)))
 
-    r = client.post("/api/live/run", json=ARGS)
+    r = client.post("/api/live/run", json=_live_args(tmp_path))
 
     assert r.status_code == 400, r.text
     assert "ENTITY_GUARD_TIER0" in r.json()["detail"]

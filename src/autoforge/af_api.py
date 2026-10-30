@@ -222,6 +222,9 @@ class LiveRunBody(BaseModel):
     confirm: bool = False
     #: F7：记录动作前快照，使本次下发可在窗口内经 /api/undo 撤销
     undo: bool = False
+    #: 审计 AF-401：真机下发的授权码闸在**服务层**（svc.live_run），REST 与 MCP 同闸。
+    #: 此前闸只在 MCP dispatch 层 ⇒ REST 直连（开发 WebUI 走这条路）免码绕过。
+    auth_code: str = ""
 
 
 # ── F7 残留（WebUI 撤销按钮）：撤销 = 对真实设备再下发一次 ──
@@ -237,6 +240,8 @@ class TagBody(BaseModel):
 
 class TagEnableBody(BaseModel):
     tag: str
+    #: 审计 AF-401：启用（enable 端点）需要授权码；disable 端点忽略此字段（禁用免码）。
+    auth_code: str = ""
 
 
 # ── v0.7.0 模板导出与备份恢复 ──
@@ -733,9 +738,11 @@ def build_app(
     def api_graph_enable(
         body: TagEnableBody, info: TokenInfo | None = Depends(_write),
     ) -> dict[str, Any]:
+        # AF-401：启用与真机下发同级，闸在服务层（禁用端点不传 code——免码）。
         return _svc(
             svc.enable_by_tag, store, body.tag, True,
             caller=info.subject if info else "", caller_is_owner=_caller_is_owner(info),
+            auth_code=body.auth_code,
         )
 
     @app.post("/api/graphs/disable")
@@ -1030,8 +1037,10 @@ def build_app(
     def api_live_run(body: LiveRunBody) -> dict[str, Any]:
         # `clock` 刻意**不在** `LiveRunBody` 里：真机证据的时间轴由服务端决定，
         # 请求体能递钟就等于让被审计的一方自己写审计时间。
+        # auth_code 同名透传给服务层闸（AF-401：两面同闸，不许 REST 直连绕过）。
         return _svc(
-            svc.live_run, body.ir, body.live_allow, body.events, body.confirm, store, body.undo
+            svc.live_run, body.ir, body.live_allow, body.events, body.confirm, store, body.undo,
+            auth_code=body.auth_code,
         )
 
     # ── F7 残留（WebUI 撤销按钮，决策 E ⑤）──
