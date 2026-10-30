@@ -151,7 +151,10 @@ def test_default_window_still_applies_when_omitted():
 
 # ── R3-8 端点不在 agent 面泄露 ────────────────────────────────────────
 
-def test_catalog_hides_internal_ha_endpoint():
+def test_catalog_hides_internal_ha_endpoint(monkeypatch):
+    # AF-303 收掉硬编码回落后，ha_url 来自 env——腿自己带一个内网址来量掩码
+    # （旧腿绿靠的是硬编码字面量恰好在场；那枚真源已按审计铲除）。
+    monkeypatch.setenv("AUTOFORGE_HA_URL", "http://192.168.2.200:8123")
     body, _ = _call("af_catalog", {})
     blob = json.dumps(body, ensure_ascii=False)
     assert "192.168" not in blob and "8123" not in blob, f"内网端点泄露：{blob[:160]}"
