@@ -230,6 +230,8 @@ class LiveRunBody(BaseModel):
 # ── F7 残留（WebUI 撤销按钮）：撤销 = 对真实设备再下发一次 ──
 class UndoBody(BaseModel):
     confirm: bool = False
+    #: DCD 裁定 2026-10-30（AF-601）：撤销是真机回放，与服务层同闸——REST 面带码。
+    auth_code: str = ""
 
 
 # ── v0.6.0 标签体系 + 批量启停 ──
@@ -1059,9 +1061,14 @@ def build_app(
 
     @app.post("/api/undo/{deploy_id}", dependencies=[Depends(_readonly_guard), Depends(_live)])
     def api_undo_deploy(deploy_id: str, body: UndoBody | None = None) -> dict[str, Any]:
-        """撤销一次部署：回放动作前快照（风险域需 body.confirm=true）。"""
+        """撤销一次部署：回放动作前快照（风险域需 body.confirm=true）。
+
+        DCD 裁定 2026-10-30（AF-601）：撤销补码——undo 是真机回放不是"关"，
+        方向取决于下发前快照，借不了 R4-3 禁用免码的豁免。
+        """
         return _svc(
-            svc.undo_deploy, deploy_id, bool(body and body.confirm), store.root if store else None
+            svc.undo_deploy, deploy_id, bool(body and body.confirm), store.root if store else None,
+            auth_code=str(body.auth_code) if body else "",
         )
 
     # ── F4：生产态验证证据（af_watch 聚合）。刻意不叫 /api/watch/*——那条前缀在本服务里
@@ -1182,12 +1189,23 @@ def build_app(
 
     @app.post("/api/watch/start", dependencies=[Depends(_admin)])
     def api_watch_start(body: dict[str, Any]) -> dict[str, Any]:
-        """启动 watch 进程跑指定 IR（dry-live 默认）。"""
+        """启动 watch 进程跑指定 IR（dry-live 默认）。
+
+        DCD 裁定 2026-10-30（AF-602 手动入口半）：手动起真机监听要码（有人可给码）。
+        serve 重启的自动恢复走 `_restore_watch_after_restart`（免码特例，函数层分开）。
+        dry-live 不动设备，免码。
+        """
         ir = body.get("ir")
         if not ir:
             return {"ok": False, "error": "缺少 ir 字段"}
         dry_live = body.get("dry_live", True)
-        return svc.start_watch(ir=ir, store_root=store.root if store else None, dry_live=dry_live)
+        try:
+            return svc.start_watch(ir=ir, store_root=store.root if store else None, dry_live=dry_live,
+                                   auth_code=str(body.get("auth_code") or ""))
+        except svc.ServiceError as exc:
+            # 码闸拒绝按状态码归档（403），不能冒成 500——对端的正确动作是去拿码。
+            raise HTTPException(status_code=int(getattr(exc, "status", 400) or 400),
+                                detail=str(exc)) from exc
 
     # ── v0.8.0：令牌自检与管理 ──
     @app.get("/api/auth/whoami")

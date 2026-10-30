@@ -483,6 +483,10 @@ def run(
         False, "--undo",
         help="F7：记录动作前快照，允许事后 `forge undo <id>` 回滚本次部署（仅 --live 真机下发生效）",
     ),
+    auth_code: str = typer.Option(
+        "", "--auth-code",
+        help="授权码（DCD 裁定 2026-10-30：--live 真机下发必填；WebUI/mimo 生成后随此参数传入）",
+    ),
     persist_dir: str = typer.Option(
         "", "--persist-dir", help="实例持久化目录（P1：重启后恢复 persist=true 的活跃实例）"
     ),
@@ -494,6 +498,16 @@ def run(
 
     undo_enabled = undo or os.getenv("AUTOFORGE_UNDO", "") == "1"
     if live or dry_live:
+        # DCD 裁定 2026-10-30（AF-603）：CLI 真机下发补授权码——最后一扇敞开的门。
+        # dry-live 不动设备，免码（与 start_watch 同口径）。
+        if live:
+            from .af_service import _auth_code_check, GraphStore as _GS
+            try:
+                _auth_code_check(_GS(persist_dir or DEFAULT_STORE_ROOT), auth_code,
+                                 action="真机下发（forge run --live）")
+            except Exception as _e:
+                typer.echo(f"[真机预检拒绝] {_e}", err=True)
+                raise typer.Exit(code=EXIT_IR_ERROR)
         token = ha_token or os.environ.get("HA_LONG_LIVED_TOKEN") or os.environ.get("AUTOFORGE_HA_TOKEN", "")
         allow = (
             {x.strip() for x in live_allow.split(",") if x.strip()}
@@ -548,11 +562,15 @@ def watch(
         help="F7：记录动作前快照，允许事后 `forge undo <id>` 回滚本监听会话的部署（仅真机下发生效）",
     ),
     tick_s: float = typer.Option(1.0, "--tick-s", help="计时器/超时巡检间隔（秒）"),
+    auth_code: str = typer.Option(
+        "", "--auth-code",
+        help="授权码（DCD 裁定 2026-10-30：真机常驻监听与下发同权，必填；dry-live 免码）",
+    ),
     persist_dir: str = typer.Option(
         "", "--persist-dir", help="实例持久化目录（P1：重启后恢复 persist=true 的活跃实例）"
     ),
 ):
-    """真机常驻监听：订阅 HA 事件流实时驱动自动化（需 --confirm + 令牌 + 白名单）。
+    """真机常驻监听：订阅 HA 事件流实时驱动自动化（需 --confirm + 令牌 + 白名单 + 授权码）。
 
     把 `forge run --live` 的一次性回放升级为常驻运行：持续订阅 HA SSE
     `/api/stream`，每个 `state_changed` 实时进入 Runtime 评估；后台线程按
@@ -567,6 +585,16 @@ def watch(
     if not confirm and not dry_live:
         typer.echo("真机常驻监听会**持续**真实操作 HA，必须显式 --confirm，拒绝启动。", err=True)
         raise typer.Exit(code=EXIT_SCAN_ERROR)
+    # DCD 裁定 2026-10-30（AF-602 手动入口半）：forge watch 是人敲的手动真机监听入口，
+    # 与 /api/watch/start 同权要码（dry-live 不动设备免码，与 start_watch 同口径）。
+    if not dry_live:
+        from .af_service import _auth_code_check, GraphStore as _GS
+        try:
+            _auth_code_check(_GS(persist_dir or DEFAULT_STORE_ROOT), auth_code,
+                             action="真机常驻监听（forge watch）")
+        except Exception as _e:
+            typer.echo(f"[监听启动被拒] {_e}", err=True)
+            raise typer.Exit(code=EXIT_IR_ERROR)
 
     cfg = get_config(persist_dir or DEFAULT_STORE_ROOT)
     token = ha_token or cfg.get_ha_token() or os.environ.get("HA_LONG_LIVED_TOKEN") or os.environ.get("AUTOFORGE_HA_TOKEN", "")
@@ -676,10 +704,12 @@ def undo(
     root: str = typer.Option(DEFAULT_STORE_ROOT, "--root", help="UndoStore 根目录（与部署时一致）"),
     ha_url: str = typer.Option(DEFAULT_HA_URL, "--ha-url", help="HA 地址（撤销真实下发到此）"),
     ha_token: str = typer.Option("", "--ha-token", help="HA 长期访问令牌（缺省读 HA_LONG_LIVED_TOKEN，旧 AUTOFORGE_HA_TOKEN 回退）"),
+    auth_code: str = typer.Option("", "--auth-code", help="授权码（DCD 裁定 2026-10-30：撤销是真机回放，必填）"),
 ):
     """回滚一次部署的设备态（F7，决策 E）。
 
-    fail-closed 三道闸：① 未知 deploy_id 拒绝；② 超过时间窗（默认 60s，
+    fail-closed 四道闸：⓪ **授权码**（DCD 2026-10-30：撤销=真机回放，⛔ 借"关"的豁免——
+    方向取决于下发前快照）；① 未知 deploy_id 拒绝；② 超过时间窗（默认 60s，
     AUTOFORGE_UNDO_WINDOW_S）拒绝，需重新走审批；③ 含风险域（climate/cover/lock）
     且未 --confirm 拒绝；④ 不可映射域跳过告警不阻断其余。
     """
@@ -688,6 +718,14 @@ def undo(
     store = UndoStore(root)
     if not store.exists(deploy_id):
         typer.echo(f"[撤销失败] 未知 deploy_id：{deploy_id}", err=True)
+        raise typer.Exit(code=EXIT_IR_ERROR)
+    # DCD 裁定 2026-10-30（AF-601 CLI 侧）：撤销前先过服务层码闸——
+    # 校验与 MCP/REST 同一条 _auth_code_check，码账本与 UndoStore 同根。
+    from .af_service import _auth_code_check, GraphStore as _GS
+    try:
+        _code_tag = _auth_code_check(_GS(root), auth_code, action=f"撤销部署（forge undo {deploy_id[:12]}…）")
+    except Exception as _e:
+        typer.echo(f"[撤销被拒] {_e}", err=True)
         raise typer.Exit(code=EXIT_IR_ERROR)
     token = ha_token or os.environ.get("HA_LONG_LIVED_TOKEN") or os.environ.get("AUTOFORGE_HA_TOKEN", "")
 
@@ -1498,14 +1536,17 @@ def serve(
             )
     bridge = _start_linkage_bridge(store_root=store_root)
     # 容器重启后自动恢复 watch：如果有已部署自动化，自动合并并起 watch
+    # DCD 裁定 2026-10-30 §2.2：自动恢复走 `_restore_watch_after_restart`（免码特例，
+    # ⛔ 扩权仅限 serve 启动序列）；公开 start_watch 已补码，这条若改回公开入口
+    # 会在无人值守时拿不到码 ⇒ 假武装。
     try:
-        from .af_service import _build_merged_ir, start_watch
+        from .af_service import _build_merged_ir, _restore_watch_after_restart
         from .af_store import GraphStore
         _store = GraphStore(store_root)
         _merged = _build_merged_ir(_store)
         if _merged and _merged.get("automations"):
             typer.echo(f"· 恢复 watch：检测到 {len(_merged['automations'])} 条已部署自动化，自动起 watch")
-            _wr = start_watch(ir=_merged, store_root=store_root, dry_live=False)
+            _wr = _restore_watch_after_restart(ir=_merged, store_root=store_root)
             typer.echo(f"· watch 恢复结果: ok={_wr.get('ok')}")
     except Exception as _e:
         typer.echo(f"⚠️ watch 自动恢复失败（不影响 API）: {_e!r}", err=True)

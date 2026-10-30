@@ -124,7 +124,13 @@ def test_live_confirm_tier_is_named_live_confirmed_and_real(tmp_path, root, monk
         _sidecar(root, _mine(captured))
 
     monkeypatch.setattr(time, "sleep", spawn_sidecar)
-    res = svc.start_watch(IR, store_root=str(root), dry_live=False)
+    # DCD 裁定 2026-10-30（AF-602 手动半）：start_watch 真机档要码——这条腿量的是
+    # 档位命名与真实下发旗子，签一枚同根真码过闸（拒收语义另有 test_dcd_side_door_gates）。
+    from pathlib import Path as _P
+    from autoforge.af_auth import AuthCodeStore
+    _rec = AuthCodeStore(_P(root) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    res = svc.start_watch(IR, store_root=str(root), dry_live=False,
+                          auth_code=getattr(_rec, "code", None) or _rec["code"])
     assert "--dry-live" not in captured["cmd"] and "--confirm" in captured["cmd"], captured["cmd"]
     # `--live-allow` 白名单仅在 IR 提取到实体时才追加（本测试 IR 无 nodes，故不出现，属正常）
     assert res["tier"] == "live_confirmed" and res["real_device"] is True, res

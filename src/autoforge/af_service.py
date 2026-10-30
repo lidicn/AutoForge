@@ -17,6 +17,7 @@ import socket
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -584,7 +585,9 @@ def _ensure_watcher(store: GraphStore, *, enabled: bool):
     if not merged:
         return {"action": "none_to_watch"}
     try:
-        res = start_watch(ir=merged, store_root=root, dry_live=False)
+        # DCD 裁定 2026-10-30（AF-602）：enable 已在服务层过码闸（enable_by_tag 的
+        # _auth_code_check 在先），对账拉监听不二次要码——码只收一次。走免闸实现体。
+        res = _start_watch_impl(ir=merged, store_root=root, dry_live=False)
     except ServiceError:
         # ⛔ 原样上抛。`READONLY_DEGRADED:` 那一族靠**异常文案前缀**让 DB 判读
         #（裁定 20261004 §一 1 A，判据 test_serve_lease_single_writer 钉着）；
@@ -1098,11 +1101,13 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
     result["pending"] = op_id
     if self_check:
         result["self_check"] = self_check  # ADM B-11
-    # approve 后自动起 watch（真机常驻监听）——合并所有已部署自动化，不只这一条
+    # approve 后自动起 watch（真机常驻监听）——合并所有已部署自动化，不只这一条。
+    # DCD 裁定 2026-10-30（AF-602）：这条的凭据语义在 reviewer 里（MCP 路径 A=
+    # auth_code:xx***、HTTP=令牌主体/人审），起监听不二次要码。走免闸实现体。
     try:
         merged = _build_merged_ir(store)
         if merged:
-            watch_res = start_watch(ir=merged, store_root=str(store.root), dry_live=False)
+            watch_res = _start_watch_impl(ir=merged, store_root=str(store.root), dry_live=False)
             result["watch"] = watch_res
     except Exception as e:
         logger.warning("approve_pending: 自动起 watch 失败（不影响落盘）: %r", e)
@@ -2528,11 +2533,27 @@ def live_run(
     entities = sorted(_entities_of(graph))
     final_states, missing_entities = _live_final_states(provider, entities)
     logger.warning(
-        "LIVE RUN：automation(s)=%s writes=%s events=%d",
+        "LIVE RUN：automation(s)=%s writes=%s events=%d authorized_by=%s",
         [a.id for a in graph],
         sorted(targets),
         len(events or []),
+        code_tag,
     )
+    # DCD 裁定 2026-10-30（AF-403 后半）：过闸凭据标签进审计流水（deploy_audit.jsonl
+    # 随 store 根落盘）——回执给调用方，流水给事后追查；过闸无痕＝查不到哪把凭据放行。
+    # 记账失败不回滚已发生的下发（口径同 _persist_deploy：操作员连撤销把手都拿不到更糟）。
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        from .af_audit import AuditEvent as _AE, record_deploy as _rd
+        _rd(
+            _AE("LIVE_RUN_EXECUTED", at=_dt.now(_tz.utc),
+                message=f"live_run executed ({len(events or [])} events)",
+                data={"authorized_by": code_tag, "writes": sorted(targets),
+                      "verdict": _dispatch_verdict(runtime)}),
+            store,
+        )
+    except Exception as exc:
+        logger.warning("LIVE_RUN_AUDIT_RECORD_FAILED 下发已执行但记账失败：%s", exc)
     return {
         "ok": True,
         "mode": "live",
@@ -2608,18 +2629,30 @@ def undo_deploy(
     deploy_id: str,
     confirm: bool = False,
     store_root: "str | Path | None" = None,
+    auth_code: str = "",
 ) -> dict[str, Any]:
     """受闸门撤销：真机回放动作前快照（决策 E）。
 
     被 `UndoStore.revert` 拒绝（未知/过期/风险域未确认）时**不抛异常**，
     原样返回 `{ok: false, reason, …}`——前端要渲染的是"哪几个实体需要二次确认"，
     不是笼统的 4xx。
+
+    DCD 裁定 2026-10-30（AF-601）：撤销补授权码——它是**真机回放下发**，
+    不是"关"：方向取决于下发前快照（下发前设备开着、有人误关，undo 会把它开回来）。
+    「禁用免码」的豁免只对方向恒定收敛的动作成立，undo 借不了。闸走与
+    live_run 同一条 `_auth_code_check`（⛔ 另造一套）。
     """
     cfg = _live_config()
     if not cfg["enabled"]:
         raise ServiceError("撤销未启用：真机回滚需要服务端设置 AUTOFORGE_LIVE_ENABLED=1", status=403)
     if not cfg["has_token"]:
         raise ServiceError("撤销缺少 HA 令牌：服务端需设置 HA_LONG_LIVED_TOKEN（旧 AUTOFORGE_HA_TOKEN）", status=403)
+
+    # ★ undo 的码闸（AF-601）：位置在 LIVE_ENABLED/has_token 之后（与 live_run 同序——
+    # 环境没配好时先报环境），校验与放行标签同一条通道。
+    _real_root = store_root if isinstance(store_root, (str, os.PathLike)) else None
+    _gate_store = GraphStore(str(_real_root)) if _real_root else None
+    code_tag = _auth_code_check(_gate_store, auth_code, action=f"撤销部署（undo {str(deploy_id)[:12]}…）")
 
     store = _undo_store(store_root)
     token = _ha_token(store_root)
@@ -2628,13 +2661,28 @@ def undo_deploy(
     transport = factory(ha_url, token) if factory is not None else HATransport(base_url=ha_url, token=token)
     adapter = HAAdapter(transport=transport, dry_run=False)
 
-    logger.warning("UNDO：deploy_id=%s confirm=%s ha_url=%s", deploy_id, confirm, ha_url)
+    logger.warning("UNDO：deploy_id=%s confirm=%s ha_url=%s authorized_by=%s", deploy_id, confirm, ha_url, code_tag)
     result = store.revert(deploy_id, adapter, confirm=confirm)
     result["results"] = [
         {"action": r.data.get("action"), "success": r.success, "data": r.data, "error": r.error}
         for r in result.get("results", [])
     ]
     result["ha_url"] = ha_url
+    result["authorized_by"] = code_tag
+    # DCD 裁定 2026-10-30（AF-403 后半）：过闸凭据标签必须进审计流水——
+    # 回执是给调用方看的，审计才是给事后追查看的；过闸无痕＝查不到哪把凭据放行。
+    try:
+        from .af_audit import AuditEvent as _AE, record_deploy as _rd
+        from datetime import datetime as _dt, timezone as _tz
+        _rd(
+            _AE("UNDO_DEPLOYED", at=_dt.now(_tz.utc),
+                message=f"undo deploy {str(deploy_id)[:12]}… executed",
+                data={"deploy_id": str(deploy_id), "authorized_by": code_tag,
+                      "restored": bool(result.get("fully_restored"))}),
+            _gate_store,
+        )
+    except Exception as exc:  # 记账失败不回滚已发生的撤销（口径同 _persist_deploy）
+        logger.warning("UNDO_AUDIT_RECORD_FAILED 撤销已执行但记账失败：%s", exc)
     return result
 
 
@@ -3505,8 +3553,14 @@ def _gate_watch_log(root: Path) -> None:
     )
 
 
-def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) -> dict[str, Any]:
-    """启动 watch 进程跑指定 IR。
+def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True,
+                auth_code: str = "") -> dict[str, Any]:
+    """启动 watch 进程跑指定 IR（**手动入口**——DCD 裁定 2026-10-30 补授权码）。
+
+    两条起监听路径在**函数层分开**（裁定 §2.2，⛔ 用参数区分——参数会漏传）：
+    - 公开手动入口（HTTP `/api/watch/start`、MCP、CLI 显式调用）＝**本函数**，要码；
+    - serve 进程重启自动恢复（无人值守，加码=假武装）＝走 `_restore_watch_after_restart`，
+      免码且 ⛔ 扩权——内部函数只被 serve 启动序列调用。
 
     P1-19 修复：
     - HA 令牌经环境变量 HA_LONG_LIVED_TOKEN（旧 AUTOFORGE_HA_TOKEN）传递（不出现在 /proc/pid/cmdline）
@@ -3519,6 +3573,44 @@ def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True) 
     - 停旧 watch 前先核验 PID 身份（`_verified_pid`）；核验不过就**不杀**，由新 watcher 自己去
       抢协调锁，抢不到就如实回 `coord_lock_held_by_other`（带 `previous_watch` 说明没杀成的原因）。
       "端点立刻返回 job id、由前端轮询"那一半要改 HTTP 面（`af_api.py`），不在这次的射程内。
+    """
+    _real_root = store_root if isinstance(store_root, (str, os.PathLike)) else None
+    _gate_store = GraphStore(str(_real_root)) if _real_root else None
+    # dry-live 不动设备（do 只记意图）——与 live_preflight 的 confirm 检查同口径，免码。
+    if not dry_live:
+        code_tag = _auth_code_check(_gate_store, auth_code, action="启动真机监听（start_watch）")
+    else:
+        code_tag = ""
+    out = _start_watch_impl(ir, store_root=store_root, dry_live=dry_live)
+    if code_tag:
+        out["authorized_by"] = code_tag
+        # AF-403 后半（裁定 Q4）：过闸凭据进审计流水。
+        try:
+            from .af_audit import AuditEvent as _AE, record_deploy as _rd
+            _rd(
+                _AE("WATCH_STARTED", at=datetime.now(timezone.utc),
+                    message="live watch started (manual entry)",
+                    data={"authorized_by": code_tag, "pid": out.get("pid")}),
+                _gate_store,
+            )
+        except Exception as exc:
+            logger.warning("WATCH_START_AUDIT_RECORD_FAILED 监听已起但记账失败：%s", exc)
+    return out
+
+
+def _restore_watch_after_restart(ir: dict, store_root: str) -> dict[str, Any]:
+    """serve 进程重启的自动恢复（DCD 裁定 2026-10-30 §2.2 前半）。
+
+    ★ **自动恢复特例：⛔ 扩权，仅限 serve 启动序列内调用。** 进程重启时无人可给码，
+    加码＝把「进程死了有人补监听」换成「进程死了没人补」（假武装比免码更危险）。
+    免码的正当性来自"无人值守"，与 dry-live 的免码（不动设备）是两种理由，⛔ 混写。
+    函数层与公开 start_watch 分开，防参数漏传重开旁门。
+    """
+    return _start_watch_impl(ir, store_root=store_root, dry_live=False)
+
+
+def _start_watch_impl(ir: dict, store_root: str | None = None, dry_live: bool = True) -> dict[str, Any]:
+    """`start_watch` 的实现体（两条路径共用；闸在公开入口与自动恢复各自的包装层）。
 
     20261012 审计席确证的两格磁盘卫生（本批收）：
     - 每次启动建的 `watch-ir-*` 目录**先扫旧再建新**（`_reap_stale_watch_scratch`），`Popen` 抛错

@@ -76,7 +76,7 @@ src/autoforge/af_service.py#fake-ok-const#save_graph
 src/autoforge/af_service.py#fake-ok-const#set_graph_tags
 src/autoforge/af_service.py#fake-ok-const#simulate_track
 src/autoforge/af_service.py#fake-ok-const#spec_of
-src/autoforge/af_service.py#fake-ok-const#start_watch
+src/autoforge/af_service.py#fake-ok-const#_start_watch_impl
 src/autoforge/af_service.py#fake-ok-const#submit_pending
 src/autoforge/af_store.py#fake-ok-const#GraphStore.import_bundle
 src/autoforge/af_telemetry.py#fake-ok-const#TelemetryStore.usage

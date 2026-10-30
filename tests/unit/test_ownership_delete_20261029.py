@@ -163,7 +163,8 @@ def test_reconcile_refuses_loudly_when_lock_held(tmp_path, monkeypatch):
     merged = {"automations": [{"id": "x", "name": "n", "version": 1, "mode": "single",
                                "nodes": [], "edges": []}]}
     monkeypatch.setattr(svc, "_build_merged_ir", lambda store: merged)
-    monkeypatch.setattr(svc, "start_watch",
+    # DCD 2026-10-30 拆层后 _ensure_watcher 走免闸实现体（enable 的码闸在先，码只收一次）
+    monkeypatch.setattr(svc, "_start_watch_impl",
                         lambda **kw: {"ok": False, "reason": "coord_lock_held_by_other"})
     r = svc._ensure_watcher(GraphStore(str(tmp_path / "s")), enabled=True)
     assert r["action"] == "refused"

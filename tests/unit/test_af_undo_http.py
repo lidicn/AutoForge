@@ -198,8 +198,14 @@ def test_live_run_records_pre_snapshot_and_undo_restores_it(tmp_path, noauth, mo
     assert body["final_states"]["binary_sensor.hall"] is None
     assert body["final_states"]["light.study"] == "on"
 
-    u = client.post(f"/api/undo/{deploy_id}", json={"confirm": True})
+    u = client.post(f"/api/undo/{deploy_id}", json={"confirm": True, "auth_code": _code})
     assert u.status_code == 200, u.json()
+    # DCD 2026-10-30 Q4：过闸凭据标签要出现在回执与审计流水（deploy_audit.jsonl）
+    assert u.json().get("authorized_by"), "撤销回执要带 authorized_by（过闸无痕=查不到哪把放行）"
+    _audit_path = _P(tmp_path) / "deploy_audit.jsonl"
+    if _audit_path.exists():
+        assert "authorized_by" in _audit_path.read_text(encoding="utf-8"), \
+            "authorized_by 没进审计流水（AF-403 后半）"
     body = u.json()
     assert body["restored"] == ["light.study"]
     assert body["fully_restored"] is True
@@ -255,7 +261,14 @@ def test_undo_refuses_expired_window_via_http(tmp_path, noauth, monkeypatch):
     preview = client.get("/api/undo/dep-old").json()
     assert preview["expired"] is True and preview["undoable"] is False
 
-    r = client.post("/api/undo/dep-old", json={"confirm": True})
+    # DCD 裁定 2026-10-30（AF-601）：撤销=真机回放要码——这条腿量的是窗口过期
+    # 口径，签一枚同根真码带上传码路径。
+    from pathlib import Path as _P
+    from autoforge.af_auth import AuthCodeStore
+    _rec = AuthCodeStore(_P(tmp_path) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    _code = getattr(_rec, "code", None) or _rec["code"]
+
+    r = client.post("/api/undo/dep-old", json={"confirm": True, "auth_code": _code})
     assert r.status_code == 200
     assert r.json()["ok"] is False and r.json()["reason"] == "expired"
 

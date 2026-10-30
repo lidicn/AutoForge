@@ -51,7 +51,7 @@ def _call_names(node: ast.AST) -> list[str]:
 
 def test_a1_start_watch_reaps_before_creating():
     tree = ast.parse(_src_text())
-    start = _func(tree, "start_watch")
+    start = _func(tree, "_start_watch_impl")
     assert "_reap_stale_watch_scratch" in _call_names(start), (
         "start_watch 不再先扫旧目录 ⇒ `watch-ir-*` 又回到只增不减那一档"
     )
@@ -59,7 +59,7 @@ def test_a1_start_watch_reaps_before_creating():
 
 def test_a2_mkdtemp_carries_the_sweepable_prefix():
     tree = ast.parse(_src_text())
-    start = _func(tree, "start_watch")
+    start = _func(tree, "_start_watch_impl")
     mkdtemp = [
         c
         for c in ast.walk(start)
@@ -77,7 +77,7 @@ def test_a2_mkdtemp_carries_the_sweepable_prefix():
 
 def test_a3_log_gate_runs_before_the_log_is_opened():
     tree = ast.parse(_src_text())
-    start = _func(tree, "start_watch")
+    start = _func(tree, "_start_watch_impl")
     #: ⚠️ 只取 `ast.Call` 节点。先前写成「凡子树里含这枚调用的节点都算」，外层 `FunctionDef`
     #: 自己就含全部调用、行号永远是 `def` 那一行 ⇒ 这一档怎么挪都绿（变异 M3 实测撞过）。
     gate = [
@@ -98,7 +98,7 @@ def test_a3_log_gate_runs_before_the_log_is_opened():
 
 def test_a4_popen_failure_path_drops_its_own_scratch():
     tree = ast.parse(_src_text())
-    start = _func(tree, "start_watch")
+    start = _func(tree, "_start_watch_impl")
     handlers = [h for h in ast.walk(start) if isinstance(h, ast.ExceptHandler)]
     assert any("_drop_watch_scratch" in _call_names(h) for h in handlers), (
         "子进程确定没起来那一档不收回本次目录，就得等下一次启动才扫——失败路径正是最容易连撞的"
@@ -282,6 +282,8 @@ def start_watch(ir, store_root=None):
 
 
 def test_c1_the_pre_fix_shape_fails_the_same_predicates():
+    # PRE_FIX 是 2026-10-12 修前形状的历史快照——函数名就是当时的 start_watch；
+    # 2026-10-30 拆层（DCD AF-602）后现役函数叫 _start_watch_impl，快照不改历史。
     tree = ast.parse(PRE_FIX)
     start = _func(tree, "start_watch")
     names = _call_names(start)
@@ -304,4 +306,4 @@ def test_c2_the_real_writer_is_wired_not_just_defined():
     tree = ast.parse(_src_text())
     for helper in ("_reap_stale_watch_scratch", "_drop_watch_scratch", "_gate_watch_log"):
         _func(tree, helper)
-        assert helper in _call_names(_func(tree, "start_watch")), f"{helper} 只在定义里，没接上落盘点"
+        assert helper in _call_names(_func(tree, "_start_watch_impl")), f"{helper} 只在定义里，没接上落盘点"
