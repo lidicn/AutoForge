@@ -92,6 +92,10 @@ CHECKS: dict[str, str] = {
     "ENTITY_GUARD_TIER0": "设备保护 Tier-0：读取/写入须经人工审批",
     # ── v1.7.4 ask 节点需 DB 承接 ──
     "ASK_AT_RUNTIME": "IR 含 ask 节点：运行期挂起等待回答，需豆包管家（DB）对接 TTS/语音或 WebUI 应答",
+    # ── v1.14.22 假绿三族收口（审计 AF-123/124/125）──
+    "TIME_AT_INVALID": "time 触发的 at 字段不是 HH:MM(:SS) 或 sunrise/sunset±offset——25:00 这类值 build 照样 ok 是假绿",
+    "SERVICE_UNKNOWN": "do 动作的服务名在该域不存在（turn_onnn）——build/sim 双绿但真机必 404",
+    "ENTITY_CHECK_DEGRADED": "设备目录为空，实体存在性校验静默跳过（entity_check=skipped 但零诊断）——假绿通道",
 }
 
 #: 诊断码 → **怎么改**（v1.2.0：让 Agent 一次往返就能自修正，而不是自己推断修法）
@@ -155,6 +159,9 @@ CODE_HINT: dict[str, str] = {
     "ASK_AT_RUNTIME": "ask 节点是运行期挂起点：自动化跑到此处暂停，等豆包管家（DB）通过 TTS 播报"
                           "并接收语音/文本回答，再 POST /api/sessions/{id}/answer 恢复实例。"
                           "确认 DB 已对接此房间（room 字段）；未对接时实例会走 on_timeout 静默兜底。",
+    "TIME_AT_INVALID": "at 用 HH:MM（或 HH:MM:SS），日落日出写 sunrise/sunset（可带 ±HH:MM offset）。",
+    "SERVICE_UNKNOWN": "服务名打错（turn_onnn）；该域合法服务用 af_resolve_entity 查 services 清单。",
+    "ENTITY_CHECK_DEGRADED": "先 af_catalog 刷新设备目录再 build——空目录时幽灵实体检测不到，这条 ok 不可信。",
 }
 
 _SHADOW_LOW = 0.60
@@ -412,6 +419,8 @@ class StaticScanner:
             self._check_expr_namespaces(auto, node, out)
             self._check_unresolved(auto, node, out)
             self._check_trigger_depth(auto, node, out)
+            # AF-125（假绿三族，v1.14.22）：服务词汇此前零校验
+            self._check_service_vocab_node(auto, node, out)
             # 参数容器是**闸门口径**：运行期的泛容器遍历腿（版本投影 / 冲突内省 / NL 渲染）
             # 都接了同一份预算，但闸门原本不查，于是"build 放行、运行期内省必失败"的 IR
             # 能进库；而冲突内省失败会被 dispatch 的 `except Exception` 变成降级放行。
@@ -428,6 +437,8 @@ class StaticScanner:
         self._check_shadow(auto, out)
         self._check_low_confidence(auto, out)
         self._check_entry(auto, out)
+        # AF-124（假绿三族，v1.14.22）：time 触发 at 校验（自动化级：按节点扫触发器）
+        self._check_time_at(auto, out)
         self._check_entities(auto, out)
         self._check_static_loop(auto, out)
         self._check_emit(auto, out)
@@ -794,6 +805,73 @@ class StaticScanner:
                 )
             )
 
+    # AF-124（假绿三族）：time 触发的 at 从来没人校验——`25:00` 一路绿灯到归档。
+    # 校验口径：HH:MM 或 HH:MM:SS（00-23/00-59），或 sunrise/sunset（可带 ±offset）。
+    _TIME_AT_RE = __import__("re").compile(
+        r"^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$"
+        r"|^(?:sunrise|sunset)(?:[+-]\d+:[0-5]\d)?$"
+    )
+
+    def _check_time_at(self, auto: Automation, out: ScanResult) -> None:
+        for node in auto.nodes.values():
+            tr = getattr(node, "trigger", None)
+            if tr is None or getattr(tr, "type", "") != "time":
+                continue
+            at = str(getattr(tr, "at", "") or "").strip()
+            if not at:
+                # 缺 at 已有 TRIGGER_INVALID 家族管……吗？不——那是 depth 检查。
+                # 缺 at 是「时间触发没时间」，也在这条报（同一枚码，同一族假绿）
+                out.diagnostics.append(
+                    Diagnostic(
+                        "TIME_AT_INVALID",
+                        ERROR,
+                        f"节点 {node.id} 的 time 触发缺 at 字段：时间触发器没有触发时刻，永远不会触发",
+                        auto.id,
+                        node.id,
+                    )
+                )
+                continue
+            if not self._TIME_AT_RE.match(at):
+                out.diagnostics.append(
+                    Diagnostic(
+                        "TIME_AT_INVALID",
+                        ERROR,
+                        f"节点 {node.id} 的 time 触发 at={at!r} 不是合法时刻"
+                        f"（HH:MM[:SS] 或 sunrise/sunset[±offset]）——build 此前照样 ok 是假绿",
+                        auto.id,
+                        node.id,
+                    )
+                )
+
+    # AF-125（假绿三族）：`light.turn_onnn` 实体是真的、服务名是幽灵——实体存在性
+    # 校验管不到这一层，build ok + sim ok + 真机 404。判据用 af_affordance 的
+    # 域服务表（DOMAIN_AFFORDANCE）+ `set_state`/`toggle` 全域逃生口（fake.py 同口径）。
+    def _check_service_vocab_node(self, auto: Automation, node: Node, out: ScanResult) -> None:
+        from .af_affordance import DOMAIN_AFFORDANCE
+        if node.kind != "do" or not node.action:
+            return
+        action = str(node.action)
+        if action.count(".") != 1:
+            return  # 非 domain.service 形状（automation.trigger 等另有分类管）
+        domain, service = action.split(".", 1)
+        if service in ("set_state", "toggle"):
+            return  # 全域逃生口（状态提供者接口 / 通用翻转）
+        spec = DOMAIN_AFFORDANCE.get(domain)
+        if spec is None:
+            return  # 未登记域不猜词汇（affordance_for 同口径：服务表请查 attributes）
+        if service not in (spec.get("services") or {}):
+            out.diagnostics.append(
+                Diagnostic(
+                    "SERVICE_UNKNOWN",
+                    ERROR,
+                    f"动作 {action!r} 的服务 {service!r} 不在 {domain!r} 域的服务表里"
+                    f"（该域已知：{sorted((spec.get('services') or {}).keys())[:8]}…）"
+                    f"——build/sim 双绿但真机必 404",
+                    auto.id,
+                    node.id,
+                )
+            )
+
     # 入口节点：一条自动化必须能被触发（2026-10-17 敲打 N02）
     def _check_entry(self, auto: Automation, out: ScanResult) -> None:
         if not auto.entry_nodes():
@@ -1014,6 +1092,21 @@ class StaticScanner:
                             auto.id,
                         )
                     )
+        elif refs:
+            # AF-123（假绿三族，v1.14.22）：目录为空 ⇒ 存在性校验静默退化 skipped。
+            # 「没刷过目录」与「实体全不存在」在回执里只有一个 entity_check=skipped 字样、
+            # 零诊断——审计拿幽灵实体连过 40 问就是这么来的。退化必须显式标注，
+            # 不许装作校验过（不拦截：空目录是合法首建态，fail-open 但要说话）。
+            out.diagnostics.append(
+                Diagnostic(
+                    "ENTITY_CHECK_DEGRADED",
+                    WARNING,
+                    f"自动化 `{auto.id}` 引用了 {len(refs)} 个实体但设备目录为空，"
+                    f"存在性校验被跳过（entity_check=skipped）——幽灵实体检测不到，"
+                    f"先 af_catalog 刷新目录再 build",
+                    auto.id,
+                )
+            )
 
         # v1.6.0 P2 联动验证闸：引用了「此刻不可用」的实体 → **显式标注**（防假绿）。
         # 只告警不拦截：设备可能只是临时离线，静默替 Agent 判死是更大的错（fail-closed 纪律）。

@@ -90,9 +90,11 @@ def test_real_repo_site_readings_are_pinned(real):
     from collections import Counter
 
     lv = Counter(s["level"] for s in real["sites"])
-    assert len(real["sites"]) == 204
+    # 204 → 205（2026-10-30 v1.14.21 归属收口批）：`list_quarantined` 隔离区清单
+    # 新增 1 枚带码站点（warning 138→139）。AF-507 两轮未动的账，这笔随 v1.14.22 补齐。
+    assert len(real["sites"]) == 205
     assert len({s["path"] for s in real["sites"]}) == 32
-    assert dict(lv) == {"debug": 22, "info": 9, "warning": 138, "error": 24, "exception": 11}
+    assert dict(lv) == {"debug": 22, "info": 9, "warning": 139, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -134,8 +136,10 @@ def test_real_repo_named_code_readings_are_pinned(real):
 
     coded = real["coded"]
     # 89→90 站／86→87 枚：返工 5.1③ `PAIR_LINK_FAILURE_COUNT_WRITE_FAILED`（af_api），出处链见上两条腿
-    assert len(coded) == 90
-    assert len({s["code"] for s in coded}) == 87
+    # 90→91 站／87→88 枚（2026-10-30 v1.14.21）：`af_service.list_quarantined` 隔离区归属
+    # 读不出的降级留痕（AF-501 批），同因同形状，+1 站 +1 码。
+    assert len(coded) == 91
+    assert len({s["code"] for s in coded}) == 88
     # 41 站／38 枚＝仓内三例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
     # ① `DEPLOY_AUDIT_PERSIST_FAILED` 同时出自「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」
     #    两条腿——同一句承诺（台账没落稳）；
@@ -208,7 +212,7 @@ def test_real_repo_every_named_code_is_registered(real):
     # `INBOX_REJECT_STALE` 两枚新码入 §三（af_live.read_answer_inbox），同上。
     # 86 → 87 枚／89 → 90 站（2026-10-26 返工 5.1③）：`PAIR_LINK_FAILURE_COUNT_WRITE_FAILED`
     # 入 §三（af_api._pair_record_failure 吞异常改留痕），同上。
-    assert info["codes"] == 87 and info["coded"] == 90
+    assert info["codes"] == 88 and info["coded"] == 91
 
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
@@ -252,8 +256,11 @@ def test_real_repo_http_face_readings_are_pinned(real):
     # 返工 5.1：98→102——第四批批 0-5 在 af_api 新增端点与 Depends 装配。
     # ok_true 现读 32（返工 5.1 把 agent-token/pair-link/pair 三处的 `"ok": True` 字面量
     # 改成派生值，先例=api_pair_redeem 的 ok=verified，消 AST 门 fake-ok-const 3 枚）。
-    assert http["ok_true"] == 32
-    assert http["depends"] == 102
+    # ok_true 32 → 31（2026-10-30 v1.14.21）：`af_api` 的 enable 端点回执 ok 改派生值
+    #（归属/码闸收口批），无账可对格按 #134 口径重钉现读。
+    # depends 102 → 103（同批）：enable 端点装配 caller 主体 Depends（归属收口）。
+    assert http["ok_true"] == 31
+    assert http["depends"] == 103
 
 
 def test_real_repo_debt_rows_match_fresh_readings(real):

@@ -117,8 +117,13 @@ def test_service_tags_and_enable_by_tag(tmp_path):
     # g2 不受影响
     assert all(a.enabled for a in store.load("g2", store.latest("g2")))
 
-    # 批量启用回来
-    enable_by_tag(store, "lighting", True)
+    # 批量启用回来（AF-401 后启用要过服务层码闸——这条腿量的是批量启停语义，
+    # 签一枚真码过闸；禁用免码已由上面的 disable 验证）
+    from pathlib import Path as _P
+    from autoforge.af_auth import AuthCodeStore
+    _rec = AuthCodeStore(_P(store.root) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    enable_by_tag(store, "lighting", True,
+                  auth_code=getattr(_rec, "code", None) or _rec["code"])
     assert all(a.enabled for a in store.load("g1", store.latest("g1")))
 
     # set_graph_tags 覆盖式设置
@@ -172,5 +177,10 @@ def test_api_graphs_enable_disable_by_tag(tmp_path, monkeypatch):
     client.post("/api/graphs/disable", json={"tag": "lighting"})
     ver = store.latest("g1")
     assert all(not a.enabled for a in store.load("g1", ver))
-    client.post("/api/graphs/enable", json={"tag": "lighting"})
+    # AF-401 后 REST /api/graphs/enable 要 auth_code（禁用免码）——签一枚同根真码
+    from pathlib import Path as _P
+    from autoforge.af_auth import AuthCodeStore
+    _rec = AuthCodeStore(_P(store.root) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    client.post("/api/graphs/enable", json={"tag": "lighting",
+                                            "auth_code": getattr(_rec, "code", None) or _rec["code"]})
     assert all(a.enabled for a in store.load("g1", store.latest("g1")))

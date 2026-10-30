@@ -94,6 +94,10 @@ def test_dirty_check_ignores_untracked_files(tmp_path):
     (repo / "src.py").write_text("x = 1\n", encoding="utf-8")
     (repo / "src.py.bak").write_text("x = 0\n", encoding="utf-8")  # 未跟踪
     subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    # CI runner 无全局 git identity ⇒ commit 128（2026-10-30 CI #257 实测红）。
+    # 临时仓自备身份，不依赖宿主配置。
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "ci@test"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "ci"], check=True)
     subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
     # 脚本实际用的命令（--untracked-files=no）必须不再数到 .bak

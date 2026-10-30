@@ -4,8 +4,8 @@
 > **本文回答什么**：AF **怎么搭的、怎么跑的、每道闸在哪个文件哪一行**。用法、清单、命令速查在《AF完整知识文档.md》。
 > **两文档分工**（避免同一事实长两处、改一处漏一处）：
 > - 本文 = 机制与不变量（档位语义、闸门位置、失败面、出向唯一生产者）。
-> - 知识文档 = 面与清单（MCP 31 工具表、HTTP 路由表、CLI 18 命令、IR 语言参考、安全闸 47 项）。
-> **取证口径**：所有 `file:line` 均可用 `git show HEAD:<file>` 复核；行数是当场用注册表/枚举读出来的（`len(TOOLS)=34`、`len(CHECKS)=47`、`len(app.routes 含 methods)=90`、`forge --help` 命令表 18 条），不是手抄。
+> - 知识文档 = 面与清单（MCP 36 工具表、HTTP 路由表、CLI 18 命令、IR 语言参考、安全闸 50 项）。
+> **取证口径**：所有 `file:line` 均可用 `git show HEAD:<file>` 复核；行数是当场用注册表/枚举读出来的（`len(TOOLS)=36`、`len(CHECKS)=50`、`len(app.routes 含 methods)=90`、`forge --help` 命令表 18 条），不是手抄。
 
 ---
 
@@ -69,7 +69,7 @@
 | 层 | 模块 | 责任 |
 |---|---|---|
 | **IR 与编译** | `af_ir/`（models/schema/condition_norm/…）、`af_spec.py`、`af_nl.py`、`af_nl_parse.py`、`af_nl_build.py`、`af_fidelity.py` | 图模型、JSON Schema、AF-Spec 文本⇄IR、NL 渲染与解析、往返保真 |
-| **第一道闸** | `af_scanner.py`（`CHECKS` 47 项、`live_preflight`、`DeviceGuardRegistry`）、`af_irreversible.py` | 编译期静态安全闸、L2/L3 不可逆字段标注 |
+| **第一道闸** | `af_scanner.py`（`CHECKS` 50 项、`live_preflight`、`DeviceGuardRegistry`）、`af_irreversible.py` | 编译期静态安全闸、L2/L3 不可逆字段标注 |
 | **第二道闸** | `af_vhass/`（`fake.py` 唯一效果真值表、`high_fidelity.py`）、`af_expect.py` | 双轨仿真 + 后置条件断言 |
 | **设计链** | `af_draft.py`（staging，进程内 TTL，不落盘）、`af_apply.py`、`af_premiere.py`、`af_pending.py`、`af_service.py` | 意图→IR→校验→仿真→（预演）→入队→试演期 |
 | **运行态** | `af_runtime.py`、`af_executor.py`、`af_scheduler.py`、`af_bus.py`、`af_state.py`、`af_registry.py`、`af_time.py` | 实例生命周期、事件总线、调度、状态源、时钟 |
@@ -92,7 +92,7 @@
    ↓ af_draft(intent)                    进程内 staging（TTL，不落盘）af_draft.py:51
    ↓ 返回 ref（IR 永不回传，防上下文炸）
    ↓ af_apply(ref, stage=?)              af_apply.py:72
-   ├── build   → StaticScanner 47 项 CHECKS
+   ├── build   → StaticScanner 50 项 CHECKS
    ├── simulate→ af_service.simulate / simulate_track（双轨）
    ├── [dry_run] → 到此为止，零写入            af_apply.py:189-193
    └── save    → submit_pending 入待批队列      af_apply.py:196-204

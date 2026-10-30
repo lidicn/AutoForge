@@ -390,6 +390,16 @@ def test_real_every_auto_doc_is_in_roster():
 def test_real_red_cause_is_exact_phrase():
     """红因逐字含「清单与源码不同批」——这是裁定 §一 Q1 钉死的措辞。"""
     mod = _load()
+    # CI（actions/checkout）默认浅克隆 ⇒ 历史里的 779b9ed 读不出来（rev-parse 128）。
+    # 这条腿量的是**那笔历史违规的文案**，浅克隆上无从量——跳过不算放水：
+    # rc 永不为 2 与真实红形状由合成树腿覆盖，本地全克隆上本腿照跑。
+    probe = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "--verify", "779b9ed^{commit}"],
+        capture_output=True, text=True,
+    )
+    if probe.returncode != 0:
+        import pytest
+        pytest.skip(f"浅克隆读不出 779b9ed（CI 默认 fetch-depth=1）——文案腿由本地全克隆覆盖")
     # 779b9ed 是本门上线后咬到的第一枚真违规（交接单 §2 永久坐在那笔上）。
     p = subprocess.run(
         [sys.executable, str(SCRIPT), "--repo", str(ROOT), "--rev", "779b9ed"],

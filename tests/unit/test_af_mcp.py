@@ -136,7 +136,12 @@ def test_read_tools_hide_unowned_archives_from_plain_agents(tmp_path):
 
 def test_dispatch_export_import_roundtrip(tmp_path):
     store = GraphStore(tmp_path)
-    _seed(store)
+    # AF-504 归属收口后 export 按调用方份额导出——归档要落在调用主体名下，
+    # 这条腿量的才是 roundtrip（导出→导入）而不是"空份额导出"。
+    g = load_graph(_DEMO_IR)
+    store.save(g, "demo", note="v1", owner="test-all")
+    store.save(g, "demo", note="v2", owner="test-all")
+    store.set_tags("demo", ["lighting", "test"])
     exported, _ = dispatch("af_export_store", {}, store, _ALL)
     body = _load(exported[0]["text"])
     assert body["names"] == ["demo"]

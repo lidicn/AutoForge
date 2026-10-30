@@ -178,7 +178,7 @@ forge sim examples/ir/case01_day_light.json
 | 面 | 现读口径 | 真源锚点 |
 |---|---|---|
 | 项目声明下限（真源） | `>=3.11` | `pyproject.toml:10` |
-| CI 的四个 Python 作业钉值 | `3.11` | `.github/workflows/ci.yml:16` |
+| CI 的四个 Python 作业钉值 | `3.11` | `.github/workflows/ci.yml:20` |
 | 交付镜像 base | `3.14` | `docker/Dockerfile.api:27` |
 | 测试镜像 base | `3.14` | `docker/Dockerfile.test:13` |
 
