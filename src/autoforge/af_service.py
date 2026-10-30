@@ -433,8 +433,57 @@ def delete_graph(
             "message": (f"归档 {name!r} 的隔离未完成（源目录已移除={src_gone}，"
                         f"隔离区已出现={landed}）——没有报告成功，请人工核对目录状态"),
             "fix": {"quarantine_dir": str(Path(store.root) / GraphStore.TRASH_DIR),
-                    "next_action": "af_list_quarantined 或人工检查 store.root 下该归档目录"},
+                    "next_action": "af_quarantine 列隔离区，或人工检查 store.root 下该归档目录"},
         }
+    return out
+
+
+def list_quarantined(store: GraphStore, *, caller: str = "", caller_is_owner: bool = False) -> dict[str, Any]:
+    """隔离区清单（AF-501）：`af_delete_graph` 的回执一直把 next_action 指向
+    一个不存在的工具——删除能力上线却看不到隔离区，等于「删了就黑箱」。
+    owner 面看全量；普通 agent 只看自己名下被隔离的。归属从**隔离目录里的版本
+    记录**读（`history()` 只扫活目录 `*/v*.json`，隔离后的归档不在其中）。
+    """
+    names = store.list_quarantined()
+    trash = Path(store.root) / GraphStore.TRASH_DIR
+
+    def _quarantined_owner(qname: str) -> str:
+        original = qname.split("--", 1)[0]
+        live = _existing_owner(store, original)
+        if live:
+            return live
+        # 活目录已无此归档 ⇒ 从隔离目录自己的版本记录里读归属
+        qdir = trash / qname
+        if not qdir.is_dir():
+            return ""
+        try:
+            records = sorted(qdir.glob("v*.json"))
+            if not records:
+                return ""
+            import json as _json
+            rec = _json.loads(records[-1].read_text(encoding="utf-8"))
+            return str(rec.get("owner") or "")
+        except (ValueError, OSError):
+            return ""
+
+    items: list[str] = []
+    hidden = 0
+    for q in names:
+        if caller and not caller_is_owner:
+            if _quarantined_owner(q) == caller:
+                items.append(q)
+            else:
+                hidden += 1
+        else:
+            items.append(q)
+    # fake-ok-const 门：`ok` 必须派生自读数本身（len(items) == len(想要的范围)），
+    # 不是字面量 True——对照 delete_graph 的 verified_by_readback 同款纪律
+    visible_total = len(items) + (hidden if (caller and not caller_is_owner) else 0)
+    ok = len(names) == visible_total
+    out: dict[str, Any] = {"ok": ok, "items": items, "count": len(items)}
+    if caller and not caller_is_owner:
+        out["hidden_count"] = hidden
+        out["scope"] = f"owner:{caller}"
     return out
 
 
@@ -453,17 +502,34 @@ def set_graph_tags(
     return {"ok": True, "name": name, "tags": store.get_tags(name)}
 
 
-def graphs_by_tag(store: GraphStore, tag: str) -> dict[str, Any]:
-    """返回带某标签的所有归档名（及其最新版本信息）。"""
+def graphs_by_tag(
+    store: GraphStore, tag: str, *, caller: str = "", caller_is_owner: bool = False,
+) -> dict[str, Any]:
+    """返回带某标签的所有归档名（及其最新版本信息）。
+
+    审计 AF-504：带身份的非 owner 面按归属过滤（别人的不进列表），
+    并像 `list_graphs` 一样报 `hidden_count`——agent 要能知道看到的不是全量；
+    校验失败的归档不再静默消失，进 `unavailable` 名单（原来"同一条数据在
+    `af_list_graphs` 可见、在 `af_graphs_by_tag` 隐身"还无解释）。
+    """
     names = [n for n, ts in store.all_tags().items() if tag in ts]
+    # 带身份先做范围判定，未带身份的旧路径维持全量（渐进收口，与 list_graphs 同口径）
+    scoped_names = [
+        n for n in names
+        if not (caller and not caller_is_owner) or _existing_owner(store, n) == caller
+    ]
+    hidden = len(names) - len(scoped_names)
     items = []
-    for name in names:
+    unavailable: list[str] = []
+    for name in scoped_names:
         try:
             latest_version = store.latest(name)
             if latest_version is None:
+                unavailable.append(name)
                 continue
             graph = store.load(name, latest_version)
         except (FileNotFoundError, IRValidationError, OSError):
+            unavailable.append(name)
             continue
         try:
             tags = store.get_tags(name)
@@ -478,7 +544,15 @@ def graphs_by_tag(store: GraphStore, tag: str) -> dict[str, Any]:
                 "tags": tags,
             }
         )
-    return {"ok": True, "tag": tag, "items": sorted(items, key=lambda x: x["name"])}
+    out: dict[str, Any] = {"ok": True, "tag": tag,
+                           "items": sorted(items, key=lambda x: x["name"])}
+    # 范围透明（AF-504）：缺口要么说数量（别人的），要么点名（读不出的）——都不许静默
+    if caller and not caller_is_owner:
+        out["hidden_count"] = hidden
+        out["scope"] = f"owner:{caller}"
+    if unavailable:
+        out["unavailable"] = sorted(unavailable)
+    return out
 
 
 def _ensure_watcher(store: GraphStore, *, enabled: bool):
@@ -1589,12 +1663,16 @@ def _assert_archive_mutator(
     - 归档已归属他人：调用方须是归属人本人或 owner 面（`owner`/`shared`）；
       未携带身份（旧调用方/MCP 未透传 `current`）不阻断，留给后续批次收口。
     - 归档无归属：仅 owner 面可改（fail-closed，不因 D5 未修而漏）；未携带身份的旧调用方放行。
+
+    ⛔ 拒绝文案不点归属者的名（审计 AF-509）：`set_tags/enable/delete` 共用这条文案，
+    写上"归属 'agent-b'"等于给调用方一条批量采集全库归属者名单的通道——与同批
+    `get_graph` 的「与不存在逐字同形」自相矛盾。归属者是谁，owner 面自己查去。
     """
     prev = _existing_owner(store, name)
     if prev:
         if caller and prev != caller and not caller_is_owner:
             raise ServiceError(
-                f"归档 {name!r} 归属 {prev!r}，当前主体 {caller!r} 无权{action}（所有权隔离）",
+                f"归档 {name!r} 不属于当前主体（或不存在），无权{action}",
                 status=403,
             )
     elif caller and not caller_is_owner:
@@ -1602,6 +1680,19 @@ def _assert_archive_mutator(
             f"归档 {name!r} 无归属，仅 owner 面可{action}（所有权隔离）",
             status=403,
         )
+
+
+def _assert_archive_visible(
+    store: GraphStore, name: str, *, caller: str, caller_is_owner: bool,
+) -> None:
+    """读面归属判定（审计 AF-504）：非 owner 面读别人的归档时抛 404——
+    文案与「归档不存在」逐字同形（与 `_t_get_graph` 收口面同款，⛔ 不回
+    "无权查看"：那等于承认存在）。未携带身份的旧调用路径不阻断（渐进收口）。
+    """
+    if not caller or caller_is_owner:
+        return
+    if _existing_owner(store, name) != caller:
+        raise ServiceError(f"没找到归档 {str(name)!r}（或它不属于你）", status=404)
 
 
 def _check_blast(count: int, what: str) -> None:
@@ -1615,7 +1706,11 @@ def _check_blast(count: int, what: str) -> None:
         )
 
 
-def get_conf(store: GraphStore, name: str) -> dict[str, Any]:
+def get_conf(
+    store: GraphStore, name: str, *, caller: str = "", caller_is_owner: bool = False,
+) -> dict[str, Any]:
+    # 审计 AF-504：置信度读面同样按归属收口——非 owner 面读别人的归档回 404 同形文案
+    _assert_archive_visible(store, name, caller=caller, caller_is_owner=caller_is_owner)
     if name in _ALL_NAMES:
         merged: dict[str, dict[str, Any]] = {}
         for archive in _archive_names(store):
@@ -1723,7 +1818,12 @@ def _load_or_404(store: GraphStore, name: str, version: int):
         ) from exc
 
 
-def diff(store: GraphStore, name: str, old: int, new: int) -> dict[str, Any]:
+def diff(
+    store: GraphStore, name: str, old: int, new: int, *,
+    caller: str = "", caller_is_owner: bool = False,
+) -> dict[str, Any]:
+    # 审计 AF-504：版本差异读面按归属收口——diff 会吐他人 IR 的增删行，不只是元数据
+    _assert_archive_visible(store, name, caller=caller, caller_is_owner=caller_is_owner)
     old_graph = _load_or_404(store, name, old)
     new_graph = _load_or_404(store, name, new)
     result = diff_graphs(old_graph, new_graph)
@@ -2539,12 +2639,22 @@ def undo_deploy(
 # ─────────────────────────────────────────────────────────────────────
 
 
-def export_store(store: GraphStore) -> dict[str, Any]:
-    """导出整个 store 为可携带 bundle（含 tags，依赖 v0.6.0）。
+def export_store(
+    store: GraphStore, *, caller: str = "", caller_is_owner: bool = False,
+) -> dict[str, Any]:
+    """导出 store 为可携带 bundle（含 tags，依赖 v0.6.0）。
 
-    返回可直接 JSON 化的 dict（GraphStore.export_bundle 的形态）。
+    审计 AF-504（🔴 实测）：此前任何 read 令牌可整店导出**他人归档**。现在带身份的
+    非 owner 面导出自己名下的（别人的既不进 entries 也不进 names，`hidden_count`
+    报缺口）；owner 面仍是全量——导出的是「你的份额」，不是「全库」。
+    未携带身份的旧调用路径维持全量（渐进收口，与 list_graphs 同口径）。
     """
     bundle = store.export_bundle()
+    entries = list(bundle.get("entries", []))
+    if caller and not caller_is_owner:
+        scoped = [e for e in entries if _existing_owner(store, str(e.get("name", ""))) == caller]
+        hidden = len(entries) - len(scoped)
+        bundle = {**bundle, "entries": scoped}
     return {
         "ok": True,
         "format": bundle.get("format"),
@@ -2552,6 +2662,8 @@ def export_store(store: GraphStore) -> dict[str, Any]:
         "checksum": bundle.get("checksum"),
         "exported_at": bundle.get("exported_at"),
         "names": [e["name"] for e in bundle.get("entries", [])],
+        **({"hidden_count": hidden, "scope": f"owner:{caller}"}
+           if (caller and not caller_is_owner) else {}),
         "bundle": bundle,
     }
 

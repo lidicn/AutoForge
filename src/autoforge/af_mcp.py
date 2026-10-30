@@ -313,12 +313,28 @@ def _t_delete_graph(store: GraphStore, args: dict[str, Any],
                           "message": str(exc)}}
 
 
-def _t_by_tag(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    return svc.graphs_by_tag(store, args["tag"])
+def _t_by_tag(store: GraphStore, args: dict[str, Any],
+              current: dict[str, Any] | None = None) -> dict[str, Any]:
+    # AF-504：读面归属收口——工具层透传身份，服务层过滤（未带身份=旧路径全量）
+    return svc.graphs_by_tag(store, args["tag"],
+                             caller=str((current or {}).get("subject") or ""),
+                             caller_is_owner=_owner_face(current))
 
 
-def _t_conf(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    return svc.get_conf(store, args["name"])
+def _t_conf(store: GraphStore, args: dict[str, Any],
+            current: dict[str, Any] | None = None) -> dict[str, Any]:
+    return svc.get_conf(store, args["name"],
+                        caller=str((current or {}).get("subject") or ""),
+                        caller_is_owner=_owner_face(current))
+
+
+def _t_quarantine(store: GraphStore, args: dict[str, Any],
+                  current: dict[str, Any] | None = None) -> dict[str, Any]:
+    """【读】隔离区清单（AF-501）：af_delete_graph 的 next_action 一直指向
+    一个不存在的工具——删除能力上线却没有查询隔离区的工具面。"""
+    return svc.list_quarantined(store,
+                                caller=str((current or {}).get("subject") or ""),
+                                caller_is_owner=_owner_face(current))
 
 
 def _t_set_tags(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
@@ -334,12 +350,19 @@ def _t_enable(store: GraphStore, args: dict[str, Any], current: dict[str, Any] |
     return svc.enable_by_tag(
         store, args["tag"], bool(args["enabled"]),
         allow_bulk=bool(args.get("allow_bulk", False)),
+        caller=str((current or {}).get("subject") or ""),
+        caller_is_owner=_owner_face(current),
         auth_code=str(args.get("auth_code") or ""),
     )
 
 
-def _t_export(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    return svc.export_store(store)
+def _t_export(store: GraphStore, args: dict[str, Any],
+              current: dict[str, Any] | None = None) -> dict[str, Any]:
+    # AF-504（🔴）：此前任何 read 令牌可整店导出他人归档——审计实测
+    # agent-a 的 bundle 里含 ['mine','theirs']。现在导出的是调用方的份额。
+    return svc.export_store(store,
+                            caller=str((current or {}).get("subject") or ""),
+                            caller_is_owner=_owner_face(current))
 
 
 def _t_import(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -405,8 +428,11 @@ def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | N
     return svc.submit_pending(store, "af_save", payload, submitted_by=owner or "mcp", authenticated_subject=owner or None)
 
 
-def _t_diff(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    return svc.diff(store, args["name"], int(args["old"]), int(args["new"]))
+def _t_diff(store: GraphStore, args: dict[str, Any],
+            current: dict[str, Any] | None = None) -> dict[str, Any]:
+    return svc.diff(store, args["name"], int(args["old"]), int(args["new"]),
+                    caller=str((current or {}).get("subject") or ""),
+                    caller_is_owner=_owner_face(current))
 
 
 # ── v1.9.0 用户 WebUI：配对（MCP 连接认证）──
@@ -787,8 +813,10 @@ def _t_deploy_status(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 
 #: 需要注入当前令牌主体（`current`）的工具：用于归档归属 / 所有权隔离（v1.3.0）
 #: ＋ 部署请求的 requested_by 归属（v1.13.3 af_deploy）
+#: AF-504 归属读面收口（2026-10-30）：by_tag/conf/diff/export/quarantine 五枚入列
 _TOOLS_WITH_CONTEXT = frozenset({
-    _t_delete_graph, _t_list_graphs, _t_get_graph,_t_whoami, _t_save, _t_import, _t_enable, _t_deploy})
+    _t_delete_graph, _t_list_graphs, _t_get_graph,_t_whoami, _t_save, _t_import, _t_enable, _t_deploy,
+    _t_by_tag, _t_conf, _t_diff, _t_export, _t_quarantine})
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1061,6 +1089,14 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
         {"type": "object", "properties": {}},
         _t_list_graphs,
         None,
+    ),
+    (
+        "af_quarantine",
+        "【读】隔离区清单（.deleted/ 下可人工恢复的归档）。无参数。"
+        "普通 agent 只看自己名下被隔离的（hidden_count 报缺口）；owner 面看全量。",
+        {"type": "object", "properties": {}},
+        _t_quarantine,
+        "read",
     ),
     (
         "af_delete_graph",
