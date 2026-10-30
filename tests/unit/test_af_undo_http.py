@@ -168,6 +168,13 @@ def test_live_run_records_pre_snapshot_and_undo_restores_it(tmp_path, noauth, mo
     monkeypatch.setattr(svc, "LIVE_TRANSPORT_FACTORY", factory)
     client = TestClient(build_app(store_root=str(tmp_path)))
 
+    # AF-401 后 /api/live/run 过服务层码闸——这条腿量的是 undo 快照/还原链路，
+    # 在与 store 同根的 .auth 签一枚真码随请求带上（拒收语义另有套件钉）。
+    from pathlib import Path as _P
+    from autoforge.af_auth import AuthCodeStore
+    _rec = AuthCodeStore(_P(tmp_path) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    _code = getattr(_rec, "code", None) or _rec["code"]
+
     r = client.post(
         "/api/live/run",
         json={
@@ -176,6 +183,7 @@ def test_live_run_records_pre_snapshot_and_undo_restores_it(tmp_path, noauth, mo
             "events": [{"entity_id": "binary_sensor.hall", "state": "on"}],
             "confirm": True,
             "undo": True,
+            "auth_code": _code,
         },
     )
     assert r.status_code == 200, r.json()
@@ -208,6 +216,12 @@ def test_live_run_without_undo_flag_advertises_nothing(tmp_path, noauth, monkeyp
     monkeypatch.setattr(svc, "LIVE_TRANSPORT_FACTORY", lambda ha_url, token: FakeTransport())
     client = TestClient(build_app(store_root=str(tmp_path)))
 
+    # 同上：AF-401 服务层码闸——量的是 undo 开关回执形状，带上同根真码。
+    from pathlib import Path as _P
+    from autoforge.af_auth import AuthCodeStore
+    _rec = AuthCodeStore(_P(tmp_path) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    _code = getattr(_rec, "code", None) or _rec["code"]
+
     r = client.post(
         "/api/live/run",
         json={
@@ -215,6 +229,7 @@ def test_live_run_without_undo_flag_advertises_nothing(tmp_path, noauth, monkeyp
             "live_allow": ["light.study"],
             "events": [{"entity_id": "binary_sensor.hall", "state": "on"}],
             "confirm": True,
+            "auth_code": _code,
         },
     )
     assert r.status_code == 200, r.json()

@@ -204,9 +204,15 @@ def test_d4_tags_and_enable_owner_bypass(tmp_path, monkeypatch):
         headers=_bearer("tok-owner"),
     )
     assert r1.status_code == 200, r1.text
+    # AF-401 后启用过服务层码闸——owner 的**归属 bypass**只免归属判定，
+    # 不免码（那是出资人给的凭据，不是身份自带）。腿补一枚真码量 bypass 本体。
+    from pathlib import Path as _P
+    from autoforge.af_auth import AuthCodeStore
+    _rec = AuthCodeStore(_P(store_dir) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    _code = getattr(_rec, "code", None) or _rec["code"]
     r2 = client.post(
         "/api/graphs/enable",
-        json={"tag": "work"},
+        json={"tag": "work", "auth_code": _code},
         headers=_bearer("tok-owner"),
     )
     assert r2.status_code == 200, r2.text

@@ -186,13 +186,27 @@ def test_undeclared_argument_is_rejected(tmp_path):
 
 
 def test_declared_arguments_still_accepted(tmp_path):
-    """绿色一侧：声明过的键（含审计点名的 `allow_bulk`）照常进 handler。"""
+    """绿色一侧：声明过的键（含审计点名的 `allow_bulk`）照常进 handler。
+
+    AF-401 后启用闸在服务层——这条腿量的是"声明过的参数不遭 `未声明` 拒"，
+    enable 腿换成禁用（免码）+ 真码启用各一条：前者绕开码闸量 schema 面，
+    后者证明带 auth_code 的合法路径也不被 schema 面挡。
+    """
     store = GraphStore(tmp_path)
     content, is_error = dispatch("af_health", {}, store)
     assert is_error is False, _text(content)
     content, is_error = dispatch("af_enable_by_tag",
-                                 {"tag": "nope", "enabled": True, "allow_bulk": True}, store,
+                                 {"tag": "nope", "enabled": False, "allow_bulk": True}, store,
                                  {"subject": "rw", "scopes": ["read", "write"]})
+    assert is_error is False, _text(content)
+    assert "未声明" not in _text(content)
+    from autoforge.af_auth import AuthCodeStore
+    from pathlib import Path as _P
+    _rec = AuthCodeStore(_P(store.root) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    content, is_error = dispatch("af_enable_by_tag",
+                                 {"tag": "nope", "enabled": True, "allow_bulk": True,
+                                  "auth_code": getattr(_rec, "code", None) or _rec["code"]},
+                                 store, {"subject": "rw", "scopes": ["read", "write"]})
     assert is_error is False, _text(content)
     assert "未声明" not in _text(content)
 

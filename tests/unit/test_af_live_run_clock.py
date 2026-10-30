@@ -79,11 +79,27 @@ class FakeTransport:
 
 
 @pytest.fixture()
-def live(monkeypatch):
+def live(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("AUTOFORGE_LIVE_ENABLED", "1")
     monkeypatch.setenv("AUTOFORGE_HA_TOKEN", "srv-side-token")
     monkeypatch.delenv("AUTOFORGE_UNDO", raising=False)
     monkeypatch.setattr(svc, "LIVE_TRANSPORT_FACTORY", lambda ha_url, token: FakeTransport())
+    # AF-401 后 live_run 要过服务层码闸——码必须签在与各腿 store **同根**的 .auth
+    # （闸按 store.root/.auth 取账本；签在别处=四因合一里的"不存在"，红得对）。
+    # fixture 借第一腿的 tmp_path 落根（各腿 store 都在自己 tmp_path 下，根不匹配），
+    # 所以改成 `_coded` 内联：腿自己的 store 根上签码再跑。
+    monkeypatch.delenv("HA_LONG_LIVED_TOKEN", raising=False)
+
+
+def _coded(ir, allow, events, **kw):
+    """带码跑一条真机下发的薄壳：码签在 kw['store'] 的同根 .auth（时间轴套件
+    只量钟，不量码闸；拒收语义另有套件钉着）。"""
+    store = kw["store"]
+    from pathlib import Path as _P
+    from autoforge.af_auth import AuthCodeStore
+    rec = AuthCodeStore(_P(store.root) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    kw["auth_code"] = getattr(rec, "code", None) or rec["code"]
+    return svc.live_run(ir, allow, events, **kw)
 
 
 def _trigger_times(out: dict) -> list[datetime]:
@@ -95,9 +111,8 @@ def _trigger_times(out: dict) -> list[datetime]:
 
 def test_live_run_anchors_the_real_wall_clock(tmp_path, live):
     """一条真机下发的时间轴不许落在 2026-09-14 08:00 的仿真锚点上。"""
-    out = svc.live_run(
-        LIVE_IR, ["light.study"], HALL_ON, confirm=True, store=svc.GraphStore(str(tmp_path))
-    )
+    out = _coded(LIVE_IR, ["light.study"], HALL_ON, confirm=True,
+                 store=svc.GraphStore(str(tmp_path)))
 
     now = datetime.now(timezone.utc)
     assert all(abs(t - now) < timedelta(minutes=5) for t in _trigger_times(out)), (
@@ -109,14 +124,9 @@ def test_explicit_clock_is_honoured(tmp_path, live):
     """确定性入口：显式传钟就按给定锚点，不受真实时间影响。"""
     anchor = datetime(2027, 3, 4, 5, 6, 7, tzinfo=timezone.utc)
 
-    out = svc.live_run(
-        LIVE_IR,
-        ["light.study"],
-        HALL_ON,
-        confirm=True,
-        store=svc.GraphStore(str(tmp_path)),
-        clock=VirtualTimeSource(anchor),
-    )
+    out = _coded(LIVE_IR, ["light.study"], HALL_ON, confirm=True,
+                 store=svc.GraphStore(str(tmp_path)),
+                 clock=VirtualTimeSource(anchor))
 
     assert all(t == anchor for t in _trigger_times(out)), (
         "显式 clock 被忽略 ⇒ 复现一次真机下发永远拿不到确定性时间轴"
@@ -127,9 +137,8 @@ def test_advance_s_still_moves_the_live_clock(tmp_path, live):
     """锚在真实"现在"不等于放弃回放：`advance_s` 仍要把钟推进一小时。"""
     events = [{"advance_s": 3600}, {"entity_id": "binary_sensor.hall", "state": "on"}]
 
-    out = svc.live_run(
-        LIVE_IR, ["light.study"], events, confirm=True, store=svc.GraphStore(str(tmp_path))
-    )
+    out = _coded(LIVE_IR, ["light.study"], events, confirm=True,
+                 store=svc.GraphStore(str(tmp_path)))
 
     delta = max(_trigger_times(out)) - datetime.now(timezone.utc)
     assert timedelta(seconds=3500) <= delta <= timedelta(seconds=3700), (
