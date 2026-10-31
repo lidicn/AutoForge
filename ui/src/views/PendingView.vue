@@ -5,13 +5,16 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import { facade } from '@/api'
-import type { PendingItem, PendingListResponse } from '@/types/api'
+import type { L2Action, PendingItem, PendingListResponse } from '@/types/api'
 
 const data = ref<PendingListResponse | null>(null)
 const loading = ref(true)
 const error = ref('')
 const busy = ref<string | null>(null)
 const message = useMessage()
+// DCD 矩阵行 2：批准回执里的 L2 摘要必须显式给人看——空数组＝明文占位，
+// 字段缺失＝「未读到」（⛔ 两种都不许留白，留白＝没读出来）。
+const receipt = ref<{ summary: string; l2: L2Action[] | null } | null>(null)
 
 async function load() {
   loading.value = true
@@ -29,7 +32,10 @@ async function load() {
 async function approve(op: PendingItem) {
   busy.value = op.op_id
   try {
-    await facade.pendingApprove(op.op_id)
+    const res = await facade.pendingApprove(op.op_id)
+    const l2 = res.data?.l2_summary
+    // 缺字段与空数组是两件事：前者＝后端没给（无法确认），后者＝本条确实不含 L2。
+    receipt.value = { summary: op.summary || op.tool, l2: Array.isArray(l2) ? l2 : null }
     message.success(`已批准并回放落盘：${op.summary}`)
     await load()
   } catch (e) {
@@ -157,6 +163,24 @@ onMounted(load)
         :row-key="(row: PendingItem) => row.op_id"
       />
     </n-card>
+
+    <n-card v-if="receipt" title="部署审批摘要" :bordered="false" class="block">
+      <p class="receipt-sub">最近一次批准：{{ receipt.summary }}</p>
+      <ul v-if="receipt.l2 && receipt.l2.length" class="l2-list">
+        <li v-for="(it, i) in receipt.l2" :key="`${it.action}-${it.node}-${i}`" class="l2-item">
+          <span class="l2-main">
+            本条含：<code>{{ it.action }}</code><template v-if="it.alias">（{{ it.alias }}）</template>
+          </span>
+          <span v-if="it.automation || it.node" class="l2-meta">
+            {{ it.automation }}<template v-if="it.node"> · 节点 {{ it.node }}</template>
+          </span>
+        </li>
+      </ul>
+      <p v-else-if="receipt.l2" class="l2-note l2-empty">本条不含 L2 动作</p>
+      <p v-else class="l2-note l2-missing">
+        未读到 L2 摘要：批准回执里没有 l2_summary 字段（后端未返回，本条是否含 L2 动作无法确认）
+      </p>
+    </n-card>
   </div>
 </template>
 
@@ -183,5 +207,50 @@ onMounted(load)
 .block {
   margin-bottom: 16px;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+.receipt-sub {
+  margin: 0 0 10px;
+  color: #8b93a7;
+  font-size: 13px;
+}
+.l2-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.l2-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  padding: 7px 0;
+  border-top: 1px solid #f0f2f6;
+}
+.l2-item:first-child {
+  border-top: 0;
+}
+.l2-main {
+  font-size: 14px;
+  color: #1f2937;
+}
+.l2-main code {
+  background: #f2f4f8;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 13px;
+}
+.l2-meta {
+  color: #8b93a7;
+  font-size: 12px;
+}
+.l2-note {
+  margin: 0;
+  font-size: 14px;
+}
+.l2-empty {
+  color: #8b93a7;
+}
+.l2-missing {
+  color: #b45309;
 }
 </style>

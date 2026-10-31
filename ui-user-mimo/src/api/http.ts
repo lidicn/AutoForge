@@ -6,7 +6,7 @@
  * Token 由本层持有（localStorage），随请求带 Authorization；SSE 因 EventSource
  * 不能带自定义头，改用 ?token= 回退（后端已支持）。
  */
-import type { Agent, AuthCode, Automation, PairLink, PairRequest, PendingItem, User } from '../types/api.ts'
+import type { Agent, AuthCode, Automation, PairLink, PairRequest, PendingItem, PendingReceipt, User } from '../types/api.ts'
 import { apiError, type ApiClient, type ApiErrorCode } from './mock.ts'
 import { API_BASE } from './env.ts'
 
@@ -256,7 +256,7 @@ export const httpApi: ApiClient = {
   },
 
   async resolvePending (opId, approve) {
-    await req(`/api/pending/${approve ? 'approve' : 'reject'}`, {
+    return await req<PendingReceipt>(`/api/pending/${approve ? 'approve' : 'reject'}`, {
       method: 'POST',
       body: JSON.stringify(approve ? { op_id: opId } : { op_id: opId, reason: '' }),
     })
