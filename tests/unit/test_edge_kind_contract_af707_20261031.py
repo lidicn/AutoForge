@@ -9,10 +9,18 @@
 修法三层（锚点按符号名钉，PM 新规矩二）：
 1. 静态闸（主攻）：`StaticScanner._check_edge_kind_contract`——节点 kind 的
    出边 kind 不在 `ALLOWED_OUT_EDGE_KINDS` ⇒ ERROR `EDGE_KIND_MISMATCH`，
-   build 期即拦；
-2. 执行器兜底：`Executor.run` 的 pick_edge 落空 ⇒ `_fail`（终态 failed +
-   审计留痕，明文原因），⛔ 不再以 done 收场；`resume` 侧同口径；
+   build 期即拦（**本批唯一保留的一层**）；
+2. 执行器兜底：**本批已撤回**（PM 裁决 2026-10-31）——「pick_edge 落空 ⇒ 终态
+   failed」把 8 条既有判据编码的终态语义从 done 改成 failed（确认闸无人应答／
+   超时／denial、canary 链断、体验者 no-op），落点正是 DCD 在裁的「取消运行期
+   二次授权」面＝抢裁；改按**窄口径**另开卡：只在「边 kind 非法导致落空」时报
+   failed，不改合法终止路径的终态语义，等 DCD 裁定后落；
 3. 顺带：`_check_high_risk_after_suspend` 的重复 `continue`（并发双写残留）删除。
+
+⇒ 假绿洞在 build 期已闭合：边 kind 写错的图过不了静态闸 ⇒ 不会部署 ⇒ 运行期
+不可能出现那种静默终止。允许集的口径＝**执行器现读**：`do` 允许 `on_timeout`
+（canary 观察期到期）、任何节点允许 `on_cancel`（全局中断路径）、`yes`/`no`
+只属于 `ask`（if 的真分支必须是 then）。
 
 变异自证（摘掉静态闸 ⇒ 判据①红）由实现者手工执行并附命令输出。
 """
@@ -84,23 +92,23 @@ def _run_instance(ir: dict) -> list[dict]:
     return out.get("instances") or []
 
 
-# ── 判据② 执行器兜底：pick_edge 落空不得以 done 收场 ─────────────────
+# ── 判据② 执行器兜底：**压后**（PM 裁决 2026-10-31）────────────────────
+# 「pick_edge 落空 ⇒ 终态 failed」那一层已从本批撤回（理由见文件头）：它改的是
+# 既有判据编码的终态语义，落点在 DCD 正裁的授权面。假绿洞在 **build 期**闭合——
+# yes 形状过不了静态闸 ⇒ 不会部署 ⇒ 运行期不可能静默终止。执行器兜底改按窄口径
+# 另开卡（只在「边 kind 非法导致落空」时报 failed），等 DCD 裁定后落。
 
 
-def test_dead_edge_instance_fails_not_done():
-    """yes 边形状：实例终态 failed（含明文原因），⛔ 不是 done。"""
-    instances = _run_instance(_study_ac_shape("yes"))
-    assert instances, "没有实例被触发（判据自身失效）"
-    st = {str(i.get("state")) for i in instances}
-    assert "done" not in st, f"静默死图：终态仍是 done（{st}）——AF-707 未收口"
-    assert "failed" in st, f"终态既非 done 也非 failed：{st}"
-    # 失败原因必须看得见（终止在 c1、明文指到边匹配不上）
-    text = str(instances)
-    assert "c1" in text and ("出边" in text or "kinds" in text), text[:300]
+def test_yes_shape_never_reaches_runtime_as_silence():
+    """yes 形状在 build 期即被拒（ERROR 级）⇒ 不可能部署成静默终止。"""
+    diags = _scan(_study_ac_shape("yes"))
+    assert any(d.code == "EDGE_KIND_MISMATCH" and d.level == ERROR for d in diags), [
+        (d.code, d.level) for d in diags
+    ]
 
 
 def test_healthy_edge_instance_reaches_done():
-    """对照腿：then 图正常走完（终态含 done）——兜底不误伤正常路径。"""
+    """对照腿：then 图正常走完（终态含 done）——静态闸不误伤正常路径。"""
     instances = _run_instance(_study_ac_shape("then"))
     assert instances, "没有实例被触发"
     st = {str(i.get("state")) for i in instances}

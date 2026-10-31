@@ -681,16 +681,27 @@ class StaticScanner:
     #: 每种节点 kind 允许的出边 kind 集合（EDGE_KINDS 全集的真子集判定用）。
     #: ClassVar：dataclass 不把它当字段（PM 抓的 import 炸：dict 默认值不能做字段）。
     ALLOWED_OUT_EDGE_KINDS: ClassVar[dict[str, frozenset[str]]] = {
-        "on": frozenset({"then", "on_error"}),
-        "if": frozenset({"then", "no", "default", "on_error"}),
-        "set": frozenset({"then", "on_error"}),
-        "do": frozenset({"then", "on_error", "default"}),
+        # 口径＝执行器现读（依据逐条钉在下面，PM 复核）：`_execute` 返回 {"then"}（on/set）、
+        # {"then"} / {"no","default"}（if）；`_do` 失败走 on_error/default
+        # （af_executor.py:809-813）；`_if_eval_fail` 只认显式 on_error 边
+        # （af_executor.py:815-823）；ask 的 resume 走 yes/no/then/default/on_timeout/
+        # on_cancel；wait 走 then/default/on_timeout/on_cancel。
+        # ⛔ on_cancel 对**任何**节点 kind 都合法：中断路径 cancel() → resume("on_cancel")
+        # 是全局的（af_executor.py:610-624），不限节点类型。
+        # ⛔ do 额外允许 on_timeout：canary 观察期到期正是 resume("on_timeout")
+        # （af_executor.py:270-271），do 节点带 on_timeout 是仓内既有正例形状
+        # （书房 v2 三个 L2 节点均带 on_timeout→p1）——漏它会把正例判死。
+        # ⛔ yes/no 只属于 ask：if 的真分支必须是 then（AF-707 假绿族的核心，勿放宽）。
+        "on": frozenset({"then", "on_error", "on_cancel"}),
+        "if": frozenset({"then", "no", "default", "on_error", "on_cancel"}),
+        "set": frozenset({"then", "on_error", "on_cancel"}),
+        "do": frozenset({"then", "on_error", "default", "on_timeout", "on_cancel"}),
         "ask": frozenset({"yes", "no", "then", "default", "on_timeout", "on_cancel", "on_error"}),
         "wait": frozenset({"then", "default", "on_timeout", "on_cancel", "on_error"}),
         # pass 允许集**以仓内正例为准**（PM 抓的误判死）：case_lamp_sync 等正例
         # 的广播 pass 节点带 then 出边——空集会把仓自己的正例判死。留 then/on_error；
         # 别的 kind（如 no）出现在 pass 出边上时才报。
-        "pass": frozenset({"then", "on_error"}),
+        "pass": frozenset({"then", "on_error", "on_cancel"}),
     }
 
     def _check_edge_kind_contract(self, auto: Automation, node: Node, out: ScanResult) -> None:
