@@ -183,7 +183,30 @@ class NodeExecutor:
 
             edge = auto.pick_edge(node.id, kinds)
             if edge is None:
-                self._terminate(instance)
+                # AF-707（假绿族，PM 裁定补码）：pick_edge 落空此前以 _terminate
+                # （done）收场——轨迹停在出错节点、终态报 done、report 全 inferred，
+                # 而图作者以为自动化部署成功。终态必须能区分「跑完」与「边匹配不上
+                # 而中断」：落 failed + 审计留痕，明文原因进 reason（build 期的
+                # EDGE_KIND_MISMATCH 是第一道闸，这里是运行期兜底，两层都开）。
+                self.audit.add(
+                    AuditEvent(
+                        type=ENTITY_DRIFT,
+                        at=self.clock.now(),
+                        message=(
+                            f"节点 {node.id}（kind={node.kind}）执行后可用边 kinds={sorted(set(kinds))} "
+                            f"在图里匹配不到任何出边——实例中断（非正常完成）。"
+                            f"多为边 kind 写错（如 if 真值分支写了 yes），build 期应报 EDGE_KIND_MISMATCH"
+                        ),
+                        automation_id=instance.automation.id,
+                        instance_id=instance.instance_id,
+                        node_id=node.id,
+                    )
+                )
+                self._fail(
+                    instance,
+                    f"节点 {node.id} 的出边与执行结果不匹配（可用 kinds={sorted(set(kinds))}，"
+                    f"图的出边无一命中）：实例中断，终态 failed 而非 done（AF-707）",
+                )
                 return instance
 
             instance.ctx.current_node = edge.to
@@ -332,7 +355,26 @@ class NodeExecutor:
 
         edge = auto.pick_edge(node.id, {kind, "default"})
         if edge is None:
-            self._terminate(instance)
+            # AF-707 同族（resume 唤醒侧）：挂起点被唤醒（kind）却匹配不到出边，
+            # 此前也以 done 收场——同一条静默死图。落 failed + 留痕，与 run 侧同口径。
+            self.audit.add(
+                AuditEvent(
+                    type=ENTITY_DRIFT,
+                    at=self.clock.now(),
+                    message=(
+                        f"挂起节点 {node.id}（kind={node.kind}）被唤醒（{kind}）后匹配不到出边"
+                        f"（含 default 兜底）——实例中断（非正常完成），多为边 kind 写错"
+                    ),
+                    automation_id=instance.automation.id,
+                    instance_id=instance.instance_id,
+                    node_id=node.id,
+                )
+            )
+            self._fail(
+                instance,
+                f"挂起节点 {node.id} 被唤醒（kind={kind}）后无出边可走（default 也没有）："
+                f"实例中断，终态 failed 而非 done（AF-707）",
+            )
             return instance
         instance.ctx.current_node = edge.to
         return self.run(instance)

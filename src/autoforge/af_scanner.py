@@ -12,7 +12,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, ClassVar, Iterable, Mapping
 
 from .af_adapters import POLICY_PARAMS, classify_action, is_destructive, host_of
 from .af_adapters.inbox import inbox_overlong_fields
@@ -96,6 +96,8 @@ CHECKS: dict[str, str] = {
     "TIME_AT_INVALID": "time 触发的 at 字段不是 HH:MM(:SS) 或 sunrise/sunset±offset——25:00 这类值 build 照样 ok 是假绿",
     "SERVICE_UNKNOWN": "do 动作的服务名在该域不存在（turn_onnn）——build/sim 双绿但真机必 404",
     "ENTITY_CHECK_DEGRADED": "设备目录为空，实体存在性校验静默跳过（entity_check=skipped 但零诊断）——假绿通道",
+    # ── AF-707 假绿族（PM 裁定补码，2026-10-31）──
+    "EDGE_KIND_MISMATCH": "边 kind 不在该节点 kind 的允许集合（如 if 的真值分支写 yes）——pick_edge 永远选不中，实例静默终止报 done",
 }
 
 #: 诊断码 → **怎么改**（v1.2.0：让 Agent 一次往返就能自修正，而不是自己推断修法）
@@ -162,6 +164,7 @@ CODE_HINT: dict[str, str] = {
     "TIME_AT_INVALID": "at 用 HH:MM（或 HH:MM:SS），日落日出写 sunrise/sunset（可带 ±HH:MM offset）。",
     "SERVICE_UNKNOWN": "服务名打错（turn_onnn）；该域合法服务用 af_resolve_entity 查 services 清单。",
     "ENTITY_CHECK_DEGRADED": "先 af_catalog 刷新设备目录再 build——空目录时幽灵实体检测不到，这条 ok 不可信。",
+    "EDGE_KIND_MISMATCH": "把该出边的 kind 改成目标节点 kind 的合法取值（if 真值分支用 then、否值分支用 no/default；yes/no 只属于 ask）。合法集合见 af_scanner.ALLOWED_OUT_EDGE_KINDS。",
 }
 
 _SHADOW_LOW = 0.60
@@ -410,6 +413,8 @@ class StaticScanner:
             self._check_high_risk_after_suspend(auto, node, out)
             self._check_cancel_branch(auto, node, out)
             self._check_duplicate_edges(auto, node, out)
+            # AF-707：边 kind ↔ 节点 kind 契约（build 期即拦，不靠运行期静默终止）
+            self._check_edge_kind_contract(auto, node, out)
             self._check_expr(auto, node, out)
             # 命名空间是 `split_namespace` 的硬前提，也是体验者现场（2026-10-28）的静默
             # 假绿源头：`var` 写成裸 entity_id（`sensor.duka_x`）时 `_check_expr` 放行
@@ -647,7 +652,6 @@ class StaticScanner:
         for edge in auto.outgoing(node.id):
             if edge.kind not in edge_kinds:
                 continue
-                continue
             for reachable in _reachable(auto, edge.to):
                 if reachable.kind != "do":
                     continue
@@ -662,6 +666,49 @@ class StaticScanner:
                             reachable.id,
                         )
                     )
+
+    # AF-707（假绿族，2026-10-31 PM 裁定补码）：边 kind ↔ 节点 kind 契约。
+    # 病灶（台账 AF-707 行，证据 audit_mcp/study_ac_edgekind_proof_20261031.json）：
+    # if 节点真值分支的出边 kind 写成 `yes` ⇒ 执行器 pick_edge 匹配不上 ⇒ 实例
+    # 静默终止、终态报 done、report 全 inferred，而 build 与 sim 零报错——
+    # 自动化看起来部署成功，实际一件事没干。
+    #
+    # 集合口径（**现读代码定，注释不立法**）：on/set/do 真值面只发 {"then"}；
+    # if 发 {"then"} | {"no","default"}；do 失败兜底走 on_error/default（_do 的
+    # 返回面，af_executor.py:_execute/_do）；ask/wait 由 resume(kind) 唤醒，
+    # classify_answer 只产 yes/no，超时/取消/软失效走 on_timeout/on_cancel/on_error，
+    # 结构化应答走 then——resume 侧 `pick_edge(node.id, {kind, "default"})`。
+    #: 每种节点 kind 允许的出边 kind 集合（EDGE_KINDS 全集的真子集判定用）。
+    #: ClassVar：dataclass 不把它当字段（PM 抓的 import 炸：dict 默认值不能做字段）。
+    ALLOWED_OUT_EDGE_KINDS: ClassVar[dict[str, frozenset[str]]] = {
+        "on": frozenset({"then", "on_error"}),
+        "if": frozenset({"then", "no", "default", "on_error"}),
+        "set": frozenset({"then", "on_error"}),
+        "do": frozenset({"then", "on_error", "default"}),
+        "ask": frozenset({"yes", "no", "then", "default", "on_timeout", "on_cancel", "on_error"}),
+        "wait": frozenset({"then", "default", "on_timeout", "on_cancel", "on_error"}),
+        # pass 允许集**以仓内正例为准**（PM 抓的误判死）：case_lamp_sync 等正例
+        # 的广播 pass 节点带 then 出边——空集会把仓自己的正例判死。留 then/on_error；
+        # 别的 kind（如 no）出现在 pass 出边上时才报。
+        "pass": frozenset({"then", "on_error"}),
+    }
+
+    def _check_edge_kind_contract(self, auto: Automation, node: Node, out: ScanResult) -> None:
+        allowed = self.ALLOWED_OUT_EDGE_KINDS.get(node.kind)
+        if allowed is None:  # 未知节点 kind 由别的腿报（不在这里重复）
+            return
+        for edge in auto.outgoing(node.id):
+            if edge.kind not in allowed:
+                out.diagnostics.append(
+                    Diagnostic(
+                        "EDGE_KIND_MISMATCH",
+                        ERROR,
+                        f"节点 {node.id}（kind={node.kind}）的出边 kind={edge.kind!r} 不在允许集合 "
+                        f"{sorted(allowed)}——运行期 pick_edge 永远选不中这条边，实例会在该节点静默终止",
+                        auto.id,
+                        node.id,
+                    )
+                )
 
     # ⑭ 同节点同优先级边重复定义
     def _check_duplicate_edges(self, auto: Automation, node: Node, out: ScanResult) -> None:

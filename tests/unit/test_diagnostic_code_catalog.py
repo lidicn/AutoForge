@@ -177,7 +177,9 @@ def test_catalog_size_reading_is_pinned():
     # 44 → 47：v1.14.11 的 EXPR_NS_INVALID +v1.14.12 的 UNRESOLVED_ENTITY / SELF_TRIGGER_LOOP。
     # 47 → 50：v1.14.22 的 TIME_AT_INVALID / SERVICE_UNKNOWN / ENTITY_CHECK_DEGRADED
     # （审计假绿三族 AF-124/125/123：time.at 零校验、幽灵服务、空目录静默退化）。
+    # 50 → 51：AF-707 的 EDGE_KIND_MISMATCH（边 kind↔节点 kind 契约，PM 裁定补码，
+    # 静默死图：pick_edge 落空实例报 done）。
     # ⚠️ 上一笔（1.14.11）我改了码表却没动这枚 pin 与文档读数——当时 `-k` 选择罩不到本文件，
     #    CI 才会红。教训：加诊断码必查这三处（本 pin／两份架构文档／_NON_LITERAL_KEYS）。
-    assert len(CHECKS) == 50, f"CHECKS 现读 {len(CHECKS)} 枚，两份架构文档那句读数要跟着改"
+    assert len(CHECKS) == 51, f"CHECKS 现读 {len(CHECKS)} 枚，两份架构文档那句读数要跟着改"
     assert set(CHECKS) == set(CODE_HINT), "两份目录的键集要同源：只进一份就是半张脸"
