@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterable
 
 from .af_draft import get_staged, DraftError
 from .af_spec import graph_to_raw
@@ -139,6 +139,7 @@ def apply(
     store: Any = None,
     premiere_code: str | None = None,
     authenticated_subject: str = "",
+    known_entities: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """一次走完 校验→仿真→入队（v2 M1：可选首演码闸门）。
 
@@ -150,6 +151,11 @@ def apply(
             未重放）才放行，失败即中止并返回 ok=False。为 None 时不开闸门
             （向后兼容既有调用 / 现有 forge run/watch --live 三重闸）。dry_run 一律
             不开闸门——一次性码被"看一眼"就烧掉，等于把试演门槛变成消耗品。
+        known_entities: 实体存在性校验的白名单（AF-123 假绿收口）。调用方的设备目录
+            与本 store 不同源时（测试通道：store 是空目录的测试区，目录挂在主 store
+            根上），必须由调用方显式递入，否则 build 的 use_catalog 会在本 store 的
+            空目录上静默退化成 entity_check=skipped——幽灵实体一路绿。None 保持既有
+            行为（use_catalog 走本 store 目录）。
 
     Returns:
         {ok, summary, build_report, sim_report, save_result}
@@ -232,7 +238,16 @@ def apply(
     result: dict[str, Any] = {"ok": True, "ref": ref, "summary": summary}
 
     # 2. build（安全闸）
-    build_result = af_service.build(ir_payload, store=store, use_catalog=True)
+    # AF-123：known_entities 显式递入时透传给 build——实体校验用调用方的设备目录
+    # （测试通道的主 store 目录），不是本 store 的空目录。None 时保持**原有调用形状**
+    # （不多递 known_entities 键）：既保留 use_catalog 旧路，也不破坏既有调用方/桩
+    # 对 `build(ir, store=..., use_catalog=...)` 的签名假设。
+    if known_entities is None:
+        build_result = af_service.build(ir_payload, store=store, use_catalog=True)
+    else:
+        build_result = af_service.build(
+            ir_payload, known_entities=list(known_entities), store=store, use_catalog=True,
+        )
     result["build"] = build_result
     if not build_result.get("ok"):
         result["ok"] = False

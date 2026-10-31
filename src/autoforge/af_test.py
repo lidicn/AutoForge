@@ -151,6 +151,28 @@ class TestChannel:
         except Exception:  # 目录拿不到（HA 未配/凭据缺失）时不阻断测试通道
             return None
 
+    def _main_catalog_entity_ids(self) -> set[str] | None:
+        """build 实体校验的白名单——主 store 设备目录全集（AF-123 假绿收口）。
+
+        与 `_resolve_catalog` 同源（AF-015）：设备目录是全局事实，挂在主 store 根上。
+        测试区的 store 是空目录，旧实现让 build 的 use_catalog 在测试根上拿空目录 ⇒
+        `entity_check=skipped` ⇒ 幽灵实体（如 `binary_sensor.ghost99`）一路绿——
+        审计 AF-123 的 40 连绿就是这么来的。这里把主目录全集递给 `apply` 透传到
+        `svc.build(known_entities=...)`。
+
+        目录为空 / 构造失败 ⇒ None：空目录是合法首建态，fail-open 不拦截，但**必须
+        说话**——build 回执带 `entity_check=skipped` + `ENTITY_CHECK_DEGRADED` 警告，
+        报告明细如实转述（见 `_submit_one` 成功路径），不许装作校验过。
+        """
+        catalog = self._resolve_catalog()
+        if catalog is None:
+            return None
+        try:
+            ids = catalog.known_entity_ids()
+        except Exception:  # noqa: BLE001 - 目录读不出等同空目录：fail-open 但要说话
+            return None
+        return ids or None
+
     def submit_batch(
         self,
         intents: list[dict[str, Any]],
@@ -214,9 +236,13 @@ class TestChannel:
         record["ref"] = ref
 
         # 2. build + simulate（用测试区 store）
+        # AF-123（假绿三族，v1.14.22）：实体存在性校验用**主 store 设备目录**
+        # （`_main_catalog_entity_ids`），不是测试区 store 的空目录——否则
+        # entity_check=skipped，幽灵实体检测不到。
         store = self._get_store()
+        known = self._main_catalog_entity_ids()
         try:
-            apply_result = apply(ref, stage="simulate", store=store)
+            apply_result = apply(ref, stage="simulate", store=store, known_entities=known)
         except Exception as e:
             record["stage"] = "build_sim"
             record["error"] = {"code": "E_APPLY", "message": str(e)}
@@ -238,6 +264,17 @@ class TestChannel:
 
         record["build_ok"] = True
         record["sim_ok"] = True
+        # AF-123：成功记录也要带 build 的 entity_check 与 warnings——旧实现只在
+        # 失败路径抄 build 明细，成功路径把 ENTITY_CHECK_DEGRADED 整个丢了，
+        # 「pass=True 但存在性校验根本没跑」在报告里读不出来。
+        build = apply_result.get("build", {})
+        record["entity_check"] = build.get("entity_check")
+        record["build_warnings"] = build.get("warnings", [])
+        if known is None:
+            record["entity_check_note"] = (
+                "主设备目录为空/不可用：实体存在性校验 skipped（fail-open 合法首建态），"
+                "幽灵实体检测不到——这条 passed 不构成存在性背书，先 af_catalog 刷新目录"
+            )
 
         # 3. 直接落盘测试区（不走 pending 队列，测试区自动 approve）
         try:
@@ -254,7 +291,13 @@ class TestChannel:
                 note="af_test batch",
                 tags=["test"],
             )
-            record["graph_ref"] = save_result.get("graph_id", "")
+            # AF-123（附带）：save_graph 的返回键里**没有 graph_id**（实测：
+            # blast_radius/name/note/ok/owner/tags/version/warnings），旧实现
+            # `get("graph_id", "")` 恒为空串——报告里的 graph_ref 从来没指过任何图。
+            # 用 name+version 拼出可回指的引用；不动 save_graph 契约。
+            record["graph_ref"] = (
+                f"{save_result.get('name', '')}@v{save_result.get('version', '')}"
+            )
         except Exception as e:
             record["stage"] = "save"
             record["error"] = {"code": "E_SAVE", "message": str(e)}
