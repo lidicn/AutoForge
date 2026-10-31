@@ -121,7 +121,12 @@ def realign(name: str) -> int:
 
     led = ROOT / ("docs/可观测性清单.md" if name == "observability" else "docs/进程模型清单.md")
     b = led.read_bytes()
-    crlf = b.count(b"\r\n") > 0 and b.count(b"\r\n") == b.count(b"\n")
+    style = _eol_style(b)
+    if style == "mixed":
+        raise MixedEolError(
+            f"该文件行尾混合、拒绝写（fail-closed）：{led.name}"
+            "——先人工归一行尾再跑 realign，⛔ 不自动归一")
+    crlf = style == "crlf"
     lines = b.decode("utf-8").replace("\r\n", "\n").split("\n")
 
     groups: dict[tuple, list[int]] = {}
@@ -175,6 +180,31 @@ def run_gate(name: str) -> tuple[int, str]:
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
+class MixedEolError(RuntimeError):
+    """被写文件行尾混合（CRLF 与裸 LF 并存）——fail-closed，拒绝写。
+
+    2026-10-31 卡复核补尺（AF-Verify 三 fixture ＋ Chief 定口径）：混合行尾＝非法
+    输入，regen/realign 直接拒，回执报「该文件行尾混合、拒绝写」；⛔ 不自动归一到
+    任何一侧——自动归一本身就是本卡病灶（把整文件翻成另一种行尾＝假 diff）。
+    """
+
+
+def _eol_style(raw: bytes) -> str:
+    """现状行尾判定：纯 CRLF ⇒ "crlf"、纯 LF（含无换行）⇒ "lf"、两者并存 ⇒ "mixed"。
+
+    历史（2026-10-31 卡）：regen() 旧实现无条件把重生成结果转 CRLF，而两份台账
+    （docs/可观测性清单.md、docs/进程模型清单.md）都是 LF、两个 --write 生成器输出
+    的也是 LF ⇒ 跑一次 regen 就把整份文档翻成 CRLF＝整文件假 diff（953 行假 diff
+    三次复发的真凶之一），还把「移动锚点的提交必须自带重生成清单」的真实锚点位移
+    淹在行尾噪声里。改为写前读现状字节、写后按同一风格还原；写前不存在（首次生成）
+    按生成器的 LF 落盘并在输出里写明。
+    """
+    crlf = raw.count(b"\r\n")
+    if crlf == 0:
+        return "lf"
+    return "crlf" if crlf == raw.count(b"\n") else "mixed"
+
+
 def regen(name: str) -> None:
     gate = {"observability": "check_observability", "process_model": "check_process_model"}[name]
     sys.path.insert(0, str(ROOT / "scripts"))
@@ -182,11 +212,25 @@ def regen(name: str) -> None:
     spec = importlib.util.spec_from_file_location(gate, ROOT / "scripts" / f"{gate}.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    mod.write_doc(ROOT)
     led = ROOT / ("docs/可观测性清单.md" if name == "observability" else "docs/进程模型清单.md")
-    b = led.read_bytes()
-    led.write_bytes(b.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
-    print(f"[{name}] 自动段已重生成 + CRLF 复原")
+    # 行尾归一（2026-10-31 卡）：写前先读被写文件的现状行尾，写后按同一风格还原；
+    # ⛔ 不再无条件转 CRLF（现状 LF 的台账会被整文件翻转成假 diff）。
+    existed = led.exists()
+    if existed:
+        style = _eol_style(led.read_bytes())
+        if style == "mixed":
+            raise MixedEolError(
+                f"该文件行尾混合、拒绝写（fail-closed）：{led.name}"
+                "——先人工归一行尾再跑 regen，⛔ 不自动归一（自动归一＝本卡病灶）")
+    else:
+        style = "lf"
+    mod.write_doc(ROOT)
+    b = led.read_bytes().replace(b"\r\n", b"\n")
+    if style == "crlf":
+        b = b.replace(b"\n", b"\r\n")
+    led.write_bytes(b)
+    print(f"[{name}] 自动段已重生成（行尾＝{'CRLF' if style == 'crlf' else 'LF'}"
+          + ("；首次生成，按生成器 LF 落盘" if not existed else "") + "）")
 
 
 def main(argv: list[str]) -> int:
@@ -196,10 +240,20 @@ def main(argv: list[str]) -> int:
     a = ap.parse_args(argv)
     rc_all = 0
     for name in (a.targets or ["observability", "process_model"]):
-        if not a.no_regen:
-            regen(name)
+        try:
+            if not a.no_regen:
+                regen(name)
+        except MixedEolError as exc:
+            print(f"[{name}] {exc}")
+            rc_all = 1
+            continue
         for attempt in range(1, 4):
-            fixed = realign(name)
+            try:
+                fixed = realign(name)
+            except MixedEolError as exc:
+                print(f"[{name}] {exc}")
+                rc_all = 1
+                break
             rc, out = run_gate(name)
             if rc == 0:
                 print(f"[{name}] 第 {attempt} 轮：门绿 ✅")
