@@ -46,7 +46,7 @@ CHECKS: dict[str, str] = {
     "SELF_TRIGGER_LOOP": "⑭ 同自动化写回自己的触发源（自激风险按效果表判定，非跨自动化）",
     "STATIC_LOOP": "④ 静态图内循环且无终止条件",
     "CANCEL_SPAWNS_INSTANCE": "⑤ on_cancel 分支产生新实例",
-    "HIGH_RISK_AFTER_SUSPEND": "⑥ 挂起分支内执行高风险动作",
+    "HIGH_RISK_AFTER_SUSPEND": "⑥ 无人值守分支（on_timeout/default/on_cancel）内执行高风险动作（ask 的 yes/no 有人在环，不在射程——裁定 20261031）",
     "SHADOW_WRITES_DEVICE": "⑦ Shadow 模式 do 写设备状态",
     "CROSS_AUTOMATION_VAR": "⑧ 跨自动化读写对方实例私有变量",
     "ADAPTER_POLICY_PARAM": "⑨ 适配器配置含 IR 未定义策略参数",
@@ -109,7 +109,7 @@ CODE_HINT: dict[str, str] = {
     "ENTITY_DEP_CYCLE": "用 `emit`/`on event` 解耦：状态变化侧只广播事件（不写实体），跟随侧只写对方实体。",
     "STATIC_LOOP": "补终止条件：加 `if` 分支走 `pass`，或改用 `for` 持续条件而不是自触发。",
     "CANCEL_SPAWNS_INSTANCE": "`on_cancel` 分支里不要写会重新触发本自动化的实体/事件。",
-    "HIGH_RISK_AFTER_SUSPEND": "把高风险动作移到挂起（ask/wait）之前的求值段。",
+    "HIGH_RISK_AFTER_SUSPEND": "把高风险动作移到挂起（ask/wait）之前的求值段；ask 的 yes/no 分支有人在环、不在射程（裁定 20261031 一次审批）。",
     "SHADOW_WRITES_DEVICE": "conf<0.85 的 shadow 自动化禁止写设备；改为出 `ask` 提案或提升置信度。",
     "CROSS_AUTOMATION_VAR": "跨自动化只传消息（`emit`），不要读写对方实例变量。",
     "ADAPTER_POLICY_PARAM": "重试/降级/业务超时属于 IR 语义层，适配器参数里去掉 `retry`/`fallback` 等。",
@@ -620,16 +620,19 @@ class StaticScanner:
 
     # ① 挂起分支内不得执行高风险动作
     #    方案 A：wait 到期走 then 是设计行为（等待条件确认后自动执行），不拦 then；
-    #    只拦 ask 的 then/default/on_timeout（无人回答时执行高风险）。
+    #    只拦 ask 的 on_timeout/default/on_cancel（无人回答时执行高风险）。
+    #    裁定 20261031（取消运行期二次授权）收窄：ask 的 yes/no 分支是**有人在环**
+    #    的应答路径，L2 动作已在部署审批摘要列明（矩阵行 2，审批前可见），运行期
+    #    不再二次问人 ⇒ 移出本检查射程。P1-3 把 yes/no 纳入是裁定 20261009 运行期
+    #    二次授权闸的静态影子，随卡 B 一并收回。L3 不受影响：L3_ACTION 默认拒绝
+    #    在一切分支独立生效。
     def _check_high_risk_after_suspend(self, auto: Automation, node: Node, out: ScanResult) -> None:
         if not node.is_suspending:
             return
-        # P1-3 修复：ask 节点的 yes/no 分支也必须纳入高风险动作检查
-        # （之前只检查 on_timeout/default/on_cancel/then，yes/no 分支里的写动作成盲区）
         if node.kind == "wait":
             edge_kinds = ("on_timeout", "default", "on_cancel")
         elif node.kind == "ask":
-            edge_kinds = ("on_timeout", "default", "on_cancel", "yes", "no")
+            edge_kinds = ("on_timeout", "default", "on_cancel")
         else:
             edge_kinds = ("on_timeout", "default", "on_cancel", "then")
         for edge in auto.outgoing(node.id):
