@@ -807,7 +807,8 @@ class StaticScanner:
 
     # AF-124（假绿三族）：time 触发的 at 从来没人校验——`25:00` 一路绿灯到归档。
     # 校验口径：HH:MM 或 HH:MM:SS（00-23/00-59），或 sunrise/sunset（可带 ±offset）。
-    _TIME_AT_RE = __import__("re").compile(
+    # （顶部已 `import re`，静态正则用顶层导入——动态 __import__ 会进规范化门读数）
+    _TIME_AT_RE = re.compile(
         r"^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$"
         r"|^(?:sunrise|sunset)(?:[+-]\d+:[0-5]\d)?$"
     )

@@ -118,6 +118,16 @@ def _guard(scope: str | None, current: dict[str, Any] | None) -> None:
             "（旧 AUTOFORGE_MCP_TOKEN）启动；"
             "确需原型全放行请显式设 `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1`。"
         )
+    # AF-701（审计第七轮实测）：带 scopes 却 subject 为空的令牌 = 残缺身份。归属判定
+    # （_assert_archive_mutator 等）对 caller="" 走"未携带身份不阻断"的渐进收口豁免，
+    # 于是空主体令牌能改他人归档标签/批量启停/删除。现在 MCP/HTTP 都拿得到主体，
+    # 这一档没有合法存在：要 scope 就必须有 subject（fail-closed，与空 owner 归档
+    # 仅 owner 面可改的 D5 口径同族）。
+    if scope and not str(current.get("subject") or "").strip():
+        raise ServiceError(
+            f"拒绝：令牌缺少 subject（残缺身份不能获得 '{scope}' 域权限）——"
+            "请用带 subject 的令牌（AF_ACCESS_TOKENS 每条须含 subject + scopes）。"
+        )
     if scope not in current.get("scopes", []):
         raise ServiceError(
             f"拒绝：当前令牌缺少 '{scope}' 权限（当前 scopes：{current.get('scopes')}）。"
@@ -228,6 +238,27 @@ def _coerce_json_arg(value: Any, name: str) -> Any:
             f"参数 {name!r} 收到的是字符串且不是合法 JSON（桥接层序列化问题）："
             f"{value[:80]!r}…——请按原生对象/数组转发，或检查桥接层不要 json.dumps"
         ) from exc
+
+
+def _pattern_violations(schema: dict[str, Any], args: dict[str, Any]) -> list[str]:
+    """按 inputSchema 声明的 `pattern` 校验字符串参数（AF-402：声明即契约的另一半）。
+
+    只查**存在且非空**的顶层字符串参数；空串/缺省交给各工具自己的必填闸（那不是
+    pattern 的事）。返回违规参数名列表（顺序按声明序，取第一个就够 dispatch 用）。
+    """
+    import re as _re
+    props = (schema.get("properties") or {})
+    out: list[str] = []
+    for name, spec in props.items():
+        pattern = spec.get("pattern") if isinstance(spec, dict) else None
+        if not pattern:
+            continue
+        value = args.get(name) if isinstance(args, dict) else None
+        if not isinstance(value, str) or not value:
+            continue
+        if not _re.match(pattern, value):
+            out.append(name)
+    return out
 
 
 def _normalize_args_by_schema(schema: dict[str, Any], args: Any, tool_name: str) -> Any:
@@ -1165,7 +1196,7 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
             "properties": {
                 "tag": {"type": "string"},
                 "enabled": {"type": "boolean"},
-                "auth_code": {"type": "string", "pattern": "^[0-9]{8}$",
+                "auth_code": {"type": "string", "pattern": "^[0-9]{6,8}$",
                               "description": "授权码：enabled=true（启用）必填；enabled=false（禁用）不需要（裁定 R4-3）"},
                 "allow_bulk": {
                     "type": "boolean",
@@ -1220,7 +1251,7 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
                 "note": {"type": "string", "description": "版本备注"},
                 "tags": {"type": "array", "items": {"type": "string"}, "description": "标签（覆盖式）"},
                 "expect_version": {"type": "integer", "description": "乐观锁：期望的当前最新版本"},
-                "auth_code": {"type": "string", "pattern": "^[0-9]{8}$",
+                "auth_code": {"type": "string", "pattern": "^[0-9]{6,8}$",
                               "description": "部署授权码（用户在 WebUI 生成）；8 位纯数字；长期码可重复使用"
                                              "（不撤销一直可用），短期码一次性；连续 10 次错误该码锁定 5 分钟"},
                 "allow_bulk": {
@@ -1260,7 +1291,7 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
                 "live_allow": {"type": "array", "items": {"type": "string"}, "description": "允许写入的实体白名单"},
                 "events": {"type": "array", "items": {"type": "object"}},
                 "confirm": {"type": "boolean", "description": "必须显式 true 才允许下发"},
-                "auth_code": {"type": "string", "pattern": "^[0-9]{8}$",
+                "auth_code": {"type": "string", "pattern": "^[0-9]{6,8}$",
                               "description": "授权码（缺码即拒）：真机下发与 af_save 部署同级（裁定 R4-3）"},
             },
             "required": ["ir", "live_allow", "confirm"],
@@ -1413,6 +1444,30 @@ def dispatch(
             return [
                 _text(
                     json.dumps(_failure_payload(ADM_ERR_PAYLOAD_INVALID, str(exc)), ensure_ascii=False)
+                )
+            ], True
+        # AF-402（审计第三轮起挂账）：schema 里的 `pattern` 声明三处、执行零处——
+        # 非数字码/位数错的码与合法码拿到同一条四因合一文案，声明成了装饰。
+        # 这里按声明真执行：**auth_code 的 pattern 拒绝文案与四因合一逐字同形**
+        #（格式错也是"无效"的一种，⛔ 不外传具体哪一因，那是授权码枚举面；
+        # 兼容 6 位老码与 8 位新码——`_rand6` 的口径）。
+        bad_pattern = _pattern_violations(_schema, args)
+        if bad_pattern:
+            if bad_pattern[0] == "auth_code":
+                return [
+                    _text(
+                        json.dumps(_failure_payload(
+                            ADM_ERR_AUTH_REQUIRED,
+                            "授权码无效（不存在/已消耗/已过期/已锁定之一）——格式也不符合",
+                        ), ensure_ascii=False)
+                    )
+                ], True
+            return [
+                _text(
+                    json.dumps(_failure_payload(
+                        ADM_ERR_PAYLOAD_INVALID,
+                        f"参数 {bad_pattern[0]!r} 不符合声明的 pattern（值不合法）",
+                    ), ensure_ascii=False)
                 )
             ], True
         if fn in _TOOLS_WITH_CONTEXT:

@@ -171,4 +171,7 @@ def test_the_six_keys_from_the_audit_are_now_declared():
     auth = by_name["af_save"]
     assert "auth_code" in auth
     pattern = TOOLS[[t[0] for t in TOOLS].index("af_save")][2]["properties"]["auth_code"]["pattern"]
-    assert pattern == "^[0-9]{8}$"
+    # AF-402（2026-10-31）：pattern 开始真执行（dispatch _pattern_violations）后，
+    # 声明必须兼容 6 位老码（af_auth._rand6 口径：老码仍可 validate/consume）——
+    # 8 位独占会把存量老码在格式层拒掉，修复变误伤。
+    assert pattern == "^[0-9]{6,8}$"

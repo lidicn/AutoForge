@@ -83,7 +83,9 @@ BASELINE: frozenset[str] = frozenset(
         # 门报 A"新增 1502"+C"基线 1493 读不到"是同一枚的两面。净 16 → 16。
         # 同日傍晚 DCD 旁门批：1502 → 1520（UndoBody 加 auth_code 在它上方 +18 行）。
         # 仍是同一枚，净 16 → 16。
-        "af_api.py:1520",
+        # 2026-10-31 AF-701 残缺身份闸：1520 → 1528（requires() 加 subject 检查
+        # +8 行在它上方）。仍是同一枚，净 16 → 16。
+        "af_api.py:1528",
         "af_closedloop/deepfix.py:52",
         "af_conflict.py:680",
         "af_conflict_audit.py:150",

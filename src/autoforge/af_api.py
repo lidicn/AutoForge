@@ -578,6 +578,14 @@ def build_app(
                 ) from None
             if info is None:
                 raise HTTPException(status_code=403, detail="无效或已撤销的 API 令牌")
+            # AF-701（审计第七轮实测）：带 scopes 却 subject 为空的令牌 = 残缺身份——
+            # 归属判定对 caller="" 走"未携带身份不阻断"豁免，空主体令牌于是能改他人归档。
+            # 与 MCP _guard 同一道闸：要 scope 就必须有 subject（fail-closed）。
+            if not str(info.subject or "").strip():
+                raise HTTPException(
+                    status_code=403,
+                    detail="令牌缺少 subject（残缺身份）——AF_ACCESS_TOKENS 每条须含 subject + scopes",
+                )
             # admin 门的 owner 名单通道（v1.13.0）：subject ∈ _OWNER_SUBJECTS 的登录令牌
             # 视同持 admin——WebUI 升级页/watch 治理不用改签发。第三方 agent 令牌要 admin
             # 必须在 AF_ACCESS_TOKENS 显式配 scopes:["admin"]（autoflow 铁律：身份由人签发，
