@@ -29,6 +29,9 @@ def _meta(entity_id: str, *, state: str = "on", offline: bool = False) -> dict:
 
 
 ENTITIES = {
+    # AF-704 后 save_graph 的扫描也做实体存在性校验：触发实体必须一并铺进目录，
+    # 否则会被 ENTITY_NOT_FOUND 拒（与本测试「offline 告警面」的主题无关）。
+    "binary_sensor.m": _meta("binary_sensor.m"),
     "light.online_lamp": _meta("light.online_lamp"),
     "light.dead_lamp": _meta("light.dead_lamp", state="unavailable", offline=True),
 }

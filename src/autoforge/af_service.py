@@ -801,6 +801,24 @@ def set_automation_enabled(
     return store.resave_raw(name, flip)
 
 
+def _catalog_known_entities(store: GraphStore) -> set[str] | None:
+    """归档面实体校验白名单——store 的设备目录全集（AF-704，假绿族第二面）。
+
+    `af_build` 走目录时幽灵实体会被 `ENTITY_NOT_FOUND` 拒，但 `submit_pending` 与
+    `save_graph` 的 `StaticScanner` 从不传 `known_entities` ⇒ 存在性校验恒 skipped
+    ⇒ 同一份 IR 入队/归档一路绿，动作打 HA 404 静默无效。两处扫描统一从本 store 的
+    设备目录取全集，与 build 的 use_catalog 同源。
+
+    目录为空 / 读不出 ⇒ None：空目录是合法首建态，fail-open 不拦截，但**必须说话**
+    ——scanner 会发 `ENTITY_CHECK_DEGRADED`，`submit_pending` 回执把它转述给人审。
+    """
+    try:
+        ids = DeviceCatalog(store.root).known_entity_ids()
+    except Exception:  # noqa: BLE001 - 目录读不出等同空目录：fail-open 但要说话
+        return None
+    return ids or None
+
+
 def save_graph(
     store: GraphStore,
     ir: Mapping[str, Any],
@@ -825,14 +843,19 @@ def save_graph(
     if not name or not str(name).strip():
         raise ServiceError("归档名不能为空", status=400)
     graph = _load_ir(ir)
+    # AF-704：归档面实体校验——白名单取 store 设备目录（空则 None，fail-open 但说话）
+    known = _catalog_known_entities(store)
     scan = StaticScanner(
         graph,
+        known_entities=known,
         device_guard=load_device_guard(store),
         entity_health=load_entity_health(store),
     ).scan()
     if not scan.ok:
+        # AF-704：同 submit_pending——拒绝消息带具名码（含 ENTITY_NOT_FOUND）。
+        codes = sorted({d.code for d in scan.errors})
         raise ServiceError(
-            f"拒绝归档：IR 未通过静态扫描（{len(scan.errors)} 个错误）。先修 IR 或改用 af_build 查看诊断。",
+            f"拒绝归档：IR 未通过静态扫描（{len(scan.errors)} 个错误：{'、'.join(codes)}）。先修 IR 或改用 af_build 查看诊断。",
             status=400,
         )
     count = len(list(graph))
@@ -906,19 +929,30 @@ def submit_pending(
     传入时强制覆盖 `submitted_by`，防止调用方伪造提交人身份。
     """
     ir = payload.get("ir")
+    entity_check: str | None = None
+    build_warnings: list[dict[str, Any]] = []
     if ir is not None:
         try:
             graph = _load_ir(ir)
         except (IRValidationError, ValueError, KeyError) as exc:
             raise ServiceError(f"拒绝归档：IR 结构非法（{exc}）", status=400)
+        # AF-704：入队闸的实体校验——白名单取 store 设备目录（与 af_build 同源）。
+        # 空则 None（合法首建态 fail-open），但回执必须把 skipped + 警告说给人审。
+        known = _catalog_known_entities(store)
         scan = StaticScanner(
             graph,
+            known_entities=known,
             device_guard=load_device_guard(store),
             entity_health=load_entity_health(store),
         ).scan()
+        entity_check = "catalog" if known else "skipped"
+        build_warnings = [_diag(d) for d in scan.warnings]
         if not scan.ok:
+            # AF-704：消息里带上具名码——人审/agent 拿到的是一句自由文本时，
+            # 分不出「结构非法」与「实体不存在」（裁定 20261006 §二.2 同族）。
+            codes = sorted({d.code for d in scan.errors})
             raise ServiceError(
-                f"拒绝归档：IR 未通过静态扫描（{len(scan.errors)} 个错误）。"
+                f"拒绝归档：IR 未通过静态扫描（{len(scan.errors)} 个错误：{'、'.join(codes)}）。"
                 f"先修 IR 或改用 af_build 查看诊断。",
                 status=400,
             )
@@ -943,6 +977,11 @@ def submit_pending(
         "submitted_at": op.submitted_at,
         "agent": op.agent,
         "note": "待人工审批（approve 后才会落盘）",
+        # AF-704：实体校验读数必须随回执到人审眼前——旧回执没有 entity_check，
+        # 「这条没做存在性校验」在 WebUI/CLI 上读不出来，幽灵实体靠人眼兜底也兜不住。
+        # skipped 时 build_warnings 里会有 ENTITY_CHECK_DEGRADED（scanner 发的）。
+        "entity_check": entity_check,
+        "build_warnings": build_warnings,
         # 契约 R2-4（P1，2026-10-29）：`ok:true` + `pending` 被 agent 读成"已保存"，
         # 转头就去 `af_get_graph` / `af_diff` 取它 ⇒ 全部未找到（实测）。写闸 `open`
         # 只表示"能提交"，不表示"已落盘"——提交与落盘是两件事，⛔ 别让调用方自己猜。
