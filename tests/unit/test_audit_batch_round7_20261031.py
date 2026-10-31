@@ -86,25 +86,26 @@ def test_scopeless_tools_unaffected_by_subject_gate(tmp_path):
     assert body["ok"] is True
 
 
-def test_http_empty_subject_token_is_refused(tmp_path):
-    """HTTP 面同一道闸：AF_ACCESS_TOKENS 里 subject 为空的令牌拿不到 write 域。"""
+def test_http_empty_subject_token_is_refused(tmp_path, monkeypatch):
+    """HTTP 面同一道闸：AF_ACCESS_TOKENS 里 subject 为空的令牌拿不到 write 域。
+
+    ⚠️ 环境变量必须 monkeypatch（test_stability_r3 门拦裸 os.environ 直写——
+    会跨测试泄漏；我第一版就是裸写，CI run #262 实测红）。
+    """
     from fastapi.testclient import TestClient
-    import os
-    os.environ["AUTOFORGE_TOKENS"] = json.dumps({
+    monkeypatch.setenv("AUTOFORGE_TOKENS", json.dumps({
         "tok-empty": {"subject": "", "scopes": ["read", "write", "live"]},
         "tok-ok": {"subject": "owner", "scopes": ["read", "write", "live", "admin"]},
-    })
-    try:
-        from autoforge.af_api import build_app
-        client = TestClient(build_app(store_root=str(tmp_path)))
-        r = client.post("/api/graphs/tags", json={"name": "x", "tags": ["t"]},
-                        headers={"Authorization": "Bearer tok-empty"})
-        assert r.status_code == 403, f"HTTP 面残缺身份穿透（AF-701）：{r.status_code} {r.text[:120]}"
-        assert "subject" in r.text
-        r2 = client.get("/api/graphs", headers={"Authorization": "Bearer tok-ok"})
-        assert r2.status_code == 200, "有名令牌被误伤"
-    finally:
-        os.environ.pop("AUTOFORGE_TOKENS", None)
+    }))
+    monkeypatch.setenv("AF_ALLOW_NOAUTH", "0")
+    from autoforge.af_api import build_app
+    client = TestClient(build_app(store_root=str(tmp_path)))
+    r = client.post("/api/graphs/tags", json={"name": "x", "tags": ["t"]},
+                    headers={"Authorization": "Bearer tok-empty"})
+    assert r.status_code == 403, f"HTTP 面残缺身份穿透（AF-701）：{r.status_code} {r.text[:120]}"
+    assert "subject" in r.text
+    r2 = client.get("/api/graphs", headers={"Authorization": "Bearer tok-ok"})
+    assert r2.status_code == 200, "有名令牌被误伤"
 
 
 # ── AF-402：pattern 声明即契约 ──────────────────────────────────
