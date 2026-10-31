@@ -1066,8 +1066,19 @@ def reject_insight(queue: Any, proposal_id: str, *, reviewer: str = "", reason: 
 
 
 def list_pending(store: GraphStore, agent: str | None = None) -> dict[str, Any]:
-    """列出待批（审批视图：含 summary / blast_radius / 完整 payload 供回放）。"""
-    return {"ok": True, "items": PendingStore(store.root).list(agent)}
+    """列出待批（审批视图：含 summary / blast_radius / 完整 payload 供回放）。
+
+    每行附 `l2_summary`（`l2_summary_of` 单一真源机提取，⛔ 前端不自算）：DCD 矩阵
+    行 2 的判据是「**审批时**」人必须看见本条含哪些 L2——待批列表就是批准前那一刻
+    的审批面，批准后回执上的那份只补「批准动作」本身。空列表＝合法「本条无 L2」
+    （前端显式占位，⛔ 留白＝没读出来）。
+    """
+    items = PendingStore(store.root).list(agent)
+    for item in items:
+        payload = item.get("payload")
+        ir = payload.get("ir") if isinstance(payload, Mapping) else None
+        item["l2_summary"] = l2_summary_of(ir or {})
+    return {"ok": True, "items": items}
 
 
 def l2_summary_of(ir_payload: Mapping[str, Any]) -> list[dict[str, str]]:
