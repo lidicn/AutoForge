@@ -54,9 +54,8 @@ CHECKS: dict[str, str] = {
     # ── G2 新增（KICKOFF §4.7 明确延后 G2 的两项 + IR §8.2 补齐）──
     "ENTITY_NOT_FOUND": "⑫ 引用了不存在的实体",
     "ENTITY_WRITE_CONFLICT": "③ 跨自动化写同一实体且无优先级",
-    "L2_NEEDS_CONFIRM": "§8.1 L2 动作（门锁/窗帘/空调）强制 canary + 人工确认",
+    "L2_NEEDS_CONFIRM": "§8.1 L2 动作（门锁/窗帘/空调）强制 canary + 部署期显眼标记（requires_confirm）",
     "L2_NEEDS_CANARY": "§8.1 P1-2 L2 动作只标 requires_confirm 而无 canary＝免费豁免，服务端策略表不放行",
-    "CONFIRM_WITHOUT_DENY_PATH": "裁定 20261009 §二 2.2：requires_confirm 节点没有 no/on_timeout/default 任一出口，被拒后的走向只在运行期静默落 done",
     "LOW_CONF_WRITES_DEVICE": "§10 conf<0.6 只出 ask 提案，禁止写设备",
     "DO_WITHOUT_ON_ERROR": "§6 do 建议有 on_error（缺省直接 failed）",
     "NESTED_SUSPEND_IN_CANCEL": "§5.3 on_cancel 分支内禁止再次挂起（禁止嵌套中断）",
@@ -107,8 +106,6 @@ CODE_HINT: dict[str, str] = {
     "L3_ACTION": "把该动作换成低危替代；确需保留则补 `requires_confirm` + `canary`（L3 必须白名单 + 人工确认）。",
     "HTTP_NOT_WHITELISTED": "把出站主机加进 `--http-allowed-hosts` 白名单，或改用 HA 适配器。",
     "MISSING_TIMEOUT_OR_DEFAULT": "给 ask 补 `timeout` 并加 `on_timeout` 边，或给该节点加 `default` 边。",
-    "CONFIRM_WITHOUT_DENY_PATH": "给人工确认节点补一条拒绝出口：`kind: no`（答「不要」时走）、`on_timeout`（没人答时走）或 `default`（兜底）三选一即可。"
-                                 "不补也能跑——运行期照既有边纪律落 `done`，但那条路在图里读不出来。",
     "ENTITY_DEP_CYCLE": "用 `emit`/`on event` 解耦：状态变化侧只广播事件（不写实体），跟随侧只写对方实体。",
     "STATIC_LOOP": "补终止条件：加 `if` 分支走 `pass`，或改用 `for` 持续条件而不是自触发。",
     "CANCEL_SPAWNS_INSTANCE": "`on_cancel` 分支里不要写会重新触发本自动化的实体/事件。",
@@ -409,7 +406,6 @@ class StaticScanner:
                 )
             self._check_risk(auto, node, out)
             self._check_suspension(auto, node, out)
-            self._check_confirm_exit(auto, node, out)
             self._check_high_risk_after_suspend(auto, node, out)
             self._check_cancel_branch(auto, node, out)
             self._check_duplicate_edges(auto, node, out)
@@ -466,7 +462,9 @@ class StaticScanner:
                     node.id,
                 )
             )
-        # P1-2：L2 动作服务端策略表——requires_confirm=true 必须配 canary 灰度，不可免费豁免
+        # P1-2：L2 动作服务端策略表——L2 分档保留（DCD 裁定 20261031·Q2 甲：语义从
+        # "运行期问人"改写为「部署期必须显眼 + 必须配 canary 灰度」）。矩阵第 3/4 行：
+        # L2 不写 requires_confirm 仍 ERROR；写了不配 canary 仍 ERROR。
         from .af_adapters.base import unrecognized_service as _unrec
         _unrecognized = _unrec(node.action) if node.kind == "do" else None
         if level == "L2":
@@ -475,12 +473,13 @@ class StaticScanner:
                     Diagnostic(
                         "L2_NEEDS_CONFIRM",
                         ERROR,
-                        # 两种 L2 要说两种话：真高危域（该补确认）vs 动作名认不出
-                        # （该改动作名）。见 af_adapters.base.unrecognized_service。
+                        # 两种 L2 要说两种话：真高危域（部署期显眼标记）vs 动作名认不出
+                        # （该改动作名）。语义按裁定 20261031 Q2 甲改写：标记只承载
+                        # 「部署期必须显眼」，部署审批摘要机提取 L2 列表，运行期不问人。
                         (f"动作 {node.adapter}.{node.action} 属于 L2（门锁/窗帘/空调），"
-                         f"必须显式标记 requires_confirm=true（IR §8.1）"
+                         f"必须显式标记 requires_confirm=true（部署期显眼要求，IR §8.1）"
                          if _unrecognized is None else
-                         f"{_unrecognized}；因此按保守档要求确认——"
+                         f"{_unrecognized}；因此按保守档要求标记——"
                          f"⛔ 补 requires_confirm 不是修法，改动作名才是："
                          f"HA 服务写 `<domain>.<service>`（如 switch.turn_off），"
                          f"或用意图别名 开灯/关灯/开空调/关空调"),
@@ -572,25 +571,9 @@ class StaticScanner:
                 )
             )
 
-    # 裁定 20261009 §二 2.2：受确认节点的"被拒后走向"必须在图里读得出来。
-    # 运行期那一半（`af_executor.resume` 的拒绝分支）照既有边纪律选路：没有 `no`/`default` 边就落
-    # `done`——这是 Q2 裁的甲，不是缺陷。这条 WARN 只是把"作者没写拒绝出口"从运行期静默挪到编译期可见。
-    def _check_confirm_exit(self, auto: Automation, node: Node, out: ScanResult) -> None:
-        if not node.requires_confirm:
-            return
-        kinds = {e.kind for e in auto.outgoing(node.id)}
-        if kinds & {"no", "on_timeout", "default"}:
-            return
-        out.diagnostics.append(
-            Diagnostic(
-                "CONFIRM_WITHOUT_DENY_PATH",
-                WARNING,
-                f"节点 {node.id} 标了 requires_confirm，却没有 no/on_timeout/default 任一出口："
-                f"人答「不要」或无人应答时，运行期照既有边纪律落 done，图里读不出这条走向",
-                auto.id,
-                node.id,
-            )
-        )
+    # `_check_confirm_exit`（CONFIRM_WITHOUT_DENY_PATH WARN）已随 DCD 裁定 20261031
+    # （Q3 甲）整族撤销——运行期确认闸没了，"人答不要/无人应答"这条走向不再存在；
+    # 调用点同批删除，CHECKS/CODE_HINT/pin 同批清，防孤儿。
 
     # ⑤ on_cancel 分支不得产生新实例
     def _check_cancel_branch(self, auto: Automation, node: Node, out: ScanResult) -> None:

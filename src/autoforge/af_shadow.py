@@ -373,18 +373,25 @@ class ShadowRunner:
                 # （`af_executor.py` 的 `_execute` docstring + 驱动循环 `if kinds is None: return`）。
                 # 原先这里 return None ⇒ 驱动把"影子记完第一条"读成"实例终止"，实例挂在 created，
                 # 多动作自动化只回放得到第一个 do——而 shadow_log 正是 conf grading 的转正证据。
-                # ask 档那一格**不动**：它要的是"挂起等人确认"，但 `open_ask` 并不 suspend，
-                # 真去 suspend 又会让 resume 重入时无限重开 ask ⇒ 语义怎么对齐递 DCD（清单 §七）。
+                # ask 档那一格**不动**：ask 是业务问句（DCD 裁定 20261031 ⛔ 边界）。
                 return {"then"}
             if band == "ask":
                 runner.open_ask(instance, node)
                 return None
-            if runner.intervention is not None and getattr(node, "kind", "") == "do":
+            # AF-710 闸位次序半（DCD 裁定 20261031 §五 约束 7 ＋ 矩阵行 6）：
+            # `af_action_dispatched` 必须记在**真下发之后**——旧写法先 note_node（写
+            # dispatched 留痕）再调 `_orig`（执行器真下发），闸前留痕让"被拦下、零下发"
+            # 的动作在 `_dispatch_verdict` 与 `deploy_audit.jsonl` 流水里都读成 executed。
+            # 运行期确认闸已随 Q1 甲撤除，但**次序纪律独立于闸**：留痕只配得上真发生的下发。
+            # 实现：先真执行，`_orig` 正常返回（= 适配器调用确实发生、未 fail-closed 终止）
+            # 才补记报到；失败/终止路径走 `_orig` 自身的审计（action_failed / _fail）。
+            kinds = _orig(instance, node)
+            if kinds is not None and runner.intervention is not None and getattr(node, "kind", "") == "do":
                 runner.intervention.note_node(
                     aid, _instance_id(instance), node,
                     runner.resolver(node, node.target_entities() or (), runner.states),
                 )
-            return _orig(instance, node)
+            return kinds
 
         setattr(executor, "_do", _do)
         return ShadowBinding(executor=executor, original=original, had_own_attr=had_own)

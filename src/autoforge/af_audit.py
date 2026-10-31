@@ -62,10 +62,9 @@ PREMIERE_CONSUMED = "premiere_consumed"
 PREMIERE_TRIAL_STARTED = "premiere_trial_started"
 PREMIERE_TRIAL_PAUSED = "premiere_trial_paused"
 TRIAL_ASSERT_FAILED = "trial_assert_failed"
-#: 裁定 20261009 §三 硬前置：`requires_confirm` 的运行期确认。一次确认只放行一次下发，
-#: 所以"通过"与"未通过"都要各自留一条能对上节点与动作的账（拒绝侧不许只落在会被截断的 trace 里）。
-CONFIRM_GRANTED = "confirm_granted"
-CONFIRM_DENIED = "confirm_denied"
+#: 裁定 20261031（取消运行期二次授权·Q3 甲）：CONFIRM_GRANTED / CONFIRM_DENIED 两枚审计事件
+#: 随运行期闸整族撤销——闸没了，放行侧（confirm_granted）与拒绝侧（confirm_denied）
+#: 都不再存在。常量与 ALL_EVENT_TYPES 注册同批删除，全仓无孤儿引用。
 #: G8（2026-10-24）：已过期的已签发令牌被静默剔除——落一条账，回答"什么时候掉的、掉了几枚"。
 TOKEN_EXPIRED_PURGED = "token_expired_purged"
 #: G9（2026-10-24）：A 类访问密钥走了旧名回退路径（运维看着配置齐，实际跑的是兜底名）。
@@ -113,8 +112,6 @@ ALL_EVENT_TYPES = (
     PREMIERE_TRIAL_STARTED,
     PREMIERE_TRIAL_PAUSED,
     TRIAL_ASSERT_FAILED,
-    CONFIRM_GRANTED,
-    CONFIRM_DENIED,
     TOKEN_EXPIRED_PURGED,
     TOKEN_ENV_LEGACY_NAME,
     TOKEN_ISSUED_REJECTED,

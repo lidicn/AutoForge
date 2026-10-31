@@ -24,8 +24,6 @@ _logger = logging.getLogger(__name__)
 from .af_adapters import AdapterRegistry, CallResult
 from .af_audit import (
     ACTION_FAILED,
-    CONFIRM_DENIED,
-    CONFIRM_GRANTED,
     ENTITY_DRIFT,
     EVENT_EMITTED,
     INSTANCE_SESSION_LOST,
@@ -208,37 +206,9 @@ class NodeExecutor:
         if instance.state == SUSPENDED:
             self.instances.resume(instance)  # 恢复时重新取快照
 
-        # 人工确认（`requires_confirm`）的唤醒：yes ⇒ 重入同一个 do 节点真执行；
-        # no / on_timeout / on_cancel ⇒ 一条动作都不发（fail-closed），照旧按边选路。
-        pending_confirm = instance.ctx.context.pop("pending_confirm", None)
-        if pending_confirm is not None:
-            confirmed_action = str(pending_confirm.get("action") or "") or node.id
-            if kind == "yes":
-                granted = str(pending_confirm.get("node_id") or node.id)
-                instance.ctx.context["confirm_granted"] = granted
-                instance.ctx.current_node = granted
-                self.audit.add(
-                    AuditEvent(
-                        type=CONFIRM_GRANTED,
-                        at=self.clock.now(),
-                        message=f"人工确认通过，放行一次下发：{confirmed_action}（一次性授权，再走到还要再确认）",
-                        automation_id=instance.automation.id,
-                        instance_id=instance.instance_id,
-                        node_id=node.id,
-                    )
-                )
-                return self.run(instance)
-            instance.trace(node.id, note=f"confirm_denied:{kind}")
-            self.audit.add(
-                AuditEvent(
-                    type=CONFIRM_DENIED,
-                    at=self.clock.now(),
-                    message=f"人工确认未通过（{kind}），fail-closed：{confirmed_action} 一条动作都不下发",
-                    automation_id=instance.automation.id,
-                    instance_id=instance.instance_id,
-                    node_id=node.id,
-                )
-            )
+        # DCD 裁定 20261031（取消运行期二次授权·Q1 甲）：确认唤醒分支整体撤除——
+        # 运行期闸没了，不存在"确认会话被唤醒放行"这条路；`ask` 的应答唤醒走
+        # 下面的通用边选路。CONFIRM_GRANTED/CONFIRM_DENIED 审计事件随闸撤销（§2.3）。
 
         # P1-11：canary 观察期结束 → 检查漂移并回滚
         # P1-4 修复：pending_canary 现在是可序列化字典。崩溃恢复后据此重建 CanaryResult
@@ -505,13 +475,16 @@ class NodeExecutor:
         return self.resume(instance, "then")
 
     def reseed_sessions(self, instances: Iterable[Instance]) -> int:
-        """崩溃恢复：把落盘时挂起的 `ask` / 人工确认会话重挂回 `pending_asks`（§十八 B.14）。
+        """崩溃恢复：把落盘时挂起的 `ask` 会话重挂回 `pending_asks`（§十八 B.14）。
 
-        判据只用重启后仍然成立的三格：`state==suspended`、`ctx.context["pending_confirm"]`
-        （确认会话的唯一标记，唤醒时 pop）、`automation.node(ctx.current_node).kind == "ask"`。
+        判据只用重启后仍然成立的两格：`state==suspended`、
+        `automation.node(ctx.current_node).kind == "ask"`。
         **不能循 `timer.kind`**——未设 `timeout` 的 ask 挂起时 `timer` 就是 `None`
         （`af_instance.py` 的 `suspend`），重启后没有任何计时器信号可循；`wait` /
-        `canary_observe` 既无 `pending_confirm`、节点也不是 `ask`，因此天然排除。
+        `canary_observe` 的节点不是 `ask`，因此天然排除。
+        （确认会话的 `pending_confirm` 腿已随 DCD 裁定 20261031·Q1 甲撤除——运行期
+        闸不存在，重启后不会再有确认会话要重挂；落盘旧实例若仍带该键，按 ask 之外的
+        普通挂起处理，不重挂。）
 
         **只重挂、绝不放行**：这里不调 `resume`（重启不等于人已批过），实例保持 suspended，
         必须等 `/api/asks`、sidecar 或 inbox 收到人的答复才动。问句一律按**当前图**的节点渲染，
@@ -541,16 +514,7 @@ class NodeExecutor:
                     )
                 )
                 continue
-            pending_confirm = instance.ctx.context.get("pending_confirm")
-            if isinstance(pending_confirm, Mapping):
-                self.pending_asks[instance.instance_id] = AskSession(
-                    instance_id=instance.instance_id,
-                    node_id=node.id,
-                    room=node.room or instance.ctx.context.get("_ask_room"),
-                    created_at=self.clock.monotonic(),
-                    prompt=node.prompt or f"确认执行 {node.action or node.id}？",
-                )
-            elif node.kind == "ask":
+            if node.kind == "ask":
                 self.pending_asks[instance.instance_id] = AskSession(
                     instance_id=instance.instance_id,
                     node_id=node.id,
@@ -637,26 +601,25 @@ class NodeExecutor:
             logger.warning("af_watch 聚合 canary 证据失败（不影响执行）：%r", exc)
 
     def _do(self, instance: Instance, node: Node) -> Iterable[str] | None:
-        """`do`：**单次调用**，不重试不降级。"""
+        """`do`：**单次调用**，不重试不降级。
+
+        DCD 裁定 20261031（取消运行期二次授权·Q1 甲 ＋ AF-710 闸位次序半）：
+        `requires_confirm` 的运行期闸**整体撤除**——字段保留但只承载「部署期必须
+        显眼」语义（编译期 L2 分档负责），运行期不再挂起、不再开会话、不再等人
+        应答（出资人设计模型：一次审批，部署后即生效）。
+
+        撤除面：旧确认挂起块、`resume` 的确认唤醒分支、`_suspend_for_confirm`、
+        `reseed_sessions` 的 pending_confirm 腿、CONFIRM_GRANTED/CONFIRM_DENIED
+        审计事件与 confirm_skipped_dry_run/confirm_wait 留痕（裁定 §2.1/§2.3）。
+        ⛔ 不动：`ask` 节点（业务里"问用户一句话"）、`live_run` 的 confirm=true
+        （部署范畴的一次确认）、canary 灰度（部署后兜底，Q2 甲保留并强制）。
+        """
         try:
             adapter = self.adapters.get(node.adapter or "")
         except Exception as exc:  # 适配器未注册
             return self._soft_fail(instance, node, exc)
 
         dry_run = bool(getattr(adapter, "dry_run", False))
-
-        # 裁定 20261009 §三 硬前置：`requires_confirm` 的**运行期**消费者。此前这一格只有
-        # 编译期看得见（af_scanner 出诊断），执行器 0 处消费 ⇒ "需要确认"是断的承诺。
-        # 一次性授权：一次确认只放行一次下发，同一节点再次走到还要再确认。
-        if node.requires_confirm:
-            if instance.ctx.context.get("confirm_granted") == node.id:
-                instance.ctx.context.pop("confirm_granted")
-            elif not dry_run:
-                self._suspend_for_confirm(instance, node)
-                return None
-            else:
-                # 预演档一条上线字节都不发（与 canary 跳过 dry_run 同一口径），但记痕不留白
-                instance.trace(node.id, note="confirm_skipped_dry_run")
 
         # G4 canary：conf 处于 auto 带且节点标了 canary → 走灰度保护
         # ⚠️ dry-run 适配器（G1 默认不写真机）不改状态，会**永远**被判定为漂移，必须跳过
@@ -888,34 +851,8 @@ class NodeExecutor:
                 ask_spec=node.ask,
             )
 
-    def _suspend_for_confirm(self, instance: Instance, node: Node) -> None:
-        """把带 `requires_confirm` 的 `do` 挂成一次人工确认会话（裁定 20261009 §三 硬前置）。
-
-        复用 ask 已有的那条应答接缝（`pending_asks` → `resolve_ask`/`answer` → HTTP
-        `/api/asks*` 与 sidecar/inbox），**不给 `AskSession` 加字段、不新造第二套通道**：
-        确认会话在消费侧就是一条自由文本 ask，答"好"才放行这一次下发。
-        `timeout` 未设 ⇒ 无限期挂起（与不带 timeout 的 `ask` 同形），无人应答就永不下发。
-        """
-        duration: float | None = None
-        if node.timeout:
-            try:
-                duration = parse_duration(node.timeout)
-            except (ValueError, TypeError) as exc:
-                # 与 `_suspend` 同口径：配置非法就地软失效，不许冒泡停摆整个调度循环
-                self._soft_fail(instance, node, exc)
-                return
-
-        instance.ctx.context["pending_confirm"] = {"node_id": node.id, "action": node.action or ""}
-        instance.trace(node.id, note="confirm_wait")
-        # 同上：`pending_confirm` 是重启后重挂确认会话的唯一标记，必须赶在落盘那次转换之前写好
-        self.instances.suspend(instance, node.id, duration, kind="confirm")
-        self.pending_asks[instance.instance_id] = AskSession(
-            instance_id=instance.instance_id,
-            node_id=node.id,
-            room=node.room or instance.ctx.context.get("_ask_room"),
-            created_at=self.clock.monotonic(),
-            prompt=node.prompt or f"确认执行 {node.action or node.id}？",
-        )
+    # `_suspend_for_confirm`（确认会话挂起点）已随 DCD 裁定 20261031（Q1 甲）撤除——
+    # 运行期闸不存在，确认会话无起点；本函数刻意不留空壳，调用点同批删除。
 
     # ─────────────────────────────────────────────────────────────────
     # 终止

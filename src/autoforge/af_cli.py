@@ -561,6 +561,24 @@ def _auth_code_of(cli_value: str) -> str:
     return cli_value or os.environ.get("AUTOFORGE_AUTH_CODE", "")
 
 
+def _watch_targets_deployed(store: Any, graph: Any) -> bool:
+    """第五面免码判据（DCD 20261031 §2.1）：watch 的 IR 在 store 里**全部**已部署。
+
+    按 graph 里 automation id 集合**逐条**查 store 的已归档（任一缺失即 False——
+    ⛔ 不许"任一命中即免码"，那等于给部分未部署的动作放行）。store 打不开 /
+    归档查不到一律 False（fail-closed：拿不准就走要码路径）。
+    """
+    try:
+        auto_ids = {a.id for a in graph}
+        if not auto_ids:
+            return False
+        for aid in auto_ids:
+            store.load(aid)
+        return True
+    except Exception:
+        return False
+
+
 @app.command()
 def watch(
     path: Path = typer.Argument(..., help="IR 文件路径（.json）"),
@@ -600,17 +618,26 @@ def watch(
     if not confirm and not dry_live:
         typer.echo("真机常驻监听会**持续**真实操作 HA，必须显式 --confirm，拒绝启动。", err=True)
         raise typer.Exit(code=EXIT_SCAN_ERROR)
-    # DCD 裁定 2026-10-30（AF-602 手动入口半）：forge watch 是人敲的手动真机监听入口，
-    # 与 /api/watch/start 同权要码（dry-live 不动设备免码，与 start_watch 同口径）。
+    # DCD 裁定 2026-10-30（AF-602 手动入口半）＋ 20261031（常驻监听启动面·第五面）：
+    # forge watch 的码归属按**对象是否已部署**判定（⛔ 按"进程怎么起的"）——
+    # 第五面（容器开机自起）免码的充要条件：watch 的 IR 在 store 里有**已 approve 的
+    # 归档**（按 file 里 automation id 集合**逐条**查，⛔ 不许"任一命中即免码"）；
+    # 未满足 ⇒ 走"要码"族（人工 watch 一个未部署文件＝新的一次真机动作）。
+    # dry-live 不动设备，本就免码。
     if not dry_live:
         from .af_service import _auth_code_check, GraphStore as _GS
-        try:
-            # AF-714：编排面经 env 注入（AUTOFORGE_AUTH_CODE）；--auth-code 仍是人工启动面回退。
-            _auth_code_check(_GS(persist_dir or DEFAULT_STORE_ROOT), _auth_code_of(auth_code),
-                             action="真机常驻监听（forge watch）")
-        except Exception as _e:
-            typer.echo(f"[监听启动被拒] {_e}", err=True)
-            raise typer.Exit(code=EXIT_IR_ERROR)
+        _gs = _GS(persist_dir or DEFAULT_STORE_ROOT)
+        deployed = _watch_targets_deployed(_gs, graph)
+        if deployed:
+            typer.echo("· 第五面免码（DCD 20261031 §2.1）：watch 对象均已部署（store 有已 approve 归档）")
+        else:
+            try:
+                # AF-714：编排面经 env 注入（AUTOFORGE_AUTH_CODE）；--auth-code 仍是人工启动面回退。
+                _auth_code_check(_gs, _auth_code_of(auth_code),
+                                 action="真机常驻监听（forge watch）")
+            except Exception as _e:
+                typer.echo(f"[监听启动被拒] {_e}", err=True)
+                raise typer.Exit(code=EXIT_IR_ERROR)
 
     cfg = get_config(persist_dir or DEFAULT_STORE_ROOT)
     token = ha_token or cfg.get_ha_token() or os.environ.get("HA_LONG_LIVED_TOKEN") or os.environ.get("AUTOFORGE_HA_TOKEN", "")

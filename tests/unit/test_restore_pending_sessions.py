@@ -1,17 +1,21 @@
-"""§十八 B.14：崩溃恢复后，挂起的 `ask` / 人工确认会话必须**重挂**（看得见、能应答、绝不自动放行）。
+"""§十八 B.14：崩溃恢复后，挂起的 `ask` 会话必须**重挂**（看得见、能应答、绝不自动放行）。
 
 判据要钉住的形状：
 - 重启后 `pending_asks`（`/api/asks`、sidecar、inbox 三面共同的读源）里必须还挂着那条问题。
 - **恢复过程本身零下发**：重启不等于人已批过。
-- 答 yes ⇒ 恰一次下发；答 no ⇒ 零下发（沿用 §三 硬前置那套一次性授权与边纪律）。
-- 确认会话的问句按**当前图**渲染 ⇒ 拿旧动作名问人 = 说谎。
+- 答 yes ⇒ 恰一次下发；答 no ⇒ 零下发（沿用边纪律）。
+- ask 会话的问句按**当前图**渲染 ⇒ 拿旧动作名问人 = 说谎。
 - `wait` / `canary_observe` 不重挂（无人在场语义，不是问题）。
 - 挂起节点已不在当前图 ⇒ 具名审计，不许静默跳过。
+- （v1.15.0 · DCD 裁定 20261031·Q1 甲）**确认会话**不再存在：运行期闸撤除，
+  `pending_confirm` 腿与 CONFIRM_GRANTED/DENIED 已删——重启后不会、也不该再有
+  确认会话被重挂（本文件负向腿钉住"谁把它加回来谁红"）。
 """
 
 from __future__ import annotations
 
-from autoforge.af_audit import CONFIRM_DENIED, CONFIRM_GRANTED, INSTANCE_SESSION_LOST
+import pytest
+
 from autoforge.af_instance import DONE, SUSPENDED
 from autoforge.af_ir import Graph, load_automation
 from autoforge.af_runtime import build_runtime
@@ -71,7 +75,7 @@ def _ask_ir(*, room: bool = False, timeout: str | None = None) -> dict:
 
 
 def _confirm_ir(*, room: bool = False, action: str = "climate.turn_on") -> dict:
-    """入口 →（可选 ask 定房间）→ 受确认 `do`。链路与 §三 硬前置那批判据同形。"""
+    """入口 →（可选 ask 定房间）→ 带标记的 `do`。**闸已撤**：这条现在直接执行、零挂起。"""
     head: list[dict] = []
     edges = [{"from": "a1", "to": "d1", "kind": "then"}]
     if room:
@@ -229,68 +233,39 @@ def test_expired_ask_timeout_clears_reseeded_session(tmp_path):
     assert rt2.instances.get(instance_id).state == DONE
 
 
-# ── 确认会话 ──
+# ── 确认会话：**已不存在**（v1.15.0 · Q1 甲，负向腿）─────────────────
 
 
-def test_confirm_session_reseeds_with_action_in_prompt(tmp_path):
+def test_confirm_flag_no_longer_creates_session(tmp_path):
+    """带 requires_confirm 的 do 现在直接执行——不挂起、无会话、无确认审计。"""
     persist_dir = tmp_path / "p"
     rt1 = _runtime(_confirm_ir(), persist_dir)
-    instance_id = _suspend_first(rt1)
-    assert rt1.adapters.get("mock").calls == []
+    rt1.states.set_state("binary_sensor.study", "off")
+    rt1.emit("binary_sensor.study", "on", last_changed="t1")
+    inst = rt1.instances.all()[0]
+    assert inst.state == DONE, "运行期确认闸没删干净：实例停在了非终态"
+    assert [a for a, _ in rt1.adapters.get("mock").calls] == ["climate.turn_on"]
+    assert rt1.executor.pending_asks == {}
+    assert rt1.audit.of_type("confirm_granted") == []
+    assert rt1.audit.of_type("confirm_denied") == []
 
-    rt2 = _runtime(_confirm_ir(), persist_dir)
-    sess = rt2.executor.pending_asks[instance_id]
-    assert sess.node_id == "d1"
-    assert "climate.turn_on" in sess.prompt, "问句必须说清要下发的动作"
+
+def test_confirm_context_legacy_no_longer_reseeds(tmp_path):
+    """旧落盘实例若仍带 pending_confirm 键（历史残骸）：恢复**不**重挂确认会话（零下发）。"""
+    persist_dir = tmp_path / "p"
+    rt1 = _runtime(_ask_ir(), persist_dir)
+    instance_id = _suspend_first(rt1)
+    # 模拟历史残骸：往挂起实例的 ctx 里塞一个旧版确认标记
+    inst = rt1.instances.get(instance_id)
+    inst.ctx.context["pending_confirm"] = {"node_id": inst.ctx.current_node, "action": "x"}
+
+    rt2 = _runtime(_ask_ir(), persist_dir)
+    # ask 节点本身会重挂；这里钉的是**不因 pending_confirm 造出第二条会话**
+    sessions = rt2.executor.pending_asks
+    assert all(s.node_id == "q1" for s in sessions.values()), (
+        f"恢复不得据 pending_confirm 造出确认会话：{dict(sessions)!r}"
+    )
     assert rt2.adapters.get("mock").calls == []
-
-    inst = rt2.executor.answer(room=None, text="好", ask_id=instance_id)
-    assert inst is not None
-    assert [a for a, _ in rt2.adapters.get("mock").calls] == ["climate.turn_on"]
-    assert [e.node_id for e in rt2.audit.of_type(CONFIRM_GRANTED)] == ["d1"]
-
-
-def test_confirm_denial_after_restart_still_lands_on_edge_discipline(tmp_path):
-    persist_dir = tmp_path / "p"
-    rt1 = _runtime(_confirm_ir(), persist_dir)
-    instance_id = _suspend_first(rt1)
-
-    rt2 = _runtime(_confirm_ir(), persist_dir)
-    inst = rt2.executor.answer(room=None, text="不要", ask_id=instance_id)
-    assert inst is not None
-    assert rt2.adapters.get("mock").calls == []
-    assert inst.state == DONE
-    assert len(rt2.audit.of_type(CONFIRM_DENIED)) == 1
-
-
-def test_confirm_session_inherits_persisted_ask_room(tmp_path):
-    """链式 IR（ask room → 受确认 do）：`_ask_room` 随上下文落盘，重启后确认会话还在同房间。"""
-    persist_dir = tmp_path / "p"
-    rt1 = _runtime(_confirm_ir(room=True), persist_dir)
-    _suspend_first(rt1)
-    assert rt1.executor.answer(ROOM, "好") is not None
-    assert rt1.adapters.get("mock").calls == [], "第一道门放行、第二道门仍挂着"
-
-    rt2 = _runtime(_confirm_ir(room=True), persist_dir)
-    sess = next(iter(rt2.executor.pending_asks.values()))
-    assert sess.node_id == "d1"
-    assert sess.room == ROOM, "确认会话的房间要能跟着实例跨重启"
-    assert rt2.executor.answer(ROOM, "好") is not None
-    assert [a for a, _ in rt2.adapters.get("mock").calls] == ["climate.turn_on"]
-
-
-def test_confirm_prompt_follows_current_graph_not_the_stale_action(tmp_path):
-    """停机期间 IR 改了动作：问句必须按**当前图**渲染，拿落盘的旧动作名问人等于说谎。"""
-    persist_dir = tmp_path / "p"
-    rt1 = _runtime(_confirm_ir(action="climate.turn_on"), persist_dir)
-    instance_id = _suspend_first(rt1)
-
-    rt2 = _runtime(_confirm_ir(action="climate.turn_off"), persist_dir)
-    sess = rt2.executor.pending_asks[instance_id]
-    assert "climate.turn_off" in sess.prompt
-    assert "climate.turn_on" not in sess.prompt
-    rt2.executor.answer(room=None, text="好", ask_id=instance_id)
-    assert [a for a, _ in rt2.adapters.get("mock").calls] == ["climate.turn_off"]
 
 
 # ── 不该重挂的 & 恢复不出会话的 ──
@@ -329,6 +304,8 @@ def test_unresolvable_suspended_node_audits_inst_of_silently_skipping(tmp_path):
 
     assert rt2.executor.pending_asks == {}
     assert rt2.adapters.get("mock").calls == []
+    from autoforge.af_audit import INSTANCE_SESSION_LOST
+
     lost = rt2.audit.of_type(INSTANCE_SESSION_LOST)
     assert len(lost) == 1
     assert lost[0].instance_id == instance_id

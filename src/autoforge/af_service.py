@@ -991,6 +991,9 @@ def submit_pending(
         # skipped 时 build_warnings 里会有 ENTITY_CHECK_DEGRADED（scanner 发的）。
         "entity_check": entity_check,
         "build_warnings": build_warnings,
+        # DCD 裁定 20261031·Q2 甲（矩阵行 2）：待批回执也带 L2 摘要——人审在批准前
+        # 就要看见"本条含哪些 L2 动作"（机提取，⛔ 人肉手写；空列表照给）。
+        "l2_summary": l2_summary_of(ir or {}),
         # 契约 R2-4（P1，2026-10-29）：`ok:true` + `pending` 被 agent 读成"已保存"，
         # 转头就去 `af_get_graph` / `af_diff` 取它 ⇒ 全部未找到（实测）。写闸 `open`
         # 只表示"能提交"，不表示"已落盘"——提交与落盘是两件事，⛔ 别让调用方自己猜。
@@ -1065,6 +1068,39 @@ def reject_insight(queue: Any, proposal_id: str, *, reviewer: str = "", reason: 
 def list_pending(store: GraphStore, agent: str | None = None) -> dict[str, Any]:
     """列出待批（审批视图：含 summary / blast_radius / 完整 payload 供回放）。"""
     return {"ok": True, "items": PendingStore(store.root).list(agent)}
+
+
+def l2_summary_of(ir_payload: Mapping[str, Any]) -> list[dict[str, str]]:
+    """部署审批摘要的 L2 动作清单（DCD 裁定 20261031·Q2 甲：审批时人必须看见本条含哪些 L2）。
+
+    ★ 机提取（⛔ 人肉手写）：由 IR 的 do 节点经 `classify_action` 判级，L2 命中即列。
+    中文别名复用 `af_nl._VERB_ZH` 的既有词汇表（单一真源，不另抄一份）。
+    返回形如 ``[{"action": "climate.turn_on", "alias": "打开空调", "automation": "空调",
+    "node": "d1"}]`` 的清单；前端/回执照此渲染「本条含：`climate.turn_on`（打开空调）」，
+    列表为空也要显式显示占位（⛔ 空白＝"没读出来"）。
+    """
+    from . import af_nl
+    from .af_adapters import classify_action
+    from .af_adapters.base import unrecognized_service as _unrec
+
+    out: list[dict[str, str]] = []
+    for auto in ir_payload.get("automations") or []:
+        if not isinstance(auto, Mapping):
+            continue
+        for node in auto.get("nodes") or []:
+            if not isinstance(node, Mapping) or node.get("kind") != "do":
+                continue
+            action = str(node.get("action") or "")
+            if _unrec(action) is not None:
+                continue  # 认不出的动作名交给 L2_NEEDS_CONFIRM 的另一支文案，不列进摘要
+            if classify_action(str(node.get("adapter") or ""), action, node.get("params")) == "L2":
+                out.append({
+                    "action": action,
+                    "alias": str(getattr(af_nl, "_ACTION_VERBS", {}).get(action, "")),
+                    "automation": str(auto.get("name") or auto.get("id") or ""),
+                    "node": str(node.get("id") or ""),
+                })
+    return out
 
 
 def _build_merged_ir(store: GraphStore) -> dict[str, Any] | None:
@@ -1149,6 +1185,9 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
     result["pending"] = op_id
     if self_check:
         result["self_check"] = self_check  # ADM B-11
+    # DCD 裁定 20261031·Q2 甲（矩阵行 2）：部署审批摘要显式列出本条含哪些 L2 动作——
+    # ★ 机提取（`l2_summary_of`，⛔ 人肉手写）。空列表照给（前端渲染占位，⛔ 空白＝没读出来）。
+    result["l2_summary"] = l2_summary_of(payload.get("ir") or {})
     # approve 后自动起 watch（真机常驻监听）——合并所有已部署自动化，不只这一条。
     # 凭据语义：MCP 路径 reviewer=auth_code:xx***（码已消费）、HTTP 路径 reviewer=令牌
     # 主体/人审（人审那一票）——这条是四条起监听路径之一，其余三条见

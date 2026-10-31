@@ -133,7 +133,10 @@ def _do_node_with_catalog(intent):
     return next(x for x in graph.automations[0].nodes.values() if x.kind == "do")
 
 
-# ── AF-001 · 预演把"停在确认闸"说出来 ────────────────────────────────
+# ── AF-001 · 历史判定随闸撤销（v1.15.0 · DCD 裁定 20261031·Q1 甲）─────
+# 当年 AF-001 的"预演停在确认闸"形状来自运行期确认闸（20261009 那枚裁定）；
+# 20261031 裁定把闸整体撤除（requires_confirm 只承载部署期显眼语义），预演不再挂起，
+# `held_at_confirm`/`confirm_note` 两键随之删除。此处改钉**负向判据**：谁把闸加回来谁红。
 
 def _confirm_ref(tmp):
     return draft_intent({"name": "空调", "when": {"entity": "binary_sensor.m", "to": "off"},
@@ -141,18 +144,17 @@ def _confirm_ref(tmp):
                                 "requires_confirm": True, "canary": {"duration": "10m"}}})["ref"]
 
 
-def test_preview_reports_held_at_confirm_not_silence(tmp_path):
+def test_preview_l2_runs_without_holding(tmp_path):
+    """预演含 L2（带 requires_confirm+canary）照常跑完、零挂起（矩阵第 5 行）。"""
     store = GraphStore(str(tmp_path / "store"))
     r = apply(_confirm_ref(tmp_path), stage="dry_run", store=store)
     assert r.get("ok") is True, str(r)[:200]
-    held = r.get("held_at_confirm")
-    assert held and held[0]["node"], f"停在确认闸却没上报：{r.get('sim_coverage')}"
-    note = str(r.get("confirm_note") or "")
-    assert "answer" in note, "要给出去哪条路能验完整链的指路（否则调用方只能读成链断了）"
+    assert "held_at_confirm" not in r, "确认闸撤了还报 held_at_confirm（残骸键）"
+    assert "confirm_note" not in r, "确认闸撤了还报 confirm_note（残骸键）"
 
 
 def test_answer_event_completes_the_chain():
-    """对照：注入 `answer` 后整条链跑通——证明"卡住"是可解的，不是引擎缺陷。"""
+    """对照：L2 do 直接执行到终点（不再有"闸前停住等应答"那条路径）。"""
     ir = {"ir_version": "0.3.0", "id": "t", "name": "t", "version": 1, "mode": "single",
           "nodes": [
               {"id": "a1", "kind": "on", "name": "触发",
@@ -163,12 +165,7 @@ def test_answer_event_completes_the_chain():
               {"id": "p1", "kind": "pass", "name": "结束"}],
           "edges": [{"from": "a1", "to": "d1", "kind": "then"}, {"from": "d1", "to": "p1", "kind": "then"}]}
     base = [{"entity_id": "binary_sensor.m", "state": "off"}]
-    r_held = simulate(ir, seed={"binary_sensor.m": "on", "climate.ac": "off"}, events=base)
-    r_yes = simulate(ir, seed={"binary_sensor.m": "on", "climate.ac": "off"},
-                     events=base + [{"answer": "yes"}])
-    held_state = {i.get("state") for i in (r_held.get("instances") or [])}
-    done_state = {i.get("state") for i in (r_yes.get("instances") or [])}
-    assert held_state == {"suspended"}, held_state
-    assert (r_held.get("final_states") or {}).get("climate.ac") == "off", "闸前不该下发"
-    assert (r_yes.get("final_states") or {}).get("climate.ac") == "cool", "应答后必须跑完整条"
-    assert "suspended" not in done_state
+    r = simulate(ir, seed={"binary_sensor.m": "on", "climate.ac": "off"}, events=base)
+    done_state = {i.get("state") for i in (r.get("instances") or [])}
+    assert "suspended" not in done_state, done_state
+    assert (r.get("final_states") or {}).get("climate.ac") == "cool", "L2 动作应直接执行"
