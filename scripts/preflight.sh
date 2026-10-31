@@ -10,9 +10,23 @@ ok()  { say "PASS  $1"; }
 bad() { say "FAIL  $1"; RED=1; }
 
 say "=== 1. 容器状态 ==="
+# AF-714：不能只看"容器在不在"——NAS 崩溃循环（restart_count=329 / exit=2 /
+# 「需要授权码」）里容器一直在"running"，旧体检照样 PASS。崩循环的两个指纹：
+# restarts 超阈值（连续重启说明起不来）＋ exit code 非零（最后一次也是失败）。
+# 阈值 5：正常发布滚动重启个位数，秒级崩循环几分钟就破百。
+CRASH_RESTARTS_CAP=5
 for c in autoforge-api autoforge-sync; do
-    st=$(docker inspect --format '{{.State.Status}} restarts={{.RestartCount}}' "$c" 2>/dev/null) \
-        && ok "$c: $st" || bad "$c: 不存在或未运行"
+    if ! st=$(docker inspect --format '{{.State.Status}} restarts={{.RestartCount}} exit={{.State.ExitCode}}' "$c" 2>/dev/null); then
+        bad "$c: 不存在或未运行"
+        continue
+    fi
+    restarts=$(docker inspect --format '{{.RestartCount}}' "$c" 2>/dev/null)
+    exitcode=$(docker inspect --format '{{.State.ExitCode}}' "$c" 2>/dev/null)
+    if [ "${restarts:-0}" -gt "$CRASH_RESTARTS_CAP" ] && [ "${exitcode:-0}" != "0" ]; then
+        bad "$c: 崩溃循环（restarts=$restarts > $CRASH_RESTARTS_CAP 且 exit=$exitcode）——凭据/配置注入失败的高频重启，不是容器噪音；对照 docker logs $c 的日志尾找被拒原因"
+    else
+        ok "$c: $st"
+    fi
 done
 
 say "=== 2. 健康检查 ==="

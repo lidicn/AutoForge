@@ -485,7 +485,8 @@ def run(
     ),
     auth_code: str = typer.Option(
         "", "--auth-code",
-        help="授权码（DCD 裁定 2026-10-30：--live 真机下发必填；WebUI/mimo 生成后随此参数传入）",
+        help="授权码（DCD 裁定 2026-10-30：--live 真机下发必填；WebUI/mimo 生成后随此参数传入）。"
+             "缺省读 env AUTOFORGE_AUTH_CODE（编排面注入；AF-714）",
     ),
     persist_dir: str = typer.Option(
         "", "--persist-dir", help="实例持久化目录（P1：重启后恢复 persist=true 的活跃实例）"
@@ -503,7 +504,8 @@ def run(
         if live:
             from .af_service import _auth_code_check, GraphStore as _GS
             try:
-                _auth_code_check(_GS(persist_dir or DEFAULT_STORE_ROOT), auth_code,
+                # AF-714：与 forge watch 同口径——env 注入优先，--auth-code 人工面回退。
+                _auth_code_check(_GS(persist_dir or DEFAULT_STORE_ROOT), _auth_code_of(auth_code),
                                  action="真机下发（forge run --live）")
             except Exception as _e:
                 typer.echo(f"[真机预检拒绝] {_e}", err=True)
@@ -547,6 +549,18 @@ def run(
     _print_expects(graph, runtime)
 
 
+def _auth_code_of(cli_value: str) -> str:
+    """授权码取值（AF-714 编排面）：`--auth-code` 显式给则用之；否则读 env `AUTOFORGE_AUTH_CODE`。
+
+    NAS 崩溃循环（restart_count=329 / exit=2 /「需要授权码」）的根因是编排面
+    没有凭据注入口：容器里不能敲 `--auth-code`，明文写进命令行又会被
+    `docker inspect` 一览无余（G24 同族）。env 注入是编排面的正路；
+    `--auth-code` 保留为人工启动面回退。HA 令牌同口径早已支持
+    （HA_LONG_LIVED_TOKEN），本函数补齐授权码这一半。⛔ 真值永不进仓。
+    """
+    return cli_value or os.environ.get("AUTOFORGE_AUTH_CODE", "")
+
+
 @app.command()
 def watch(
     path: Path = typer.Argument(..., help="IR 文件路径（.json）"),
@@ -564,7 +578,8 @@ def watch(
     tick_s: float = typer.Option(1.0, "--tick-s", help="计时器/超时巡检间隔（秒）"),
     auth_code: str = typer.Option(
         "", "--auth-code",
-        help="授权码（DCD 裁定 2026-10-30：真机常驻监听与下发同权，必填；dry-live 免码）",
+        help="授权码（DCD 裁定 2026-10-30：真机常驻监听与下发同权，必填；dry-live 免码）。"
+             "缺省读 env AUTOFORGE_AUTH_CODE（编排面注入；AF-714）——命令行明文码会被 docker inspect 泄露",
     ),
     persist_dir: str = typer.Option(
         "", "--persist-dir", help="实例持久化目录（P1：重启后恢复 persist=true 的活跃实例）"
@@ -590,7 +605,8 @@ def watch(
     if not dry_live:
         from .af_service import _auth_code_check, GraphStore as _GS
         try:
-            _auth_code_check(_GS(persist_dir or DEFAULT_STORE_ROOT), auth_code,
+            # AF-714：编排面经 env 注入（AUTOFORGE_AUTH_CODE）；--auth-code 仍是人工启动面回退。
+            _auth_code_check(_GS(persist_dir or DEFAULT_STORE_ROOT), _auth_code_of(auth_code),
                              action="真机常驻监听（forge watch）")
         except Exception as _e:
             typer.echo(f"[监听启动被拒] {_e}", err=True)
@@ -704,7 +720,7 @@ def undo(
     root: str = typer.Option(DEFAULT_STORE_ROOT, "--root", help="UndoStore 根目录（与部署时一致）"),
     ha_url: str = typer.Option(DEFAULT_HA_URL, "--ha-url", help="HA 地址（撤销真实下发到此）"),
     ha_token: str = typer.Option("", "--ha-token", help="HA 长期访问令牌（缺省读 HA_LONG_LIVED_TOKEN，旧 AUTOFORGE_HA_TOKEN 回退）"),
-    auth_code: str = typer.Option("", "--auth-code", help="授权码（DCD 裁定 2026-10-30：撤销是真机回放，必填）"),
+    auth_code: str = typer.Option("", "--auth-code", help="授权码（DCD 裁定 2026-10-30：撤销是真机回放，必填）。缺省读 env AUTOFORGE_AUTH_CODE（AF-714）"),
 ):
     """回滚一次部署的设备态（F7，决策 E）。
 
@@ -723,7 +739,7 @@ def undo(
     # 校验与 MCP/REST 同一条 _auth_code_check，码账本与 UndoStore 同根。
     from .af_service import _auth_code_check, GraphStore as _GS
     try:
-        _code_tag = _auth_code_check(_GS(root), auth_code, action=f"撤销部署（forge undo {deploy_id[:12]}…）")
+        _code_tag = _auth_code_check(_GS(root), _auth_code_of(auth_code), action=f"撤销部署（forge undo {deploy_id[:12]}…）")
     except Exception as _e:
         typer.echo(f"[撤销被拒] {_e}", err=True)
         raise typer.Exit(code=EXIT_IR_ERROR)

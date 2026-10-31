@@ -1,0 +1,48 @@
+# AutoForge 真机常驻监听（sync 面）—— 书房"挂灯→吊灯跟随"那条自动化的正式编排。
+#
+# AF-714（2026-10-31）：NAS 上此前用临时 `docker run` 起的孤儿容器（无编排定义、
+# 凭据明文进命令行、restart 循环 329 次），本文件是它**正式的仓内替身**——
+# ⛔ 不照抄临时容器的名字/写法，凭据一律经 env 注入（值永不进仓）。
+#
+# 在仓库根目录执行（先把三枚 env 在宿主机 shell 配好）：
+#   docker compose -f docker/docker-compose.sync.yml up -d --build
+#
+# 前置（缺一不可，缺了就是"每秒起一次、每次 exit 2"的崩溃循环重演）：
+#   export AUTOFORGE_HA_URL=http://<ha-host>:8123
+#   export HA_LONG_LIVED_TOKEN=<B类·AF→HA 出站令牌>      # 代码读点 af_cli.py（watch 的 token 取值）
+#   export AUTOFORGE_AUTH_CODE=<部署授权码>              # 代码读点 af_cli._auth_code_of（AF-714 新增）
+#   export AUTOFORGE_SYNC_LIVE_ALLOW=switch.xxx,light.yyy # 真机可写白名单（逗号分隔）
+#
+# 授权码说明：长期码（WebUI 生成，kind=long）适合常驻编排面；短期码 5–30 分钟过期，
+# 容器重启后即失效，会让 restart 循环回来——编排面不要用短期码。
+# 「开机自起要不要码」属 DCD 在裁的「常驻监听五个启动面」件，本编排按现行语义
+# （要码、经 env 注入）落，裁定落地后随裁对齐。
+
+services:
+  autoforge-sync:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    image: autoforge-api:latest   # 与 api 服务同一镜像：CLI 就在包里，不需要第二份构建
+    container_name: autoforge-sync
+    init: true
+    command: >
+      python -m autoforge.af_cli watch /app/examples/ir/case_lamp_sync.json
+      --confirm
+      --persist-dir /data
+      --ha-url ${AUTOFORGE_HA_URL}
+      --live-allow ${AUTOFORGE_SYNC_LIVE_ALLOW}
+    volumes:
+      # 码账本在 store 根的 .auth/ 下，必须与 autoforge-api 挂同一个 store 卷，
+      # 否则 watch 读不到 WebUI 签发的授权码（auth_codes.json 两头各一份）。
+      - /vol1/1000/docker/autoforge-store:/data
+    environment:
+      # ⛔ 三枚敏感值全部来自宿主机 env（docker inspect 只见键名与占位）：
+      #   HA_LONG_LIVED_TOKEN / AUTOFORGE_AUTH_CODE —— 真值绝不写进本文件。
+      # HA 令牌：watch 命令缺省读 env（与 api.yml 的 B 类令牌同键同源）。
+      - HA_LONG_LIVED_TOKEN=${HA_LONG_LIVED_TOKEN:-}
+      # 授权码：watch 侧 env 注入口（键名 AUTOFORGE_AUTH_CODE，AF-714 新增；代码读点 af_cli._auth_code_of）。
+      - AUTOFORGE_AUTH_CODE=${AUTOFORGE_AUTH_CODE:-}
+      - AUTOFORGE_CONF_GRADING=1   # 与 api.yml 同源：conf 分级引擎 NAS 面正式启用
+    restart: unless-stopped
+    stop_grace_period: 15s   # watch 的 SIGTERM 收尾路径需要宽限（审计 BUG-06 的修复面）
