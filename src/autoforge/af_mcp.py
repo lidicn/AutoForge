@@ -526,8 +526,14 @@ def _t_live(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     # "修法"是给红测试配码让它过，那是致盲哨兵）。这里只透传 auth_code。
     # `store` 必须递进去：Tier-0 设备保护（`device_acl.json`）与实体健康视图都从 store 根目录读。
     # 漏掉它，Agent 这条路径就能写入人类点同一个按钮会被拦下的设备——闸门只装了 HTTP 一面。
+    # AF-705：缺参此前是 args["live_allow"] 的 KeyError，穿到 dispatch 的
+    # catch-all 变 ADM_ERR_INTERNAL（"工具执行出错：KeyError: 'live_allow'"）——
+    # 对端读 INTERNAL 的默认动作是重试/报障，正确答案是"补参数"。改 .get 后
+    # None 落进 svc.live_run 的必填闸：ServiceError 400 ⇒ ADM_ERR_PAYLOAD_INVALID，
+    # 与同工具其它缺参（ir/confirm）同一档。字符串入参的桥接提示由 dispatch 的
+    # schema 归一层给（"参数收到的是字符串且不是合法 JSON…"），此处不重复。
     return svc.live_run(
-        args["ir"], args["live_allow"], args.get("events"), bool(args.get("confirm", False)),
+        args["ir"], args.get("live_allow"), args.get("events"), bool(args.get("confirm", False)),
         store=store, auth_code=str(args.get("auth_code") or ""),
     )
 
