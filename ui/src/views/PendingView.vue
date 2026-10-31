@@ -65,6 +65,28 @@ const columns: DataTableColumns<PendingItem> = [
     render: (row) => h('div', { style: 'font-weight:600' }, row.summary || row.tool),
   },
   {
+    title: 'L2 动作',
+    key: 'l2_summary',
+    width: 260,
+    render: (row) => {
+      const l2 = row.l2_summary
+      // ⛔ 只渲染后端给的字段，前端不算 L2；空数组＝显式占位，缺字段＝未读到。
+      if (!Array.isArray(l2)) return h(NText, { depth: 3, style: 'font-size:12px' }, '未读到')
+      if (l2.length === 0) return h(NText, { depth: 3, style: 'font-size:12px' }, '本条不含 L2 动作')
+      return h(
+        'div',
+        { style: 'display:flex;flex-direction:column;gap:3px' },
+        l2.map((it) =>
+          h('div', { style: 'font-size:12px;line-height:1.5' }, [
+            h('span', {}, '本条含：'),
+            h('code', { style: 'background:#f2f4f8;border-radius:4px;padding:1px 4px' }, it.action),
+            it.alias ? h('span', {}, `（${it.alias}）`) : null,
+          ]),
+        ),
+      )
+    },
+  },
+  {
     title: '工具',
     key: 'tool',
     width: 140,

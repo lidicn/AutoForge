@@ -378,6 +378,11 @@ export interface PendingItem {
   submitted_by: string
   submitted_at: string
   agent: string
+  /**
+   * DCD 矩阵行 2 补格：`list_pending` 回执带 L2 摘要（机提取），让待批列表每一行在批准前就能
+   * 看见本条含哪些 L2 动作。空数组＝本条不含 L2（显式占位）；缺字段＝后端没给（⛔ 别当成空数组）。
+   */
+  l2_summary?: L2Action[]
 }
 
 export interface PendingListResponse {
