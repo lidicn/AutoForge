@@ -1,11 +1,17 @@
-import urllib.request, json
+import os, sys, urllib.request, json
+
+# G24（2026-10-31）：令牌从环境变量 AF_ACCESS_TOKEN 读——仓是 public，
+# 硬编码 Bearer 字面已从 HEAD 移除。查不到就明确报错退出，⛔ 不静默降级成空串。
+TOKEN = os.environ.get("AF_ACCESS_TOKEN")
+if not TOKEN:
+    sys.exit("AF_ACCESS_TOKEN 未设置：resync 需要访问令牌（export AF_ACCESS_TOKEN=...），拒绝用空串继续")
 
 def mcp(method, params=None, id=1):
     body = {"jsonrpc":"2.0","id":id,"method":method}
     if params: body["params"] = params
     req = urllib.request.Request("http://localhost:8787/mcp",
         data=json.dumps(body).encode(),
-        headers={"Authorization":"Bearer f6eed36d5ef42db00844a13f5cc5dea2717797f112c344e5","Content-Type":"application/json"},
+        headers={"Authorization":"Bearer "+TOKEN,"Content-Type":"application/json"},
         method="POST")
     return json.loads(urllib.request.urlopen(req).read().decode())
 

@@ -161,6 +161,16 @@ echo "══ 出站护栏门禁（第一方出站不许直连 urlopen）══�
 outbound_rc=$?
 
 echo
+echo "══ 令牌泄漏门禁（入库面 Bearer 长串 / af_ 40hex，命中即红）══"
+# G24（2026-10-31）：仓是 public，真实令牌绝不进 commit。取数面＝HEAD 树
+# （git grep，与卫生门/发布线门同口径，磁盘未跟踪件不在射程）。命中形状只两族：
+# af_ 前缀 + 40 位 hex、Bearer 后 ≥32 位高熵串——宽松正则会把长 entity_id 误报成
+# 令牌（AF-211 教训）。命中行只报文件名+行号+形状名，⛔ 不打印值本身。
+# 豁免：命中行写 secret-scan: exempt(理由)，理由为空仍红。
+"$PYTHON" "$REPO/scripts/check_secrets.py" "$REPO"
+secrets_rc=$?
+
+echo
 echo "══ 状态源 fail-closed 门禁（snapshot() 不许静默省略未知实体）══════"
 # 第七轮审计的 key_finding：`af_ir/expr.py` 的 `and`/`or` 走 all()/any() **短路**，没被求值的
 # 那一支永远不会去读快照 ⇒ "缺失留给运行时发现"在 fail-open 一侧根本不成立：仿真软失效不执行、
@@ -651,6 +661,14 @@ fi
 if [ $subject_rc -ne 0 ]; then
   echo "结论：owner 主体门禁红（exit=$subject_rc）。**这一格的红是预期**（裁定 20261011《八问》§3 Q1 丙原话：「门在补齐前持续红是预期，不是回归」）：判据 A 管的是 owner 面名单只许 \`_OWNER_SUBJECTS\` 一枚真源（判定侧抄第二份字面量＝签发侧改主体名时判定侧不跟着红，审计 F-02 的形状）；判据 B 管的是 \`/api/user/agents/{agent_id}\` 那两枚必须把「调用方主体 ↔ 路径主体」绑一次（今天只挂 scope:write，一枚 write 令牌可撤销／改名任何主体的 agent，审计 §六 I 在 HEAD 上就成立）。两格的归属都在**并发登录线**（#79 窗）⇒ 本批 ⛔ 不动 \`af_api.py\` 一行码，AF 侧不替它补。谁把这行抹掉：登录线把那两面按判据写法落地即自绿；撤销本门的条件是裁定 §5 那一条——删该腿并把 ARCH-05 登记表改回『待裁』，⛔ 不是就地给 \`af_api.py\` 加豁免标记。"
   exit $subject_rc
+fi
+if [ $secrets_rc -eq 2 ]; then
+  echo "结论：令牌泄漏门禁读不出射程（exit=$secrets_rc）。不是 git 仓、git grep 自身报错、或输出行形状解析不出——射程塌了不许报『干净』。"
+  exit $secrets_rc
+fi
+if [ $secrets_rc -ne 0 ]; then
+  echo "结论：令牌泄漏门禁红（exit=$secrets_rc）。命中的是入库内容：把令牌挪进环境变量/密管，历史里的值要轮换（脱敏提交救不了已泄漏的令牌）；确属误报才在**命中那一行**写 secret-scan: exempt(理由)——理由为空不算豁免。注意 AF-211 的教训：长 entity_id（light.mijia_cn… / sensor.duka_cn…）不是令牌，本门形状定义已排除，⛔ 不要靠加豁免去喂宽松正则。"
+  exit $secrets_rc
 fi
 echo '结论：门禁干净。注意 import 通过不等于服务能起，验收仍要 compose ps + HTTP。'
 exit 0

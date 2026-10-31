@@ -578,7 +578,7 @@ return {
 
 ```json
 {
-  "af_ec63983fd1ab17a5823e14fc33bf8dd62b0195f1": {
+  "af_***REDACTED***": {
     "subject": "owner",
     "scopes": ["live", "read", "write"]
   }
