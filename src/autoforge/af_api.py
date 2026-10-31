@@ -1532,7 +1532,9 @@ def build_app(
                     yield f"event: pair-request\ndata: {payload}\n\n"
                     pair_store.mark_pushed(pc.code)
             except Exception:  # noqa: BLE001 - SSE 不应因单次异常中断
-                pass
+                # 吞而不说＝配对推送断了、前端弹窗从此静默（autoflow「静默失效」
+                # 同族）。留痕再继续：至少日志里有得查。
+                logger.warning("PAIR_SSE_EVENT_FAILED —— 本轮推送跳过，长连接继续", exc_info=True)
             await asyncio.sleep(1.0)
 
     @app.get("/api/mcp/pair-request")
