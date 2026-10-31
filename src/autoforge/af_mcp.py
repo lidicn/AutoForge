@@ -448,14 +448,15 @@ def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | N
             applied = svc.approve_pending(store, op_id, reviewer=f"auth_code:{auth_code[:2]}" + "***")
             applied["deployed_via"] = "auth_code"
             return applied
-        # 无效/已消耗/已锁定授权码：入待批队列（路径 B），并记录失败计数（10 次后锁定）
+        # AF-706：无效码此前"不拒绝、转 pending + warning"，而 af_enable_by_tag
+        # 遇同一枚码直接拒——同一类输入两种裁决。统一到拒绝（四因合一文案与
+        # _auth_code_check / af_enable_by_tag 逐字同形，⛔ 不外传具体哪一因，
+        # AF-402 口径）。依据交接单 §2/§5.3 四因合一红线；若 DCD 对"无效码应拒
+        # 还是应转 pending"另有裁定，以 DCD 为准、届时回退本条。
         acs.record_failure(auth_code)
-        pending = svc.submit_pending(
-            store, "af_save", payload,
-            submitted_by=owner or "mcp", authenticated_subject=owner or None,
+        raise svc.ServiceError(
+            "授权码无效（不存在/已消耗/已过期/已锁定之一），归档已拒绝"
         )
-        pending["warning"] = "auth_code 无效（不存在/已消耗/已过期/已锁定），已转为待人工审批（连续 10 次错误该码将锁定 5 分钟）"
-        return pending
     return svc.submit_pending(store, "af_save", payload, submitted_by=owner or "mcp", authenticated_subject=owner or None)
 
 
