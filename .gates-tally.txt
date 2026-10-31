@@ -13,4 +13,4 @@
 # 的 update_check、v1.13.0 的 update/update_status、bd0a1b5 的 _t_deploy/_t_deploy_status、
 # 敲打 P0 的 stop_watch、v1.13.3 的 api_system_version）；③ 3 条 STALE 过期指纹按
 # cee6a3a 口径删除。上调这 3 条全部是「发版时未同步基线」的积欠认领，不是新豁免。
-99 # 2026-10-27 下调（登录态换代 v1.14.4）：revoke 端点两枚 ok:True 字面量合并为一枚 n>0 派生，fake-ok-const 85→84。只降不升，非新豁免。
+98 # 2026-10-31 下调（AF-710 留痕半 9ead4f0）：`_pair_event_gen` 的 `except Exception: pass` 已收窄成 `logger.warning(..., exc_info=True)`＋具名码 PAIR_SSE_EVENT_FAILED ⇒ except-pass-broad 16→15（严格吞掉站点少一枚），同批删除 .gates-baseline.txt 里已不再命中的同名指纹一条。只降不升，非新豁免。

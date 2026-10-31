@@ -126,10 +126,14 @@ def test_real_repo_gate_is_green():
     assert _run(repo_src) == 0
 
 
-def test_baseline_frozen_at_16():
-    """基线规模钉：16 枚。增减都要走"重冻结+核对同一批"的流程。
-    17 → 16（2026-10-24）：-1 是修掉的真缺陷，非静默缩水——见 BASELINE 旁注释。"""
-    assert len(check_except_pass.BASELINE) == 16
+def test_baseline_frozen_at_15():
+    """基线规模钉：15 枚。增减都要走"重冻结+核对同一批"的流程。
+    17 → 16（2026-10-24）：-1 是修掉的真缺陷，非静默缩水——见 BASELINE 旁注释。
+    16 → 15（2026-10-31 AF-710 留痕半 9ead4f0）：`_pair_event_gen` 的 `except Exception: pass`
+    已收窄成 `logger.warning(..., exc_info=True)`＋具名码 PAIR_SSE_EVENT_FAILED，不再是严格吞掉
+    形状 ⇒ 该枚从 BASELINE 拿掉（本门明写「真删了就把它们从 BASELINE 拿掉（只减不增）」）。
+    -1 仍是修掉的真缺陷，非静默缩水。"""
+    assert len(check_except_pass.BASELINE) == 15
     repo_src = SCRIPT.parents[1] / "src" / "autoforge"
     if not repo_src.is_dir():
         pytest.skip("real repo src not present")

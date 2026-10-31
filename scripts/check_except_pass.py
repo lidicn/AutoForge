@@ -85,7 +85,11 @@ BASELINE: frozenset[str] = frozenset(
         # 仍是同一枚，净 16 → 16。
         # 2026-10-31 AF-701 残缺身份闸：1520 → 1528（requires() 加 subject 检查
         # +8 行在它上方）。仍是同一枚，净 16 → 16。
-        "af_api.py:1528",
+        # 2026-10-31 AF-710 留痕半（9ead4f0）：**减**——`_pair_event_gen` 的
+        # `except Exception: pass` 已收窄成 `logger.warning(..., exc_info=True)`
+        # ＋具名码 PAIR_SSE_EVENT_FAILED，不再是吞掉形状 ⇒ 这枚从 BASELINE 拿掉
+        # （本门明写「真删了就把它们从 BASELINE 拿掉（只减不增）」）。
+        # 16 → 15 枚：净 -1 全是修掉的真缺陷，不是新增。
         "af_closedloop/deepfix.py:52",
         "af_conflict.py:680",
         "af_conflict_audit.py:150",

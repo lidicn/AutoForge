@@ -1,7 +1,6 @@
 # homesdk 质量门禁基线：只准减少，不准新增。
 # 指纹 = 相对路径#规则#函数限定名（刻意不含行号，改一行不该让基线失效）。
 # 由 `python -m homesdk.gates AutoForge --update-baseline` 生成。
-src/autoforge/af_api.py#except-pass-broad#build_app._pair_event_gen
 src/autoforge/af_closedloop/deepfix.py#except-pass-broad#extract_json
 src/autoforge/af_conflict.py#except-pass-broad#ConflictArbiter._emit
 src/autoforge/af_conflict_audit.py#except-pass-broad#ConflictAuditor.locks
