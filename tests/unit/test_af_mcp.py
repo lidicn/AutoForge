@@ -54,8 +54,10 @@ _WRITE = {"subject": "rw", "scopes": ["read", "write"]}
 
 def _seed(store: GraphStore) -> None:
     g = load_graph(_DEMO_IR)
-    store.save(g, "demo", note="v1")
-    store.save(g, "demo", note="v2")
+    # AF-701 界线钉（2026-10-31）：af_set_tags 已透传身份（进 _TOOLS_WITH_CONTEXT），
+    # 无归属归档对带身份的非 owner 面不再放行——种子归档挂 owner=rw，正例腿照常绿。
+    store.save(g, "demo", note="v1", owner="rw")
+    store.save(g, "demo", note="v2", owner="rw")
     store.set_tags("demo", ["lighting", "test"])
 
 

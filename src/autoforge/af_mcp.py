@@ -334,7 +334,8 @@ def _t_delete_graph(store: GraphStore, args: dict[str, Any],
     try:
         return svc.delete_graph(store, args["name"], caller=caller,
                                 caller_is_owner=_owner_face(current),
-                                note=str(args.get("note") or ""))
+                                note=str(args.get("note") or ""),
+                                token_identity=(current is not None))
     except svc.ServiceError as exc:
         # ⚠️ 必须捕 `svc.ServiceError`：af_mcp 自己也有一个叫 ServiceError 的类
         #（守卫用），捕错就等于让异常冒到 dispatch 的 catch-all 变成 INTERNAL。
@@ -368,8 +369,16 @@ def _t_quarantine(store: GraphStore, args: dict[str, Any],
                                 caller_is_owner=_owner_face(current))
 
 
-def _t_set_tags(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    return svc.set_graph_tags(store, args["name"], args["tags"])
+def _t_set_tags(store: GraphStore, args: dict[str, Any],
+                current: dict[str, Any] | None = None) -> dict[str, Any]:
+    # AF-701 服务层界线钉（20261031 §2.1）：MCP 面经 _guard 必持令牌，透传身份与
+    # token_identity；旧调用（current=None，原型放行）按"无令牌身份"处理，维持豁免。
+    return svc.set_graph_tags(
+        store, args["name"], args["tags"],
+        caller=str((current or {}).get("subject") or ""),
+        caller_is_owner=_owner_face(current),
+        token_identity=(current is not None),
+    )
 
 
 def _t_enable(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -384,6 +393,7 @@ def _t_enable(store: GraphStore, args: dict[str, Any], current: dict[str, Any] |
         caller=str((current or {}).get("subject") or ""),
         caller_is_owner=_owner_face(current),
         auth_code=str(args.get("auth_code") or ""),
+        token_identity=(current is not None),
     )
 
 
@@ -398,12 +408,15 @@ def _t_export(store: GraphStore, args: dict[str, Any],
 
 def _t_import(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
     owner = (current or {}).get("subject", "") or ""  # R20-01: 导入操作者归属
+    # AF-701 服务层界线钉（20261031 §2.1）：MCP 面经 _guard 必持令牌 ⇒ 持令牌缺 subject
+    # 的档在服务层钉死拒绝；current=None（原型放行）按无令牌身份处理。
     return svc.import_store(
         store,
         args["bundle"],
         args.get("strategy", "skip"),
         allow_bulk=bool(args.get("allow_bulk", False)),
         owner=owner,
+        token_identity=(current is not None),
     )
 
 
@@ -852,9 +865,10 @@ def _t_deploy_status(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 #: 需要注入当前令牌主体（`current`）的工具：用于归档归属 / 所有权隔离（v1.3.0）
 #: ＋ 部署请求的 requested_by 归属（v1.13.3 af_deploy）
 #: AF-504 归属读面收口（2026-10-30）：by_tag/conf/diff/export/quarantine 五枚入列
+#: AF-701 服务层界线钉（2026-10-31）：af_set_tags 入列（透传 subject + token_identity）
 _TOOLS_WITH_CONTEXT = frozenset({
     _t_delete_graph, _t_list_graphs, _t_get_graph,_t_whoami, _t_save, _t_import, _t_enable, _t_deploy,
-    _t_by_tag, _t_conf, _t_diff, _t_export, _t_quarantine})
+    _t_by_tag, _t_conf, _t_diff, _t_export, _t_quarantine, _t_set_tags})
 
 
 # ─────────────────────────────────────────────────────────────────────

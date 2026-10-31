@@ -739,9 +739,12 @@ def build_app(
     def api_graph_tags(
         body: TagBody, info: TokenInfo | None = Depends(_write),
     ) -> dict[str, Any]:
+        # AF-701 界线钉（20261031 §2.1）：过 _write 必持令牌 ⇒ 递 token_identity；
+        # info=None 是 AF_ALLOW_NOAUTH 的本地逃生舱（无令牌身份），按 None 传。
         return _svc(
             svc.set_graph_tags, store, body.name, body.tags,
             caller=info.subject if info else "", caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
         )
 
     @app.post("/api/graphs/enable")
@@ -752,7 +755,7 @@ def build_app(
         return _svc(
             svc.enable_by_tag, store, body.tag, True,
             caller=info.subject if info else "", caller_is_owner=_caller_is_owner(info),
-            auth_code=body.auth_code,
+            auth_code=body.auth_code, token_identity=(info is not None),
         )
 
     @app.post("/api/graphs/disable")
@@ -762,6 +765,7 @@ def build_app(
         return _svc(
             svc.enable_by_tag, store, body.tag, False,
             caller=info.subject if info else "", caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
         )
 
     # ── v0.7.0 模板导出与备份恢复 ──
@@ -777,10 +781,12 @@ def build_app(
         """导入 bundle（写操作，需鉴权）。冲突策略 skip/overwrite/rename。
 
         D3：传 owner=当前主体（与 MCP 面 af_mcp._t_import 同口径）；owner 面可 bypass 归属预检。
+        AF-701 界线钉（20261031 §2.1）：过 _write 必持令牌 ⇒ 递 token_identity。
         """
         return _svc(
             svc.import_store, store, body.bundle, body.strategy,
             owner=info.subject if info else "", owner_surface=_caller_is_owner(info),
+            token_identity=(info is not None),
         )
 
     @app.get("/api/graphs/{name}", dependencies=[Depends(_read)])
@@ -1980,6 +1986,7 @@ def build_app(
         v = _svc(
             svc.set_automation_enabled, store, name, True,
             caller=info.subject if info else "", caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
         )
         return {"ok": True, "name": name, "enabled": True, "version": v}
 
@@ -1992,6 +1999,7 @@ def build_app(
         v = _svc(
             svc.set_automation_enabled, store, name, False,
             caller=info.subject if info else "", caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
         )
         return {"ok": True, "name": name, "enabled": False, "version": v}
 

@@ -388,7 +388,7 @@ def list_graphs(store: GraphStore, caller: str = "", is_owner_face: bool = False
 
 def delete_graph(
     store: GraphStore, name: str, *, caller: str = "", caller_is_owner: bool = False,
-    note: str = "",
+    note: str = "", token_identity: bool | None = None,
 ) -> dict[str, Any]:
     """删除归档（移入隔离区，可人工恢复）。
 
@@ -398,7 +398,7 @@ def delete_graph(
     真正需要码的是往真机上加动作。⛔ 但删除必须可见可追：隔离区清单 + 审计留痕。
     """
     _assert_archive_mutator(store, name, caller=caller, caller_is_owner=caller_is_owner,
-                            action="删除")
+                            action="删除", token_identity=token_identity)
     try:
         moved, into = store.quarantine(name)
     except FileNotFoundError as exc:
@@ -500,9 +500,14 @@ def list_quarantined(store: GraphStore, *, caller: str = "", caller_is_owner: bo
 def set_graph_tags(
     store: GraphStore, name: str, tags: list[str],
     *, caller: str = "", caller_is_owner: bool = False,
+    token_identity: bool | None = None,
 ) -> dict[str, Any]:
-    """设置某归档名字的标签（覆盖式）。D4：改标签前做归属判定。"""
-    _assert_archive_mutator(store, name, caller=caller, caller_is_owner=caller_is_owner)
+    """设置某归档名字的标签（覆盖式）。D4：改标签前做归属判定。
+
+    AF-701 界线钉（20261031 §2.1）：`token_identity` 语义见 `_assert_archive_mutator`。
+    """
+    _assert_archive_mutator(store, name, caller=caller, caller_is_owner=caller_is_owner,
+                            token_identity=token_identity)
     store.set_tags(name, tags)
     return {"ok": True, "name": name, "tags": store.get_tags(name)}
 
@@ -585,8 +590,8 @@ def _ensure_watcher(store: GraphStore, *, enabled: bool):
     if not merged:
         return {"action": "none_to_watch"}
     try:
-        # DCD 裁定 2026-10-30（AF-602）：enable 已在服务层过码闸（enable_by_tag 的
-        # _auth_code_check 在先），对账拉监听不二次要码——码只收一次。走免闸实现体。
+        # 凭据语义：enable_by_tag 启用路径的 `_auth_code_check` 在先——同一动作链上
+        # 码已收过一次，对账拉监听不另收。（四路径清单见 DCD 裁定 20261031 §2.2。）
         res = _start_watch_impl(ir=merged, store_root=root, dry_live=False)
     except ServiceError:
         # ⛔ 原样上抛。`READONLY_DEGRADED:` 那一族靠**异常文案前缀**让 DB 判读
@@ -605,6 +610,7 @@ def _ensure_watcher(store: GraphStore, *, enabled: bool):
 def enable_by_tag(
     store: GraphStore, tag: str, enabled: bool, allow_bulk: bool = False,
     *, caller: str = "", caller_is_owner: bool = False, auth_code: str = "",
+    token_identity: bool | None = None,
 ) -> dict[str, Any]:
     """批量启停：对某标签下所有归档的最新版本，翻转其中全部自动化的 `enabled` 并保存新版本。
 
@@ -616,7 +622,8 @@ def enable_by_tag(
     """
     names = [n for n, ts in store.all_tags().items() if tag in ts]
     for name in names:
-        _assert_archive_mutator(store, name, caller=caller, caller_is_owner=caller_is_owner)
+        _assert_archive_mutator(store, name, caller=caller, caller_is_owner=caller_is_owner,
+                                token_identity=token_identity)
     # 先算清影响面（不落盘），超阈值直接拒——避免"改了一半才失败"
     planned: list[tuple[str, int, Any]] = []
     failed: list[dict[str, Any]] = []
@@ -774,6 +781,7 @@ def automation_card(
 def set_automation_enabled(
     store: GraphStore, name: str, enabled: bool,
     *, caller: str = "", caller_is_owner: bool = False,
+    token_identity: bool | None = None,
 ) -> int:
     """翻转归档内**每一条自动化**的启停旗子，返回新版本号。
 
@@ -782,7 +790,8 @@ def set_automation_enabled(
     锁、版本号、原子写与归属字段（owner / writer / note 之外的记录元数据）都留在 store 那一处，端点不碰。
     D4：翻转前先做归属判定。
     """
-    _assert_archive_mutator(store, name, caller=caller, caller_is_owner=caller_is_owner)
+    _assert_archive_mutator(store, name, caller=caller, caller_is_owner=caller_is_owner,
+                            token_identity=token_identity)
 
     def flip(graph_raw: Any) -> None:
         items = graph_raw.get("automations") if isinstance(graph_raw, dict) else None
@@ -1141,13 +1150,31 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
     if self_check:
         result["self_check"] = self_check  # ADM B-11
     # approve 后自动起 watch（真机常驻监听）——合并所有已部署自动化，不只这一条。
-    # DCD 裁定 2026-10-30（AF-602）：这条的凭据语义在 reviewer 里（MCP 路径 A=
-    # auth_code:xx***、HTTP=令牌主体/人审），起监听不二次要码。走免闸实现体。
+    # 凭据语义：MCP 路径 reviewer=auth_code:xx***（码已消费）、HTTP 路径 reviewer=令牌
+    # 主体/人审（人审那一票）——这条是四条起监听路径之一，其余三条见
+    # `start_watch` / `_restore_watch_after_restart` / `_ensure_watcher` 各自的凭据语义。
+    # （路径清单与凭据口径：DCD 裁定 20261031 §2.2「起监听＝四路径」。）
+    # approve 后自动起真机 watch 的审计留痕（20261031 裁定 §2.2 附带②）：这一跳含
+    # 真机常驻监听，凭据语义在 reviewer 里（MCP=码已消费、HTTP=人审/令牌主体）。
     try:
         merged = _build_merged_ir(store)
         if merged:
             watch_res = _start_watch_impl(ir=merged, store_root=str(store.root), dry_live=False)
             result["watch"] = watch_res
+            # 记账失败不回滚已起的监听（口径同 start_watch 的 WATCH_START_AUDIT_RECORD_FAILED）。
+            try:
+                from .af_audit import AuditEvent as _AE2, record_deploy as _rd2
+                _rd2(
+                    _AE2("APPROVE_WATCH_AUTO_STARTED", at=datetime.now(timezone.utc),
+                         message="approve 后自动起真机 watch（含真机常驻监听）",
+                         data={"approved_by": reviewer, "pending": op_id,
+                               "live_watch": True, "dry_live": False,
+                               "watch_ok": bool(watch_res.get("ok")),
+                               "pid": watch_res.get("pid")}),
+                    store,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("APPROVE_WATCH_AUDIT_RECORD_FAILED 批准后监听已起但记账失败：%r", exc)
     except Exception as e:
         logger.warning("approve_pending: 自动起 watch 失败（不影响落盘）: %r", e)
         result["watch_error"] = str(e)
@@ -1704,7 +1731,7 @@ def _existing_owner(store: GraphStore, name: str) -> str:
 
 def _assert_archive_mutator(
     store: GraphStore, name: str, *, caller: str = "", caller_is_owner: bool = False,
-    action: str = "修改其标签/启停",
+    action: str = "修改其标签/启停", token_identity: bool | None = None,
 ) -> None:
     """D4 归属判定：改标签/启停/批量按标签启停前，确认调用方有权动这条归档。
 
@@ -1715,8 +1742,23 @@ def _assert_archive_mutator(
     ⛔ 拒绝文案不点归属者的名（审计 AF-509）：`set_tags/enable/delete` 共用这条文案，
     写上"归属 'agent-b'"等于给调用方一条批量采集全库归属者名单的通道——与同批
     `get_graph` 的「与不存在逐字同形」自相矛盾。归属者是谁，owner 面自己查去。
+
+    界线判据（AF-701 收口，20261031 裁定 §2.1）：豁免只对"根本没有令牌身份"的本地
+    CLI／内部调用保留。`token_identity` 的判定规则：
+
+    - `token_identity is None` → 调用方没声明自己是否持令牌（旧调用方/纯本地路径），
+      按"无令牌身份"处理，豁免维持；
+    - `token_identity=True` → 持有令牌。此时 `caller==""` 即"持令牌却缺 subject"（残缺身份），
+      界线之内**不放行**——这一档在 MCP/HTTP 入口已被拒，这里写判据钉住，⛔ 靠注释。
+
+    ⛔ 不再把服务层豁免整体删除：那会打断本地 CLI／内部调用（裁定 §四 ⛔ 清单第 1 条）。
     """
     prev = _existing_owner(store, name)
+    if token_identity is True and not str(caller or "").strip():
+        raise ServiceError(
+            "拒绝：令牌缺少 subject（残缺身份）——豁免只对没有令牌身份的本地调用有效",
+            status=403,
+        )
     if prev:
         if caller and prev != caller and not caller_is_owner:
             raise ServiceError(
@@ -2795,6 +2837,7 @@ def import_store(
     allow_bulk: bool = False,
     owner: str = "",
     owner_surface: bool = False,
+    token_identity: bool | None = None,
 ) -> dict[str, Any]:
     """导入 bundle（v0.7.0）。冲突策略 skip/overwrite/rename，见 GraphStore.import_bundle。
 
@@ -2807,7 +2850,17 @@ def import_store(
 
     R20-01：加 `owner` 参数并下传 store.import_bundle——overwrite 时与 save_graph
     对称做所有权隔离校验，导入后记录携带归属主体。
+
+    界线判据（AF-701 收口，20261031 裁定 §2.1）：`token_identity=True` 且 `owner==""`
+    即"持令牌却缺 subject"（残缺身份）——与 `_assert_archive_mutator` 同一道界线，
+    本函数的豁免（owner 面 admin 或无令牌身份的旧 CLI/MCP）⛔ 不放行残缺身份档。
+    `token_identity is None`＝未声明（旧调用方），按无令牌身份处理。
     """
+    if token_identity is True and not str(owner or "").strip():
+        raise ServiceError(
+            "拒绝：令牌缺少 subject（残缺身份）——豁免只对没有令牌身份的本地调用有效",
+            status=403,
+        )
     count = _bundle_automation_count(bundle)
     clobbered = 0
     if strategy == "overwrite":
@@ -3594,12 +3647,17 @@ def _gate_watch_log(root: Path) -> None:
 
 def start_watch(ir: dict, store_root: str | None = None, dry_live: bool = True,
                 auth_code: str = "") -> dict[str, Any]:
-    """启动 watch 进程跑指定 IR（**手动入口**——DCD 裁定 2026-10-30 补授权码）。
+    """启动 watch 进程跑指定 IR（**手动入口**——要码；手动入口属于四条起监听路径之一，
+    路径清单与"码只收一次"口径见 DCD 裁定 20261031 §2.2）。
 
-    两条起监听路径在**函数层分开**（裁定 §2.2，⛔ 用参数区分——参数会漏传）：
+    起监听的四条路径在函数层各归各：
     - 公开手动入口（HTTP `/api/watch/start`、MCP、CLI 显式调用）＝**本函数**，要码；
-    - serve 进程重启自动恢复（无人值守，加码=假武装）＝走 `_restore_watch_after_restart`，
-      免码且 ⛔ 扩权——内部函数只被 serve 启动序列调用。
+    - serve 进程重启自动恢复（无人值守）＝走 `_restore_watch_after_restart`，免码；
+    - enable 后对账 / approve 后自动起 ＝ 凭据在 enable/approve 那一跳已收（码只收一次）。
+
+    过闸的码分两型（af_auth 口径）：
+    - 短期码：一次性，consume 后置 `consumed`，不能再用于本闸或下一跳；
+    - 长期码：计 `use_count`、不撤销、TTL 默认 180 天（`AUTOFORGE_AUTH_LONGCODE_TTL_DAYS`）。
 
     P1-19 修复：
     - HA 令牌经环境变量 HA_LONG_LIVED_TOKEN（旧 AUTOFORGE_HA_TOKEN）传递（不出现在 /proc/pid/cmdline）
