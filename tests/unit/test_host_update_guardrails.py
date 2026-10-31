@@ -22,13 +22,46 @@ _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "host_update.sh"
 _TEXT = _SCRIPT.read_text(encoding="utf-8")
 
 
-def test_bash_syntax_smoke():
-    """真 bash 冒烟：脚本至少语法成立（Git Bash 环境可跑；无 bash 时跳过）。"""
+def _readable_stderr(data: bytes) -> str:
+    """把子进程 stderr 解码成可读文本；WSL 存根的报错是 UTF-16LE。"""
+    if not data:
+        return ""
+    if b"\x00" in data:  # NUL 字节是 UTF-16LE 的痕迹（纯 ASCII/UTF-8 文本不含）
+        try:
+            return data.decode("utf-16-le")
+        except UnicodeDecodeError:
+            pass
+    return data.decode("utf-8", errors="replace")
+
+
+def _find_real_bash() -> tuple[str | None, str]:
+    """探测真 bash；识别并排除 WSL 存根。
+
+    返回 (bash 路径或 None, 探测说明)。优先 Git Bash 固定安装路径；PATH 上的
+    bash 用 `bash -c 'echo $BASH_VERSION'` 有输出才算真。WSL 存根
+    C:\\WINDOWS\\system32\\bash.exe 在本机未装发行版：退出码 1，stderr 还是
+    UTF-16LE（直接按 UTF-8 解码是乱码），必须解码成可读原因后排除。
+    """
+    git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    if git_bash.exists():
+        return str(git_bash), "Git Bash 固定路径"
     bash = shutil.which("bash")
     if bash is None:
-        import pytest
+        return None, "PATH 上无 bash"
+    probe = subprocess.run([bash, "-c", "echo $BASH_VERSION"], capture_output=True)
+    if probe.returncode == 0 and probe.stdout.strip():
+        return bash, "PATH bash 输出了 BASH_VERSION"
+    reason = _readable_stderr(probe.stderr).strip() or f"exit {probe.returncode}"
+    return None, f"{bash} 非真 bash（{reason}）"
 
-        pytest.skip("no bash on PATH")
+
+def test_bash_syntax_smoke():
+    """真 bash 冒烟：脚本至少语法成立（Git Bash 环境可跑；无真 bash 时跳过）。"""
+    import pytest
+
+    bash, why = _find_real_bash()
+    if bash is None:
+        pytest.skip(f"本机无真 bash（{why}），语法检查跳过")
     proc = subprocess.run([bash, "-n", str(_SCRIPT)], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
 
