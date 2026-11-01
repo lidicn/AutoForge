@@ -143,12 +143,20 @@ def test_delete_refusal_same_for_named_owner_and_ghost(tmp_path):
 
 
 def test_enable_refusal_does_not_name_the_owner(tmp_path):
-    """enable/set_tags 与 delete 共用 _assert_archive_mutator 文案——同批收口。"""
+    """C-3 R5（PM 裁定 20261101 §②）取代旧「整批拒绝」形状：混合归属标签的批量启停
+    改**份额化**——只动调用方自己名下的条目，缺口只报数（`hidden_count`），⛔ 他人归档名
+    与归属者名都不许出现。旧形状（非归属面整批 ok=False）正是 AF-509 要堵的泄名通道
+    （拒绝文案回显被拒归档名），份额化把它连根拔掉；「调用方自报名」写面
+    （set_tags/delete/单条启停）的 403 文案仍逐字保持（AF-509 半边不变）。"""
     store = GraphStore(str(tmp_path))
     _seed(store)
     body = _call("af_enable_by_tag", {"tag": "prod", "enabled": False}, store, AGENT_A)
-    assert body["ok"] is False, "非归属面批量启停他人归档必须拒"
-    assert "agent-b" not in json.dumps(body, ensure_ascii=False)
+    assert body["ok"] is True, "份额化：自己名下的条目照常落"
+    assert [a["name"] for a in body["affected"]] == ["mine"]
+    assert body["hidden_count"] == 1, "缺口报数"
+    blob = json.dumps(body, ensure_ascii=False)
+    assert "agent-b" not in blob, f"回执泄露归属者身份：{blob[:200]}"
+    assert "theirs" not in blob, f"回执泄露他人归档名：{blob[:200]}"
 
 
 # ── AF-501：af_quarantine 工具面 ──────────────────────────────────

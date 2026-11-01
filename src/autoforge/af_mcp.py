@@ -347,17 +347,21 @@ def _t_delete_graph(store: GraphStore, args: dict[str, Any],
 
 def _t_by_tag(store: GraphStore, args: dict[str, Any],
               current: dict[str, Any] | None = None) -> dict[str, Any]:
-    # AF-504：读面归属收口——工具层透传身份，服务层过滤（未带身份=旧路径全量）
+    # AF-504：读面归属收口——工具层透传身份，服务层过滤（未带身份=旧路径全量）；
+    # C-3 R1：token_identity 透传，持令牌缺 subject 在服务层钉死 403（⛔ 退化成匿名全量）
     return svc.graphs_by_tag(store, args["tag"],
                              caller=str((current or {}).get("subject") or ""),
-                             caller_is_owner=_owner_face(current))
+                             caller_is_owner=_owner_face(current),
+                             token_identity=(current is not None))
 
 
 def _t_conf(store: GraphStore, args: dict[str, Any],
             current: dict[str, Any] | None = None) -> dict[str, Any]:
+    # C-3 R1：同上，token_identity 透传（残缺身份读面同拒）
     return svc.get_conf(store, args["name"],
                         caller=str((current or {}).get("subject") or ""),
-                        caller_is_owner=_owner_face(current))
+                        caller_is_owner=_owner_face(current),
+                        token_identity=(current is not None))
 
 
 def _t_quarantine(store: GraphStore, args: dict[str, Any],
@@ -401,9 +405,11 @@ def _t_export(store: GraphStore, args: dict[str, Any],
               current: dict[str, Any] | None = None) -> dict[str, Any]:
     # AF-504（🔴）：此前任何 read 令牌可整店导出他人归档——审计实测
     # agent-a 的 bundle 里含 ['mine','theirs']。现在导出的是调用方的份额。
+    # C-3 R1：token_identity 透传（残缺身份读面同拒 403）
     return svc.export_store(store,
                             caller=str((current or {}).get("subject") or ""),
-                            caller_is_owner=_owner_face(current))
+                            caller_is_owner=_owner_face(current),
+                            token_identity=(current is not None))
 
 
 def _t_import(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -475,9 +481,11 @@ def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | N
 
 def _t_diff(store: GraphStore, args: dict[str, Any],
             current: dict[str, Any] | None = None) -> dict[str, Any]:
+    # C-3 R1：token_identity 透传（残缺身份读面同拒 403，verdict 单点在服务层守卫）
     return svc.diff(store, args["name"], int(args["old"]), int(args["new"]),
                     caller=str((current or {}).get("subject") or ""),
-                    caller_is_owner=_owner_face(current))
+                    caller_is_owner=_owner_face(current),
+                    token_identity=(current is not None))
 
 
 # ── v1.9.0 用户 WebUI：配对（MCP 连接认证）──

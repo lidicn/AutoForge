@@ -36,10 +36,20 @@ from .af_flock import FileLock, serve_lock_path
 from .af_fault import FAULT_META, FOUR_FAILURES, FaultKind
 from .af_ir import Graph, IRValidationError, load_graph
 from .af_nl import render_graph
+from .af_ownership import (
+    DenyKind,
+    Subject,
+    TokenState,
+    broken_identity_error,
+    decide,
+    mutator_error,
+    scope_names,
+    visible_error,
+)
 from .af_runtime import Runtime, build_runtime
 from .af_scanner import DeviceGuardRegistry, Diagnostic, ScanResult, StaticScanner
 from .af_spec import SpecError, compile_spec, graph_to_raw, render_spec
-from .af_store import DEFAULT_STORE_ROOT, GraphStore, diff_graphs
+from .af_store import DEFAULT_STORE_ROOT, GraphStore, _bundle_checksum, diff_graphs
 from .af_state import UnknownEntity
 from .af_time import SystemTimeSource, VirtualTimeSource
 from .af_undo import UndoStore, deploy_id as new_deploy_id
@@ -343,6 +353,11 @@ def list_graphs(store: GraphStore, caller: str = "", is_owner_face: bool = False
 
     `caller` 为空 = 未携带身份的旧调用方（HTTP 控制台/CLI），维持全量——与
     `_assert_archive_mutator` 同一渐进口径：先收带身份的路径，⛔ 不一刀切把控制台打空。
+
+    C-3 C4：归属读取单源 `_existing_owner`——最新版本记录没写 owner 时，列表的
+    owner 字段与范围过滤都跟 `_existing_owner` 同值（R6 对账，⛔ 内联第二份解析）。
+    R4/R8：读不出的归档不再静默隐身，与 `graphs_by_tag` 同形进 `unavailable`；
+    `ok` 从计数合拢派生（items + unavailable + hidden == 全集）。
     """
     latest: dict[str, dict[str, Any]] = {}
     for record in store.history():
@@ -355,14 +370,21 @@ def list_graphs(store: GraphStore, caller: str = "", is_owner_face: bool = False
                 "saved_at": record.get("saved_at", ""),
                 "note": record.get("note", ""),
                 "mode": "",
-                "owner": record.get("owner", ""),  # v1.3.0 归档归属
+                "owner": _existing_owner(store, name),  # C4：归属单源（与过滤同值）
                 "automation_ids": [],
                 }
-    # 补上 mode / automation_ids / tags（供列表页把"归档名 ↔ 自动化 id / 置信度"对上）
-    for name, item in latest.items():
+    sub = Subject.from_caller(caller, owner_face=is_owner_face)
+    # 范围判定单源（C-3）：带身份先收份额，别人的既不加载也不点名
+    visible, hidden = scope_names(lambda n: _existing_owner(store, n), latest.keys(), sub)
+    items: list[dict[str, Any]] = []
+    unavailable: list[str] = []
+    for name in visible:
+        item = latest[name]
         try:
             graph = store.load(name, int(item["latest_version"]))
         except (FileNotFoundError, IRValidationError, OSError):
+            # R8：与 graphs_by_tag 同形——读不出进 unavailable，⛔ 一面显示一面隐身
+            unavailable.append(name)
             continue
         autos = list(graph)
         item["automation_ids"] = [a.id for a in autos]
@@ -372,17 +394,19 @@ def list_graphs(store: GraphStore, caller: str = "", is_owner_face: bool = False
         except Exception as exc:  # AF71：tags 只是展示层附属，读不出降级为空继续，不能炸掉整个列表
             logger.warning("LIST_GRAPHS_TAGS_FAILED name=%s err=%s —— tags 降级为空继续", name, exc)
             item["tags"] = []
-    items = sorted(latest.values(), key=lambda x: x["name"])
+        items.append(item)
+    items.sort(key=lambda x: x["name"])
     # 单一出口：写两个 `return {"ok": True, ...}` 会让 AST 棘轮多出一枚"没派生自校验"的
-    # 站点（今天真的涨了 1 条、把只降不升的上限顶红）。收口成一个出口，字段按范围派生。
-    scoped = ([r for r in items if str(r.get("owner") or "") == caller]
-              if (caller and not is_owner_face) else items)
-    out: dict[str, Any] = {"ok": True, "items": scoped, "count": len(scoped)}
+    # 站点（今天真的涨了 1 条、把只降不升的上限顶红）。收口成一个出口，`ok` 派生自计数合拢。
+    out: dict[str, Any] = {"ok": len(items) + len(unavailable) + hidden == len(latest),
+                           "items": items, "count": len(items)}
     if caller and not is_owner_face:
         # 别人的条目**不进列表也不报总数**（裁定要的是"看不到"，不是"看到了不能改"）；
         # `hidden_count` 必须存在：agent 要能知道自己看到的不是全量。
-        out["hidden_count"] = len(items) - len(scoped)
+        out["hidden_count"] = hidden
         out["scope"] = f"owner:{caller}"
+    if unavailable:
+        out["unavailable"] = sorted(unavailable)
     return out
 
 
@@ -468,8 +492,9 @@ def list_quarantined(store: GraphStore, *, caller: str = "", caller_is_owner: bo
             original = ""  # 戳形不匹配 ⇒ 原名不可解析，⛔ 不猜
         if not original:
             return ""
-        live = _existing_owner(store, original)
-        # 活目录已无此归档 ⇒ 从隔离目录自己的版本记录里读归属
+        # C4：隔离面归属＝**删除时点真值**（隔离目录自己的版本记录）。活目录
+        # `_existing_owner` 在这里不参与——删除后同名重建时，旧隔离项不能被记到
+        # 新主头上；判定/范围的单源语义见 af_ownership（下方过滤走 scope_names）。
         qdir = trash / qname
         if not qdir.is_dir():
             return ""
@@ -483,20 +508,12 @@ def list_quarantined(store: GraphStore, *, caller: str = "", caller_is_owner: bo
         except (ValueError, OSError):
             return ""
 
-    items: list[str] = []
-    hidden = 0
-    for q in names:
-        if caller and not caller_is_owner:
-            if _quarantined_owner(q) == caller:
-                items.append(q)
-            else:
-                hidden += 1
-        else:
-            items.append(q)
+    # C-3 C1：范围过滤单源 `scope_names`（⛔ 内联第二份 owner==caller 判断）。
     # fake-ok-const 门：`ok` 必须派生自读数本身（len(items) == len(想要的范围)），
     # 不是字面量 True——对照 delete_graph 的 verified_by_readback 同款纪律
-    visible_total = len(items) + (hidden if (caller and not caller_is_owner) else 0)
-    ok = len(names) == visible_total
+    sub = Subject.from_caller(caller, owner_face=caller_is_owner)
+    items, hidden = scope_names(_quarantined_owner, names, sub)
+    ok = len(names) == len(items) + hidden
     out: dict[str, Any] = {"ok": ok, "items": items, "count": len(items)}
     if caller and not caller_is_owner:
         out["hidden_count"] = hidden
@@ -526,6 +543,7 @@ def set_graph_tags(
 
 def graphs_by_tag(
     store: GraphStore, tag: str, *, caller: str = "", caller_is_owner: bool = False,
+    token_identity: bool | None = None,
 ) -> dict[str, Any]:
     """返回带某标签的所有归档名（及其最新版本信息）。
 
@@ -533,14 +551,15 @@ def graphs_by_tag(
     并像 `list_graphs` 一样报 `hidden_count`——agent 要能知道看到的不是全量；
     校验失败的归档不再静默消失，进 `unavailable` 名单（原来"同一条数据在
     `af_list_graphs` 可见、在 `af_graphs_by_tag` 隐身"还无解释）。
+    C-3 收口：范围判定单源 `scope_names`（⛔ 内联第二份 owner==caller）；
+    BROKEN（持令牌缺 subject）⇒ 403 残缺身份（R1）；`ok` 派生自计数合拢（R4）。
     """
+    sub = Subject.from_caller(caller, owner_face=caller_is_owner, token_identity=token_identity)
+    if sub.token_state is TokenState.BROKEN:
+        raise ServiceError(broken_identity_error(), status=403)
     names = [n for n, ts in store.all_tags().items() if tag in ts]
-    # 带身份先做范围判定，未带身份的旧路径维持全量（渐进收口，与 list_graphs 同口径）
-    scoped_names = [
-        n for n in names
-        if not (caller and not caller_is_owner) or _existing_owner(store, n) == caller
-    ]
-    hidden = len(names) - len(scoped_names)
+    # 带身份先做范围判定（单源 scope_names），未带身份的旧路径维持全量（渐进收口）
+    scoped_names, hidden = scope_names(lambda n: _existing_owner(store, n), names, sub)
     items = []
     unavailable: list[str] = []
     for name in scoped_names:
@@ -566,7 +585,10 @@ def graphs_by_tag(
                 "tags": tags,
             }
         )
-    out: dict[str, Any] = {"ok": True, "tag": tag,
+    # R4：`ok` 派生自计数合拢——items + unavailable + hidden 必须收得回全集，
+    # ⛔ 字面量 True（有归档被静默漏掉时必须能读出 False）。
+    out: dict[str, Any] = {"ok": len(items) + len(unavailable) + hidden == len(names),
+                           "tag": tag,
                            "items": sorted(items, key=lambda x: x["name"])}
     # 范围透明（AF-504）：缺口要么说数量（别人的），要么点名（读不出的）——都不许静默
     if caller and not caller_is_owner:
@@ -630,17 +652,24 @@ def enable_by_tag(
 
     v1.3.0：默认受**爆炸半径**约束——先把受影响自动化条数算出来再决定要不要做，
     **绝不做一半才报错**。显式传 `allow_bulk=True` 绕过（真正想批量时用）。
-    D4：先做归属判定（在 load/IR 校验之前）——无权动的归档即使 IR 读不出也先拒。
+    C-3 R5（PM 裁定 20261101 §②）：归属判定改**份额化**——混合归属标签上，带身份的
+    非 owner 只动自己名下的条目，别人的**不进 affected/failed 也不点名**，缺口只报数
+    （`hidden_count`）；⛔ 不改既有键的语义/形状（affected/failed 仍是 list-of-dict）。
+    「调用方自报名」写面（set_tags/delete/单条启停）的既有 403 文案经
+    `_assert_archive_mutator` 逐字保持，⛔ 本面借用它拒批。
     """
     names = [n for n, ts in store.all_tags().items() if tag in ts]
-    for name in names:
-        _assert_archive_mutator(store, name, caller=caller, caller_is_owner=caller_is_owner,
-                                token_identity=token_identity)
+    # C-3：范围判定单源 scope_names（D4 的逐名 _assert 在批量面被份额化取代——
+    # 逐名 403 会把「别人有一条同标签」放大成整批拒绝，还把他人归档名回给调用方）。
+    sub = Subject.from_caller(caller, owner_face=caller_is_owner, token_identity=token_identity)
+    if sub.token_state is TokenState.BROKEN:
+        raise ServiceError(broken_identity_error(), status=403)
+    visible, hidden = scope_names(lambda n: _existing_owner(store, n), names, sub)
     # 先算清影响面（不落盘），超阈值直接拒——避免"改了一半才失败"
     planned: list[tuple[str, int, Any]] = []
     failed: list[dict[str, Any]] = []
     total = 0
-    for name in names:
+    for name in visible:
         try:
             version = store.latest(name)
             if version is None:
@@ -685,7 +714,7 @@ def enable_by_tag(
             failed.append({"name": name, "reason": f"save_failed:{type(exc).__name__}"})
             continue
         affected.append({"name": name, "version": new_version, "enabled": enabled})
-    return {
+    out: dict[str, Any] = {
         "ok": not failed,
         "tag": tag,
         "enabled": enabled,
@@ -702,6 +731,11 @@ def enable_by_tag(
         # R4-4 收口（裁定方案 A）：启用后做对账——有活监听就复用、没有就起、起不动就回原因。
         "watch_reconcile": _ensure_watcher(store, enabled=enabled),
     }
+    if caller and not caller_is_owner:
+        # R5 份额化回执：无权条目不出现（⛔ 泄名），缺口只报数；新增键、旧键原样
+        out["hidden_count"] = hidden
+        out["scope"] = f"owner:{caller}"
+    return out
 
 
 def get_graph(store: GraphStore, name: str, version: int | None = None) -> dict[str, Any]:
@@ -1805,18 +1839,15 @@ def _assert_archive_mutator(
     ⛔ 不再把服务层豁免整体删除：那会打断本地 CLI／内部调用（裁定 §四 ⛔ 清单第 1 条）。
     """
     prev = _existing_owner(store, name)
-    if token_identity is True and not str(caller or "").strip():
-        raise ServiceError(
-            "拒绝：令牌缺少 subject（残缺身份）——豁免只对没有令牌身份的本地调用有效",
-            status=403,
-        )
-    if prev:
-        if caller and prev != caller and not caller_is_owner:
-            raise ServiceError(
-                f"归档 {name!r} 不属于当前主体（或不存在），无权{action}",
-                status=403,
-            )
-    elif caller and not caller_is_owner:
+    sub = Subject.from_caller(caller, owner_face=caller_is_owner, token_identity=token_identity)
+    # C-3：verdict 单源 decide（判定表六行在 af_ownership，⛔ 这里再内联第二份归属规则）；
+    # 文案单源三选一：残缺身份（broken_identity_error）／写拒不点名（mutator_error，AF-509）／
+    # 无归属 fail-closed（既有专文案，判据在钉，⛔ 并进 mutator_error 丢掉"无归属"这一因）。
+    if sub.token_state is TokenState.BROKEN:
+        raise ServiceError(broken_identity_error(), status=403)
+    if decide(lambda _n: prev, name, sub, write=True) is DenyKind.FORBIDDEN:
+        if prev:
+            raise ServiceError(mutator_error(name, action), status=403)
         raise ServiceError(
             f"归档 {name!r} 无归属，仅 owner 面可{action}（所有权隔离）",
             status=403,
@@ -1825,15 +1856,20 @@ def _assert_archive_mutator(
 
 def _assert_archive_visible(
     store: GraphStore, name: str, *, caller: str, caller_is_owner: bool,
+    token_identity: bool | None = None,
 ) -> None:
     """读面归属判定（审计 AF-504）：非 owner 面读别人的归档时抛 404——
-    文案与「归档不存在」逐字同形（与 `_t_get_graph` 收口面同款，⛔ 不回
-    "无权查看"：那等于承认存在）。未携带身份的旧调用路径不阻断（渐进收口）。
+    文案与「归档不存在」逐字同形（`visible_error` 单源，与 `_t_get_graph` 收口面
+    同款，⛔ 不回"无权查看"：那等于承认存在）。未携带身份的旧调用路径不阻断
+    （渐进收口）。C-3：verdict 走 `decide` 单源；BROKEN（持令牌缺 subject）⇒
+    403 残缺身份（R1：读面 ⛔ 不得退化成匿名全量）。
     """
-    if not caller or caller_is_owner:
-        return
-    if _existing_owner(store, name) != caller:
-        raise ServiceError(f"没找到归档 {str(name)!r}（或它不属于你）", status=404)
+    sub = Subject.from_caller(caller, owner_face=caller_is_owner, token_identity=token_identity)
+    if sub.token_state is TokenState.BROKEN:
+        raise ServiceError(broken_identity_error(), status=403)
+    if decide(lambda _n: _existing_owner(store, name), name, sub,
+              write=False) is DenyKind.NOT_FOUND:
+        raise ServiceError(visible_error(name), status=404)
 
 
 def _check_blast(count: int, what: str) -> None:
@@ -1849,35 +1885,62 @@ def _check_blast(count: int, what: str) -> None:
 
 def get_conf(
     store: GraphStore, name: str, *, caller: str = "", caller_is_owner: bool = False,
+    token_identity: bool | None = None,
 ) -> dict[str, Any]:
-    # 审计 AF-504：置信度读面同样按归属收口——非 owner 面读别人的归档回 404 同形文案
-    _assert_archive_visible(store, name, caller=caller, caller_is_owner=caller_is_owner)
+    """置信度读面。C-3 收口：BROKEN（持令牌缺 subject）⇒ 403 残缺身份（R1）。
+
+    审计 AF-504：单名面非 owner 读别人的归档回 404 同形文案（verdict 走 decide 单源）。
+    R2：`_all` 合并面**按份额聚合**——非 owner 只含自己名下归档的行，读不出的进
+    `unavailable`；⛔ 整面 404（那会把整个置信度面板对 agent 关死）、⛔ 全库聚合。
+    `ok` 派生自展开合拢（合并面＝contributed+unavailable==visible；单名面＝每条
+    自动化都有置信度行），⛔ 字面量 True。
+    """
+    sub = Subject.from_caller(caller, owner_face=caller_is_owner, token_identity=token_identity)
+    if sub.token_state is TokenState.BROKEN:
+        raise ServiceError(broken_identity_error(), status=403)
+    owner_of = lambda n: _existing_owner(store, n)
     if name in _ALL_NAMES:
+        names = _archive_names(store)
+        visible, hidden = scope_names(owner_of, names, sub)
         merged: dict[str, dict[str, Any]] = {}
-        for archive in _archive_names(store):
+        unavailable: list[str] = []
+        loaded = 0
+        for archive in visible:
             try:
                 graph = store.load(archive)
             except (FileNotFoundError, IRValidationError, OSError):
+                unavailable.append(archive)
                 continue
+            loaded += 1
             conf = _conf_of(store, archive, graph)
             for item in _conf_items(graph, conf):
                 merged.setdefault(item["automation_id"], item)
-        return {
-            "ok": True,
+        out: dict[str, Any] = {
+            "ok": loaded + len(unavailable) == len(visible),
             "name": name,
             "version": None,
             "items": sorted(merged.values(), key=lambda x: x["automation_id"]),
             "thresholds": {"auto": AUTO_MIN, "shadow_low": SHADOW_LOW},
         }
+        if caller and not caller_is_owner:
+            out["hidden_count"] = hidden
+            out["scope"] = f"owner:{caller}"
+        if unavailable:
+            out["unavailable"] = sorted(unavailable)
+        return out
 
+    # 单名面：verdict 落在名字上（他人/无归属 ⇒ 404 同形，⛔ 整面 404 只属于旧形状）
+    if decide(owner_of, name, sub, write=False) is DenyKind.NOT_FOUND:
+        raise ServiceError(visible_error(name), status=404)
     record = store.load_record(name)
     graph = load_graph(record["graph"])
     conf = _conf_of(store, name, graph)
+    items = _conf_items(graph, conf)
     return {
-        "ok": True,
+        "ok": len(items) == len(list(graph)),
         "name": name,
         "version": record.get("version"),
-        "items": _conf_items(graph, conf),
+        "items": items,
         "thresholds": {"auto": AUTO_MIN, "shadow_low": SHADOW_LOW},
     }
 
@@ -1962,9 +2025,12 @@ def _load_or_404(store: GraphStore, name: str, version: int):
 def diff(
     store: GraphStore, name: str, old: int, new: int, *,
     caller: str = "", caller_is_owner: bool = False,
+    token_identity: bool | None = None,
 ) -> dict[str, Any]:
     # 审计 AF-504：版本差异读面按归属收口——diff 会吐他人 IR 的增删行，不只是元数据
-    _assert_archive_visible(store, name, caller=caller, caller_is_owner=caller_is_owner)
+    # C-3：verdict 走 _assert_archive_visible 内的 decide 单点；BROKEN ⇒ 403（R1）。
+    _assert_archive_visible(store, name, caller=caller, caller_is_owner=caller_is_owner,
+                            token_identity=token_identity)
     old_graph = _load_or_404(store, name, old)
     new_graph = _load_or_404(store, name, new)
     result = diff_graphs(old_graph, new_graph)
@@ -2825,6 +2891,7 @@ def undo_deploy(
 
 def export_store(
     store: GraphStore, *, caller: str = "", caller_is_owner: bool = False,
+    token_identity: bool | None = None,
 ) -> dict[str, Any]:
     """导出 store 为可携带 bundle（含 tags，依赖 v0.6.0）。
 
@@ -2832,20 +2899,32 @@ def export_store(
     非 owner 面导出自己名下的（别人的既不进 entries 也不进 names，`hidden_count`
     报缺口）；owner 面仍是全量——导出的是「你的份额」，不是「全库」。
     未携带身份的旧调用路径维持全量（渐进收口，与 list_graphs 同口径）。
+    C-3 收口：范围判定单源 `scope_names`；BROKEN ⇒ 403 残缺身份（R1）；
+    R3：`checksum` 与**返回的** bundle 一致——份额化后按 scoped bundle 重算
+    （⛔ 留全量指纹：导入侧复算对不上，调用方也无法自校验拿到的是哪份）；
+    R4：`ok` 派生自计数合拢（names + hidden == 全集 entries）。
     """
+    sub = Subject.from_caller(caller, owner_face=caller_is_owner, token_identity=token_identity)
+    if sub.token_state is TokenState.BROKEN:
+        raise ServiceError(broken_identity_error(), status=403)
     bundle = store.export_bundle()
     entries = list(bundle.get("entries", []))
+    entry_names = [str(e.get("name", "")) for e in entries]
+    visible, hidden = scope_names(lambda n: _existing_owner(store, n), entry_names, sub)
     if caller and not caller_is_owner:
-        scoped = [e for e in entries if _existing_owner(store, str(e.get("name", ""))) == caller]
-        hidden = len(entries) - len(scoped)
+        visible_set = set(visible)
+        scoped = [e for e, n in zip(entries, entry_names) if n in visible_set]
         bundle = {**bundle, "entries": scoped}
+        # R3：指纹跟份额走（store._bundle_checksum 单源，⛔ 本面另写第二份哈希）
+        bundle["checksum"] = _bundle_checksum(bundle)
+    out_names = [e["name"] for e in bundle.get("entries", [])]
     return {
-        "ok": True,
+        "ok": len(out_names) + hidden == len(entries),
         "format": bundle.get("format"),
         "version": bundle.get("version"),
         "checksum": bundle.get("checksum"),
         "exported_at": bundle.get("exported_at"),
-        "names": [e["name"] for e in bundle.get("entries", [])],
+        "names": out_names,
         **({"hidden_count": hidden, "scope": f"owner:{caller}"}
            if (caller and not caller_is_owner) else {}),
         "bundle": bundle,

@@ -20,7 +20,7 @@ owner 面名单仍是 `af_api._OWNER_SUBJECTS`（既有安全契约，本模块�
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Callable, Iterable
 
@@ -42,11 +42,14 @@ class DenyKind(Enum):
 class Subject:
     caller: str
     token_state: TokenState
+    #: 服务层显式传入的 owner 面旗（MCP/HTTP 调用方已按 `_OWNER_SUBJECTS` 核过才传 True；
+    #: 服务直调/CLI 的旧入参形状由此保持兼容）。名单真源仍只有 `af_api._OWNER_SUBJECTS`。
+    owner_face: bool = False
 
     @property
     def is_owner_face(self) -> bool:
         from .af_api import _OWNER_SUBJECTS
-        return self.caller in _OWNER_SUBJECTS
+        return self.owner_face or self.caller in _OWNER_SUBJECTS
 
     @classmethod
     def from_current(cls, current: dict[str, Any] | None,
@@ -60,6 +63,13 @@ class Subject:
         else:
             state = TokenState.NONE
         return cls(caller=caller, token_state=state)
+
+    @classmethod
+    def from_caller(cls, caller: str, *, owner_face: bool = False,
+                    token_identity: bool | None = None) -> "Subject":
+        """服务层标量入参 → Subject：身份映射仍走 `from_current` 单源，⛔ 第二份解读。"""
+        return replace(cls.from_current({"subject": str(caller or "")}, token_identity),
+                       owner_face=owner_face)
 
 
 def visible_error(name: str) -> str:
