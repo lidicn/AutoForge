@@ -1,4 +1,4 @@
-﻿"""P0-9：令牌验证使用恒定时间比较（hmac.compare_digest），防止时序攻击。"""
+"""P0-9：令牌验证使用恒定时间比较（hmac.compare_digest），防止时序攻击。"""
 
 import pytest
 

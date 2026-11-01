@@ -1,4 +1,4 @@
-﻿"""P1-9：parse_duration 拒绝 inf/nan/负值，支持 HA 原生 HH:MM:SS。"""
+"""P1-9：parse_duration 拒绝 inf/nan/负值，支持 HA 原生 HH:MM:SS。"""
 
 import math
 
