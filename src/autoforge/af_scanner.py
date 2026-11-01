@@ -97,6 +97,8 @@ CHECKS: dict[str, str] = {
     "ENTITY_CHECK_DEGRADED": "设备目录为空，实体存在性校验静默跳过（entity_check=skipped 但零诊断）——假绿通道",
     # ── AF-707 假绿族（PM 裁定补码，2026-10-31）──
     "EDGE_KIND_MISMATCH": "边 kind 不在该节点 kind 的允许集合（如 if 的真值分支写 yes）——pick_edge 永远选不中，实例静默终止报 done",
+    "ASK_BINARY_NO_DENY_PATH": "C-2 G.2①：二元 ask 缺拒绝出口（无 no 边，或 default 直达执行类节点）——听不清不执行的 fail-closed 缺口",
+    "ASK_STRUCT_NO_THEN": "C-2 G.2③：结构化 ask 缺 then 边（参数收集无法恢复）或带运行期不可达的 yes/no 死边",
 }
 
 #: 诊断码 → **怎么改**（v1.2.0：让 Agent 一次往返就能自修正，而不是自己推断修法）
@@ -161,6 +163,8 @@ CODE_HINT: dict[str, str] = {
     "TIME_AT_INVALID": "at 用 HH:MM（或 HH:MM:SS），日落日出写 sunrise/sunset（可带 ±HH:MM offset）。",
     "SERVICE_UNKNOWN": "服务名打错（turn_onnn）；该域合法服务用 af_resolve_entity 查 services 清单。",
     "ENTITY_CHECK_DEGRADED": "先 af_catalog 刷新设备目录再 build——空目录时幽灵实体检测不到，这条 ok 不可信。",
+    "ASK_BINARY_NO_DENY_PATH": "给二元 ask 补 `no` 边（指向 pass/收尾），或把 `default` 改指非执行下游；⛔ 不要删 no 让 unknown 落到 do。",
+    "ASK_STRUCT_NO_THEN": "给结构化 ask 补 `then` 边（结构化应答的恢复通道），并删掉 yes/no 出边（那是二元语义，结构化会话走 then）。",
     "EDGE_KIND_MISMATCH": "把该出边的 kind 改成目标节点 kind 的合法取值（if 真值分支用 then、否值分支用 no/default；yes/no 只属于 ask）。合法集合见 af_scanner.ALLOWED_OUT_EDGE_KINDS。",
 }
 
@@ -406,6 +410,7 @@ class StaticScanner:
                 )
             self._check_risk(auto, node, out)
             self._check_suspension(auto, node, out)
+            self._check_ask_edge_contract(auto, node, out)
             self._check_high_risk_after_suspend(auto, node, out)
             self._check_cancel_branch(auto, node, out)
             self._check_duplicate_edges(auto, node, out)
@@ -574,6 +579,78 @@ class StaticScanner:
     # `_check_confirm_exit`（CONFIRM_WITHOUT_DENY_PATH WARN）已随 DCD 裁定 20261031
     # （Q3 甲）整族撤销——运行期确认闸没了，"人答不要/无人应答"这条走向不再存在；
     # 调用点同批删除，CHECKS/CODE_HINT/pin 同批清，防孤儿。
+
+    # C-2 §G.2（设计稿 af-runtime-ask-semantics，PM 裁落点＝af_scanner 新码，
+    # ⛔ 不动 af_ir/models.py 的 AskSpec.__post_init__——G.1 契约零变更）：
+    # ① 二元 ask（无 ask 对象）必须有 `no` 边（用户明确拒绝的出口），或其 `default`
+    #    边指向**非执行**下游（可达集无 do 节点——"听不清不执行"，D.2：unknown 收紧
+    #    为 no 后经 {kind,"default"} 选路，default 若直达 do 就是无人值守执行）；
+    # ③ 结构化 ask（带 ask 对象）必须有 `then` 边（参数收集的唯一恢复通道，
+    #    af_executor.answer_structured 走 then），且 ⛔ 不得有 yes/no 出边——
+    #    yes/no 是二元语义，结构化会话被 classify_answer/then 分流，挂着就是死边。
+    # ② （带 timeout 须有 on_timeout/default）由既有 MISSING_TIMEOUT_OR_DEFAULT
+    #    覆盖（它对所有 ask 无差别要求 on_timeout/default，比 ② 更严）⇒ 不另开码。
+    def _check_ask_edge_contract(self, auto: Automation, node: Node, out: ScanResult) -> None:
+        if node.kind != "ask":
+            return
+        edges = auto.outgoing(node.id)
+        kinds = {e.kind for e in edges}
+        if node.ask is None:
+            # ① 二元 ask：拒绝出口必须存在
+            if "no" in kinds:
+                return
+            default_edges = [e for e in edges if e.kind == "default"]
+            if default_edges:
+                for e in default_edges:
+                    for reachable in _reachable(auto, e.to):
+                        if reachable.kind == "do":
+                            out.diagnostics.append(
+                                Diagnostic(
+                                    "ASK_BINARY_NO_DENY_PATH",
+                                    ERROR,
+                                    f"二元 ask 节点 {node.id} 无 `no` 边，且 `default` 分支"
+                                    f"可达执行类节点 {reachable.id}（{reachable.action}）——"
+                                    f"unknown/听不清会经 default 无人值守执行（D.2 fail-closed 缺口）",
+                                    auto.id,
+                                    node.id,
+                                )
+                            )
+                return
+            out.diagnostics.append(
+                Diagnostic(
+                    "ASK_BINARY_NO_DENY_PATH",
+                    ERROR,
+                    f"二元 ask 节点 {node.id} 既没有 `no` 边也没有 `default` 边——"
+                    f"用户明确拒绝时无路可走（D.2：听不清不执行）",
+                    auto.id,
+                    node.id,
+                )
+            )
+            return
+        # ③ 结构化 ask：then 必达、yes/no 禁用
+        if "then" not in kinds:
+            out.diagnostics.append(
+                Diagnostic(
+                    "ASK_STRUCT_NO_THEN",
+                    ERROR,
+                    f"结构化 ask 节点 {node.id} 缺 `then` 边——结构化应答经 then 恢复"
+                    f"（answer_structured），没有它参数收集永远无法继续",
+                    auto.id,
+                    node.id,
+                )
+            )
+        bad = sorted(e.kind for e in edges if e.kind in ("yes", "no"))
+        if bad:
+            out.diagnostics.append(
+                Diagnostic(
+                    "ASK_STRUCT_NO_THEN",
+                    ERROR,
+                    f"结构化 ask 节点 {node.id} 带二元出边 {bad}——yes/no 是二元语义，"
+                    f"结构化会话经 then 分流，这些边运行期不可达（死边）",
+                    auto.id,
+                    node.id,
+                )
+            )
 
     # ⑤ on_cancel 分支不得产生新实例
     def _check_cancel_branch(self, auto: Automation, node: Node, out: ScanResult) -> None:
