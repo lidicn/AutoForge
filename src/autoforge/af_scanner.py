@@ -46,7 +46,7 @@ CHECKS: dict[str, str] = {
     "SELF_TRIGGER_LOOP": "⑭ 同自动化写回自己的触发源（自激风险按效果表判定，非跨自动化）",
     "STATIC_LOOP": "④ 静态图内循环且无终止条件",
     "CANCEL_SPAWNS_INSTANCE": "⑤ on_cancel 分支产生新实例",
-    "HIGH_RISK_AFTER_SUSPEND": "⑥ 无人值守分支（on_timeout/default/on_cancel）内执行高风险动作（ask 的 yes/no 有人在环，不在射程——裁定 20261031）",
+    "HIGH_RISK_AFTER_SUSPEND": "⑥ 无人值守分支（on_timeout/default/on_cancel）内执行高风险动作（ask 的 yes/no 有人在环、不在射程；带 canary 的 do 视同挂起点——裁定 20261031）",
     "SHADOW_WRITES_DEVICE": "⑦ Shadow 模式 do 写设备状态",
     "CROSS_AUTOMATION_VAR": "⑧ 跨自动化读写对方实例私有变量",
     "ADAPTER_POLICY_PARAM": "⑨ 适配器配置含 IR 未定义策略参数",
@@ -109,7 +109,7 @@ CODE_HINT: dict[str, str] = {
     "ENTITY_DEP_CYCLE": "用 `emit`/`on event` 解耦：状态变化侧只广播事件（不写实体），跟随侧只写对方实体。",
     "STATIC_LOOP": "补终止条件：加 `if` 分支走 `pass`，或改用 `for` 持续条件而不是自触发。",
     "CANCEL_SPAWNS_INSTANCE": "`on_cancel` 分支里不要写会重新触发本自动化的实体/事件。",
-    "HIGH_RISK_AFTER_SUSPEND": "把高风险动作移到挂起（ask/wait）之前的求值段；ask 的 yes/no 分支有人在环、不在射程（裁定 20261031 一次审批）。",
+    "HIGH_RISK_AFTER_SUSPEND": "把高风险动作移到挂起（ask/wait/canary 观察窗）之前的求值段；ask 的 yes/no 分支有人在环、不在射程（裁定 20261031 一次审批）。",
     "SHADOW_WRITES_DEVICE": "conf<0.85 的 shadow 自动化禁止写设备；改为出 `ask` 提案或提升置信度。",
     "CROSS_AUTOMATION_VAR": "跨自动化只传消息（`emit`），不要读写对方实例变量。",
     "ADAPTER_POLICY_PARAM": "重试/降级/业务超时属于 IR 语义层，适配器参数里去掉 `retry`/`fallback` 等。",
@@ -626,13 +626,25 @@ class StaticScanner:
     #    不再二次问人 ⇒ 移出本检查射程。P1-3 把 yes/no 纳入是裁定 20261009 运行期
     #    二次授权闸的静态影子，随卡 B 一并收回。L3 不受影响：L3_ACTION 默认拒绝
     #    在一切分支独立生效。
+    #    Chief 阻断项（2026-11-01，撤闸后果面）：canary 观察窗是撤闸后运行期**仅剩
+    #    的挂起**（af_executor._do 挂 canary_observe，到期 resume("on_timeout")，恢复
+    #    处理完漂移检查后按 {kind,"default"} 选边继续 run）——而 is_suspending 只认
+    #    ask/wait，带 canary 的 do 节点此前漏在射程外。撤闸前 L2 do 挂 confirm 必被
+    #    运行期闸拦下；撤闸后该拦截消失 ⇒ canary 窗到期无人值守继续执行下游 L2 成为
+    #    **实际可达**通道。修法：带 canary 的 do 节点视同挂起点，其 on_timeout/default
+    #    分支纳入射程；⛔ 不动 canary 本身（Q2 甲保留），只补静态闸射程。
     def _check_high_risk_after_suspend(self, auto: Automation, node: Node, out: ScanResult) -> None:
-        if not node.is_suspending:
+        suspending = node.is_suspending or node.canary is not None
+        if not suspending:
             return
         if node.kind == "wait":
             edge_kinds = ("on_timeout", "default", "on_cancel")
         elif node.kind == "ask":
             edge_kinds = ("on_timeout", "default", "on_cancel")
+        elif node.kind == "do" and node.canary is not None:
+            # canary 窗到期 = resume("on_timeout")；恢复后按 {kind,"default"} 选边 ⇒
+            # 无人值守可达面就这两条（then/on_cancel 不属无人值守恢复面）。
+            edge_kinds = ("on_timeout", "default")
         else:
             edge_kinds = ("on_timeout", "default", "on_cancel", "then")
         for edge in auto.outgoing(node.id):

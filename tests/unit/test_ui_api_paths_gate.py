@@ -761,15 +761,32 @@ def test_transport_wrappers_are_pinned_to_the_api_layer():
 
     这条是 `test_non_literal_path_is_registered_as_transport` 放宽判红之后的兜底：视图里再冒出一处
     动态路径（那才是真该追问"调的是哪条接口"的地方）会红在这里，逼来留名而不是静默过关。
-    `ui/src/api/client.ts:75`（20261021）：登录正规化批次的 `authRequest` 第二枚包装。
+    `ui/src/api/client.ts`：登录正规化批次的 `authRequest` 第二枚包装（20261021）。
+
+    2026-11-01（PM 发布树 2 条红卡，Chief 收紧裁定）：⛔ 钉行号违反「判据按符号名钉」
+    纪律——UI-1 只加一行 import 就把 `ui-user` 的包装从 :36 顶到 :37 ⇒ 假红；改行号只是
+    把下一坑推迟一行。改为**按形状钉**：每棵树的 api 门面文件里必须恰有一处传输层包装
+    （`fetch(` 首参是路径表达式而非字面量），文件名与数量仍死——视图里冒出的动态路径
+    照旧红在这里。⛔ 不删这条判据。
     """
     mod = _module()
     got: list[str] = []
     for t in mod._registry_trees():
         sites, _ = mod.collect_ui_sites(t["root"], t["name"])
         got += [f"{s['rel']}:{s['line']}" for s in sites if "transport" in s["kinds"]]
-    assert sorted(got) == ["ui-user-mimo/src/api/http.ts:103", "ui-user/src/api/client.ts:36",
-                           "ui/src/api/client.ts:38", "ui/src/api/client.ts:75"], got
+    # 文件名死钉（api 门面唯一真源，ui/ 两枚包装是登录正规化批次的既有形状），
+    # 行号随改动自然漂移；数量死钉（每文件恰一枚，新冒头的动态路径必须来这里留名）。
+    files = sorted(g.split(":")[0] for g in got)
+    assert files == ["ui-user-mimo/src/api/http.ts", "ui-user/src/api/client.ts",
+                     "ui/src/api/client.ts", "ui/src/api/client.ts"], got
+    # 形状复核：每个被钉的站点行真含 `fetch(` 且路径是表达式（BASE/` 反引号模板），
+    # 防"行号漂到别的东西上仍绿"的假对齐。s['rel'] 已含树名前缀（ui/src/…），
+    # 路径相对仓根拼，⛔ 不再叠 t['root']。
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    for g in got:
+        rel, _, ln = g.rpartition(":")
+        src_line = (repo / rel).read_text(encoding="utf-8").splitlines()[int(ln) - 1]
+        assert "fetch(" in src_line, (rel, ln, src_line)
 
 
 def test_helper_names_have_one_source():
