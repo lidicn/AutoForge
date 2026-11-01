@@ -453,10 +453,22 @@ def list_quarantined(store: GraphStore, *, caller: str = "", caller_is_owner: bo
     trash = Path(store.root) / GraphStore.TRASH_DIR
 
     def _quarantined_owner(qname: str) -> str:
-        original = qname.split("--", 1)[0]
+        # C-3 D6（设计稿 af-ownership-audit-model-v3-v3 §4 D6，PM 裁定）：归档名可含
+        # `--`（normalize_archive_name 允许 -/_），旧 `split("--",1)[0]` 会从第一个
+        # `--` 截断 ⇒ `foo--bar--<戳>` 解析成 `foo` 而非 `foo--bar`，真主看不到自己的
+        # 隔离项。改为**尾部戳反解**：`rpartition("--")` 取最后一段，戳形校验
+        # ^\d{8}T\d{6}\d{6}$（GraphStore.quarantine 落戳 %Y%m%dT%H%M%S%f＝20 位、
+        # 不含 `--`）。戳形不匹配时 ⛔ 不回退 split、⛔ 不猜原名——按「原名不可解析」
+        # 返回 ""（走既有不可解析路径，不静默返回错误归属者）。
+        import re as _re
+        head, _sep, tail = qname.rpartition("--")
+        if head and _re.fullmatch(r"\d{8}T\d{6}\d{6}", tail):
+            original = head
+        else:
+            original = ""  # 戳形不匹配 ⇒ 原名不可解析，⛔ 不猜
+        if not original:
+            return ""
         live = _existing_owner(store, original)
-        if live:
-            return live
         # 活目录已无此归档 ⇒ 从隔离目录自己的版本记录里读归属
         qdir = trash / qname
         if not qdir.is_dir():
