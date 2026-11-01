@@ -132,8 +132,12 @@ def test_baseline_frozen_at_15():
     16 → 15（2026-10-31 AF-710 留痕半 9ead4f0）：`_pair_event_gen` 的 `except Exception: pass`
     已收窄成 `logger.warning(..., exc_info=True)`＋具名码 PAIR_SSE_EVENT_FAILED，不再是严格吞掉
     形状 ⇒ 该枚从 BASELINE 拿掉（本门明写「真删了就把它们从 BASELINE 拿掉（只减不增）」）。
-    -1 仍是修掉的真缺陷，非静默缩水。"""
-    assert len(check_except_pass.BASELINE) == 15
+    -1 仍是修掉的真缺陷，非静默缩水。
+    AF-718 键化（2026-11-01）后规模钉改**实例级**：`sum(BASELINE.values())`（站点数）才是
+    规模——键数是格式副产品（一个外层符号一枚键，`af_version._now` 同函数 3 枚聚一键计 3）；
+    旧 file:line 基线同为 15 枚实例 ⇒ 原语义不变。⛔ 不许钉键数 13：那会把格式细节冻成
+    不变量，下次有人拆/并键就假红。"""
+    assert sum(check_except_pass.BASELINE.values()) == 15
     repo_src = SCRIPT.parents[1] / "src" / "autoforge"
     if not repo_src.is_dir():
         pytest.skip("real repo src not present")
