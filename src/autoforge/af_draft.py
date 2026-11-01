@@ -504,6 +504,14 @@ def draft_intent(
                        f"先用 af_resolve_entity 拿真实 entity_id（多候选要选定），"
                        f"或用 af_remember_entity 沉淀别名后重跑 af_draft",
     }
+    # C-1 起草期追问（2026-11-01 设计稿 af-draft-ask-clarify-v2-v2）：编译成功仍可能
+    # 带 blocking 语义缺口（动作/参数/条件槽）⇒ 只加返回键 `_clarify_hint`（与
+    # `_unresolved_hint` 同族）；签名/ok 语义/range_sha 不变（R5：ok 仍表示编译成功）。
+    # ⛔ 追问层不消除 `?`、不代填占位符（边界 7.1）；⛔ 不复活执行确认语义（7.3）。
+    from .af_clarify import clarify_scan as _clarify_scan
+    _rep = _clarify_scan(intent, catalog)
+    if not _rep.is_clear():
+        out["_clarify_hint"] = _rep.to_hint()
     return out
 
 
