@@ -1137,6 +1137,15 @@ class StaticScanner:
     def _check_entities(self, auto: Automation, out: ScanResult) -> None:
         reads, writes = self._entity_refs(auto)
         refs = reads | writes
+        # AF-722（2026-11-01 PM 实测，🔴 归档面）：`event` 触发的**总线主体名**
+        # （`event.<name>`，EVENT_ENTITY_PREFIX）经 `Trigger.entity_ids()` 混进
+        # `reads()`——那是为跨自动化依赖矩阵与环检测而设的语义（af_ir docstring
+        # 原文，⛔ entity_ids() 不改），不是 HA 实体；拿它比**设备目录**（只含
+        # HA 实体）必然 `ENTITY_NOT_FOUND`（ERROR ⇒ 硬拒归档），仓内在册正例
+        # case_lamp_sync 四枚 event 触发全被拦。比对前按既有前缀剔除事件主体名
+        # （⛔ 不放宽任何真实体校验，两枚真实 switch 照常校验）；环检测/依赖矩阵
+        # 那半边不经过本函数、仍用未过滤的 reads()（EMIT_SELF_LOOP 照旧）。
+        refs = {r for r in refs if not r.startswith(EVENT_ENTITY_PREFIX)}
 
         if self._known is not None:
             for entity_id in sorted(refs):
