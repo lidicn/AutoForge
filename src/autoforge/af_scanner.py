@@ -1151,7 +1151,16 @@ class StaticScanner:
             trigger = getattr(node, "trigger", None)
             if trigger is None:
                 continue
-            for leaf in trigger.leaf_triggers():
+            try:
+                # 生成器要在这里才被真正耗尽：超预算/自引用的 group 触发在这条腿上
+                # 受控失败（`TriggerDepthError`）——scan() 的对外契约是「返回诊断」，
+                # 不许把异常换成整次扫描的崩溃（与 `_entity_refs`／`_trigger_refs`
+                # 同族口径）。诊断已由 `_check_trigger_depth` 落过（TRIGGER_INVALID），
+                # 本腿只跳过该节点，不影响其余节点的剔除集合。
+                leaves = list(trigger.leaf_triggers())
+            except TriggerDepthError:
+                continue
+            for leaf in leaves:
                 if leaf.type == "event" and leaf.event:
                     out.add(f"{EVENT_ENTITY_PREFIX}{leaf.event}")
         return out
