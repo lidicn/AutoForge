@@ -9,7 +9,9 @@
 #
 # 前置（缺一不可，缺了就是"每秒起一次、每次 exit 2"的崩溃循环重演）：
 #   export AUTOFORGE_HA_URL=http://<ha-host>:8123
-#   export HA_LONG_LIVED_TOKEN=<B类·AF→HA 出站令牌>      # 代码读点 af_cli.py（watch 的 token 取值）
+#   export HA_LONG_LIVED_TOKEN=<B类·AF→HA 出站令牌>      # ⚠️ AF-720：watch 真源＝store
+#       `credentials.json`（cfg.get_ha_token() 优先于 env，af_cli.py watch 取值序末位才是
+#       env 回退）——本机 docker/.env 那枚是失效旧令牌（401），store 真值在位时 env 可不注
 #   export AUTOFORGE_AUTH_CODE=<部署授权码>              # 代码读点 af_cli._auth_code_of（AF-714 新增）
 #   export AUTOFORGE_SYNC_LIVE_ALLOW=switch.xxx,light.yyy # 真机可写白名单（逗号分隔）
 #
@@ -39,7 +41,11 @@ services:
     environment:
       # ⛔ 三枚敏感值全部来自宿主机 env（docker inspect 只见键名与占位）：
       #   HA_LONG_LIVED_TOKEN / AUTOFORGE_AUTH_CODE —— 真值绝不写进本文件。
-      # HA 令牌：watch 命令缺省读 env（与 api.yml 的 B 类令牌同键同源）。
+      # HA 令牌（AF-720 更正，2026-11-01 真机实测）：**令牌真源＝store `credentials.json`**
+      # ——`af_cli watch` 的取值序是 `--ha-token or cfg.get_ha_token() or env[HA_LONG_LIVED_TOKEN]
+      # or env[AUTOFORGE_HA_TOKEN]`（af_cli.py watch），`cfg.get_ha_token()` 读 store 真值、
+      # **优先于 env**；env 那枚仅是取值序末位回退，且本机 docker/.env 里那枚是失效旧令牌
+      # （对 HA /api/ 返 401）⇒ 只注 env 不配 store 会 401。env 口子保留（store 无令牌时的回退）。
       - HA_LONG_LIVED_TOKEN=${HA_LONG_LIVED_TOKEN:-}
       # 授权码：watch 侧 env 注入口（键名 AUTOFORGE_AUTH_CODE，AF-714 新增；代码读点 af_cli._auth_code_of）。
       - AUTOFORGE_AUTH_CODE=${AUTOFORGE_AUTH_CODE:-}
