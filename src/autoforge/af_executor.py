@@ -83,8 +83,18 @@ MAX_ASK_ROUNDS = 3
 #: v2 收敛纪律：同一房间同一时刻挂起问题数上限（跨实例合计）
 MAX_ASKS_PER_ROOM = 2
 
-#: 收敛违约 / 结构化应答被拒的审计事件类型
+#: 收敛违约 / 交叉通道误用的审计事件类型（C-2 设计稿 §B.3：结构化会话被喂自由文本、
+#: 二元会话被喂结构化 payload ⇒ 拒、保持挂起、留这条痕）
 ASK_VIOLATION = "ask_convergence_violation"
+#: C-2（设计稿 §F.1）：结构化应答被校验拒绝（缺省即拒、保持挂起可重答）。
+#: 从 ASK_VIOLATION 拆出：「填错值」≠「收敛纪律违反」，两件事在审计里必须可数分。
+ASK_REJECTED = "ask_answer_rejected"
+#: C-2：一次会话被成功消费恰一条（answer/answer_structured 校验通过、进入边选路前）。
+#: 重复应答不再产生（出队即消费），"一问一答"在审计里对得平。
+ASK_RESOLVED = "ask_resolved"
+#: C-2：会话未经应答就消亡。reason ∈ {timeout, terminal, sweep}（超时到点 / 终态幽灵 /
+#: sweep_orphans 兜底清扫）。与 ASK_RESOLVED 互斥：一条会话要么被答掉，要么过期。
+ASK_EXPIRED = "ask_expired"
 
 #: v0.3.0：`emit` 延迟发布所用的实例定时器 kind（与 `wait`/`ask` 的 timeout 区分）
 EMIT_TIMER_KIND = "emit"
@@ -197,7 +207,25 @@ class NodeExecutor:
     def resume(self, instance: Instance, kind: str) -> Instance:
         """用给定的边类型唤醒挂起实例（yes / no / default / on_timeout / on_cancel）。"""
         # B3-AF-02: pop pending_asks BEFORE terminal check (was after, leaving ghost in queue)
-        self.pending_asks.pop(instance.instance_id, None)
+        # C-2 §F.1：ask 的 on_timeout 到点 ⇒ 会话未经应答即消亡 ⇒ ASK_EXPIRED
+        # (reason=timeout)。canary 的 on_timeout 不进 pending_asks（timer 挂起不入
+        # 会话表），pop 得 None 不落这条——审计里三径（timeout/terminal/sweep）可分。
+        expired_session = self.pending_asks.pop(instance.instance_id, None)
+        if expired_session is not None and kind == "on_timeout":
+            self.audit.add(
+                AuditEvent(
+                    type=ASK_EXPIRED,
+                    at=self.clock.now(),
+                    message=(
+                        f"ask 超时到点，会话未经应答出队：instance={instance.instance_id} "
+                        f"node={expired_session.node_id}"
+                    ),
+                    automation_id=instance.automation.id,
+                    instance_id=instance.instance_id,
+                    node_id=expired_session.node_id,
+                    data={"reason": "timeout", "channel": "timeout"},
+                )
+            )
         if instance.is_terminal:
             return instance
         auto = instance.automation
@@ -336,6 +364,26 @@ class NodeExecutor:
         if instance is None:
             logger.warning("answer: session.instance_id=%r 对应实例不存在", session.instance_id)
             return None
+        # C-2 §B.3 交叉通道守卫：结构化会话（带 ask_spec，含 kind=="text"）不吃自由文本
+        # 通道——`no` 是"用户明确不要"，文本乱答不得冒充参数收集（kind=="text" 的应答
+        # 也必须走 answer_structured 带 kind="text"）。拒、**保持挂起**、落审计。
+        if session.ask_spec is not None:
+            self.audit.add(
+                AuditEvent(
+                    type=ASK_VIOLATION,
+                    at=self.clock.now(),
+                    message=(
+                        f"交叉通道误用：结构化会话（spec kind={getattr(session.ask_spec, 'kind', '?')}）"
+                        f"被喂自由文本，已拒绝、会话保持挂起（应答请走 answer_structured）："
+                        f"text_len={len(text or '')} text_head={(text or '')[:2]!r}"
+                    ),
+                    automation_id=instance.automation.id,
+                    instance_id=instance.instance_id,
+                    node_id=session.node_id,
+                    data={"reason": "cross_channel", "channel": "text"},
+                )
+            )
+            return None
         verdict = classify_answer(text)
         import homesdk
         logger.info(
@@ -347,7 +395,35 @@ class NodeExecutor:
         if getattr(instance, "is_terminal", False) is True:
             self.pending_asks.pop(instance.instance_id, None)
             logger.warning("answer: instance %s is terminal, popping ghost ask", instance.instance_id)
+            # C-2 §F.1：终态幽灵出队未经应答 ⇒ ASK_EXPIRED(reason=terminal)，
+            # 与 sweep_orphans 的 reason=sweep 同族两径，审计里分得开。
+            self.audit.add(
+                AuditEvent(
+                    type=ASK_EXPIRED,
+                    at=self.clock.now(),
+                    message=f"迟到应答命中终态实例，幽灵会话出队（零推进）：instance={instance.instance_id}",
+                    automation_id=instance.automation.id,
+                    instance_id=instance.instance_id,
+                    node_id=session.node_id,
+                    data={"reason": "terminal", "channel": "text"},
+                )
+            )
             return None
+        # C-2 §F.1：一次会话至多一条 ASK_RESOLVED——校验已过、即将进边选路（resume
+        # 出队即消费）；重复应答在 resolve_ask/出队后到不了这里，不产生第二条。
+        self.audit.add(
+            AuditEvent(
+                type=ASK_RESOLVED,
+                at=self.clock.now(),
+                message=f"ask 会话被自由文本应答消费：verdict={verdict}",
+                automation_id=instance.automation.id,
+                instance_id=instance.instance_id,
+                node_id=session.node_id,
+                data={"ask_id": session.instance_id, "edge": verdict, "room": session.room,
+                      "rounds": int(instance.ctx.context.get("_ask_rounds", 0)),
+                      "payload_kind": "text", "channel": "text"},
+            )
+        )
         return self.resume(instance, verdict)
 
     # ─────────────────────────────────────────────────────────────────
@@ -373,24 +449,70 @@ class NodeExecutor:
         instance = self.instances.get(session.instance_id)
         if instance is None:
             return None
-        if isinstance(payload, dict):
-            payload = AskAnswer.from_dict(payload)
-        if not self._validate_structured(payload, session.ask_spec):
+        # C-2 §B.3 交叉通道守卫（对称半）：二元会话（ask_spec 为 None）不吃结构化
+        # 通道——旧现状 `_validate_structured(payload, None)` 只查非空文本，会把
+        # 结构化 payload 误送上 `then` 边。拒、**保持挂起**、落审计；自由文本应
+        # 走 answer()（text 会话除外——那类请经本通道带 kind="text"）。
+        if session.ask_spec is None:
             self.audit.add(
                 AuditEvent(
                     type=ASK_VIOLATION,
                     at=self.clock.now(),
                     message=(
-                        f"结构化应答未通过校验（缺省即拒，会话保持挂起可重答）："
-                        f"spec={session.ask_spec}, answer={payload}"
+                        "交叉通道误用：二元会话（无 ask_spec）被喂结构化应答，已拒绝、"
+                        "会话保持挂起（自由文本请走 answer 通道）"
                     ),
                     automation_id=instance.automation.id,
                     instance_id=instance.instance_id,
                     node_id=session.node_id,
+                    data={"reason": "cross_channel", "channel": "structured"},
+                )
+            )
+            return None
+        if isinstance(payload, dict):
+            payload = AskAnswer.from_dict(payload)
+        if not self._validate_structured(payload, session.ask_spec):
+            # C-2 §F.1：从 ASK_VIOLATION 拆出 ASK_REJECTED——「填错值」≠「收敛纪律
+            # 违反」；同时按 §F.3 脱敏：spec/answer 只记 kind 与值域摘要，⛔ 全文直印。
+            _val = getattr(payload, "value", None)
+            _pkind = getattr(payload, "kind", "?")
+            if _pkind == "entity" and isinstance(_val, str):
+                _digest = f"domain={_val.split('.', 1)[0] if '.' in _val else '?'}"
+            elif isinstance(_val, str):
+                _digest = f"len={len(_val)} head={_val[:2]!r}"
+            else:
+                _digest = f"value={str(_val)[:40]}"
+            self.audit.add(
+                AuditEvent(
+                    type=ASK_REJECTED,
+                    at=self.clock.now(),
+                    message=(
+                        f"结构化应答未通过校验（缺省即拒，会话保持挂起可重答）："
+                        f"spec_kind={getattr(session.ask_spec, 'kind', '?')} "
+                        f"answer_kind={_pkind} {_digest}"
+                    ),
+                    automation_id=instance.automation.id,
+                    instance_id=instance.instance_id,
+                    node_id=session.node_id,
+                    data={"channel": "structured", "answer_kind": _pkind},
                 )
             )
             return None
         instance.ctx.vars["ask_answer"] = {"kind": payload.kind, "value": payload.value}
+        # C-2 §F.1：一次会话至多一条 ASK_RESOLVED（出队即消费，重复应答到不了这里）。
+        self.audit.add(
+            AuditEvent(
+                type=ASK_RESOLVED,
+                at=self.clock.now(),
+                message=f"ask 会话被结构化应答消费：payload_kind={payload.kind}",
+                automation_id=instance.automation.id,
+                instance_id=instance.instance_id,
+                node_id=session.node_id,
+                data={"ask_id": session.instance_id, "edge": "then", "room": session.room,
+                      "rounds": int(instance.ctx.context.get("_ask_rounds", 0)),
+                      "payload_kind": payload.kind, "channel": "structured"},
+            )
+        )
         return self.resume(instance, "then")
 
     def validate_answer(self, room: str | None, payload: "AskAnswer | dict", ask_id: str | None = None) -> bool:
@@ -401,6 +523,10 @@ class NodeExecutor:
         """
         session = self.resolve_ask(ask_id, room)
         if session is None:
+            return False
+        # C-2 §B.3：二元会话（ask_spec 为 None）吃结构化应答＝交叉通道误用，
+        # 与 answer_structured 的守卫同形——预检 False ⇒ service 层映 422，不消费。
+        if session.ask_spec is None:
             return False
         if isinstance(payload, dict):
             payload = AskAnswer.from_dict(payload)
@@ -462,7 +588,20 @@ class NodeExecutor:
             if inst is None or getattr(inst, "is_terminal", False) is True:
                 ghosts.append(inst_id)
         for inst_id in ghosts:
-            self.pending_asks.pop(inst_id, None)
+            session = self.pending_asks.pop(inst_id, None)
+            if session is not None:
+                # C-2 §F.1：sweep 兜底出队未经应答 ⇒ ASK_EXPIRED(reason=sweep)，
+                # 与 answer 的 terminal 腿、resume 的 timeout 腿同族三径可分。
+                self.audit.add(
+                    AuditEvent(
+                        type=ASK_EXPIRED,
+                        at=self.clock.now(),
+                        message=f"sweep_orphans: 终态实例 {inst_id} 的幽灵会话出队（零推进）",
+                        instance_id=inst_id,
+                        node_id=session.node_id,
+                        data={"reason": "sweep", "channel": "sweep"},
+                    )
+                )
         if ghosts:
             import logging
             logging.getLogger("autoforge.executor").warning(
