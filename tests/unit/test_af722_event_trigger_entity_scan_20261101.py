@@ -1,19 +1,15 @@
-"""AF-722（v1.16.0 批代码先落）：`event` 触发的总线主体名不进设备目录比对判据。
+"""AF-722 丙案判据（PM 裁定 `plans/AF_裁定_AF722丙案_event触发源产生_20261101.md`，七腿）。
 
-缺陷（PM 2026-11-01 NAS 容器内现读复现）：`Trigger.entity_ids()` 对 `type:"event"`
-返回 `event.<name>`——那是**总线主体名**（跨自动化依赖矩阵与环检测语义，af_ir
-docstring 原文，⛔ 本批不改它）；`Automation.reads()` 把它收进「读到的实体」，
-`_check_entities` 拿去比**设备目录**（只含 HA 实体）⇒ `ENTITY_NOT_FOUND`（ERROR ⇒
-硬拒归档）——仓内在册正例 `examples/ir/case_lamp_sync.json` 整包归档必然被拦。
+缺陷：`event` 触发的**总线主体名**（`event.<name>`）经 `Trigger.entity_ids()` 混进
+`reads()`（为依赖矩阵/环检测覆盖事件边，af_ir docstring 原文「`event` 类型**不是实体**」），
+拿它比**设备目录** ⇒ `ENTITY_NOT_FOUND`（ERROR ⇒ 硬拒归档）——仓内正例
+`examples/ir/case_lamp_sync.json` 四枚 event 触发全被拦（线上单条归档同拦）。
 
-修法＝`_check_entities` 比对前按既有 `EVENT_ENTITY_PREFIX` 前缀剔除事件主体名
-（⛔ 不放宽任何真实体校验、⛔ 不改 `DeviceCatalog.known_entity_ids()`、⛔ 不改
-`entity_ids()`；环检测那半边不经过本函数，`EMIT_SELF_LOOP` 照旧）。
-
-三腿（两向都有牙）：
-① 正例＝`case_lamp_sync` 整包 0 ERROR（4 条 event 触发全过，真实 switch 照常校验）；
-② 变异＝真实体 id 写错 ⇒ **仍报** `ENTITY_NOT_FOUND`（⛔ 不许把真实体校验一起放掉）；
-③ 反向＝目录空 ⇒ `ENTITY_CHECK_DEGRADED`（entity_check=skipped）退化路径照旧。
+丙案口径（⛔ 不许改判据迁就实现）：剔除集合＝**由 `type:"event"` 触发源产生的**
+总线主体名（`_event_bus_subjects` 单源，`leaf_triggers()` 展开 group）；其余全部
+（state 触发/do 参数里的 `event.*` 字面＝HA 真实 `event` 域）⇒ 照常参与实体校验。
+⛔ 判别不是「图里 emit 过」（单条归档 `_load_ir` 只扫本次那条，图级集合恒空）、
+⛔ 不是「按前缀」（漏报幽灵+真实域，探针坐实）、⛔ 不是「目录里有没有」（随目录漂）。
 """
 
 from __future__ import annotations
@@ -28,7 +24,6 @@ from autoforge.af_scanner import ERROR, StaticScanner
 REPO = Path(__file__).resolve().parents[2]
 EXAMPLE = REPO / "examples" / "ir" / "case_lamp_sync.json"
 
-#: 正例里的两枚真实体（挂灯／吊灯，switch.*；事件名 event.* 不是实体）
 REAL_ENTITIES = {
     "switch.lumi_cn_lumi_158d000239c546_aq1_on_p_2_1",
     "switch.lumi_cn_lumi_158d000239c546_aq1_on_p_3_1",
@@ -44,60 +39,136 @@ def _errors(result) -> list:
     return [d for d in result.diagnostics if d.level == ERROR]
 
 
-def test_event_trigger_full_pack_builds_without_entity_errors():
-    """① 正例腿：整包 0 ERROR——4 条 event 触发不再被误拦，真实 switch 照常过。"""
+def _single(ir_dict: dict) -> Graph:
+    return Graph([load_automation(ir_dict)])
+
+
+# ── 正例 1：整包（case_lamp_sync 四枚 event 触发） ───────────────────
+
+def test_full_pack_zero_entity_errors():
     result = StaticScanner(graph=_load_graph(), known_entities=REAL_ENTITIES).scan()
-    errs = _errors(result)
-    assert errs == [], [f"{d.code}:{d.message[:60]}" for d in errs]
+    assert _errors(result) == [], [f"{d.code}:{d.message[:70]}" for d in _errors(result)]
     assert result.ok is True
 
 
-def test_real_entity_typo_still_flagged():
-    """② 变异腿：真实体 id 写错 ⇒ 仍报 ENTITY_NOT_FOUND（剔除只对 event 前缀生效）。"""
-    graph = _load_graph()
-    autos = list(graph)
-    mutated = False
-    for auto in autos:
-        for node in auto.nodes.values():
-            params = getattr(node, "params", None)
-            if isinstance(params, dict) and "switch.lumi" in str(params.get("entity_id", "")):
-                params["entity_id"] = "switch.ghost_af722"
-                mutated = True
-                break
-        if mutated:
-            break
-    assert mutated, "夹具必须真改到一枚真实体引用"
-    result = StaticScanner(graph=Graph(autos), known_entities=REAL_ENTITIES).scan()
+# ── 正例 2：拆面（线上单条归档形状——只扫跟随图那一条，图内无 emitter） ──
+
+def test_split_pack_follow_only_passes():
+    ir = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    follow = [load_automation(a) for a in ir["automations"]
+              if a["id"] in {"lamp_follow_ceiling", "ceiling_follow_lamp"}]
+    result = StaticScanner(graph=Graph(follow), known_entities=REAL_ENTITIES).scan()
+    assert _errors(result) == [], [f"{d.code}:{d.message[:70]}" for d in _errors(result)]
+
+
+# ── 腿 A：state 触发形状的幽灵 event.*（⛔ 不因长得像事件被放过） ──────
+
+def test_ghost_event_via_state_trigger_still_flagged():
+    ir = {"ir_version": "0.3.0", "id": "ghost_st", "name": "g", "version": 1, "mode": "single",
+          "nodes": [{"id": "o1", "kind": "on", "name": "o",
+                     "trigger": {"type": "state", "entity_id": "event.ghost_x", "to": "on"}},
+                    {"id": "d1", "kind": "do", "name": "d", "adapter": "ha",
+                     "action": "light.turn_on", "params": {"entity_id": "light.x"}}],
+          "edges": [{"from": "o1", "to": "d1", "kind": "then"}]}
+    result = StaticScanner(graph=_single(ir), known_entities={"light.x"}).scan()
     errs = _errors(result)
-    assert any(d.code == "ENTITY_NOT_FOUND" and "switch.ghost_af722" in d.message
-               for d in errs), [f"{d.code}:{d.message[:60]}" for d in errs]
-    assert not any(EVENT_ENTITY_PREFIX in d.message for d in errs), "事件主体名不许再进目录比对"
+    assert any(d.code == "ENTITY_NOT_FOUND" and "event.ghost_x" in d.message
+               for d in errs), [f"{d.code}:{d.message[:70]}" for d in errs]
 
 
-def test_event_subjects_never_reach_catalog_check():
-    """① 补充腿：事件主体名（event.<name>）不出现在任何 ENTITY_NOT_FOUND 消息里。"""
-    result = StaticScanner(graph=_load_graph(), known_entities=REAL_ENTITIES).scan()
-    blob = "\n".join(d.message for d in result.diagnostics)
-    assert f"{EVENT_ENTITY_PREFIX}ceiling_on" not in blob
-    assert f"{EVENT_ENTITY_PREFIX}lamp_off" not in blob
+# ── 腿 B：do 参数形状的真实 HA event 域（照常参与校验） ───────────────
+
+def test_real_event_domain_via_do_param_still_checked():
+    ir = {"ir_version": "0.3.0", "id": "do_ev", "name": "d", "version": 1, "mode": "single",
+          "nodes": [{"id": "o1", "kind": "on", "name": "o",
+                     "trigger": {"type": "state", "entity_id": "light.x", "to": "on"}},
+                    {"id": "d1", "kind": "do", "name": "d", "adapter": "ha",
+                     "action": "input_text.set_value", "params": {"entity_id": "event.doorbell"}}],
+          "edges": [{"from": "o1", "to": "d1", "kind": "then"}]}
+    result = StaticScanner(graph=_single(ir), known_entities={"light.x"}).scan()
+    errs = _errors(result)
+    assert any(d.code == "ENTITY_NOT_FOUND" and "event.doorbell" in d.message
+               for d in errs), [f"{d.code}:{d.message[:70]}" for d in errs]
 
 
-def test_empty_catalog_degraded_path_unchanged(tmp_path):
-    """③ 反向腿：目录为空 ⇒ ENTITY_CHECK_DEGRADED（entity_check=skipped）照旧，零拦截。"""
-    result = StaticScanner(graph=_load_graph(), known_entities=None).scan()
-    codes = [d.code for d in result.diagnostics]
+# ── 腿 C：真实体写错（剔除不许波及 switch/sensor 族） ─────────────────
+
+def test_real_entity_typo_still_flagged():
+    ir = {"ir_version": "0.3.0", "id": "typo", "name": "t", "version": 1, "mode": "single",
+          "nodes": [{"id": "o1", "kind": "on", "name": "o",
+                     "trigger": {"type": "state", "entity_id": "switch.ghost_typo", "to": "on"}},
+                    {"id": "d1", "kind": "do", "name": "d", "adapter": "ha",
+                     "action": "light.turn_on", "params": {"entity_id": "light.x"}}],
+          "edges": [{"from": "o1", "to": "d1", "kind": "then"}]}
+    result = StaticScanner(graph=_single(ir), known_entities={"light.x"}).scan()
+    errs = _errors(result)
+    assert any(d.code == "ENTITY_NOT_FOUND" and "switch.ghost_typo" in d.message
+               for d in errs), [f"{d.code}:{d.message[:70]}" for d in errs]
+
+
+# ── 腿 D：负控——改回「按前缀整族剔」⇒ 腿 A/B 的幽灵必须漏报（monkeypatch） ──
+
+def test_negative_control_prefix_variant_lets_ghost_through():
+    def _buggy(self, auto, out):
+        from autoforge.af_scanner import Diagnostic
+
+        reads, writes = self._entity_refs(auto)
+        refs = {r for r in reads | writes if not r.startswith(EVENT_ENTITY_PREFIX)}
+        if self._known is not None:
+            for entity_id in sorted(refs):
+                if entity_id not in self._known:
+                    out.diagnostics.append(Diagnostic(
+                        "ENTITY_NOT_FOUND", ERROR,
+                        f"引用了不存在的实体：{entity_id}（可能是实体 ID 漂移）", auto.id))
+
+    ghost = {"ir_version": "0.3.0", "id": "ghost_st", "name": "g", "version": 1, "mode": "single",
+             "nodes": [{"id": "o1", "kind": "on", "name": "o",
+                        "trigger": {"type": "state", "entity_id": "event.ghost_x", "to": "on"}},
+                       {"id": "d1", "kind": "do", "name": "d", "adapter": "ha",
+                        "action": "light.turn_on", "params": {"entity_id": "light.x"}}],
+             "edges": [{"from": "o1", "to": "d1", "kind": "then"}]}
+    do_ev = {"ir_version": "0.3.0", "id": "do_ev", "name": "d", "version": 1, "mode": "single",
+             "nodes": [{"id": "o1", "kind": "on", "name": "o",
+                        "trigger": {"type": "state", "entity_id": "light.x", "to": "on"}},
+                       {"id": "d1", "kind": "do", "name": "d", "adapter": "ha",
+                        "action": "input_text.set_value", "params": {"entity_id": "event.doorbell"}}],
+             "edges": [{"from": "o1", "to": "d1", "kind": "then"}]}
+    original = StaticScanner._check_entities
+    try:
+        StaticScanner._check_entities = _buggy
+        errs = _errors(StaticScanner(graph=_single(ghost), known_entities={"light.x"}).scan())
+        assert not any(d.code == "ENTITY_NOT_FOUND" for d in errs), "负控：前缀版必须放过幽灵"
+        errs = _errors(StaticScanner(graph=_single(do_ev), known_entities={"light.x"}).scan())
+        assert not any(d.code == "ENTITY_NOT_FOUND" for d in errs), "负控：前缀版必须放过真实域"
+    finally:
+        StaticScanner._check_entities = original
+    errs = _errors(StaticScanner(graph=_single(ghost), known_entities={"light.x"}).scan())
+    assert any(d.code == "ENTITY_NOT_FOUND" for d in errs), "恢复后必须重新拦（负控腿自证）"
+
+
+# ── 腿 E：空目录退化面照旧（AF-123 假绿通道的反面） ───────────────────
+
+def test_empty_catalog_degraded_path_unchanged():
+    ir = {"ir_version": "0.3.0", "id": "evonly", "name": "e", "version": 1, "mode": "single",
+          "nodes": [{"id": "o1", "kind": "on", "name": "o",
+                     "trigger": {"type": "event", "event": "whatever"}},
+                    {"id": "d1", "kind": "do", "name": "d", "adapter": "ha",
+                     "action": "light.turn_on", "params": {"entity_id": "light.x"}}],
+          "edges": [{"from": "o1", "to": "d1", "kind": "then"}]}
+    result = StaticScanner(graph=_single(ir), known_entities=None).scan()
+    codes = {d.code for d in result.diagnostics}
     assert "ENTITY_NOT_FOUND" not in codes
-    assert "ENTITY_CHECK_DEGRADED" in codes, "空目录必须说话（AF-123 假绿通道的反面）"
+    assert "ENTITY_CHECK_DEGRADED" in codes
     assert any("entity_check=skipped" in d.message
                for d in result.diagnostics if d.code == "ENTITY_CHECK_DEGRADED")
 
 
-def test_event_only_automation_with_empty_catalog_is_quiet():
-    """③ 补充腿：纯 event 触发（无真实体）在空目录下不产生实体面诊断（没有可查对象）。"""
+# ── 单源锚：判别集合只从 event 触发源来（⛔ 手抄叶子名） ──────────────
+
+def test_event_bus_subjects_single_source():
     ir = json.loads(EXAMPLE.read_text(encoding="utf-8"))
-    autos = [a for a in ir["automations"]
-             if any(n.get("trigger", {}).get("type") == "event"
-                    for n in a.get("nodes", []))]
-    graph = Graph([load_automation(a) for a in autos])
-    result = StaticScanner(graph=graph, known_entities=REAL_ENTITIES).scan()
-    assert not [d for d in result.diagnostics if d.code == "ENTITY_NOT_FOUND"]
+    scanner = StaticScanner(graph=_load_graph(), known_entities=REAL_ENTITIES)
+    follow = next(a for a in scanner.graph if a.id == "lamp_follow_ceiling")
+    subjects = scanner._event_bus_subjects(follow)
+    assert subjects == {f"{EVENT_ENTITY_PREFIX}ceiling_on",
+                        f"{EVENT_ENTITY_PREFIX}ceiling_off"}, subjects
