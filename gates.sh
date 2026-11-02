@@ -212,6 +212,20 @@ echo "══ UI↔路由契约门禁（前端调的路径+方法必须真在路�
 ui_api_rc=$?
 
 echo
+echo "══ 契约漂移门禁（API_CONTRACT 端点表＋枚举两段 vs 源码现读，只判不写）══"
+# v1.18 批次 A：API_CONTRACT 自 v1.17.0 起整节由 scripts/render_api_contract.py 生成，
+# 但「生成器在、没人比对」＝下一笔改 af_api.py 增删端点／改权限面／改 docstring 首句，
+# 或动 af_audit.ALL_EVENT_TYPES／af_scanner.CHECKS 而不重生成契约，文档就悄悄回到落后
+# 状态——本门把根因（靠人记得更新）变成机器拦：复用生成器自身解析函数（importlib 装载，
+# ⛔ 不抄第二份口径）从源码现读重建端点表与两份枚举名单，与仓内契约按 (方法,路径) 对齐
+# 逐格比（权限面、说明都算格，只比端点数＝漏掉权限面/说明漂移）、枚举逐枚比（顺序敏感）。
+# 只比「端点表＋枚举」两段：散文段与「现读坐标」表全部行（生成时刻读数，随部署变）故意
+# 不进判据，否则必假红。行尾 CRLF/LF 归一后比。退出码 0/1/2：2＝射程塌（契约不在、解析
+# 不出、表空）——射程塌不许报干净。红因逐格写明；契约重生成归 PM 发布窗口，门只判不写。
+"$PYTHON" "$REPO/scripts/check_contract_drift.py" "$REPO"
+contract_rc=$?
+
+echo
 echo "══ 计划表口径门（docs/plan 那份表的 ✅ 必须落在门的认领读数上）══"
 # §六 那条登记的原文是"其余 ✅ 行未经逐行复测"：上一批人工对过一次表（会话族三行改成
 # `后端 ✅ ／ UI ✗`），但"文档比代码乐观"这一族漂移没有任何机械接缝——面板拆了、路由改名了，
@@ -520,6 +534,15 @@ fi
 if [ $ui_api_rc -ne 0 ]; then
   echo "结论：UI↔路由契约门禁红（exit=$ui_api_rc）。前端每抄一条路径都得能在 \`af_api.py\` 的路由表里落到一条真路由上，方法也要对得上：服务端改名/删路由/换方法时，vue-tsc 与 vite build 都照样绿，只有用户点一次才 404/405。确实要调路由表外的口子（外链、代理）就地写 \`# ui-api: exempt(理由)\`。"
   exit $ui_api_rc
+fi
+
+if [ $contract_rc -eq 2 ]; then
+  echo "结论：契约漂移门读不出射程（exit=$contract_rc）。五种形状：scripts/render_api_contract.py 不在盘上（本门复用它的解析口径，没有它无从判定）；src/autoforge 三份真源（af_api/af_audit/af_scanner）任一缺失；docs/reference/API_CONTRACT.md 不在盘上（移走了＝射程塌）；契约「§二 端点表」或「§三 枚举名单」解析不出／为空；端点表某行解析不出 4 格或同键两行。都是射程塌了，此刻本门无从判定，报『干净』就是假绿——契约排版变了要当场改本门口径，不能让它沉默全绿。"
+  exit $contract_rc
+fi
+if [ $contract_rc -ne 0 ]; then
+  echo "结论：契约漂移门红（exit=$contract_rc）。契约文档的「端点表＋枚举」两段落后于源码现读，红因逐格写明：现读有文档无／文档有现读无的端点、权限面漂移、说明漂移、枚举第几枚不等。修法＝在发布窗口用 scripts/render_api_contract.py --offline 重新生成 docs/reference/API_CONTRACT.md（重生成归 PM，⛔ 本门只判不写）；⛔ 不许手改端点表与枚举名单，⛔ 不许让本门宽容到只比端点数——比数不比格＝漏掉权限面/说明漂移。"
+  exit $contract_rc
 fi
 
 if [ $dep_rc -eq 2 ]; then
