@@ -7,6 +7,7 @@
  * 不能带自定义头，改用 ?token= 回退（后端已支持）。
  */
 import type { Agent, AuthCode, Automation, PairLink, PairRequest, PendingItem, PendingReceipt, User } from '../types/api.ts'
+import { toPendingItem } from '../logic/pending.ts'
 import { apiError, type ApiClient, type ApiErrorCode } from './mock.ts'
 import { API_BASE } from './env.ts'
 
@@ -244,15 +245,8 @@ export const httpApi: ApiClient = {
       body: '{}',
     })
     const raw = data.items ?? data.pendings ?? []
-    return raw.map((p) => ({
-      op_id: p.op_id,
-      summary: p.summary || '',
-      agent_name: p.agent || '',
-      submitted_at: typeof p.submitted_at === 'string' ? p.submitted_at : (toIso(p.submitted_at) ?? ''),
-      blast_radius: typeof p.blast_radius === 'object' && p.blast_radius !== null
-        ? JSON.stringify(p.blast_radius)
-        : (p.blast_radius || ''),
-    })) as PendingItem[]
+    // AF-726：行映射抽成纯函数 `logic/pending.ts`（判据可钉真行为）；`l2_summary` 一并在那儿归一。
+    return raw.map((p) => toPendingItem(p, toIso)) as PendingItem[]
   },
 
   async resolvePending (opId, approve) {
