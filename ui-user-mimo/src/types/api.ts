@@ -78,6 +78,11 @@ export interface PendingItem {
   agent_name: string
   submitted_at: string
   blast_radius: string
+  /**
+   * AF-726：交付面待批列表也要在**批准之前**看见本条含哪些 L2 动作（与管理员面 `ui/` 对齐）。
+   * 由 `logic/pending.ts` 归一：后端没给 ⇒ `[]`（本条不含 L2），⛔ 不会是 `undefined`（没读出来）。
+   */
+  l2_summary?: L2Action[]
 }
 
 /** DCD 裁定 20261031·矩阵行 2：批准回执里的 L2 动作条目（后端 `l2_summary_of` 机提取，前端只渲染）。 */

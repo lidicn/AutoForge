@@ -163,12 +163,14 @@ function seed (): Db {
       summary: '新建自动化「新风与 CO₂ 联动」：CO₂ > 1000ppm 持续 5 分钟则开启新风 2 档',
       agent_name: '实验沙箱', submitted_at: agoMin(12),
       blast_radius: '中（涉及 2 个设备，可自动回滚）',
+      l2_summary: [],   // 假后端没有 IR 判定能力 ⇒ 诚实给空数组（视图显式占位）
     },
     {
       op_id: 'op_102',
       summary: '把「夜间照明自动调节」的生效时间从 22:00 提前到 21:30',
       agent_name: '客厅主控', submitted_at: agoMin(3),
       blast_radius: 'low',
+      l2_summary: [],
     },
   ]
 

@@ -73,6 +73,19 @@ async function onReject (p: PendingItem) {
             <span class="blast" :class="blast(p.blast_radius).level">{{ blast(p.blast_radius).short }}</span>
           </div>
           <p class="summary">{{ p.summary }}</p>
+          <!-- AF-726：批准之前就让人看见本条会动哪些设备（与管理员面同形；⛔ 前端不算 L2） -->
+          <div v-if="p.l2_summary && p.l2_summary.length" class="pend-l2">
+            <div v-for="(it, i) in p.l2_summary" :key="`${it.action}-${it.node}-${i}`" class="l2-item">
+              <div class="l2-main">
+                本条含：<code>{{ it.action }}</code><template v-if="it.alias">（{{ it.alias }}）</template>
+              </div>
+              <div v-if="it.automation || it.node" class="l2-meta">
+                {{ it.automation }}<template v-if="it.node"> · 节点 {{ it.node }}</template>
+              </div>
+            </div>
+          </div>
+          <p v-else-if="p.l2_summary" class="l2-note empty">本条不含 L2 动作</p>
+          <p v-else class="l2-note missing">未读到 L2 摘要（后端未返回该字段）</p>
           <p class="radius">影响面：{{ p.blast_radius }}</p>
           <div class="bottom">
             <span class="num time">{{ formatAgo(p.submitted_at, store.now) }} 提交</span>
@@ -201,5 +214,6 @@ async function onReject (p: PendingItem) {
 .l2-meta { margin-top: 2px; font-size: 11px; color: var(--ink-3); }
 .l2-note { margin: 0; font-size: 13px; }
 .l2-note.empty { color: var(--ink-3); }
+.pend-l2 { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
 .l2-note.missing { color: var(--amber-2); }
 </style>
