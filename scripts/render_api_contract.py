@@ -20,6 +20,9 @@
 
 ⛔ 只用标准库（ast/json/re/pathlib/sys）⇒ 不引入新依赖。
 ⛔ 本文件**不得写死任何本机绝对路径**（仓是 public）。
+⛔ 也不得**写死行尾**（AF卡_契约生成器eol根治_v120：`--eol auto|crlf|lf`，默认 auto＝
+沿用目标文件既有行尾；目标不存在或为空 ⇒ LF）。写死 CRLF 会把 LF 仓/新文件也翻成
+CRLF；不控行尾则每次重生成把 CRLF 契约刷成 LF ⇒ 整文件假 diff（v1.19 实测 274/274）。
 """
 import ast
 import json
@@ -257,6 +260,23 @@ def tree_version(api_p: pathlib.Path) -> str:
     return m.group(1) if m else "unknown"
 
 
+def _detect_eol(sample: bytes) -> str:
+    """目标文件既有行尾：含 CRLF ⇒ crlf，否则（含不存在/空）⇒ lf。"""
+    return "crlf" if b"\r\n" in sample else "lf"
+
+
+def _resolve_eol(out_p: pathlib.Path, mode: str) -> str:
+    """解析写出行尾（AF卡_契约生成器eol根治_v120 §二）：auto＝沿用目标现状；
+    显式 crlf/lf 覆盖。⛔ 不许写死 CRLF——那会把 LF 仓/新文件也翻成 CRLF。"""
+    if mode != "auto":
+        return mode
+    try:
+        sample = out_p.read_bytes()[:65536]
+    except OSError:
+        return "lf"
+    return _detect_eol(sample)
+
+
 def main():
     """用法（两种模式）：
 
@@ -279,6 +299,19 @@ def main():
     if argv and argv[0] == "--offline":
         offline = True
         argv = argv[1:]
+    # `--eol auto|crlf|lf`（AF卡 §二，默认 auto＝沿用目标文件既有行尾）：
+    # 与 --offline 一样**位置无关**；值不合法＝用法退出 2（⛔ 不许静默拿默认跑）。
+    eol_mode = "auto"
+    if "--eol" in argv:
+        i = argv.index("--eol")
+        if i + 1 >= len(argv):
+            print(__doc__)
+            return 2
+        eol_mode = argv[i + 1]
+        if eol_mode not in ("auto", "crlf", "lf"):
+            print("!! --eol 只认 auto|crlf|lf，收到：%r" % eol_mode)
+            return 2
+        argv = argv[:i] + argv[i + 2:]
     if offline:
         if len(argv) != 2:
             print(__doc__)
@@ -428,10 +461,15 @@ def main():
       "枚举＝`af_audit.ALL_EVENT_TYPES`／`af_scanner.CHECKS` 现读。**任一真源缺失 ⇒ 生成器报错退出，"
       "⛔ 不许手写补洞。**")
     A("")
-    pathlib.Path(out_p).write_text("\n".join(lines), encoding="utf-8", newline="\n")
-    print("wrote=%s lines=%d paths=%d ops=%d events=%d checks=%d unmatched=%d"
+    eol = _resolve_eol(out_p, eol_mode)
+    content = "\n".join(lines)
+    if eol == "crlf":
+        content = content.replace("\n", "\r\n")
+    # write_bytes：⛔ 不走文本模式换行翻译（那会把刚定好的行尾再翻一次）。
+    out_p.write_bytes(content.encode("utf-8"))
+    print("wrote=%s lines=%d paths=%d ops=%d events=%d checks=%d unmatched=%d eol=%s(mode=%s)"
           % (out_p, len(lines), len(groups), len(op_index), len(event_types),
-             len(checks), len(unmatched)))
+             len(checks), len(unmatched), eol, eol_mode))
     if unmatched:
         for u in unmatched:
             print("  unmatched:", u)
