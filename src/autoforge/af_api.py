@@ -2128,7 +2128,23 @@ def build_app(
         return {"ok": True, "name": name, "enabled": False, "version": v}
 
     @app.post("/api/automations/{name}/archive", dependencies=[Depends(_write)])
-    def api_automation_archive(name: str) -> dict[str, Any]:
+    def api_automation_archive(
+        name: str, info: TokenInfo | None = Depends(_write)
+    ) -> dict[str, Any]:
+        """归档自动化（AF-731 写面腿：写面归属闸复用读面单源 `_assert_archive_visible`）。
+
+        - **非 owner 面**：写**他人名下**与写**不存在**同码同文 404（`visible_error`
+          单源，与读面完全一致）——⛔ oracle 必闭，不泄露存在性；
+        - **owner 面／无身份**（免令牌逃生舱）：放行走原逻辑（缺名仍 404「未找到自动化」）；
+        - 持令牌但缺 subject（残缺身份）⇒ 403，先于一切存取。
+        ⛔ 不用 `_assert_archive_mutator`（PM 裁定：它两条文案不同形 ⇒ oracle 开）。
+        """
+        _svc(
+            svc._assert_archive_visible, store, name,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
+        )
         if store.latest(name) is None:
             raise HTTPException(status_code=404, detail="未找到自动化")
         tags = store.get_tags(name)
@@ -2137,7 +2153,16 @@ def build_app(
         return {"ok": True, "name": name, "archived": True}
 
     @app.post("/api/automations/{name}/unarchive", dependencies=[Depends(_write)])
-    def api_automation_unarchive(name: str) -> dict[str, Any]:
+    def api_automation_unarchive(
+        name: str, info: TokenInfo | None = Depends(_write)
+    ) -> dict[str, Any]:
+        """解除归档（AF-731 写面腿：与 archive 同一写面闸，同码同文 404）。"""
+        _svc(
+            svc._assert_archive_visible, store, name,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
+        )
         if store.latest(name) is None:
             raise HTTPException(status_code=404, detail="未找到自动化")
         store.set_tags(name, [t for t in store.get_tags(name) if t != "archived"])
