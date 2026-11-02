@@ -80,3 +80,17 @@ export interface PendingItem {
   blast_radius: string
 }
 
+/** DCD 裁定 20261031·矩阵行 2：批准回执里的 L2 动作条目（后端 `l2_summary_of` 机提取，前端只渲染）。 */
+export interface L2Action {
+  action: string
+  alias: string
+  automation: string
+  node: string
+}
+
+/** `approve_pending` 回执（v1.15.0 卡 B）：空数组＝本条不含 L2；缺字段＝后端没给（⛔ 别当成空数组）。 */
+export interface PendingReceipt {
+  ok: boolean
+  l2_summary?: L2Action[]
+}
+

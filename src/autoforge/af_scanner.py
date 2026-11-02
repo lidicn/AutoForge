@@ -1210,10 +1210,55 @@ class StaticScanner:
                     )
                 )
 
+    def _event_bus_subjects(self, auto: Automation) -> set[str]:
+        """本自动化由 **`event` 触发源产生的**总线主体名集合（AF-722 丙案单源）。
+
+        仓内权威依据：`Trigger.entity_ids()` docstring（af_ir/models.py）——
+        「`event` 类型**不是实体**，但在总线中的主体为 `event.<name>`，一并返回——
+        这样跨自动化依赖矩阵与 `EMIT_SELF_LOOP` 环检测能覆盖事件边」⇒ 它本就不该
+        进**设备目录存在性比对**（判别域不重叠，不是豁免）。判别依据＝「这个名字
+        是否由 `type:"event"` 触发源产生」，⛔ 不是「长得像 `event.*`」（那会把
+        HA 真实 `event` 域实体与 state 触发里的 `event.*` 引用一起放过，PM 两树
+        探针坐实的漏报面）、⛔ 不是「图里 emit 过没有」（线上单条归档 `_load_ir`
+        只扫本次提交那条，图级集合对它恒空）、⛔ 不是「目录里有没有」（随目录
+        两态漂）。group 触发走 `leaf_triggers()` 展开（深度预算同源），⛔ 手抄。
+        """
+        out: set[str] = set()
+        for node in auto.nodes.values():
+            trigger = getattr(node, "trigger", None)
+            if trigger is None:
+                continue
+            try:
+                # 生成器要在这里才被真正耗尽：超预算/自引用的 group 触发在这条腿上
+                # 受控失败（`TriggerDepthError`）——scan() 的对外契约是「返回诊断」，
+                # 不许把异常换成整次扫描的崩溃（与 `_entity_refs`／`_trigger_refs`
+                # 同族口径）。诊断已由 `_check_trigger_depth` 落过（TRIGGER_INVALID），
+                # 本腿只跳过该节点，不影响其余节点的剔除集合。
+                leaves = list(trigger.leaf_triggers())
+            except TriggerDepthError:
+                continue
+            for leaf in leaves:
+                if leaf.type == "event" and leaf.event:
+                    out.add(f"{EVENT_ENTITY_PREFIX}{leaf.event}")
+        return out
+
     # ⑫ 实体存在性 + ① 设备保护分级（v1.4.0 tier 模型）
     def _check_entities(self, auto: Automation, out: ScanResult) -> None:
         reads, writes = self._entity_refs(auto)
         refs = reads | writes
+        # AF-722（2026-11-01 PM 实测，🔴 归档面）：`event` 触发的**总线主体名**
+        # （`event.<name>`）经 `Trigger.entity_ids()` 混进 `reads()`——那是为依赖
+        # 矩阵与环检测覆盖**事件边**而设的语义（af_ir docstring 原文，⛔ 它不改），
+        # 不是 HA 实体；拿它比**设备目录**（只含 HA 实体）必然 `ENTITY_NOT_FOUND`
+        # （ERROR ⇒ 硬拒归档），仓内在册正例 case_lamp_sync 四枚 event 触发全被拦。
+        # 丙案（PM 裁定 `plans/AF_裁定_AF722丙案_event触发源产生_20261101.md`）：
+        # 剔除集合＝**由 `event` 触发源产生的**总线主体名（单源 `_event_bus_subjects`，
+        # 判别域＝「event 不是实体」的定义，⛔ 不是「图里 emit 过」/「按前缀」/
+        # 「目录里有没有」三版——前两版分别打不穿单条归档路径与放走真实域实体，
+        # 探针坐实）；其余（state 触发/do 参数里的 `event.*` 字面）⇒ 照常参与
+        # 实体校验（⛔ 不放宽任何真实体校验）。环检测那半边仍用未过滤 reads()
+        # （EMIT_SELF_LOOP 照旧，本函数不动它）。
+        refs = {r for r in refs if r not in self._event_bus_subjects(auto)}
 
         if self._known is not None:
             for entity_id in sorted(refs):
@@ -1471,6 +1516,9 @@ class StaticScanner:
         # v0.3.0 发布侧：emit 事件成环——A 发出 `event.X`，B 由 `event.X` 触发 → A→B（含自环）
         emit_deps: dict[str, set[str]] = {a.id: set() for a in autos}
         for a in autos:
+            # AF-722 单源：emit 主体名拼装走 `_emitted_bus_subjects` 同一份取法——
+            # 这里需要**逐自动化**的 emitted（A 自己发的 ∩ B 触发 = A→B 边），
+            # 从图级单源退不出 per-auto，故按同一前缀拼装规则在此取 per-auto 面。
             emitted = {f"{EVENT_ENTITY_PREFIX}{e}" for e in a.emitted_events()}
             if not emitted:
                 continue

@@ -6,6 +6,7 @@ import type {
   PairAccepting,
   PairAcceptingState,
   PendingItem,
+  PendingApproveResponse,
   PairEvent,
 } from '../types/api'
 
@@ -69,7 +70,7 @@ export const api = {
 
   listPending: () => req<{ ok: boolean; ops: PendingItem[] }>('/pending/list', { method: 'POST', body: '{}' }),
   approvePending: (op_id: string) =>
-    req('/pending/approve', { method: 'POST', body: JSON.stringify({ op_id }) }),
+    req<PendingApproveResponse>('/pending/approve', { method: 'POST', body: JSON.stringify({ op_id }) }),
   rejectPending: (op_id: string, reason: string) =>
     req('/pending/reject', { method: 'POST', body: JSON.stringify({ op_id, reason }) }),
 

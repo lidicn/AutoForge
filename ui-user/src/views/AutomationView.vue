@@ -13,7 +13,7 @@ import {
 } from 'lucide-vue-next'
 import { api } from '../api'
 import { useAutomationsStore } from '../stores/automations'
-import type { Automation, PendingItem } from '../types/api'
+import type { Automation, L2Action, PendingItem } from '../types/api'
 
 const store = useAutomationsStore()
 const filter = ref<'enabled' | 'archived'>('enabled')
@@ -21,6 +21,8 @@ const pending = ref<PendingItem[]>([])
 const confirmName = ref<string | null>(null)
 const rejectId = ref<string | null>(null)
 const rejectReason = ref('')
+// DCD 矩阵行 2：批准回执里的 L2 摘要必须显式给人看——空数组＝明文占位，缺字段＝「未读到」。
+const receipt = ref<{ summary: string; l2: L2Action[] | null } | null>(null)
 
 async function loadPending() {
   try {
@@ -38,8 +40,11 @@ const filteredGroups = computed(() =>
   store.groups.map((g) => ({ agent: g.agent, items: visibleItems(g.items) })).filter((g) => g.items.length),
 )
 
-async function approve(op_id: string) {
-  await api.approvePending(op_id)
+async function approve(p: PendingItem) {
+  const res = await api.approvePending(p.op_id)
+  const l2 = res?.l2_summary
+  // 缺字段与空数组是两件事：前者＝后端没给（无法确认），后者＝本条确实不含 L2。
+  receipt.value = { summary: p.payload?.name || p.tool || p.op_id, l2: Array.isArray(l2) ? l2 : null }
   await loadPending()
   await store.load()
 }
@@ -102,7 +107,7 @@ onMounted(() => {
         <div class="flex gap-2 mt-3">
           <button
             class="flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg bg-green-500 text-white text-sm active:scale-95"
-            @click="approve(p.op_id)"
+            @click="approve(p)"
           >
             <Check :size="15" /> 批准
           </button>
@@ -122,6 +127,26 @@ onMounted(() => {
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- 部署回执（DCD 矩阵行 2：审批那一刻人必须看见本条含哪些 L2 动作） -->
+    <div v-if="receipt" class="rounded-2xl bg-white shadow-card p-4 mb-4">
+      <div class="text-xs font-semibold text-ink-faint uppercase tracking-wide">部署回执</div>
+      <div class="text-sm text-ink-soft mt-1">最近一次批准：{{ receipt.summary }}</div>
+      <ul v-if="receipt.l2 && receipt.l2.length" class="mt-2 space-y-2">
+        <li v-for="(it, i) in receipt.l2" :key="`${it.action}-${it.node}-${i}`">
+          <div class="text-sm text-ink">
+            本条含：<code class="rounded bg-black/5 px-1">{{ it.action }}</code><template v-if="it.alias">（{{ it.alias }}）</template>
+          </div>
+          <div v-if="it.automation || it.node" class="text-[11px] text-ink-faint">
+            {{ it.automation }}<template v-if="it.node"> · 节点 {{ it.node }}</template>
+          </div>
+        </li>
+      </ul>
+      <p v-else-if="receipt.l2" class="text-sm text-ink-faint mt-2">本条不含 L2 动作</p>
+      <p v-else class="text-sm text-amber-600 mt-2">
+        未读到 L2 摘要：回执里没有 l2_summary 字段（后端未返回，本条是否含 L2 动作无法确认）
+      </p>
     </div>
 
     <!-- 分组列表 -->

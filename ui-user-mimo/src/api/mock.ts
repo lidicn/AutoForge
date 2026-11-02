@@ -4,7 +4,7 @@
  * §1 只给了数据结构，没给 HTTP 契约，因此这里先定义「客户端接口」ApiClient：
  * 真实后端就绪后另写一个实现替换 mockApi 即可，视图 / store / 单测契约不变。
  */
-import type { Agent, AuthCode, Automation, PairLink, PairRequest, PendingItem, User } from '../types/api.ts'
+import type { Agent, AuthCode, Automation, PairLink, PairRequest, PendingItem, PendingReceipt, User } from '../types/api.ts'
 import { PAIR_CODE_LENGTH, PAIR_TTL_MS, isPairCode, randomDigits } from '../logic/pairing.ts'
 import { SHORT_CODE_LENGTH, shortRemainMs, validateShortMinutes } from '../logic/authcodes.ts'
 
@@ -35,7 +35,7 @@ export interface ApiClient {
   setAutomationArchived (id: string, archived: boolean): Promise<Automation>
   deleteAutomation (id: string): Promise<void>
   listPending (): Promise<PendingItem[]>
-  resolvePending (opId: string, approve: boolean): Promise<void>
+  resolvePending (opId: string, approve: boolean): Promise<PendingReceipt>
   listAuthCodes (): Promise<AuthCode[]>
   createLongCode (): Promise<AuthCode>
   createShortCode (minutes: number): Promise<AuthCode>
@@ -326,6 +326,9 @@ export const mockApi: ApiClient = {
         if (approve) m.status = 'enabled'
         else m.archived = true       // 驳回：草稿归档留痕，不物理删除
       }
+      // v1.15.0 卡 B：真实后端按 IR 机提取 L2 清单；mock 没有 IR 判定能力，
+      // 批准按「本条不含 L2」的空数组回（空数组是合法形态，视图要显式占位）；驳回无此字段。
+      return approve ? { ok: true, l2_summary: [] } : { ok: true }
     })
   },
 

@@ -1112,8 +1112,19 @@ def reject_insight(queue: Any, proposal_id: str, *, reviewer: str = "", reason: 
 
 
 def list_pending(store: GraphStore, agent: str | None = None) -> dict[str, Any]:
-    """列出待批（审批视图：含 summary / blast_radius / 完整 payload 供回放）。"""
-    return {"ok": True, "items": PendingStore(store.root).list(agent)}
+    """列出待批（审批视图：含 summary / blast_radius / 完整 payload 供回放）。
+
+    每行附 `l2_summary`（`l2_summary_of` 单一真源机提取，⛔ 前端不自算）：DCD 矩阵
+    行 2 的判据是「**审批时**」人必须看见本条含哪些 L2——待批列表就是批准前那一刻
+    的审批面，批准后回执上的那份只补「批准动作」本身。空列表＝合法「本条无 L2」
+    （前端显式占位，⛔ 留白＝没读出来）。
+    """
+    items = PendingStore(store.root).list(agent)
+    for item in items:
+        payload = item.get("payload")
+        ir = payload.get("ir") if isinstance(payload, Mapping) else None
+        item["l2_summary"] = l2_summary_of(ir or {})
+    return {"ok": True, "items": items}
 
 
 def l2_summary_of(ir_payload: Mapping[str, Any]) -> list[dict[str, str]]:
@@ -1124,13 +1135,22 @@ def l2_summary_of(ir_payload: Mapping[str, Any]) -> list[dict[str, str]]:
     返回形如 ``[{"action": "climate.turn_on", "alias": "打开空调", "automation": "空调",
     "node": "d1"}]`` 的清单；前端/回执照此渲染「本条含：`climate.turn_on`（打开空调）」，
     列表为空也要显式显示占位（⛔ 空白＝"没读出来"）。
+
+    AF-719（v1.15.1，PM 裁定 20261101）：**入口形状归一**——pending/REST 面落的是
+    **单条** IR dict（`af_mcp._t_save` 把 `args["ir"]` 原样入 payload），容器形状才带
+    `automations` 键；单条进来旧代码循环零次 ⇒ `l2_summary` 恒 `[]`（漏报：恰含 L2
+    的那条审批时看不见）。归一判别只认容器键 `automations`（⛔ 靠 `nodes` 键判——
+    那是对消费者形状的第二份猜测）；单条 ⇒ `[ir_payload]`，两种形状**产出必须相等**。
     """
     from . import af_nl
     from .af_adapters import classify_action
     from .af_adapters.base import unrecognized_service as _unrec
 
+    autos = ir_payload.get("automations")
+    if not isinstance(autos, list):
+        autos = [ir_payload]  # AF-719：单条形状归一（唯一归一点，⛔ 三处调用点各判）
     out: list[dict[str, str]] = []
-    for auto in ir_payload.get("automations") or []:
+    for auto in autos:
         if not isinstance(auto, Mapping):
             continue
         for node in auto.get("nodes") or []:

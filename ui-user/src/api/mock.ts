@@ -181,7 +181,9 @@ export const mockApi: Api = {
     await delay()
     const i = pending.findIndex((p) => p.op_id === op_id)
     if (i >= 0) pending.splice(i, 1)
-    return { ok: true, op_id }
+    // v1.15.0 卡 B：真实后端按 IR 机提取 L2 清单；mock 没有 IR 判定能力，
+    // 按「本条不含 L2」的空数组回（空数组是合法形态，视图要显式占位）。
+    return { ok: true, op_id, l2_summary: [] }
   },
   rejectPending: async (op_id: string) => {
     await delay()

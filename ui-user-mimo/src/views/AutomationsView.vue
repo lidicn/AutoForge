@@ -3,7 +3,7 @@ import { computed, reactive, ref } from 'vue'
 import { NButton, NEmpty, useMessage } from 'naive-ui'
 import UiIcon from '../components/UiIcon.vue'
 import AutomationCard from '../components/AutomationCard.vue'
-import type { Automation, PendingItem } from '../types/api.ts'
+import type { Automation, L2Action, PendingItem } from '../types/api.ts'
 import { useMainStore } from '../stores/main.ts'
 import { blastMeta } from '../logic/automations.ts'
 import { errorMessage, formatAgo } from '../logic/format.ts'
@@ -13,6 +13,8 @@ const message = useMessage()
 
 const tab = ref<'enabled' | 'archived'>('enabled')
 const folded = reactive<Record<string, boolean>>({})
+// DCD 矩阵行 2：批准回执里的 L2 摘要必须显式给人看——空数组＝明文占位，缺字段＝「未读到」。
+const receipt = ref<{ summary: string; l2: L2Action[] | null } | null>(null)
 
 const groups = computed(() => (tab.value === 'enabled' ? store.enabledGroups : store.archivedGroups))
 const blast = (r: string) => blastMeta(r)
@@ -33,7 +35,13 @@ async function onRemove (item: Automation) {
   try { await store.deleteAutomation(item.id); message.success(`已删除：${item.name}`) } catch (e) { message.error(errorMessage(e)) }
 }
 async function onApprove (p: PendingItem) {
-  try { await store.approvePending(p.op_id); message.success('已批准该操作') } catch (e) { message.error(errorMessage(e)) }
+  try {
+    const res = await store.approvePending(p.op_id)
+    const l2 = res?.l2_summary
+    // 缺字段与空数组是两件事：前者＝后端没给（无法确认），后者＝本条确实不含 L2。
+    receipt.value = { summary: p.summary || p.op_id, l2: Array.isArray(l2) ? l2 : null }
+    message.success('已批准该操作')
+  } catch (e) { message.error(errorMessage(e)) }
 }
 async function onReject (p: PendingItem) {
   try { await store.rejectPending(p.op_id); message.success('已驳回该操作') } catch (e) { message.error(errorMessage(e)) }
@@ -75,6 +83,27 @@ async function onReject (p: PendingItem) {
           </div>
         </li>
       </ul>
+    </section>
+
+    <section v-if="receipt" class="card receipt">
+      <header class="receipt-head">
+        <h2>部署回执</h2>
+        <span class="tip">最近一次批准：{{ receipt.summary }}</span>
+      </header>
+      <ul v-if="receipt.l2 && receipt.l2.length" class="l2-list">
+        <li v-for="(it, i) in receipt.l2" :key="`${it.action}-${it.node}-${i}`" class="l2-item">
+          <div class="l2-main">
+            本条含：<code>{{ it.action }}</code><template v-if="it.alias">（{{ it.alias }}）</template>
+          </div>
+          <div v-if="it.automation || it.node" class="l2-meta">
+            {{ it.automation }}<template v-if="it.node"> · 节点 {{ it.node }}</template>
+          </div>
+        </li>
+      </ul>
+      <p v-else-if="receipt.l2" class="l2-note empty">本条不含 L2 动作</p>
+      <p v-else class="l2-note missing">
+        未读到 L2 摘要：回执里没有 l2_summary 字段（后端未返回，本条是否含 L2 动作无法确认）
+      </p>
     </section>
 
     <section v-for="g in groups" :key="g.agent_id" class="card group">
@@ -154,4 +183,23 @@ async function onReject (p: PendingItem) {
 .chev { color: var(--ink-3); transition: transform 0.18s; }
 .chev.open { transform: rotate(180deg); }
 .group-body { padding: 12px; }
+.receipt {
+  padding: 12px; margin-bottom: 14px;
+  border: 1px solid var(--line); background: var(--bg-elev);
+}
+.receipt-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.receipt-head h2 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.06em; }
+.receipt-head .tip { margin-left: auto; font-size: 11px; color: var(--ink-3); }
+.l2-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.l2-item { border-top: 1px solid var(--line-soft); padding-top: 8px; }
+.l2-item:first-child { border-top: 0; padding-top: 0; }
+.l2-main { font-size: 13px; color: var(--ink); }
+.l2-main code {
+  font-family: var(--mono); font-size: 12px; padding: 1px 5px; border-radius: 4px;
+  background: var(--bg-sunken); border: 1px solid var(--line-soft);
+}
+.l2-meta { margin-top: 2px; font-size: 11px; color: var(--ink-3); }
+.l2-note { margin: 0; font-size: 13px; }
+.l2-note.empty { color: var(--ink-3); }
+.l2-note.missing { color: var(--amber-2); }
 </style>

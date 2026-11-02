@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import type { Agent, AuthCode, Automation, PairLink, PairRequest, PendingItem, User } from '../types/api.ts'
+import type { Agent, AuthCode, Automation, PairLink, PairRequest, PendingItem, PendingReceipt, User } from '../types/api.ts'
 import { api } from '../api/index.ts'
 import { USE_MOCK } from '../api/env.ts'
 import { closePairStream, onPairRequest, openPairStream, restoreSession } from '../api/http.ts'
@@ -203,7 +203,7 @@ export const useMainStore = defineStore('main', () => {
   }
 
   // ---------- 待批 ----------
-  async function resolvePending (opId: string, approve: boolean): Promise<void> {
+  async function resolvePending (opId: string, approve: boolean): Promise<PendingReceipt> {
     const prevPendings = pendings.value
     const prevAutomations = automations.value
     if (!pendings.value.some(p => p.op_id === opId)) throw new Error('待批项不存在或已被处理')
@@ -212,13 +212,16 @@ export const useMainStore = defineStore('main', () => {
       if (m.id !== opId) return m
       return approve ? { ...m, status: 'enabled' } : { ...m, archived: true }
     })
+    let receipt: PendingReceipt
     try {
-      await api.resolvePending(opId, approve)
+      receipt = await api.resolvePending(opId, approve)
     } catch (e) {
       pendings.value = prevPendings
       automations.value = prevAutomations
       throw e
     }
+    // v1.15.0 卡 B：approve 回执带 l2_summary（空数组＝本条不含 L2，缺字段＝后端没给）。
+    return receipt ?? { ok: true }
   }
 
   const approvePending = (opId: string) => resolvePending(opId, true)

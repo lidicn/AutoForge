@@ -389,6 +389,19 @@ echo "══ 台账同批门禁（改行号的提交必须与对应清单同一�
 ledger_same_batch_rc=$?
 
 echo
+echo "══ 台账行尾门禁（regen 写盘按被写文件的现状行尾，⛔ 不再无条件转 CRLF）══"
+# 2026-10-31 卡：scripts/sync_ledger_anchors.py 的 regen() 旧实现无条件把重生成结果
+# 转 CRLF，而 docs/可观测性清单.md 与 docs/进程模型清单.md 都是 LF、两个 --write 生成
+# 器输出的也是 LF ⇒ 跑一次 regen 就把整份文档翻成 CRLF＝整文件假 diff（953 行假
+# diff 三次复发的真凶之一），还把「移动锚点的提交必须自带重生成清单」的真实锚点位
+# 移淹在行尾噪声里。本门在临时夹具里真跑 regen()/realign() 四条腿（LF 仍 LF／
+# CRLF 仍 CRLF／首次生成按 LF／锚点位移只动一行），行为判据不靠注释自证；同一判据
+# 的 pytest 面在 tests/unit/test_sync_ledger_regen_eol_20261031.py（CI 全量作业自
+# 动收集，本门不改 CI 定义、不加新作业）。
+"$PYTHON" "$REPO/scripts/check_ledger_regen_eol.py"
+ledger_eol_rc=$?
+
+echo
 echo "══ IR 运行时扩展键白名单硬门（写进节点的运行时键必须在白名单里）════"
 # 裁定 20261005-AF-ir_non_reversible是否升schema 判 B（明确豁免 + schema 白名单注释），并自己写明
 # "B 能成立的前提"是这条断言：白名单只是注释、约束力弱于 A，所以代码侧键集合
@@ -653,6 +666,14 @@ fi
 if [ $ledger_same_batch_rc -ne 0 ]; then
   echo "结论：台账同批门禁红（exit=$ledger_same_batch_rc），红因逐字＝「清单与源码不同批」。四条腿各有各的修法：A 同批腿＝一笔提交动了会让在册 \`file:line\` 锚点漂的东西（hunk 行数变化在最大锚点之前／在册锚点文件被 D 或 R／根目录新增入库 \`.py\`），却没在同一笔里带上对应清单 ⇒ 跑 \`python scripts/<对应门>.py --write\` 把重生成的清单与源码改动放进**同一笔**提交；B 分两笔腿＝本笔只动清单、上一笔恰好让同一枚清单漂过（裁定 §一 Q1 点名要堵的形状：两笔一起推上去时 CI 只看得到笔尖，A 腿在笔尖上是绿的）⇒ 把两笔合成一笔；C 默认拒绝在册腿＝HEAD 里任何带 \`AUTO-BEGIN … --write 生成\` 标记的 \`docs/*.md\` 必须同时在 \`check_ledger_same_batch.py\` 的 ROSTER 里认领（锚点行正则＋现读根），新开台账不认领就永远逃过同批判据。⚠️ 本门 A 腿的红很可能**坐在历史提交上**（如别席位那笔 \`779b9ed\` 改了 \`host_update.sh\` 却没带 \`docs/发布线清单.md\`），默认 \`--rev HEAD\` 在那笔之后会读成 0——⛔ 因此以为没有违规，那枚红永久坐在那笔上，本席修法＝**下一笔带上重生成后的清单**，⛔ 让下一个人以为是本批回归。"
   exit $ledger_same_batch_rc
+fi
+if [ $ledger_eol_rc -eq 2 ]; then
+  echo "结论：台账行尾门禁读不出射程（exit=$ledger_eol_rc）。被测脚本不在盘上、临时夹具建不出来、或夹具里的被测模块加载不了——射程塌了不许报『干净』。"
+  exit $ledger_eol_rc
+fi
+if [ $ledger_eol_rc -ne 0 ]; then
+  echo "结论：台账行尾门禁红（exit=$ledger_eol_rc）。regen() 必须按被写文件的现状行尾写盘：写前读现状字节、写后按同一风格还原，首次生成按生成器的 LF 落盘。现状 LF 的台账被翻成 CRLF＝整文件假 diff，会把「移动锚点的提交必须自带重生成清单」里的真实锚点位移淹掉。修 scripts/sync_ledger_anchors.py 的 regen()，⛔ 不要在门禁夹具上放水。"
+  exit $ledger_eol_rc
 fi
 if [ $subject_rc -eq 2 ]; then
   echo "结论：owner 主体门禁读不出射程（exit=$subject_rc）。三种形状：① \`src/autoforge/af_api.py\` 不在盘上或解析不了；② 那文件里找不到 \`_OWNER_SUBJECTS = …\` 那一行——owner 面的定义被挪走或改名，判据 A 失去对照物；③ 数不出任何 \`/api/user/agents*\` 端点——那面整块搬走，本门已盯不住任何东西。三种都不许报『干净』。"
