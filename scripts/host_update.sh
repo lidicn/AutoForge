@@ -143,9 +143,26 @@ if ! git fetch --force github "$REF" >> "$LOG" 2>&1; then
     rm -f "$MARKER"
     exit 1
 fi
-TARGET_SHA=$(git rev-parse "github/$REF" 2>/dev/null || echo "")
+# 解析 pinned SHA（2026-11-02 v1.18 批次 B，tag 路线修复）：master 走 remote-tracking
+# （`git fetch --force github master` 会写 refs/remotes/github/master，rev-parse 解析得出）；
+# tag（vX.Y.Z）的 fetch 只写 FETCH_HEAD、不写 refs/remotes/github/<tag> ⇒ 旧实现
+# `git rev-parse github/$REF` 对 tag 恒解析不出（rev-parse 把实参回显到 stdout 且退出非零
+# ⇒ TARGET_SHA 拿到的是死串）⇒ v1.17.0 部署第一次 ref=tag 就死在这。修法＝按 ref 形状
+# 分路：tag 用 FETCH_HEAD^{commit}（每次 fetch 必写；annotated tag 由 ^{commit} 剥到提交，
+# 2026-11-02 宿主实测 v1.17.0 → 298b45d）；master 仍走 github/$REF（⛔ 不得改走本地
+# master——那会部署本地分支而不是刚 fetch 的发布线）。两条路都解析不出＝报错退出，
+# 不猜、不回退 FROM_SHA。
+TARGET_SHA=""
+case "$REF" in
+  v[0-9]*.[0-9]*.[0-9]*)
+    TARGET_SHA=$(git rev-parse --quiet --verify "FETCH_HEAD^{commit}" 2>/dev/null || echo "")
+    ;;
+  *)
+    TARGET_SHA=$(git rev-parse "github/$REF" 2>/dev/null || echo "")
+    ;;
+esac
 if [ -z "$TARGET_SHA" ]; then
-    log "ERROR: 解析不出 github/$REF 的 SHA"
+    log "ERROR: 解析不出 $REF 的 SHA（tag 路线=FETCH_HEAD^{commit}／master 路线=github/\$REF）"
     TO_SHA="$FROM_SHA"; TO_TAG="$FROM_TAG"
     write_result False "ref 解析失败：github/$REF 不存在"
     rm -f "$MARKER"
