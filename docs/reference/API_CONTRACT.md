@@ -2,12 +2,12 @@
 
 > **本文由脚本生成，⛔ 端点表与枚举不许手抄**（真源：运行中实例的 `GET /openapi.json` ＋ 发布树 `src/autoforge/af_api.py` 现读 ＋ `af_audit.ALL_EVENT_TYPES`／`af_scanner.CHECKS` 现读）。
 > **唯一权威形态仍是运行中的 FastAPI**：`GET /openapi.json`（OpenAPI 3）／`GET /docs`（Swagger UI）。
-> 生成方式：**脚本生成**（真源口径见上一行）；⛔ **端点表与枚举不许手抄、手改**。生成器当前是 PM 域的仓外工具（⛔ 本机绝对路径不写进仓内文档）——契约漂移门落地后它会进仓内 `scripts/`，届时此处改为仓内相对路径。本文是**速查表**，联调以 `/openapi.json` 为准。
+> 生成方式：**脚本生成**（真源口径见上一行）；⛔ **端点表与枚举不许手抄、手改**。生成器：`scripts/render_api_contract.py`（仓内工具，⛔ 只用标准库）；契约漂移门（`scripts/check_contract_drift.py`）会重跑它并只比「端点表＋枚举」两段。本文是**速查表**，联调以 `/openapi.json` 为准。
 
 | 现读坐标 | 值 |
 |---|---|
-| 发布树版本（`autoforge.__version__`，取自本次生成所用源码树） | `1.17.0` |
-| 生成时线上实例 OpenAPI 版本 | `1.16.0`（⛔ **不作发布版号**：发布那一刻线上还跑着上一版；部署后自动对齐） |
+| 发布树版本（`autoforge.__version__`，取自本次生成所用源码树） | `1.19.0` |
+| 生成时线上实例 OpenAPI 版本 | `1.19.0`（⛔ **不作发布版号**：发布那一刻线上还跑着上一版；部署后自动对齐） |
 | 路径数／操作数 | **88 路径／94 操作** |
 | 认证方案 | `securitySchemes` = {"HTTPBearer": {"type": "http", "scheme": "bearer"}} |
 | 权限面列来源 | `af_api.py` 的 `Depends(_read/_write/_live/_admin/_readonly_guard)` 现读 |
@@ -56,10 +56,10 @@ Base：`http://<host>:8787`（NAS 部署：`http://192.168.2.200:8787`）
 | `GET` | `/api/automations` | read | 自动化卡片列表（AF-731/AF-730：范围收口走服务层薄入口单源）。 |
 | `DELETE` | `/api/automations/{name}` | admin | —(端点无 docstring) |
 | `GET` | `/api/automations/{name}` | read | 读取单个自动化卡片（AF-731：先过读面归属闸，再渲染）。 |
-| `POST` | `/api/automations/{name}/archive` | write | —(端点无 docstring) |
+| `POST` | `/api/automations/{name}/archive` | write | 归档自动化（AF-731 写面腿：写面归属闸复用读面单源 `_assert_archive_visible`）。 |
 | `POST` | `/api/automations/{name}/disable` | write | —(端点无 docstring) |
 | `POST` | `/api/automations/{name}/enable` | write | —(端点无 docstring) |
-| `POST` | `/api/automations/{name}/unarchive` | write | —(端点无 docstring) |
+| `POST` | `/api/automations/{name}/unarchive` | write | 解除归档（AF-731 写面腿：与 archive 同一写面闸，同码同文 404）。 |
 
 ### bind（实体绑定）
 
