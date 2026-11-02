@@ -711,6 +711,20 @@ def watch(
 
     ticker = af_live.start_ticker(runtime, max(tick_s, 0.1), stop, tick_fn=_tick, sidecar_dir=persist_dir or None)
 
+    # watch 周期对账（PM 卡 20261102 腿 1）：跑的内容 vs store 现状，漂移 ⇒ 具名告警
+    # ＋health 读数；⛔ 不自动重启（新 IR 须走审批/部署路径，授权契约不碰）。
+    # daemon 线程随 `stop` 事件收尾；对账起不来不许弄死监听，但必须响一声。
+    _reconcile = None
+    try:
+        from .af_service import ir_deployment_sha
+        _reconcile = af_live.start_ir_reconcile(
+            str(persist_dir or DEFAULT_STORE_ROOT),
+            ir_deployment_sha({"automations": [dict(a.raw) for a in graph]}),
+            stop,
+        )
+    except Exception as _re:  # noqa: BLE001
+        typer.echo(f"⚠️ watch 对账线程未启动（不影响监听本身）: {_re!r}", err=True)
+
     def _on(ev, _rt):
         typer.echo(f"  · {ev.entity_id} = {ev.state}")
 
@@ -722,6 +736,8 @@ def watch(
     finally:
         stop.set()
         ticker.join(timeout=2.0)
+        if _reconcile is not None:
+            _reconcile.join(timeout=2.0)
         coord.release()
     typer.echo(f"· 常驻监听结束，累计处理事件：{result.get('published')}")
     _print_stats(runtime)

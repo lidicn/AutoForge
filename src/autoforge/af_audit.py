@@ -72,6 +72,12 @@ TOKEN_ENV_LEGACY_NAME = "token_env_legacy_name"
 #: 批 2（D9）：签发点拒绝自助提权——调用方想经 issue_for_agent 递 developer 档。
 #: 数据只带 subject，绝不带令牌明文/摘要。
 TOKEN_ISSUED_REJECTED = "token_issued_rejected"
+#: AF-725（2026-11-02，PM 卡追加②）：approve 本体的**独立**审计留痕——此前 approve 落库
+#: 这一事实只由 APPROVE_WATCH_AUTO_STARTED（派生事件）间接带出，且该行带 watch_ok，
+#: 会把「approve 成功」与「watch 启动失败」混成一件（AF-710 同族反向：该记的没记）。
+#: 本条只记 approve 事实（op_id／对象／审批人／落点／结果），⛔ 不含 watch 结果、
+#: ⛔ 不含任何令牌/授权码真值。
+APPROVE_PENDING_APPLIED = "approve_pending_applied"
 
 #: 部署仪式台账的文件名（裁定 20261011 §3 Q13 丙：**只对 `DEPLOY_AUDIT` 这一族落盘**）。
 #: 落点跟着本次部署的 store 根走（见 `deploy_audit_sink`），所以它与 `write_conflicts.jsonl`
@@ -115,6 +121,7 @@ ALL_EVENT_TYPES = (
     TOKEN_EXPIRED_PURGED,
     TOKEN_ENV_LEGACY_NAME,
     TOKEN_ISSUED_REJECTED,
+    APPROVE_PENDING_APPLIED,
 )
 
 

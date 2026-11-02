@@ -167,6 +167,99 @@ class WatchCoordinator:
         self._lock.release()
 
 
+# ── watch 周期对账（PM 卡 20261102 腿 1）────────────────────────────────
+# 把「enable/重启时才对」扩成「周期对」：watch 挂的是启动时的 IR 快照，归档变了它
+# 不会自己知道——「系统说已部署、实际跑旧 IR」正是这批反复出现的假绿形状（AF-714、
+# 追加③ 的"启动快照 1 条"现场）。处置选择＝**具名告警＋心跳读数，不自动重启**：
+# 自动重启等于让新 IR 未经审批自部署，撞「一次审批即生效」的授权契约（卡红线 1）；
+# 漂移的修复路径留在正常审批/部署面（approve_pending / enable_by_tag 的对账腿）。
+
+def ir_reconcile_once(store_root: str, watch_ir_sha: str,
+                      prev: Mapping[str, Any] | None) -> tuple[dict[str, Any], bool, bool]:
+    """跑一轮对账，返回（sidecar 记录，进入漂移?，恢复?）。线程与判据共用这份单源逻辑。
+
+    漂移判据＝「store 现状相对**本 watch 启动时**动了」（startup 基线）。⛔ 直接拿
+    watch 文件 sha 比 store merged sha：手动 `watch <file>` 那条路的文件与 merged IR
+    是两种包装，启动即假报——基线化后首轮恒不漂，之后 store 一动才算。
+    `matches_store` 另记「我跑的内容 == store 现状」作参考读数（自动路径两轮之间
+    由 approve/enable 自己重启，正常态应一致）。
+    """
+    from datetime import datetime, timezone as _tz
+
+    from . import af_service as _svc
+    from .af_store import GraphStore
+
+    store = GraphStore(store_root)
+    merged = _svc._build_merged_ir(store)
+    store_sha = _svc.ir_deployment_sha(merged)
+    baseline = str((prev or {}).get("startup_store_sha") or "")
+    drifted = bool(store_sha) and store_sha != baseline
+    was = bool((prev or {}).get("drifted"))
+    entered = drifted and not was
+    recovered = was and not drifted
+    now_iso = datetime.now(_tz.utc).isoformat()
+    rec: dict[str, Any] = {
+        "watch_ir_sha": watch_ir_sha,
+        "startup_store_sha": baseline,
+        "store_sha": store_sha,
+        "matches_store": bool(store_sha) and store_sha == watch_ir_sha,
+        "drifted": drifted,
+        "drift_since": (prev or {}).get("drift_since") if drifted else None,
+        "checked_at": now_iso,
+        "interval_s": _svc.WATCH_RECONCILE_INTERVAL_S,
+    }
+    if entered:
+        rec["drift_since"] = now_iso
+    return rec, entered, recovered
+
+
+def start_ir_reconcile(store_root: str, watch_ir_sha: str,
+                       stop: threading.Event) -> threading.Thread:
+    """起对账线程（daemon）：每 `WATCH_RECONCILE_INTERVAL_S` 跑一轮，sidecar 原子写。
+
+    日志纪律：只在**进入漂移**与**恢复**两次跳变各喊一声（具名码 WATCH_IR_DRIFT /
+    WATCH_IR_RESYNCED），稳态静默只更新文件——⛔ 护栏不许把自己变成噪声源。
+    对账自身读不出（store 损坏等）不弄死线程也不静默：WATCH_IR_RECONCILE_FAILED 响一声、
+    下轮再试；连续失败会让 sidecar 的 checked_at 变陈旧，由 health 的 `stale` 现形。
+    """
+    from . import af_service as _svc
+    from .af_atomic import atomic_write_text
+
+    def _loop() -> None:
+        path = Path(store_root) / _svc.WATCH_RECONCILE_FILE
+        prev: dict[str, Any] | None = None
+        while not stop.is_set():
+            try:
+                rec, entered, recovered = ir_reconcile_once(store_root, watch_ir_sha, prev)
+                if prev is None:
+                    # 首轮＝启动基线：store 现状即"我起步时世界长这样"，⛔ 拿自己当漂移参照
+                    rec["startup_store_sha"] = rec["store_sha"]
+                    rec["drifted"] = False
+                    rec["drift_since"] = None
+                    entered = recovered = False
+                atomic_write_text(path, json.dumps(rec, ensure_ascii=False, indent=2))
+                if entered:
+                    logging.getLogger("autoforge.live").warning(
+                        "WATCH_IR_DRIFT store 归档集合自本 watch 启动后已变化"
+                        "（startup 基线 %s… ≠ 现状 %s…）：watch 仍跑旧 IR；不自动重启"
+                        "（新 IR 须走审批/部署路径），请 stop_watch 后按新部署重启监听",
+                        str(rec["startup_store_sha"])[:12], str(rec["store_sha"])[:12])
+                elif recovered:
+                    logging.getLogger("autoforge.live").warning(
+                        "WATCH_IR_RESYNCED store 现状与 watch 基线重新一致（drift_since=%s）",
+                        rec.get("drift_since"))
+                prev = rec
+            except Exception as exc:  # noqa: BLE001 —— 对账失败不许弄死 watch，但要响
+                logging.getLogger("autoforge.live").warning(
+                    "WATCH_IR_RECONCILE_FAILED 本轮对账读不出（下轮重试；持续失败将令 health 报 stale）: %r",
+                    exc)
+            stop.wait(_svc.WATCH_RECONCILE_INTERVAL_S)
+
+    t = threading.Thread(target=_loop, daemon=True, name="watch-ir-reconcile")
+    t.start()
+    return t
+
+
 # ── SSE 帧解析（纯函数，零网络）────────────────────────────────────────
 def iter_sse_blocks(lines: Iterable[str]) -> Iterator[tuple[str, str, str]]:
     """从 SSE 行迭代器产出 `(event_type, data_str, sse_id)` 块。

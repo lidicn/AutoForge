@@ -261,6 +261,93 @@ def write_gate(store: "GraphStore | None" = None, *, readonly: bool | None = Non
     return WRITE_GATE_BLOCKED if (blocked_at_boot or held_by_another) else WRITE_GATE_OPEN
 
 
+#: ── watch 周期对账与心跳（PM 卡 20261102）：sidecar 名与节奏 ──────────────
+#: 间隔取 600s（10 分钟）的理由：归档变更是低频人工动作（审批驱动），10 分钟内把
+#: 「改了自动化不生效」从不可见变成 health 可读数；单轮成本＝读几十个小 JSON，NAS 可忽略。
+#: catalog-auto 的 6h 节奏对目录刷新够用，对「假绿窗口」太宽（AF-714/追加③ 的现场证据：
+#: watch 挂的是启动时快照，store 后来归档了四条而读数仍是"1 条"那次的形状）。
+WATCH_RECONCILE_FILE = "watch.reconcile.json"
+WATCH_RECONCILE_INTERVAL_S = 600.0
+
+
+def ir_deployment_sha(ir: Any) -> str:
+    """一组自动化**内容**的部署指纹（watch 对账单源）。
+
+    规范化＝逐条 automation dict 的 canonical JSON（sort_keys、紧凑分隔符），按串排序后
+    换行拼接再 sha256。语义钉在「跑的内容」而不是「包装」：
+    - envelope 键（`version`／容器 vs 单条）不参与——漂移的定义是自动化集合变了，
+      不是同一个集合换了容器形状（AF-719/AF-723 的形状不对称教训）；
+    - 集合顺序不参与——store 归档出现顺序与 watch 文件里顺序本就无关；
+    - 单条形状按 AF-719 同族口径归一（判别只认容器键 `automations`）。
+    空/None/无有效条目 ⇒ `""`（没有可对照的部署，⛔ 不拿哈希差异冒充漂移）。
+    """
+    import hashlib
+    if not isinstance(ir, Mapping) or not ir:
+        return ""
+    autos = ir.get("automations")
+    if not isinstance(autos, list):
+        autos = [ir]
+    parts = sorted(
+        json.dumps(a, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        for a in autos if isinstance(a, Mapping)
+    )
+    if not parts:
+        return ""
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _watch_health(store: "GraphStore | None") -> dict[str, Any]:
+    """`/api/health` 的 watch 心跳读数（PM 卡 20261102 腿 2）。
+
+    只读两件现成件——watch 进程自己周期写的对账 sidecar ＋ 协调锁（内核真值）；
+    ⛔ 不扫归档、⛔ 不重建 merged IR、⛔ 不探 HA（那些都在 watch 侧循环里做，
+    health 保持轻）。三问各对一格：① `present`/`alive`＝在不在；② `drifted`/
+    `matches_store`＝跑的是不是 store 现状那份；③ `checked_at`/`stale`＝上次对账
+    何时跑、结果还在不在有效期。`stale`＝心跳超过 2.5×间隔没更新（watch 死了没人
+    再写 sidecar，⛔ 让旧读数冒充新鲜）。跨容器 flock 可见性由现场实证过
+    （api 恢复 watch 因 sync 持协调锁而 ok=False），`alive` 才敢用锁真值。
+    """
+    out: dict[str, Any] = {"present": False}
+    if store is None:
+        return out
+    rec_path = Path(store.root) / WATCH_RECONCILE_FILE
+    if not rec_path.is_file():
+        return out
+    try:
+        data = json.loads(rec_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return out
+    except (OSError, ValueError):
+        logger.debug("WATCH_HEALTH_SIDECAR_SKIPPED", exc_info=True)
+        return out
+    try:
+        interval = float(data.get("interval_s") or WATCH_RECONCILE_INTERVAL_S)
+    except (TypeError, ValueError):
+        interval = WATCH_RECONCILE_INTERVAL_S
+    out = {
+        "present": True,
+        "watch_ir_sha": str(data.get("watch_ir_sha") or ""),
+        "startup_store_sha": str(data.get("startup_store_sha") or ""),
+        "store_sha": str(data.get("store_sha") or ""),
+        "drifted": bool(data.get("drifted")),
+        "matches_store": bool(data.get("matches_store")),
+        "checked_at": str(data.get("checked_at") or ""),
+        "drift_since": data.get("drift_since"),
+        "stale": True,
+    }
+    try:
+        checked = datetime.fromisoformat(out["checked_at"])
+        out["stale"] = (datetime.now(timezone.utc) - checked).total_seconds() > interval * 2.5
+    except (TypeError, ValueError):
+        pass
+    try:
+        out["alive"] = (not out["stale"]) and not _lock_is_free(Path(store.root) / "watch.lock")
+    except Exception:  # noqa: BLE001 —— 存活探测不许弄坏 health，但也不许静默
+        logger.debug("WATCH_ALIVE_PROBE_SKIPPED", exc_info=True)
+        out["alive"] = False
+    return out
+
+
 def health(
     store: "GraphStore | None" = None, *, presence: Any = None, readonly: bool | None = None
 ) -> dict[str, Any]:
@@ -322,6 +409,7 @@ def health(
         "readonly": True,
         "write_gate": write_gate(store, readonly=readonly),
         "store_ok": store_ok,
+        "watch": _watch_health(store),
         "linkage": _linkage_health(presence),
         "tick_health": tick_health,
         "ticker_alive": ticker_alive,
@@ -1254,6 +1342,30 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
     # DCD 裁定 20261031·Q2 甲（矩阵行 2）：部署审批摘要显式列出本条含哪些 L2 动作——
     # ★ 机提取（`l2_summary_of`，⛔ 人肉手写）。空列表照给（前端渲染占位，⛔ 空白＝没读出来）。
     result["l2_summary"] = l2_summary_of(payload.get("ir") or {})
+    # AF-725（PM 卡 20261102 追加②）：approve 本体必须有**以 approve 为主体**的审计留痕
+    # ——此前只有 APPROVE_WATCH_AUTO_STARTED 这个派生事件间接带出 pending id，且该行带
+    # watch_ok，会把「approve 成功」与「watch 启动失败」混成一件（AF-710 同族反向：
+    # 那是记了不该记的，这是该记的没记）。本条只记 approve 事实（op_id／对象／审批人／
+    # 落点／结果），⛔ 不含 watch 结果（那是 APPROVE_WATCH_AUTO_STARTED 的职责，两件事
+    # 必须能分开读）、⛔ 不含任何令牌/授权码真值。记账失败不回滚已落盘的归档
+    # （口径同下方 APPROVE_WATCH_AUDIT_RECORD_FAILED）。
+    try:
+        from .af_audit import (
+            APPROVE_PENDING_APPLIED,
+            AuditEvent as _AE0,
+            record_deploy as _rd0,
+        )
+        _rd0(
+            _AE0(APPROVE_PENDING_APPLIED, at=datetime.now(timezone.utc),
+                 message="待批操作批准并落盘（approve 本体的独立留痕）",
+                 data={"approved_by": reviewer, "pending": op_id,
+                       "name": result.get("name", ""),
+                       "version": result.get("version"),
+                       "self_check": self_check or None}),
+            store,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("APPROVE_PENDING_AUDIT_RECORD_FAILED 批准已落盘但记账失败：%r", exc)
     # approve 后自动起 watch（真机常驻监听）——合并所有已部署自动化，不只这一条。
     # 凭据语义：MCP 路径 reviewer=auth_code:xx***（码已消费）、HTTP 路径 reviewer=令牌
     # 主体/人审（人审那一票）——这条是四条起监听路径之一，其余三条见
@@ -3940,7 +4052,16 @@ def _start_watch_impl(ir: dict, store_root: str | None = None, dry_live: bool = 
             for src in trig.get("sources", []) or []:
                 _collect_trigger_entities(src)
 
-        for auto in ir.get("automations", []):
+        # AF-723（PM 卡 20261102 追加①）：白名单提取同时认**容器与单条**两种 IR 形状
+        # （与 l2_summary_of 的 AF-719 归一同族口径：判别只认容器键 `automations`，⛔ 不靠
+        # nodes 键判）。手动 /api/watch/start 传单条 IR 时旧码循环零次 ⇒ entities 恒空 ⇒
+        # --live-allow 整个不传 ⇒ 真机可写面被静默收窄。⛔ 空白名单语义不变（提取不到
+        # 实体仍不传 --live-allow，live 面空白名单照旧被拒）——本修法只让单条形状能
+        # 提出实体，不改放行语义。
+        _autos = ir.get("automations")
+        if not isinstance(_autos, list):
+            _autos = [ir]  # 单条形状归一（AF-719 同族判别：单条 ⇒ [ir]）
+        for auto in _autos:
             for node in auto.get("nodes", []):
                 _collect_trigger_entities(node.get("trigger", {}) or {})
                 params = node.get("params", {}) or {}
