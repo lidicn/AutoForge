@@ -77,7 +77,13 @@ def _run_guard(tmp_path: pathlib.Path, **sc: str) -> tuple[list[str], str]:
     """在桩环境里跑抽取出的守卫函数，返回（docker 调用记录, 脚本 log）。"""
     stub_bin = tmp_path / "stubbin"
     stub_bin.mkdir(exist_ok=True)
-    (stub_bin / "docker").write_text(STUB, encoding="utf-8", newline="\n")
+    stub = stub_bin / "docker"
+    stub.write_text(STUB, encoding="utf-8", newline="\n")
+    # ⚠️ POSIX 可执行位（2026-11-03 CI 红点收口）：只 write_text 的话桩在 Linux runner 上
+    # **不可执行** ⇒ 实际调用的是**真 docker**（ubuntu runner 无 autoforge-api:latest）⇒
+    # 守卫走「无 latest」WARN 分支 ⇒ T1/T2/T3/T4 四条全红；而 Windows 上可执行位无意义
+    # ⇒ 本地跑是绿的（**假绿**）。同一份判据在两种宿主上结论相反 = 判据依赖宿主环境形状。
+    stub.chmod(0o755)
     (tmp_path / "harness.sh").write_text(
         "log() { printf '%s\\n' \"$*\" >> \"$SCRIPT_LOG\"; }\n"
         + _extract_guard()
@@ -88,11 +94,21 @@ def _run_guard(tmp_path: pathlib.Path, **sc: str) -> tuple[list[str], str]:
     for name in ("docker_calls.log", "script_log.txt"):
         (tmp_path / name).write_text("", encoding="utf-8", newline="\n")
     env = os.environ.copy()
-    env["PATH"] = f"stubbin{os.pathsep}{env.get('PATH', '')}"
+    # ⚠️ 绝对路径（2026-11-03 CI 红点收口）：相对 PATH 项在 POSIX 上不稳，用 stub_bin 绝对路径
+    env["PATH"] = f"{stub_bin}{os.pathsep}{env.get('PATH', '')}"
     env["DOCKER_CALLLOG"] = "docker_calls.log"
     env["SCRIPT_LOG"] = "script_log.txt"
     for key, value in sc.items():
         env[key] = value
+    # ⚠️ 桩生效自证（2026-11-03 CI 红点收口，PM 代落）：用**同一个执行者**探一次 docker
+    # （必须经 `_bash()` —— ⛔ 不能用 `subprocess.run(["docker", …])`：Windows 上
+    # subprocess 走 PATHEXT 只认 `.exe`，永远跑不到无扩展名的桩脚本 ⇒ 假红；桩本来就
+    # 只在 shell 内生效，自证也必须走 shell）。
+    subprocess.run([_bash(), "-c", "docker --version"], cwd=str(tmp_path), env=env,
+                   capture_output=True, text=True, timeout=60)
+    assert (tmp_path / "docker_calls.log").read_text(encoding="utf-8").strip(), (
+        "docker 桩未生效（可执行位 / PATH / shebang 问题）⇒ 判据结论无效"
+    )
     proc = subprocess.run(
         [_bash(), "harness.sh"], cwd=str(tmp_path), env=env,
         capture_output=True, text=True, timeout=60,
