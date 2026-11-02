@@ -41,12 +41,14 @@ AUTO_WITH_ASK: dict = {
 
 
 def test_api_asks_unknown_returns_404(tmp_path, monkeypatch):
-    # 本地无令牌逃生舱，否则 _read 依赖会 403
+    # 本地无令牌逃生舱，否则 _read 依赖会 403。
+    # AF-730 ⑬（2026-11-02）：无身份（owner 等效）路径仍走 get_graph 的原生 404；
+    # 非 owner 的「他人/不存在」才由 _assert_archive_visible 的 visible_error 单源接管。
     monkeypatch.setenv("AF_ALLOW_NOAUTH", "1")
     client = TestClient(build_app(store_root=str(tmp_path)))
     r = client.get("/api/asks/does_not_exist")
     assert r.status_code == 404
-    assert r.json()["detail"] == "未找到自动化"
+    assert r.json()["detail"] == "未找到 'does_not_exist' 的任何版本"
 
 
 def test_api_asks_by_name_exposes_control(tmp_path, monkeypatch):

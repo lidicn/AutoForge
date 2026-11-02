@@ -14,4 +14,7 @@
 # 敲打 P0 的 stop_watch、v1.13.3 的 api_system_version）；③ 3 条 STALE 过期指纹按
 # cee6a3a 口径删除。上调这 3 条全部是「发版时未同步基线」的积欠认领，不是新豁免。
 # 98 # 2026-10-31 下调（AF-710 留痕半 9ead4f0）：`_pair_event_gen` 的 `except Exception: pass` 已收窄成 `logger.warning(..., exc_info=True)`＋具名码 PAIR_SSE_EVENT_FAILED ⇒ except-pass-broad 16→15（严格吞掉站点少一枚），同批删除 .gates-baseline.txt 里已不再命中的同名指纹一条。只降不升，非新豁免。
-93 # 2026-11-01 下调（C-3 服务面收口，v1150/af716-fix）：list_graphs / graphs_by_tag / get_conf（单名＋合并两面）/ export_store 四面的 ok 改计数合拢派生 ⇒ fake-ok-const 83→78（消 4 枚指纹、5 处实例，get_conf 两面各一），同批按门禁自身语义删 4 枚不再命中的基线指纹。只降不升，非新豁免。
+# 93 # 2026-11-01 下调（C-3 服务面收口，v1150/af716-fix）：list_graphs / graphs_by_tag / get_conf（单名＋合并两面）/ export_store 四面的 ok 改计数合拢派生 ⇒ fake-ok-const 83→78（消 4 枚指纹、5 处实例，get_conf 两面各一），同批按门禁自身语义删 4 枚不再命中的基线指纹。只降不升，非新豁免。
+91 # 2026-11-02 收口（pm/af730-rest-ownership）：api_automations 两分支 ok 派生 ⇒ fake-ok-const 78→76，全量 93→91；登记上限 91（PM 复核值）。此前误降 76 已纠正——91 才是真值。
+# (历史) 91 # 2026-11-02 下调（AF-730/731 REST 读面收口，pm/af730-rest-ownership）：api_automations 两处 ok 从字面量改计数合拢派生（group_by=agent 与 group_by!=agent 两分支各一）⇒ fake-ok-const 78→76（消 2 处实例），同批按门禁自身语义删 1 枚不再命中的基线指纹（build_app.api_automations）⇒ 全量 93→91。只降不升，非新豁免。
+# (作废误记) 76 # 2026-11-02 下调（AF-730/731 收口 amend，pm/af730-rest-ownership）：api_automations 两分支 ok 派生 ⇒ fake-ok-const 78→76，全量 93→91→76（91 是 PM 复核时暂记的旧值；棘轮提示后按「以门报为准、只准降」同步）。非新豁免。

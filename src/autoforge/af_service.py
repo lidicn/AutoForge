@@ -436,7 +436,10 @@ def _archive_names(store: GraphStore) -> list[str]:
     return seen
 
 
-def list_graphs(store: GraphStore, caller: str = "", is_owner_face: bool = False) -> dict[str, Any]:
+def list_graphs(
+    store: GraphStore, caller: str = "", is_owner_face: bool = False,
+    token_identity: bool | None = None,
+) -> dict[str, Any]:
     """归档列表。出资人裁定 2026-10-29：普通 agent **只看得到自己写的**，owner 面看全部。
 
     `caller` 为空 = 未携带身份的旧调用方（HTTP 控制台/CLI），维持全量——与
@@ -446,6 +449,9 @@ def list_graphs(store: GraphStore, caller: str = "", is_owner_face: bool = False
     owner 字段与范围过滤都跟 `_existing_owner` 同值（R6 对账，⛔ 内联第二份解析）。
     R4/R8：读不出的归档不再静默隐身，与 `graphs_by_tag` 同形进 `unavailable`；
     `ok` 从计数合拢派生（items + unavailable + hidden == 全集）。
+    AF-730（2026-11-02）：REST 面开始下传身份 ⇒ 补 `token_identity` 形参——
+    BROKEN（持令牌但缺 subject）⇒ 403 残缺身份（R1：⛔ 不得退化成匿名全量）；
+    旧调用方（MCP `_t_list_graphs`）不传该参 ⇒ None ⇒ 行为逐字不变（⛔ MCP 零变化）。
     """
     latest: dict[str, dict[str, Any]] = {}
     for record in store.history():
@@ -461,7 +467,9 @@ def list_graphs(store: GraphStore, caller: str = "", is_owner_face: bool = False
                 "owner": _existing_owner(store, name),  # C4：归属单源（与过滤同值）
                 "automation_ids": [],
                 }
-    sub = Subject.from_caller(caller, owner_face=is_owner_face)
+    sub = Subject.from_caller(caller, owner_face=is_owner_face, token_identity=token_identity)
+    if sub.token_state is TokenState.BROKEN:
+        raise ServiceError(broken_identity_error(), status=403)
     # 范围判定单源（C-3）：带身份先收份额，别人的既不加载也不点名
     visible, hidden = scope_names(lambda n: _existing_owner(store, n), latest.keys(), sub)
     items: list[dict[str, Any]] = []
@@ -495,6 +503,59 @@ def list_graphs(store: GraphStore, caller: str = "", is_owner_face: bool = False
         out["scope"] = f"owner:{caller}"
     if unavailable:
         out["unavailable"] = sorted(unavailable)
+    return out
+
+
+def list_automation_cards(
+    store: GraphStore, *, caller: str = "", caller_is_owner: bool = False,
+    token_identity: bool | None = None,
+) -> dict[str, Any]:
+    """AF-731（2026-11-02，并 AF-730 批）：自动化卡片读面的**范围**单源薄入口。
+
+    形状照 `list_graphs`：身份走 `Subject.from_caller`、归属走 `_existing_owner`
+    （C3/C4 归属单源）、范围走 `scope_names`（⛔ 不在此内联第二份规则）；卡片渲染
+    不属归属逻辑，仍归 API 面（`automation_card`）。
+
+    - 非 owner 面（`caller` 非空且非 owner）：只返回自己名下归档的 history 条目；
+      `hidden_count`/`scope` 与 `list_graphs` 同口径（仅非 owner 面报，缺口必须可见）；
+    - BROKEN（持令牌但缺 subject）⇒ 403 残缺身份（R1：读面 ⛔ 退化成匿名全量）；
+    - owner 面／无身份豁免：条目原样全量返回，行为与收口前逐字一致（⛔ 误伤 owner＝
+      AF-716 反向同族，测试钉住）。
+
+    返回 {"ok": 派生, "records": 可见的 history 条目, "hidden_count"?, "scope"?}；
+    渲染所需字段由调用方补齐。
+    """
+    sub = Subject.from_caller(caller, owner_face=caller_is_owner, token_identity=token_identity)
+    if sub.token_state is TokenState.BROKEN:
+        raise ServiceError(broken_identity_error(), status=403)
+    # 去重保序（同一归档多版本只出一张卡）；范围判定走 `scope_names` 单源（⛔ 手写过滤）。
+    unique: list[str] = []
+    seen: set[str] = set()
+    for h in store.history():
+        n = str(h.get("name", ""))
+        if n and n not in seen:
+            seen.add(n)
+            unique.append(n)
+    visible_names, hidden = scope_names(lambda n: _existing_owner(store, n), unique, sub)
+    visible = set(visible_names)
+    # 去重：每名只出一条（最新版本）。现网实证：history() 多版本条目会让卡片页出现
+    # 重复卡（线上 total=6 vs 唯一归档 5，AF-Verify L4b 独立复现）⇒ 按唯一归档数出卡，
+    # 版本选择与 store.latest 同源（最新）。
+    latest_by_name: dict[str, dict[str, Any]] = {}
+    for h in store.history():
+        n = str(h.get("name", ""))
+        if n not in visible:
+            continue
+        v = int(h.get("version") or 0)
+        if n not in latest_by_name or v > int(latest_by_name[n].get("version") or 0):
+            latest_by_name[n] = h
+    records = [latest_by_name[n] for n in sorted(latest_by_name)]
+    # ok 派生自计数合拢（⛔ 字面量 True——AST 棘轮口径，与 list_graphs 同纪律）
+    out: dict[str, Any] = {"ok": len(latest_by_name) + hidden == len(unique),
+                           "records": records}
+    if caller and not caller_is_owner:
+        out["hidden_count"] = hidden
+        out["scope"] = f"owner:{caller}"
     return out
 
 

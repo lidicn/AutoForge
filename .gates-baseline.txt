@@ -33,7 +33,6 @@ src/autoforge/af_api.py#fake-ok-const#build_app.api_automation_detail
 src/autoforge/af_api.py#fake-ok-const#build_app.api_automation_disable
 src/autoforge/af_api.py#fake-ok-const#build_app.api_automation_enable
 src/autoforge/af_api.py#fake-ok-const#build_app.api_automation_unarchive
-src/autoforge/af_api.py#fake-ok-const#build_app.api_automations
 src/autoforge/af_api.py#fake-ok-const#build_app.api_pair_confirm
 src/autoforge/af_apply.py#fake-ok-const#apply
 src/autoforge/af_apply.py#fake-ok-const#issue_premiere

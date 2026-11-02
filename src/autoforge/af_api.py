@@ -729,8 +729,28 @@ def build_app(
         )
 
     @app.get("/api/graphs", dependencies=[Depends(_read)])
-    def api_graphs(tag: str | None = Query(default=None)) -> dict[str, Any]:
-        result = svc.list_graphs(store)
+    def api_graphs(
+        tag: str | None = Query(default=None),
+        info: TokenInfo | None = Depends(_read),
+    ) -> dict[str, Any]:
+        """归档列表（AF-730 收口：身份下传服务层归属判定单源）。
+
+        - **owner 面**（`_OWNER_SUBJECTS`）：看**全量**，响应**不含** `hidden_count`／
+          `scope`；
+        - **非 owner 面**：只返回**自己名下**的归档，**必报** `hidden_count`（全集−份额）
+          与 `scope=owner:<主体>`（缺口必须对自己可见，⛔ 静默收窄）；
+        - **无身份**（免令牌逃生舱 `AF_ALLOW_NOAUTH`）：按未携带身份处理，维持全量豁免；
+        - 持令牌但缺 subject（残缺身份）⇒ 403，⛔ 不退化成匿名全量。
+        """
+        # AF-730：读端点把已在手的身份下传服务层归属判定单源（⛔ 不在 REST 侧复制判断）。
+        # 三态：info=None（免令牌逃生舱）⇒ caller=""＋token_identity=None ⇒ 全量豁免不动；
+        # 有 subject ⇒ 正常；有令牌但 subject 为空 ⇒ token_identity=True ⇒ 服务层 403 残缺身份。
+        result = _svc(
+            svc.list_graphs, store,
+            caller=info.subject if info else "",
+            is_owner_face=_caller_is_owner(info),
+            token_identity=(info is not None),
+        )
         if tag:
             result["items"] = [it for it in result["items"] if tag in it.get("tags", [])]
         return result
@@ -790,7 +810,28 @@ def build_app(
         )
 
     @app.get("/api/graphs/{name}", dependencies=[Depends(_read)])
-    def api_graph(name: str, version: int | None = Query(default=None)) -> dict[str, Any]:
+    def api_graph(
+        name: str,
+        version: int | None = Query(default=None),
+        info: TokenInfo | None = Depends(_read),
+    ) -> dict[str, Any]:
+        """读取单个归档（AF-730 收口：先过读面归属闸，再取数据）。
+
+        - **owner 面**：能读**任何人名下**的归档（豁免不变）；
+        - **非 owner 面**：只读**自己名下**；读**他人名下**时拒绝文案与「归档不存在」
+          **逐字同形**（404，`visible_error` 单源）—— ⛔ 不泄露存在性、⛔ 不点归属者名；
+        - **无身份**（免令牌逃生舱）：按未携带身份处理，维持全量豁免；
+        - 持令牌但缺 subject（残缺身份）⇒ 403，⛔ 不退化成匿名全量。
+        """
+        # AF-730：先过读面归属闸（服务层单源 `_assert_archive_visible`），404 文案与
+        # 「归档不存在」逐字同形（`visible_error` 单源）⇒ 「他人名下」与「不存在」同一条
+        # 路径同一句文案，存在性 oracle 自动闭（⛔ 不能先 get 再分别映射两种文案）。
+        _svc(
+            svc._assert_archive_visible, store, name,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
+        )
         try:
             return svc.get_graph(store, name, version)
         except FileNotFoundError as exc:
@@ -819,11 +860,23 @@ def build_app(
         return _svc(svc.simulate, body.ir, body.seed, body.events, store=store)
 
     @app.get("/api/conf/{name}", dependencies=[Depends(_read)])
-    def api_conf(name: str) -> dict[str, Any]:
-        try:
-            return svc.get_conf(store, name)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    def api_conf(name: str, info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        """置信度读面（AF-730 ⑭：身份下传 `get_conf` 既有参数，服务层 R2 语义）。
+
+        - **owner 面**：全量聚合，响应**不含** `hidden_count`／`unavailable`；
+        - **非 owner 面**：R2 份额聚合——只含**自己名下**归档的行，读不出的进
+          `unavailable`（⛔ 整面 404、⛔ 全库聚合）；单名面读**他人**归档时拒绝
+          文案与「归档不存在」**逐字同形**（404，`visible_error` 单源）；
+        - **无身份**（免令牌逃生舱）：按未携带身份处理，维持全量豁免；
+        - 持令牌但缺 subject（残缺身份）⇒ 403，⛔ 不退化成匿名全量。
+        """
+        # AF-730 ⑭：get_conf 服务层本就带身份参数（R2 份额聚合／单名 404 同形），REST 补传即可。
+        return _svc(
+            svc.get_conf, store, name,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
+        )
 
     @app.get("/api/metrics", dependencies=[Depends(_read)])
     def api_metrics() -> dict[str, Any]:
@@ -915,11 +968,29 @@ def build_app(
 
     # 暴露 ask 节点的原生控件元数据（供前端渲染下拉/滑杆/时间轴等）
     @app.get("/api/asks/{name}", dependencies=[Depends(_read)])
-    def api_ask_name(name: str) -> dict[str, Any]:
+    def api_ask_name(name: str, info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        """读取归档内 ask 节点的控件元数据（AF-730 ⑬：与 graphs/{name} 同一单源闸）。
+
+        - **owner 面**：能读**任何人名下**的归档（豁免不变）；
+        - **非 owner 面**：只读**自己名下**；读**他人名下**时拒绝文案与「归档不存在」
+          **逐字同形**（404，`visible_error` 单源）—— ⛔ 不泄露存在性（旧文案
+          「未找到自动化」已撤，那会把「他人名下」与「不存在」分开说）；
+        - **无身份**（免令牌逃生舱）：按未携带身份处理，维持全量豁免；
+        - 持令牌但缺 subject（残缺身份）⇒ 403，⛔ 不退化成匿名全量。
+        """
+        # AF-730 ⑬：与 graphs/{name} 同一单源闸——先过 `_assert_archive_visible`，404 文案
+        # 由 `visible_error` 产出（与「不存在」逐字同形 ⇒ oracle 闭）。旧文案「未找到自动化」
+        # 会把「他人名下」与「不存在」分开说 ⇒ ⛔ 撤（存在性 oracle）。
+        _svc(
+            svc._assert_archive_visible, store, name,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
+        )
         try:
             rec = svc.get_graph(store, name)
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail="未找到自动化")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         # get_graph 返回的是 `ir`（单条 → 单 dict 含 nodes；多条 → {"automations": [...]}）
         ir = rec.get("ir") or {}
         nodes: list[Any] = []
@@ -1946,8 +2017,28 @@ def build_app(
         }
 
     @app.get("/api/automations", dependencies=[Depends(_read)])
-    def api_automations(group_by: str = Query(default="agent")) -> dict[str, Any]:
-        hist = store.history()
+    def api_automations(
+        group_by: str = Query(default="agent"),
+        info: TokenInfo | None = Depends(_read),
+    ) -> dict[str, Any]:
+        """自动化卡片列表（AF-731/AF-730：范围收口走服务层薄入口单源）。
+
+        - **owner 面**：全量卡片，响应**不含** `hidden_count`／`scope`；
+        - **非 owner 面**：只返回**自己名下**归档的卡片，**必报** `hidden_count`
+          （全集−份额）与 `scope=owner:<主体>`（缺口必须对自己可见，⛔ 静默收窄）；
+          ⚠️ **每名一张卡**（同归档多版本按唯一归档去重，`total` ＝ 卡片数）；
+        - **无身份**（免令牌逃生舱）：按未携带身份处理，维持全量豁免；
+        - 持令牌但缺 subject（残缺身份）⇒ 403，⛔ 不退化成匿名全量。
+        """
+        # AF-731（并 AF-730 批）：范围收口走服务层薄入口 `list_automation_cards`
+        # （身份/owner/范围全在服务层单源，⛔ 不在此筛第二遍）。
+        out = _svc(
+            svc.list_automation_cards, store,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
+        )
+        hist = out["records"]
         pmap = _pending_map()
         cards = []
         for h in hist:
@@ -1955,27 +2046,58 @@ def build_app(
                 rec = store.load_record(h["name"])
             except FileNotFoundError:
                 continue
+            # AF-730 ⑦（C4 单源）：卡片 `agent` 一律取 `_existing_owner`——与过滤用的
+            # owner 同一访问器（⛔ 与 `rec.get("owner")` 双轨；正常态同值，空 owner 边界
+            # 也归一）。
+            rec["owner"] = svc._existing_owner(store, h["name"])
             cards.append(
                 svc.automation_card(store, h["name"], rec, store.get_tags(h["name"]), pmap)
             )
+        result: dict[str, Any]
         if group_by == "agent":
             groups: dict[str, list[dict[str, Any]]] = {}
             for c in cards:
                 groups.setdefault(c["agent"] or "未归属/本地", []).append(c)
-            return {
-                "ok": True,
+            result = {
+                "ok": out["ok"],
                 "group_by": "agent",
                 "groups": [{"agent": a, "items": items} for a, items in sorted(groups.items())],
                 "total": len(cards),
             }
-        return {"ok": True, "group_by": group_by, "items": cards, "total": len(cards)}
+        else:
+            result = {"ok": out["ok"], "group_by": group_by, "items": cards, "total": len(cards)}
+        if "hidden_count" in out:
+            # 与 `list_graphs` 同口径：仅非 owner 面报缺口（Agent 要能知道自己看到的不是全量）。
+            result["hidden_count"] = out["hidden_count"]
+            result["scope"] = out["scope"]
+        return result
 
     @app.get("/api/automations/{name}", dependencies=[Depends(_read)])
-    def api_automation_detail(name: str) -> dict[str, Any]:
+    def api_automation_detail(
+        name: str, info: TokenInfo | None = Depends(_read),
+    ) -> dict[str, Any]:
+        """读取单个自动化卡片（AF-731：先过读面归属闸，再渲染）。
+
+        - **owner 面**：能读**任何人名下**的卡片（豁免不变）；
+        - **非 owner 面**：只读**自己名下**；读**他人名下**时拒绝文案与「归档不存在」
+          **逐字同形**（404，`visible_error` 单源）—— ⛔ 不泄露存在性、⛔ 不点归属者名；
+          卡片 `agent` 字段与范围过滤同取 `_existing_owner` 单源（C4）；
+        - **无身份**（免令牌逃生舱）：按未携带身份处理，维持全量豁免；
+        - 持令牌但缺 subject（残缺身份）⇒ 403，⛔ 不退化成匿名全量。
+        """
+        # AF-731：单名面先过读面归属闸（单源 404 同形文案，与 graphs/{name} 同路径）。
+        _svc(
+            svc._assert_archive_visible, store, name,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
+        )
         try:
             rec = store.load_record(name)
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail="未找到自动化")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # AF-730 ⑦：`agent` 同取 `_existing_owner` 单源（与列表卡片一致，⛔ 双轨）。
+        rec["owner"] = svc._existing_owner(store, name)
         card = svc.automation_card(store, name, rec, store.get_tags(name), _pending_map())
         return {"ok": True, "automation": card}
 
