@@ -74,7 +74,7 @@ async function onReject (p: PendingItem) {
           </div>
           <p class="summary">{{ p.summary }}</p>
           <!-- AF-726：批准之前就让人看见本条会动哪些设备（与管理员面同形；⛔ 前端不算 L2） -->
-          <div v-if="p.l2_summary && p.l2_summary.length" class="pend-l2">
+          <div v-if="Array.isArray(p.l2_summary) && p.l2_summary.length" class="pend-l2">
             <div v-for="(it, i) in p.l2_summary" :key="`${it.action}-${it.node}-${i}`" class="l2-item">
               <div class="l2-main">
                 本条含：<code>{{ it.action }}</code><template v-if="it.alias">（{{ it.alias }}）</template>
@@ -84,7 +84,7 @@ async function onReject (p: PendingItem) {
               </div>
             </div>
           </div>
-          <p v-else-if="p.l2_summary" class="l2-note empty">本条不含 L2 动作</p>
+          <p v-else-if="Array.isArray(p.l2_summary)" class="l2-note empty">本条不含 L2 动作</p>
           <p v-else class="l2-note missing">未读到 L2 摘要（后端未返回该字段）</p>
           <p class="radius">影响面：{{ p.blast_radius }}</p>
           <div class="bottom">

@@ -80,9 +80,10 @@ export interface PendingItem {
   blast_radius: string
   /**
    * AF-726：交付面待批列表也要在**批准之前**看见本条含哪些 L2 动作（与管理员面 `ui/` 对齐）。
-   * 由 `logic/pending.ts` 归一：后端没给 ⇒ `[]`（本条不含 L2），⛔ 不会是 `undefined`（没读出来）。
+   * 由 `logic/pending.ts` 归一，**三态可区分**：非空数组＝含这些 L2；空数组＝本条不含 L2；
+   * `null`／缺字段＝未读到（后端旧版）——⛔ 不许把缺失归一成空数组。
    */
-  l2_summary?: L2Action[]
+  l2_summary?: L2Action[] | null
 }
 
 /** DCD 裁定 20261031·矩阵行 2：批准回执里的 L2 动作条目（后端 `l2_summary_of` 机提取，前端只渲染）。 */

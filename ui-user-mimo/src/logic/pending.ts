@@ -3,8 +3,11 @@
  *
  * 后端 `/api/pending/list` 每行已带 `l2_summary`（`af_service.list_pending` 机提取，
  * DCD 裁定 20261031·矩阵行 2）。本函数只**透传**，⛔ 前端不算 L2。
- * ★ 缺字段 ⇒ `[]`（「本条不含 L2 动作」），⛔ 不是 `undefined`（「没读出来」）——
- *   两者必须可区分，与回执侧 `l2summary.test.mjs` 同口径。
+ * ★ 三态必须可区分（家规同管理员面 `ui/PendingView.vue`：`Array.isArray(l2) ? l2 : null`）：
+ *   - 数组且非空 ⇒ 本条含这些 L2 动作；
+ *   - 数组且为空 ⇒ 本条不含 L2 动作；
+ *   - **缺字段／不是数组** ⇒ **`null`＝「未读到」**（后端旧版时正是必须说「不知道」的时刻，
+ *     ⛔ 绝不能归成 `[]`，那会把「没读到」说成「没有」＝假保证）。
  */
 import type { L2Action, PendingItem } from '../types/api.ts'
 
@@ -16,9 +19,9 @@ function str (v: unknown): string {
   return v == null ? '' : String(v)
 }
 
-/** 后端 L2 清单归一：非数组（缺字段/坏形状）⇒ 空数组。 */
-export function normalizeL2Summary (raw: unknown): L2Action[] {
-  if (!Array.isArray(raw)) return []
+/** 后端 L2 清单归一：数组 ⇒ 映射（空数组保持空）；非数组（缺字段/坏形状）⇒ `null`＝未读到。 */
+export function normalizeL2Summary (raw: unknown): L2Action[] | null {
+  if (!Array.isArray(raw)) return null
   return raw.filter(isRecord).map((o) => ({
     action: str(o.action),
     alias: str(o.alias),
