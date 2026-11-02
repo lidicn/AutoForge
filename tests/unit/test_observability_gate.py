@@ -283,11 +283,15 @@ def test_real_repo_http_face_readings_are_pinned(real):
     # （字面量 True ⛔ AST 棘轮口径）⇒ 少 2 枚；无账可对格按 #134 口径重钉现读。
     # 同批 depends 103 → 109：六个 AF-730 读端点各新增一处 `info: TokenInfo | None = Depends(_read)`
     # 身份绑定 ⇒ Depends 引用数 +6（**与新增绑定数逐条相等**）；无账可对格按 #134 口径重钉现读。
-    # ⚠️ 这两格与 `docs/可观测性清单.md` §二 的自动段（`ok: True` 29 枚／`Depends` 109 枚）
+    # depends 109 → 111（2026-11-03 v1.18 批次 C／AF-731）：archive/unarchive 两条写面端点
+    # 原本只有装饰器 `dependencies=[Depends(_write)]`，为拿身份又各新增一处**参数形式**
+    # `info: TokenInfo | None = Depends(_write)` ⇒ Depends 引用数 +2（**与新增绑定数逐条
+    # 相等**）；无账可对格按 #134 口径重钉现读。
+    # ⚠️ 这两格与 `docs/可观测性清单.md` §二 的自动段（`ok: True` 29 枚／`Depends` 111 枚）
     # **同值**——§二 带账可对、这里无账可对，两处必须一起动（改代码不动 pin ⇒ CI 红；
     # 改 pin 不动代码 ⇒ 这条腿失去牙齿）。
     assert http["ok_true"] == 29
-    assert http["depends"] == 109
+    assert http["depends"] == 111
 
 
 def test_real_repo_debt_rows_match_fresh_readings(real):
