@@ -151,7 +151,8 @@ fi
 # 分路：tag 用 FETCH_HEAD^{commit}（每次 fetch 必写；annotated tag 由 ^{commit} 剥到提交，
 # 2026-11-02 宿主实测 v1.17.0 → 298b45d）；master 仍走 github/$REF（⛔ 不得改走本地
 # master——那会部署本地分支而不是刚 fetch 的发布线）。两条路都解析不出＝报错退出，
-# 不猜、不回退 FROM_SHA。
+# 不猜；失败路径**不推进 TO_SHA**（保持原值，AF-736 F4 措辞：字面上仍赋 FROM_SHA，
+# 语义是「失败即退出、TO_SHA 不前进」，⛔ 别当成 bug）。
 TARGET_SHA=""
 case "$REF" in
   v[0-9]*.[0-9]*.[0-9]*)
@@ -164,7 +165,7 @@ esac
 if [ -z "$TARGET_SHA" ]; then
     log "ERROR: 解析不出 $REF 的 SHA（tag 路线=FETCH_HEAD^{commit}／master 路线=github/\$REF）"
     TO_SHA="$FROM_SHA"; TO_TAG="$FROM_TAG"
-    write_result False "ref 解析失败：github/$REF 不存在"
+    write_result False "ref 解析失败：$REF（tag 路线=FETCH_HEAD^{commit}／master 路线=github/$REF）"
     rm -f "$MARKER"
     exit 1
 fi

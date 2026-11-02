@@ -28,7 +28,12 @@ v1.17.0 之前是手写稿、落后真实 API 约 8.5 倍，根因是「靠人�
      `af_` 开头含点号的 token，剔完才是干净的名单。
 
 退出码：0 干净／1 有漂（红因逐格写明）/2 射程塌（真源缺失、契约不在、§二/§三 解析不出、
-端点表或任一名单为空——**射程塌不许报干净**，与全仓门禁同口径）。
+端点表或任一名单为空、**生成器装载/执行/真源解析抛异常**——**射程塌不许报干净**，
+⛔ 崩溃也不许以 exit 1 冒充「红」，AF-736 F2）。
+
+AF-736 F5 口径：本门只能判「**契约没重新生成**」，判不了「**生成器口径本身对不对**」——
+文档侧与源码侧都出自同一个生成器 ⇒ ⇒ **⛔ 门绿 ≠ 契约对**；它只保证
+『文档与源码现读同源同刻』。⛔ 不许把「门全绿」当成「契约内容正确」的证据。
 
 行尾/空白：仓内契约是 CRLF、生成器输出是 LF ⇒ 文本按 universal newlines 读入并逐格 strip，
 ⛔ 不许因行尾差异判红。⛔ 本门只判不写：不重生成契约（重生成是 PM 在发布窗口做）、
@@ -45,8 +50,6 @@ import sys
 
 #: 文档里按 (方法, 路径) 认端点行的形状：| `GET` | `/api/graphs` | 权限面 | 说明 |
 DOC_ROW_RE = re.compile(r"^\|\s*`([A-Z]+)`\s*\|\s*`([^`]+)`\s*\|")
-#: 生成器渲染时排除的三条路径（与 render_api_contract.main 的渲染循环同口径）
-EXCLUDED_PATHS = ("/pair", "/{full_path}", "/mcp")
 #: 真源名 token 的形状（坑③）：`af_audit.ALL_EVENT_TYPES` / `af_scanner.CHECKS`
 TRUE_SOURCE_TOKEN_RE = re.compile(r"^af_[A-Za-z0-9_]+\.[A-Za-z0-9_]+$")
 
@@ -60,7 +63,12 @@ class Collapse(Exception):
 
 
 def _load_generator(repo: pathlib.Path):
-    """装载仓内生成器模块（复用其解析函数，⛔ 不抄第二份口径）。"""
+    """装载仓内生成器模块（复用其解析函数与排除常量，⛔ 不抄第二份口径）。
+
+    AF-736 F2：装载/执行阶段抛出的**任何**异常（SyntaxError／ImportError／…）
+    都必须折成 `Collapse`（exit 2「射程塌」）——⛔ 不许让 traceback 以退出码 1
+    跑成 gates.sh 的「红」分支：那一刻一条红因都没有（红因不可读＝没牙），
+    运维会被引去查契约漂移，而真相是门自己坏了——崩了报「红」比报「干净」更误导。"""
     gen_p = repo / "scripts" / "render_api_contract.py"
     if not gen_p.exists():
         raise Collapse("生成器不在：%s（本门复用它的解析口径，没有它无从判定）" % gen_p)
@@ -68,21 +76,39 @@ def _load_generator(repo: pathlib.Path):
     if spec is None or spec.loader is None:
         raise Collapse("生成器装载不了：%s" % gen_p)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    try:
+        spec.loader.exec_module(mod)
+    except Exception as exc:  # AF-736 F2：门自己坏了 ⇒ 射程塌，不是「红」
+        raise Collapse(
+            "生成器装载/执行失败（射程塌）：%s: %s" % (exc.__class__.__name__, exc)
+        ) from exc
+    if not hasattr(mod, "EXCLUDED_PATHS"):
+        raise Collapse(
+            "生成器缺少 EXCLUDED_PATHS 常量（AF-736 F1 的导出被摘了？本门"
+            "⛔ 不抄第二份排除清单，无此常量即射程塌）"
+        )
     return mod
 
 
 def _rebuild_from_source(repo: pathlib.Path, gen):
-    """源码现读重建：端点表 {(method, path): (faces_cell, doc_cell)} ＋ 两份枚举名单。"""
+    """源码现读重建：端点表 {(method, path): (faces_cell, doc_cell)} ＋ 两份枚举名单。
+
+    AF-736 F2：真源解析阶段抛出的异常（如 af_api.py 语法坏 ⇒ SyntaxError）同样
+    折成 `Collapse`（exit 2＋原始异常一行）——⛔ traceback 不许冒充红因。"""
     api_p = repo / "src" / "autoforge" / "af_api.py"
     audit_p = repo / "src" / "autoforge" / "af_audit.py"
     scanner_p = repo / "src" / "autoforge" / "af_scanner.py"
     for p in (api_p, audit_p, scanner_p):
         if not p.exists():
             raise Collapse("缺真源：%s（⛔ 不许用残缺结果下结论）" % p)
-    api_rows = gen.parse_api_source(api_p)
-    events, _event_names = gen.parse_all_event_types(audit_p)
-    checks = gen.parse_checks(scanner_p)
+    try:
+        api_rows = gen.parse_api_source(api_p)
+        events, _event_names = gen.parse_all_event_types(audit_p)
+        checks = gen.parse_checks(scanner_p)
+    except Exception as exc:  # AF-736 F2：射程塌，不是「红」
+        raise Collapse(
+            "真源解析失败（射程塌）：%s: %s" % (exc.__class__.__name__, exc)
+        ) from exc
     if not api_rows:
         raise Collapse("源码现读解析出 0 条端点（af_api.py 口径变了？射程塌，不许报干净）")
     if not events:
@@ -92,7 +118,9 @@ def _rebuild_from_source(repo: pathlib.Path, gen):
     table: dict[tuple[str, str], tuple[str, str]] = {}
     for r in api_rows:
         path = gen.normalize_route(r["path"])
-        if path in EXCLUDED_PATHS:
+        # AF-736 F1：排除清单唯一真源＝生成器常量（gen.EXCLUDED_PATHS），
+        # ⛔ 门里不留第二份字面量（否则生成器改排除集合 ⇒ 假红/假绿）。
+        if path in gen.EXCLUDED_PATHS:
             continue
         key = (r["method"], path)
         faces_cell = gen.esc("／".join(r["faces"]))

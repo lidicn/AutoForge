@@ -36,6 +36,10 @@ DEP_NAMES = {
     "_bearer": "bearer(仅校验持令牌)",
     "_write_scope": "write",
 }
+#: 渲染排除路径（AF-736 F1：**唯一真源在本常量**——契约漂移门
+#: `scripts/check_contract_drift.py` 复用 `gen.EXCLUDED_PATHS`，⛔ 任何一侧都不许
+#: 再手抄第二份字面量，否则生成器改排除集合时门会假红/假绿）。
+EXCLUDED_PATHS = ("/pair", "/{full_path}", "/mcp")
 ROUTE_RE = re.compile(r'@app\.(get|post|put|delete|patch)\(\s*"([^"]+)"')
 
 
@@ -326,7 +330,7 @@ def main():
     groups = {}
     unmatched = []
     for (m, p), op in sorted(op_index.items(), key=lambda kv: (kv[0][1], kv[0][0])):
-        if p in ("/pair", "/{full_path}") or p == "/mcp":
+        if p in EXCLUDED_PATHS:
             continue
         r = src_index.get((m, p))
         if r is None:
