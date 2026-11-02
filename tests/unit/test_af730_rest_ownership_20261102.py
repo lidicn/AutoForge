@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -33,6 +34,29 @@ from autoforge.af_store import GraphStore
 NON_OWNER = "dsh-pm"      # 纯非 owner 主体（名下无归档）
 OWNER_SUBJECT = "owner"   # 真 owner 面（_OWNER_SUBJECTS）
 OWNER_OF_ALL = "dsh"      # 腿 A：归属者（全部归档挂他名下）· 非 owner 面
+
+#: AF-735：拒绝文案的**字面量模板**（独立期望，⛔ 不引用实现函数）。
+#: 真源是 `af_ownership.visible_error` 的 f-string：`没找到归档 {name!r}（或它不属于你）`。
+#: 实现若改模板 ⇒ 这里红 ⇒ 有意照面（判据必须独立于被检对象，台账 1.28）；
+#: ⛔ 禁止改回「拿 `visible_error()` 当期望值」——那等于同源自证（AF-735 病灶①）。
+VISIBLE_TEMPLATE = "没找到归档 '«NAME»'（或它不属于你）"
+
+
+def _denamed(detail: str, name: str) -> str:
+    """AF-735 D2：把响应文案里的归档名替换成同一占位符（卡面默认取法：
+    先按「带引号的确切名」替换；再以正则兜底归一其余引号形状）。"""
+    out = detail.replace(f"'{name}'", "'«NAME»'")
+    return re.sub(r"'[^']*'", "'«NAME»'", out)
+
+
+def _assert_no_subject_leak(denamed: str) -> None:
+    """AF-735 D3：去名后的文案不得出现 owner／主体／归属者名字
+    （存在性 oracle 泄露 ⇒ 红）。⚠️ 必须对**去名后**的文本断言——
+    请求名本身（如 dsh_own）含主体子串，先去名再查才不误伤。"""
+    for subject in (NON_OWNER, OWNER_SUBJECT, OWNER_OF_ALL):
+        assert subject not in denamed, (
+            f"文案泄露归属者（存在性 oracle）: {denamed!r} 含 {subject!r}"
+        )
 
 
 def _ir(name: str, ask: bool = False) -> dict:
@@ -120,6 +144,14 @@ def test_graphs_broken_identity_403(env):
     assert "subject" in r.json()["detail"]
 
 
+def test_automations_broken_identity_403(env):
+    """AF-735 D5：残缺身份腿补第二端点（原覆盖只有 /api/graphs 一条腿）——
+    /api/automations 同样 403，⛔ 退化成匿名全量。"""
+    r = env["client"].get("/api/automations", headers=env["empty"])
+    assert r.status_code == 403
+    assert "subject" in r.json()["detail"]
+
+
 def test_graphs_non_owner_with_no_archives_shape(env):
     """腿 B 复刻（线上 dsh-PM＝名下 0 条的形状）由 leg1 的 mine 份额腿等效覆盖；
     此处只钉「非 owner 名下条数 0 ⇒ items=0、hidden=全集」的算术（tmp 直调服务层）。"""
@@ -146,16 +178,22 @@ def test_graphs_noauth_escape_hatch_still_full(tmp_path, monkeypatch):
 # ── ② GET /api/graphs/{name}：存在性 oracle ─────────────────────────
 
 def test_graph_detail_foreign_and_missing_verbatim_same(env):
-    """oracle：他人名与不存在名同一路径同一枚文案单源——状态同 404，
-    detail 去掉名字后逐字同形（`visible_error` 模板），⛔ 不泄露存在性。"""
+    """oracle（AF-735 重钉）：他人名与不存在名同一路径同一枚文案单源——状态同 404，
+    detail 各自**把归档名替换成同一占位符后**逐字等于**字面量模板**（D2；⛔ 不引用
+    `visible_error()` 当期望——期望与被检对象同源＝判红能力为零，AF-735 病灶①）；
+    且去名后不得出现归属者名字（D3，存在性 oracle 泄露 ⇒ 红）。"""
     headers = env["agent"]
     r_foreign = env["client"].get("/api/graphs/theirs", headers=headers)
     r_missing = env["client"].get("/api/graphs/no-such-archive", headers=headers)
     assert r_foreign.status_code == 404 and r_missing.status_code == 404
-    from autoforge.af_ownership import visible_error
-    assert r_foreign.json() == {"detail": visible_error("theirs")}
-    assert r_missing.json() == {"detail": visible_error("no-such-archive")}
     assert list(r_foreign.json().keys()) == list(r_missing.json().keys()) == ["detail"]
+    f_tmpl = _denamed(r_foreign.json()["detail"], "theirs")
+    m_tmpl = _denamed(r_missing.json()["detail"], "no-such-archive")
+    assert f_tmpl == VISIBLE_TEMPLATE, f_tmpl
+    assert m_tmpl == VISIBLE_TEMPLATE, m_tmpl
+    assert f_tmpl == m_tmpl, "D2：两条响应去名后必须逐字同形"
+    _assert_no_subject_leak(f_tmpl)
+    _assert_no_subject_leak(m_tmpl)
 
 
 def test_graph_detail_own_ok_owner_of_all_reads_foreign(env):
@@ -168,12 +206,17 @@ def test_graph_detail_own_ok_owner_of_all_reads_foreign(env):
 # ── ⑭ GET /api/conf/{name} ──────────────────────────────────────────
 
 def test_conf_foreign_same_shape_as_missing(env):
+    """AF-735 重钉（同 ②）：期望＝字面量模板＋占位符同形＋无主体名泄露。"""
     r_foreign = env["client"].get("/api/conf/theirs", headers=env["agent"])
     r_missing = env["client"].get("/api/conf/no-such", headers=env["agent"])
     assert r_foreign.status_code == 404 and r_missing.status_code == 404
-    from autoforge.af_ownership import visible_error
-    assert r_foreign.json() == {"detail": visible_error("theirs")}
-    assert r_missing.json() == {"detail": visible_error("no-such")}
+    f_tmpl = _denamed(r_foreign.json()["detail"], "theirs")
+    m_tmpl = _denamed(r_missing.json()["detail"], "no-such")
+    assert f_tmpl == VISIBLE_TEMPLATE, f_tmpl
+    assert m_tmpl == VISIBLE_TEMPLATE, m_tmpl
+    assert f_tmpl == m_tmpl, "D2：两条响应去名后必须逐字同形"
+    _assert_no_subject_leak(f_tmpl)
+    _assert_no_subject_leak(m_tmpl)
 
 
 def test_conf_own_ok(env):
@@ -184,12 +227,18 @@ def test_conf_own_ok(env):
 # ── ⑬ GET /api/asks/{name}（本地构造 ask 腿）────────────────────────
 
 def test_asks_name_foreign_and_missing_verbatim_same(env):
+    """AF-735 重钉（同 ②）：期望＝字面量模板＋占位符同形＋无主体名泄露
+    （⚠️ 请求名 dsh_own 含主体子串 ⇒ D3 必须对**去名后**文本断言）。"""
     r_foreign = env["client"].get("/api/asks/dsh_own", headers=env["agent"])
     r_missing = env["client"].get("/api/asks/no-such", headers=env["agent"])
     assert r_foreign.status_code == 404 and r_missing.status_code == 404
-    from autoforge.af_ownership import visible_error
-    assert r_foreign.json() == {"detail": visible_error("dsh_own")}
-    assert r_missing.json() == {"detail": visible_error("no-such")}
+    f_tmpl = _denamed(r_foreign.json()["detail"], "dsh_own")
+    m_tmpl = _denamed(r_missing.json()["detail"], "no-such")
+    assert f_tmpl == VISIBLE_TEMPLATE, f_tmpl
+    assert m_tmpl == VISIBLE_TEMPLATE, m_tmpl
+    assert f_tmpl == m_tmpl, "D2：两条响应去名后必须逐字同形"
+    _assert_no_subject_leak(f_tmpl)
+    _assert_no_subject_leak(m_tmpl)
     assert "未找到自动化" not in r_foreign.text, "旧文案必须撤（存在性 oracle）"
 
 
@@ -232,12 +281,13 @@ def test_automations_dedup_and_owner_legs(tmp_path, monkeypatch):
     r = client.get("/api/automations", headers={"Authorization": "Bearer tok-dsh"})
     assert r.status_code == 200
     body = r.json()
-    unique = {h["name"] for h in store.history()}
-    assert body["total"] == len(unique), "total 必须等于唯一归档数（去重）"
+    # AF-735 D4：期望改**独立字面量**（夹具只建 dupme 一名两版本 ⇒ 唯一归档数=1）；
+    # ⛔ 不许从 store.history() 反推期望（从被检对象的读面反推＝同源，AF-735 病灶③）。
+    assert body["total"] == 1, "total 必须等于唯一归档数（去重；字面量锚=1：dupme 两版本）"
     assert r.json()["ok"] is True
     # graphs 面同样去重口径（list_graphs 走 latest map，天然唯一）：
     r2 = client.get("/api/graphs", headers={"Authorization": "Bearer tok-dsh"})
-    assert r2.json()["count"] == len(unique)
+    assert r2.json()["count"] == 1
 
 
 def test_automations_group_by_other_shape_scoped(env):
@@ -251,12 +301,17 @@ def test_automations_group_by_other_shape_scoped(env):
 # ── ⑨/⑩ GET /api/automations/{name} ────────────────────────────────
 
 def test_automation_detail_foreign_and_missing_verbatim_same(env):
+    """AF-735 重钉（同 ②）：期望＝字面量模板＋占位符同形＋无主体名泄露。"""
     r_foreign = env["client"].get("/api/automations/theirs", headers=env["agent"])
     r_missing = env["client"].get("/api/automations/no-such", headers=env["agent"])
     assert r_foreign.status_code == 404 and r_missing.status_code == 404
-    from autoforge.af_ownership import visible_error
-    assert r_foreign.json() == {"detail": visible_error("theirs")}
-    assert r_missing.json() == {"detail": visible_error("no-such")}
+    f_tmpl = _denamed(r_foreign.json()["detail"], "theirs")
+    m_tmpl = _denamed(r_missing.json()["detail"], "no-such")
+    assert f_tmpl == VISIBLE_TEMPLATE, f_tmpl
+    assert m_tmpl == VISIBLE_TEMPLATE, m_tmpl
+    assert f_tmpl == m_tmpl, "D2：两条响应去名后必须逐字同形"
+    _assert_no_subject_leak(f_tmpl)
+    _assert_no_subject_leak(m_tmpl)
     assert "未找到自动化" not in r_foreign.text
 
 
