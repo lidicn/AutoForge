@@ -180,12 +180,41 @@ fi
 log "py_compile 通过"
 
 # 旧镜像打 tag，便于一键回滚（DCD-20261017-001 §2.5②：回滚 = up -d prev）
-if docker image inspect autoforge-api:latest >/dev/null 2>&1; then
+# ⛔ 这一步在 build 之前执行：它保存的是「当时运行中的镜像」。守卫独立成函数
+# tag_prev_guard＝T1–T4 桩测的抽取面（测试按函数名从本文件抽取，⛔ 不在测试里
+# 复制逻辑＝第二份漂移源）。
+tag_prev_guard() {
+    if ! docker image inspect autoforge-api:latest >/dev/null 2>&1; then
+        log "WARN: 无 autoforge-api:latest，跳过 prev tag"
+        return 0
+    fi
+    # :prev 同版本守卫（2026-11-03 v1.19 候选；runbook §十二 规矩二落码）：同一 sha
+    # 连续部署两次曾把 :prev 覆盖成与 :latest 同版本 ⇒ 回滚网被自己吃掉（v1.18.0
+    # 实测，AF-Verify 核出后打回 842a0ca5…）。判据（卡面裁定：两条都要，任一成立
+    # 即跳过）：① Image Id 相同；② 版本标签非空且相同——同一份代码重建可能产生
+    # 不同 Id，同一版本也可能因构建缓存换 Id，只判一条都会漏。
+    # ⚠️ 现读坐实（2026-11-03）：docker/Dockerfile.api 与 compose 均**无 version
+    # label** ⇒ 判据②在当前镜像上恒不触发（①是唯一可 fire 判据）；②按卡面保留，
+    # 未来给镜像加 `LABEL version` 即武装（另批，⛔ 本卡不碰 Dockerfile）。
+    # :prev 不存在 ⇒ 照旧 tag（首次部署不受影响）；跳过必须 log 写明原因（⛔ 不许
+    # 静默——否则下一任看到 :prev 没变会以为脚本没跑）。⛔ 只守卫这一处。
+    local cur_latest_id cur_prev_id cur_latest_ver cur_prev_ver
+    cur_latest_id=$(docker image inspect autoforge-api:latest --format '{{.Id}}' 2>/dev/null || echo "")
+    cur_prev_id=$(docker image inspect autoforge-api:prev --format '{{.Id}}' 2>/dev/null || echo "")
+    cur_latest_ver=$(docker image inspect autoforge-api:latest --format '{{index .Config.Labels "version"}}' 2>/dev/null || echo "")
+    cur_prev_ver=$(docker image inspect autoforge-api:prev --format '{{index .Config.Labels "version"}}' 2>/dev/null || echo "")
+    if [ -n "$cur_prev_id" ] && [ "$cur_latest_id" = "$cur_prev_id" ]; then
+        log "SKIP: :prev 同版本（Image Id 相同），跳过 :prev 覆盖——回滚网保持原值"
+        return 0
+    fi
+    if [ -n "$cur_latest_ver" ] && [ "$cur_latest_ver" = "$cur_prev_ver" ]; then
+        log "SKIP: :prev 同版本（版本标签相同：latest='$cur_latest_ver'），跳过 :prev 覆盖——回滚网保持原值"
+        return 0
+    fi
     docker tag autoforge-api:latest autoforge-api:prev
     log "旧镜像已打 tag: autoforge-api:prev"
-else
-    log "WARN: 无 autoforge-api:latest，跳过 prev tag"
-fi
+}
+tag_prev_guard
 
 # 从镜像构建前后端（DCD-20261017-001 §2.4：前端已烘进镜像，不再宿主 npm build / docker cp / dist 同步）
 # build 失败 ⇒ 不切流：旧镜像仍在服务，latest tag 未被覆盖，回滚 git 保持代码一致。
