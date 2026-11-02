@@ -42,11 +42,18 @@ OWNER_OF_ALL = "dsh"      # 腿 A：归属者（全部归档挂他名下）· �
 VISIBLE_TEMPLATE = "没找到归档 '«NAME»'（或它不属于你）"
 
 
+def _denamed_exact(detail: str, name: str) -> str:
+    """AF-735 D3 底座：**只**把请求名替换成占位符（⛔ 不做正则兜底）。
+    ⚠️ 主体名泄露检查必须跑在这一层——PM 复核指出的假绿角落：若实现把主体名
+    放进名字位置（如 detail 里出现 'dsh'），正则兜底会把它一起占位化 ⇒
+    D2/D3 双盲；先只去请求名，主体名留在文本里给 D3 抓。"""
+    return detail.replace(f"'{name}'", "'«NAME»'")
+
+
 def _denamed(detail: str, name: str) -> str:
-    """AF-735 D2：把响应文案里的归档名替换成同一占位符（卡面默认取法：
-    先按「带引号的确切名」替换；再以正则兜底归一其余引号形状）。"""
-    out = detail.replace(f"'{name}'", "'«NAME»'")
-    return re.sub(r"'[^']*'", "'«NAME»'", out)
+    """AF-735 D2 同形用：先只去请求名，再以正则兜底归一**其余**引号形状
+    （兜底只服务同形比较；⛔ 主体名泄露检查跑 `_denamed_exact`）。"""
+    return re.sub(r"'[^']*'", "'«NAME»'", _denamed_exact(detail, name))
 
 
 def _assert_no_subject_leak(denamed: str) -> None:
@@ -192,8 +199,10 @@ def test_graph_detail_foreign_and_missing_verbatim_same(env):
     assert f_tmpl == VISIBLE_TEMPLATE, f_tmpl
     assert m_tmpl == VISIBLE_TEMPLATE, m_tmpl
     assert f_tmpl == m_tmpl, "D2：两条响应去名后必须逐字同形"
-    _assert_no_subject_leak(f_tmpl)
-    _assert_no_subject_leak(m_tmpl)
+    # D3（PM 复核修正）：跑在**只去请求名**的中间层——主体名占名字位的泄露
+    # 不会被正则兜底吃掉
+    _assert_no_subject_leak(_denamed_exact(r_foreign.json()["detail"], "theirs"))
+    _assert_no_subject_leak(_denamed_exact(r_missing.json()["detail"], "no-such-archive"))
 
 
 def test_graph_detail_own_ok_owner_of_all_reads_foreign(env):
@@ -215,8 +224,9 @@ def test_conf_foreign_same_shape_as_missing(env):
     assert f_tmpl == VISIBLE_TEMPLATE, f_tmpl
     assert m_tmpl == VISIBLE_TEMPLATE, m_tmpl
     assert f_tmpl == m_tmpl, "D2：两条响应去名后必须逐字同形"
-    _assert_no_subject_leak(f_tmpl)
-    _assert_no_subject_leak(m_tmpl)
+    # D3（PM 复核修正）：跑在**只去请求名**的中间层
+    _assert_no_subject_leak(_denamed_exact(r_foreign.json()["detail"], "theirs"))
+    _assert_no_subject_leak(_denamed_exact(r_missing.json()["detail"], "no-such"))
 
 
 def test_conf_own_ok(env):
@@ -237,8 +247,9 @@ def test_asks_name_foreign_and_missing_verbatim_same(env):
     assert f_tmpl == VISIBLE_TEMPLATE, f_tmpl
     assert m_tmpl == VISIBLE_TEMPLATE, m_tmpl
     assert f_tmpl == m_tmpl, "D2：两条响应去名后必须逐字同形"
-    _assert_no_subject_leak(f_tmpl)
-    _assert_no_subject_leak(m_tmpl)
+    # D3（PM 复核修正）：跑在**只去请求名**的中间层
+    _assert_no_subject_leak(_denamed_exact(r_foreign.json()["detail"], "dsh_own"))
+    _assert_no_subject_leak(_denamed_exact(r_missing.json()["detail"], "no-such"))
     assert "未找到自动化" not in r_foreign.text, "旧文案必须撤（存在性 oracle）"
 
 
@@ -310,8 +321,9 @@ def test_automation_detail_foreign_and_missing_verbatim_same(env):
     assert f_tmpl == VISIBLE_TEMPLATE, f_tmpl
     assert m_tmpl == VISIBLE_TEMPLATE, m_tmpl
     assert f_tmpl == m_tmpl, "D2：两条响应去名后必须逐字同形"
-    _assert_no_subject_leak(f_tmpl)
-    _assert_no_subject_leak(m_tmpl)
+    # D3（PM 复核修正）：跑在**只去请求名**的中间层
+    _assert_no_subject_leak(_denamed_exact(r_foreign.json()["detail"], "theirs"))
+    _assert_no_subject_leak(_denamed_exact(r_missing.json()["detail"], "no-such"))
     assert "未找到自动化" not in r_foreign.text
 
 
