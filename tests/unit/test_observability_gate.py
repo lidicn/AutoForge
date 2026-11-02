@@ -100,9 +100,13 @@ def test_real_repo_site_readings_are_pinned(real):
     # `APPROVE_WATCH_AUDIT_RECORD_FAILED` 一枚带码 WARNING（warning 142→143）。
     # 209 → 210（2026-10-31 AF-710 留痕半）：SSE 配对推送吞异常补留痕
     # `PAIR_SSE_EVENT_FAILED` 一枚带码 WARNING（warning 143→144）。
-    assert len(real["sites"]) == 210
+    # 210 → 216（2026-11-02 watch 卡）：WATCH_IR_DRIFT／WATCH_IR_RESYNCED／
+    # WATCH_IR_RECONCILE_FAILED（af_live._loop）＋ APPROVE_PENDING_AUDIT_RECORD_FAILED
+    # （af_service.approve_pending）＋ WATCH_HEALTH_SIDECAR_SKIPPED／
+    # WATCH_ALIVE_PROBE_SKIPPED（af_service._watch_health）——六枚新留痕（debug+2／warning+4）。
+    assert len(real["sites"]) == 216
     assert len({s["path"] for s in real["sites"]}) == 32
-    assert dict(lv) == {"debug": 22, "info": 9, "warning": 144, "error": 24, "exception": 11}
+    assert dict(lv) == {"debug": 24, "info": 9, "warning": 148, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -153,8 +157,8 @@ def test_real_repo_named_code_readings_are_pinned(real):
     # （af_service.approve_pending 记账失败告警，+1 站 +1 码）。
     # 95→96 站／92→93 枚（2026-10-31 AF-710 留痕半）：`PAIR_SSE_EVENT_FAILED`
     # （af_api._pair_event_gen 吞异常补留痕，+1 站 +1 码）。
-    assert len(coded) == 96
-    assert len({s["code"] for s in coded}) == 93
+    assert len(coded) == 102
+    assert len({s["code"] for s in coded}) == 99
     # 41 站／38 枚＝仓内三例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
     # ① `DEPLOY_AUDIT_PERSIST_FAILED` 同时出自「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」
     #    两条腿——同一句承诺（台账没落稳）；
@@ -227,7 +231,7 @@ def test_real_repo_every_named_code_is_registered(real):
     # `INBOX_REJECT_STALE` 两枚新码入 §三（af_live.read_answer_inbox），同上。
     # 86 → 87 枚／89 → 90 站（2026-10-26 返工 5.1③）：`PAIR_LINK_FAILURE_COUNT_WRITE_FAILED`
     # 入 §三（af_api._pair_record_failure 吞异常改留痕），同上。
-    assert info["codes"] == 93 and info["coded"] == 96
+    assert info["codes"] == 99 and info["coded"] == 102
 
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
