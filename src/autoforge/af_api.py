@@ -706,6 +706,10 @@ def build_app(
     def api_pending_approve(
         body: PendingApproveBody, info: TokenInfo | None = Depends(_write)
     ) -> dict[str, Any]:
+        # AF-734：批准待部署＝**owner 专属**（agent 一律不能批）；提交者＝审批者另由
+        # 服务层 P0-13 拒。权级拒绝用「无权」形，⛔ 不点提交者名、不泄露待批内容。
+        if info is not None and not _caller_is_owner(info):
+            raise HTTPException(status_code=403, detail="无权批准待部署（仅 owner 面可批）")
         reviewer = info.subject if info else "human"
         return _svc(svc.approve_pending, store, body.op_id, reviewer)
 
@@ -713,6 +717,15 @@ def build_app(
     def api_pending_reject(
         body: PendingRejectBody, info: TokenInfo | None = Depends(_write)
     ) -> dict[str, Any]:
+        # AF-734：驳回＝owner 全部；agent **仅撤回自己提交的**（按 pending 记录的现成
+        # `submitted_by` 判，⛔ 不改数据模型）。他人提交＋非 owner ⇒ 403（⛔ 不点提交者名）。
+        if info is not None and not _caller_is_owner(info):
+            items = svc.list_pending(store, None).get("items", [])
+            target = next((r for r in items
+                           if str(r.get("op_id") or r.get("id") or "") == body.op_id), None)
+            submitter = str((target or {}).get("submitted_by") or "")
+            if submitter and info.subject != submitter:
+                raise HTTPException(status_code=403, detail="无权驳回他人提交的待批（仅能撤回自己的）")
         return _svc(svc.reject_pending, store, body.op_id, body.reason)
 
     # ── v1.4.0 治理面：凭据热重载（connection_revision 代数，免重启）──
@@ -790,8 +803,14 @@ def build_app(
 
     # ── v0.7.0 模板导出与备份恢复 ──
     @app.get("/api/store/export", dependencies=[Depends(_read)])
-    def api_store_export() -> dict[str, Any]:
-        """导出整个 store 为 bundle（含 tags + 校验和）。读端点，不强制鉴权。"""
+    def api_store_export(info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        """导出整个 store 为 bundle（含 tags + 校验和）。
+
+        AF-732：**导出整库＝owner 专属**（⛔ 不改界面文案——界面本就写「导出整库」）；
+        非 owner ⇒ 404（与「不存在」同形，⛔ 不点归属者名）；无身份维持豁免。
+        """
+        if info is not None and not _caller_is_owner(info):
+            raise HTTPException(status_code=404, detail="未找到该资源（或它不属于你）")
         return svc.export_store(store)
 
     @app.post("/api/store/import")
@@ -899,8 +918,33 @@ def build_app(
         """token/结果遥测 + 错误类别分布（四维：tool/category/ok/day）。"""
         return svc.get_telemetry(store, days=int(days))
 
+    def _write_probe(name: str, info: TokenInfo | None) -> None:
+        """AF-401 同序纪律：写面探测用**只读闸**（`_assert_archive_visible`）——
+        我们只验证身份/归属，不写盘；用写闸（`_assert_archive_mutator`）会把
+        「无归属」与「他人名下」分成两种文案 ⇒ 写面**存在性 oracle**（AF-731 教训）。
+        拆法与 AF-731 的写面收口同族：先探后写、暂不赋值。"""
+        _svc(
+            svc._assert_archive_visible, store, name,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
+        )
+
     @app.post("/api/conf/{name}/intervene", dependencies=[Depends(_write)])
-    def api_intervene(name: str, body: InterveneBody) -> dict[str, Any]:
+    def api_intervene(
+        name: str, body: InterveneBody, info: TokenInfo | None = Depends(_write)
+    ) -> dict[str, Any]:
+        """干预置信度（AF-733：owner 面全部；开发者 agent 仅**自己名下**归档）。
+
+        非 owner 干预**他人**归档 ⇒ 与「不存在」同码同文（`visible_error` 单源，
+        ⇒ 不泄露存在性）；owner 面/无身份放行；残缺身份 403 先于一切。
+        """
+        _svc(
+            svc._assert_archive_visible, store, name,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
+        )
         try:
             return svc.intervene(store, name, body.automation_id)
         except FileNotFoundError as exc:
@@ -1087,32 +1131,66 @@ def build_app(
         except IRValidationError as exc:
             raise HTTPException(status_code=400, detail=f"IR 校验失败：{exc}") from exc
 
+    # AF-732（裁定③「不做多用户」）：sessions／asks 的读面与写面**同一条 owner 门**——
+    # 非 owner 一律看不到、也写不了（与「不存在」同形，⛔ 不给 sidecar 加 owner 字段）。
+    # 无身份（AF_ALLOW_NOAUTH，info=None）维持全量豁免；残缺身份 403 先于一切。
+    def _owner_gate(info: TokenInfo | None) -> None:
+        if info is None:
+            return
+        from .af_ownership import Subject, TokenState, broken_identity_error
+
+        sub = Subject.from_caller(info.subject, owner_face=_caller_is_owner(info),
+                                  token_identity=True)
+        if sub.token_state is TokenState.BROKEN:
+            raise HTTPException(status_code=403, detail=broken_identity_error())
+        if not _caller_is_owner(info):
+            raise HTTPException(status_code=404, detail="未找到该会话（或它不属于你）")
+
     @app.post("/api/sessions", dependencies=[Depends(_write)])
-    def api_session_create(body: SessionBody) -> dict[str, Any]:
+    def api_session_create(
+        body: SessionBody, info: TokenInfo | None = Depends(_write)
+    ) -> dict[str, Any]:
+        _owner_gate(info)
         return _svc(svc.create_session, body.ir, body.seed, body.events)
 
     @app.get("/api/sessions", dependencies=[Depends(_read)])
-    def api_session_list() -> dict[str, Any]:
+    def api_session_list(info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        _owner_gate(info)
         return svc.list_sessions()
 
     @app.get("/api/sessions/{session_id}", dependencies=[Depends(_read)])
-    def api_session_get(session_id: str) -> dict[str, Any]:
+    def api_session_get(
+        session_id: str, info: TokenInfo | None = Depends(_read)
+    ) -> dict[str, Any]:
+        _owner_gate(info)
         return _svc(svc.get_session, session_id)
 
     @app.post("/api/sessions/{session_id}/answer", dependencies=[Depends(_write)])
-    def api_session_answer(session_id: str, body: AnswerBody) -> dict[str, Any]:
+    def api_session_answer(
+        session_id: str, body: AnswerBody, info: TokenInfo | None = Depends(_write)
+    ) -> dict[str, Any]:
+        _owner_gate(info)
         return _svc(svc.answer_session, session_id, body.text, body.ask_id, body.room, body.answer)
 
     @app.post("/api/sessions/{session_id}/tick", dependencies=[Depends(_write)])
-    def api_session_tick(session_id: str, body: TickBody) -> dict[str, Any]:
+    def api_session_tick(
+        session_id: str, body: TickBody, info: TokenInfo | None = Depends(_write)
+    ) -> dict[str, Any]:
+        _owner_gate(info)
         return _svc(svc.tick_session, session_id, body.advance_s)
 
     @app.post("/api/sessions/{session_id}/cancel", dependencies=[Depends(_write)])
-    def api_session_cancel(session_id: str, body: CancelBody | None = None) -> dict[str, Any]:
+    def api_session_cancel(
+        session_id: str, body: CancelBody | None = None, info: TokenInfo | None = Depends(_write)
+    ) -> dict[str, Any]:
+        _owner_gate(info)
         return _svc(svc.cancel_session, session_id, (body.reason if body else ""))
 
     @app.delete("/api/sessions/{session_id}", dependencies=[Depends(_write)])
-    def api_session_delete(session_id: str) -> dict[str, Any]:
+    def api_session_delete(
+        session_id: str, info: TokenInfo | None = Depends(_write)
+    ) -> dict[str, Any]:
+        _owner_gate(info)
         return _svc(svc.delete_session, session_id)
 
     # ── Round 2-B：真机下发（三重闸 + live scope）──
@@ -1223,13 +1301,19 @@ def build_app(
         )
 
     @app.post("/api/asks/answer", dependencies=[Depends(_write)])
-    def api_asks_answer(body: dict[str, Any]) -> dict[str, Any]:
+    def api_asks_answer(
+        body: dict[str, Any], info: TokenInfo | None = Depends(_write)
+    ) -> dict[str, Any]:
         """写答案到 watch 的 answer_inbox（由 watch ticker 注入 runtime）。
 
-        `AUTOFORGE_INBOX_KEY` 未设时**如实报失败**：读侧 `af_live.read_answer_inbox`
-        无 key 一律拒收，过去这里照样返回 ok=True，就是"接口 200、答案蒸发"的假绿。
-        文件仍写盘（保留"用户答过"的证据链），但结论按通道未生效给。
+        AF-732：asks 写面与读面同一 owner 门——非 owner ⇒ 404 同形（无身份维持豁免）。
+        以下保留原说明：`AUTOFORGE_INBOX_KEY` 未设时**如实报失败**：读侧
+        `af_live.read_answer_inbox` 无 key 一律拒收，过去这里照样返回 ok=True，就是
+        "接口 200、答案蒸发"的假绿。文件仍写盘（保留"用户答过"的证据链），但结论按
+        通道未生效给。
         """
+        if info is not None and not _caller_is_owner(info):
+            raise HTTPException(status_code=404, detail="未找到该会话（或它不属于你）")
         root = store.root if store else None
         if not root:
             return {"ok": False, "error": "no store"}
@@ -2169,7 +2253,18 @@ def build_app(
         return {"ok": True, "name": name, "archived": False}
 
     @app.delete("/api/automations/{name}", dependencies=[Depends(_admin)])
-    def api_automation_delete(name: str) -> dict[str, Any]:
+    def api_automation_delete(name: str, info: TokenInfo | None = Depends(_admin)) -> dict[str, Any]:
+        """删除归档（AF-733：owner 面全部；开发者 agent 仅**自己名下**归档）。
+
+        ⚠️ 删除是**不可逆**的：非 owner 删**他人**归档要在 `shutil.rmtree` **之前**就拒
+        （与「不存在」同码同文 404，`visible_error` 单源），否则先删后拒＝盘上已经没了。
+        """
+        _svc(
+            svc._assert_archive_visible, store, name,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=(info is not None),
+        )
         d = store._dir(name)
         if not d.is_dir():
             raise HTTPException(status_code=404, detail="未找到自动化")
