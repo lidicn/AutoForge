@@ -516,6 +516,12 @@ class GraphStore:
         if not self.root.is_dir():
             return out
         for path in sorted(self.root.glob("*/v*.json")):
+            # 防御（§1.133 幽灵归档）：operator 把手工备份放在 store 根（点目录，如
+            # `.qa_r4_backup_20261103/v1.json`）会被 `*/v*.json` 命中，列表报出幽灵条目
+            # （`unavailable`＋导出空壳）。归档目录名恒不含前导点 ⇒ 跳过点目录派生的条目，
+            # 正规归档与 `.deleted/<name>--<ts>/`（首层名不以点开头）不受影响。
+            if path.parent.name.startswith("."):
+                continue
             try:
                 record = json.loads(path.read_text(encoding="utf-8"))
             except (ValueError, OSError):
