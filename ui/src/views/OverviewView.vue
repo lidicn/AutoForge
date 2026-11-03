@@ -78,6 +78,14 @@ onMounted(async () => {
         <n-gi>
           <n-card :bordered="false" class="stat-card">
             <n-statistic label="归档用例" :value="archiveCount" />
+            <p
+              v-if="graphs?.unavailable?.length"
+              style="margin: 6px 0 0; font-size: 12px; color: #d03050"
+            >另有 {{ graphs.unavailable.length }} 条读不出</p>
+            <p
+              v-if="graphs?.hidden_count"
+              style="margin: 6px 0 0; font-size: 12px; color: #f0a020"
+            >另有 {{ graphs.hidden_count }} 条不属于你</p>
           </n-card>
         </n-gi>
       </n-grid>

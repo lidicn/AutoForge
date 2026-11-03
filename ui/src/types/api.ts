@@ -19,6 +19,16 @@ export interface GraphItem {
 
 export interface GraphListResponse {
   items: GraphItem[]
+  /** 后端计数合拢派生（items + unavailable + hidden）——v1.22 起类型化，⛔ 视图不得假定存在 */
+  count?: number
+  /** 后端 ok：计数合拢成立 */
+  ok?: boolean
+  /** 读不出的归档名（目录在但版本文件不可读等）——界面只在该数组非空时提示 */
+  unavailable?: string[]
+  /** 非 owner 面：被归属过滤掉的条数——界面只在存在该字段时提示 */
+  hidden_count?: number
+  /** 非 owner 面：本面可见范围标识（owner:<主体>） */
+  scope?: string
 }
 
 export interface Node {

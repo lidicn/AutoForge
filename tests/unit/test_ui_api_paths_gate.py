@@ -899,3 +899,38 @@ def test_event_source_with_unreadable_url_exits_2(tmp_path):
     """判据 C 对 SSE 生效：URL 来自读不出的地方（跨行拼接、外部变量）⇒ exit 2，不能当成"没人调"。"""
     assert _main(tmp_path, SSE_CLIENT.replace("const url = BASE + '/mcp/pair-request'", "const url = build()"),
                  PAIR_ROUTE) == 2
+
+
+# ── UI 缺口渲染（v1.22 · AF-UI，2026-11-03）───────────────────────────────
+# 上面整族是「路径契约门自己」的夹具判据；下面这族读的是**真实仓内文件**，钉的是另一件事：
+# `GET /api/graphs` 早就在报 `unavailable` / `hidden_count`（真丢归档／非 owner 份额），
+# 但 `GraphListResponse` 当初只有 `items` ⇒ 视图无数据可用 ⇒ 界面只少一条、不说话。
+# 分三腿：① 类型带上字段 ② 三处模板说出口 ③ 提示**受字段自身存在性保护**（⛔ 无条件显示＝
+# owner 面常驻噪音）。渲染效果不在本门射程内 ⇒ 由真机巡检带截图取证（本门只保证"字面在且挂对条件"）。
+_UI_SRC = ROOT / "ui" / "src"
+_GAP_VIEWS = (
+    ("views/OverviewView.vue", "graphs?.unavailable?.length", "graphs?.hidden_count"),
+    ("views/AutomationsListView.vue", "listMeta?.unavailable?.length", "listMeta?.hidden_count"),
+    ("views/VersionsView.vue", "listMeta?.unavailable?.length", "listMeta?.hidden_count"),
+)
+
+
+def test_graphlist_type_carries_gap_fields():
+    block = (_UI_SRC / "types" / "api.ts").read_text(encoding="utf-8")
+    block = block.split("export interface GraphListResponse {", 1)[1].split("}", 1)[0]
+    for field in ("count?", "ok?", "unavailable?", "hidden_count?", "scope?"):
+        assert field in block, f"GraphListResponse 缺字段 {field} ⇒ 后端报了前端也传不出去"
+
+
+def test_three_views_speak_up_about_gaps():
+    for rel, _u, _h in _GAP_VIEWS:
+        src = (_UI_SRC / rel).read_text(encoding="utf-8")
+        assert "条读不出" in src, f"{rel} 没有『读不出』提示"
+        assert "条不属于你" in src, f"{rel} 没有『不属于你』提示"
+
+
+def test_gap_hints_are_guarded_by_the_fields_themselves():
+    for rel, u_guard, h_guard in _GAP_VIEWS:
+        src = (_UI_SRC / rel).read_text(encoding="utf-8")
+        assert f'v-if="{u_guard}"' in src, f"{rel} 的『读不出』提示没挂在 {u_guard} 上（无条件显示＝owner 面噪音）"
+        assert f'v-if="{h_guard}"' in src, f"{rel} 的『不属于你』提示没挂在 {h_guard} 上"

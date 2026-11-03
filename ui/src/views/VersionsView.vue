@@ -2,9 +2,11 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NSelect, NTag } from 'naive-ui'
 import { facade } from '@/api'
-import type { DiffResponse, GraphItem } from '@/types/api'
+import type { DiffResponse, GraphItem, GraphListResponse } from '@/types/api'
 
 const graphs = ref<GraphItem[]>([])
+// v1.22：下拉只吃 items，但缺口（读不出／不属于你）要说得出，否则选项少一条也没人知道。
+const listMeta = ref<GraphListResponse | null>(null)
 const selectedGraph = ref('')
 const selectedOld = ref('1')
 const selectedNew = ref('2')
@@ -35,6 +37,7 @@ onMounted(async () => {
   try {
     const res = await facade.graphs()
     graphs.value = res.data.items
+    listMeta.value = res.data
     if (graphs.value.length) {
       selectedGraph.value = graphs.value[0].name
       syncVersions()
@@ -85,6 +88,12 @@ async function runDiff() {
       </div>
       <p v-if="latestVersion < 2" class="hint">
         该归档目前只有 1 个版本，暂无可对比项（可用 <code>forge store save</code> 生成第二个版本）。
+      </p>
+      <p v-if="listMeta?.unavailable?.length" class="hint" style="color: #d03050">
+        另有 {{ listMeta.unavailable.length }} 条读不出（不在下方选项里）
+      </p>
+      <p v-if="listMeta?.hidden_count" class="hint" style="color: #f0a020">
+        另有 {{ listMeta.hidden_count }} 条不属于你
       </p>
     </n-card>
 

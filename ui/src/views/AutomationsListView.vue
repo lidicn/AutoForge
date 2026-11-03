@@ -4,11 +4,14 @@ import { RouterLink } from 'vue-router'
 import { NAlert, NButton, NCard, NDataTable, NInput, NTag, NSpace, useMessage } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import { facade } from '@/api'
-import type { ConfidenceItem, GraphItem } from '@/types/api'
+import type { ConfidenceItem, GraphItem, GraphListResponse } from '@/types/api'
 
 const message = useMessage()
 
 const items = ref<GraphItem[]>([])
+// v1.22：保留整份列表响应（items 之外还有 count/ok/unavailable/hidden_count/scope）——
+// 「共 N 个归档用例」只按 items 报数，缺口必须能说出口，否则真丢归档时界面静默少一条。
+const listMeta = ref<GraphListResponse | null>(null)
 const confidences = ref<Map<string, ConfidenceItem>>(new Map())
 const loading = ref(true)
 const filter = ref('')
@@ -137,6 +140,7 @@ onMounted(async () => {
   try {
     const [gRes, cRes] = await Promise.all([facade.graphs(), facade.conf('_all')])
     items.value = gRes.data.items
+    listMeta.value = gRes.data
     if (cRes.data.items) {
       const m = new Map<string, ConfidenceItem>()
       for (const ci of cRes.data.items) m.set(ci.automation_id, ci)
@@ -154,7 +158,17 @@ onMounted(async () => {
   <div>
     <div class="page-head">
       <h1>自动化列表</h1>
-      <p class="sub">共 {{ items.length }} 个归档用例</p>
+      <p class="sub">
+        共 {{ items.length }} 个归档用例
+        <span
+          v-if="listMeta?.unavailable?.length"
+          style="margin-left: 8px; color: #d03050"
+        >另有 {{ listMeta.unavailable.length }} 条读不出</span>
+        <span
+          v-if="listMeta?.hidden_count"
+          style="margin-left: 8px; color: #f0a020"
+        >另有 {{ listMeta.hidden_count }} 条不属于你</span>
+      </p>
     </div>
 
     <n-alert v-if="error" type="error" title="加载失败" style="margin-bottom: 16px">
