@@ -199,32 +199,35 @@ log "py_compile 通过"
 
 # 旧镜像打 tag，便于一键回滚（DCD-20261017-001 §2.5②：回滚 = up -d prev）
 # ⛔ 这一步在 build 之前执行：它保存的是「当时运行中的镜像」。守卫独立成函数
-# tag_prev_guard＝T1–T4 桩测的抽取面（测试按函数名从本文件抽取，⛔ 不在测试里
-# 复制逻辑＝第二份漂移源）。
+# tag_prev_guard＝判据抽取面（测试按函数名从本文件抽取，⛔ 不在测试里复制逻辑）。
 tag_prev_guard() {
+    # :prev 同版本守卫（2026-11-03 v1.20 修法，P0）：**判据只认部署标量
+    # `TARGET_SHA == FROM_SHA`（同 sha 重部署）⇒ 跳过 :prev 覆盖**。
+    # 为什么不用镜像 Id / label（v1.19 的真根因，AF-Verify 实测＋双自查）：
+    # 本函数在 `build` 之前调用（调用点见下方 `tag_prev_guard` 与紧随其后的
+    # `docker compose build`），**它读到的 `:latest`/`:prev` 都是 build 之前的旧
+    # 标签，永远看不到「即将构建出来的那个镜像」** ⇒ 同版本重部署时所见的两枚
+    # 镜像必然一个是上一版、一个是上上版 ⇒ 「Id 相同」「版本标签相同」结构上都
+    # 不成立 ⇒ 起不到保护。只有两个部署标量能判住「即将构建的是同一版本」，
+    # 且它们零外部命令、不依赖 docker/构建缓存 ⇒ 桩测与真机等价。
+    # ⚠️ 判据必须先于任何 docker 查询（T1' 断言：跳过路径 docker 调用 0 次）。
+    # :prev 不存在 / 正常升级 ⇒ 走下面原逻辑照旧 tag；跳过必 log 写明原因
+    #（⛔ 不许静默）。⛔ 除本判据外其余行为零改动。
+    if [ -n "$FROM_SHA" ] && [ "$TARGET_SHA" = "$FROM_SHA" ]; then
+        log "SKIP: 同 sha 重部署（$TARGET_SHA），跳过 :prev 覆盖——回滚网保持原值"
+        return 0
+    fi
     if ! docker image inspect autoforge-api:latest >/dev/null 2>&1; then
         log "WARN: 无 autoforge-api:latest，跳过 prev tag"
         return 0
     fi
-    # :prev 同版本守卫（2026-11-03 v1.19 候选；runbook §十二 规矩二落码）：同一 sha
-    # 连续部署两次曾把 :prev 覆盖成与 :latest 同版本 ⇒ 回滚网被自己吃掉（v1.18.0
-    # 实测，AF-Verify 核出后打回 842a0ca5…）。判据（卡面裁定：两条都要，任一成立
-    # 即跳过）：① Image Id 相同；② 版本标签非空且相同——同一份代码重建可能产生
-    # 不同 Id，同一版本也可能因构建缓存换 Id，只判一条都会漏。
-    # ⚠️ 现读坐实（2026-11-03）：docker/Dockerfile.api 与 compose 均**无 version
-    # label** ⇒ 判据②在当前镜像上恒不触发（①是唯一可 fire 判据）；②按卡面保留，
-    # 未来给镜像加 `LABEL version` 即武装（另批，⛔ 本卡不碰 Dockerfile）。
-    # :prev 不存在 ⇒ 照旧 tag（首次部署不受影响）；跳过必须 log 写明原因（⛔ 不许
-    # 静默——否则下一任看到 :prev 没变会以为脚本没跑）。⛔ 只守卫这一处。
-    local cur_latest_id cur_prev_id cur_latest_ver cur_prev_ver
-    cur_latest_id=$(docker image inspect autoforge-api:latest --format '{{.Id}}' 2>/dev/null || echo "")
-    cur_prev_id=$(docker image inspect autoforge-api:prev --format '{{.Id}}' 2>/dev/null || echo "")
+    # 判据二（保留、但当前恒不触发）：版本标签非空且相同 ⇒ 跳过。
+    # ⚠️ 现读坐实：docker/Dockerfile.api 与 compose 均**无 version label** ⇒
+    # 本判据为将来铺路，当前恒不触发（⛔ 不要以为它在守着什么）。
+    # ⛔ 「Image Id 相同」判据已删（P0 卡 §二：死条件、且会被误读成有效）。
+    local cur_latest_ver cur_prev_ver
     cur_latest_ver=$(docker image inspect autoforge-api:latest --format '{{index .Config.Labels "version"}}' 2>/dev/null || echo "")
     cur_prev_ver=$(docker image inspect autoforge-api:prev --format '{{index .Config.Labels "version"}}' 2>/dev/null || echo "")
-    if [ -n "$cur_prev_id" ] && [ "$cur_latest_id" = "$cur_prev_id" ]; then
-        log "SKIP: :prev 同版本（Image Id 相同），跳过 :prev 覆盖——回滚网保持原值"
-        return 0
-    fi
     if [ -n "$cur_latest_ver" ] && [ "$cur_latest_ver" = "$cur_prev_ver" ]; then
         log "SKIP: :prev 同版本（版本标签相同：latest='$cur_latest_ver'），跳过 :prev 覆盖——回滚网保持原值"
         return 0
