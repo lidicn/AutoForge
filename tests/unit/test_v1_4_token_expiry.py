@@ -113,8 +113,10 @@ def test_expired_token_is_403_over_http(tmp_path, monkeypatch):
     # 过期令牌视为未认证：whoami → 401
     assert client.get("/api/auth/whoami", headers=expired).status_code == 401
 
-    # 合法过期时间在未来的令牌：过鉴权，卡在 IR 校验（400）
-    assert _probe_write(client, {"Authorization": "Bearer tok-live"}).status_code == 400
+    # 合法过期时间在未来的令牌（subject=current，非 owner）：AF-732 后过鉴权进 owner 门即
+    # 404 fail-closed（在校验 IR 之前）——原「卡在 IR 校验 400」不再走到，改 404。
+    # ⚠️ 过期令牌仍由 `_write` 依赖先判过期、403「过期」（见上一行断言），owner 门不吞过期分级。
+    assert _probe_write(client, {"Authorization": "Bearer tok-live"}).status_code == 404
 
     # 配置非法（无法解析）→ fail-closed 拒绝（403）
     assert _probe_write(client, {"Authorization": "Bearer tok-bad"}).status_code == 403

@@ -149,8 +149,12 @@ def test_multi_token_scope_grading(tmp_path, monkeypatch):
     assert client.get("/api/live/status", headers=reporter).status_code == 403
     assert client.get("/api/auth/whoami", headers=reporter).json()["subject"] == "reporter"
 
-    # bot：可写，不可真机
-    assert _probe_write(client, bot).status_code == 400
+    # bot：可写，不可真机。
+    # AF-732（裁定③「不做多用户」）后：`POST /api/sessions` 对非 owner 主体在校验 IR **之前**
+    # 就 404 fail-closed（与「会话不存在」同形，出资人批准语义）——故此处 400（IR 校验失败）
+    # 永不再走到，改为 404。scope/过期等鉴权分级仍由 `_write` 依赖先判（见上方 reporter 403、
+    # 及 test_v1_4 的过期 403），只有「通过鉴权的非 owner」被 owner 门挡成 404。
+    assert _probe_write(client, bot).status_code == 404
     assert client.get("/api/live/status", headers=bot).status_code == 403
 
     # 未知令牌 403；subjects 需 write scope
