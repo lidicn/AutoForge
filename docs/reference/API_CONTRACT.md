@@ -54,7 +54,7 @@ Base：`http://<host>:8787`（NAS 部署：`http://192.168.2.200:8787`）
 | 方法 | 路径 | 权限面 | 说明 |
 |---|---|---|---|
 | `GET` | `/api/automations` | read | 自动化卡片列表（AF-731/AF-730：范围收口走服务层薄入口单源）。 |
-| `DELETE` | `/api/automations/{name}` | admin | —(端点无 docstring) |
+| `DELETE` | `/api/automations/{name}` | admin | 删除归档（AF-733：owner 面全部；开发者 agent 仅**自己名下**归档）。 |
 | `GET` | `/api/automations/{name}` | read | 读取单个自动化卡片（AF-731：先过读面归属闸，再渲染）。 |
 | `POST` | `/api/automations/{name}/archive` | write | 归档自动化（AF-731 写面腿：写面归属闸复用读面单源 `_assert_archive_visible`）。 |
 | `POST` | `/api/automations/{name}/disable` | write | —(端点无 docstring) |
@@ -90,7 +90,7 @@ Base：`http://<host>:8787`（NAS 部署：`http://192.168.2.200:8787`）
 | 方法 | 路径 | 权限面 | 说明 |
 |---|---|---|---|
 | `GET` | `/api/conf/{name}` | read | 置信度读面（AF-730 ⑭：身份下传 `get_conf` 既有参数，服务层 R2 语义）。 |
-| `POST` | `/api/conf/{name}/intervene` | write | —(端点无 docstring) |
+| `POST` | `/api/conf/{name}/intervene` | write | 干预置信度（AF-733：owner 面全部；开发者 agent 仅**自己名下**归档）。 |
 
 ### credentials（凭据热重载）
 
@@ -203,7 +203,7 @@ Base：`http://<host>:8787`（NAS 部署：`http://192.168.2.200:8787`）
 
 | 方法 | 路径 | 权限面 | 说明 |
 |---|---|---|---|
-| `GET` | `/api/store/export` | read | 导出整个 store 为 bundle（含 tags + 校验和）。读端点，不强制鉴权。 |
+| `GET` | `/api/store/export` | read | 导出整个 store 为 bundle（含 tags + 校验和）。 |
 | `POST` | `/api/store/import` | write | 导入 bundle（写操作，需鉴权）。冲突策略 skip/overwrite/rename。 |
 
 ### system（版本/自更新）
