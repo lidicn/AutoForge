@@ -21,6 +21,34 @@ REPO = Path(__file__).resolve().parents[2]
 GATE_PATH = REPO / "scripts" / "check_observability.py"
 
 
+def _auto_counts() -> dict:
+    """AF-507（裁定①「以门禁为准，删掉手抄读数，改引用门禁」）：期望值从清单**自动段**
+    现读——自动段是门自己写、门自己守的唯一权威面。⛔ 测试里不再手抄计数：门实现变了
+    就跑 `--write` 重生成自动段，本测试跟着变，**不需要人工重钉四处**（手抄 pin 的老病）。"""
+    import re
+
+    doc = (REPO / gate.DOC_REL).read_text(encoding="utf-8")
+    begin, end = gate.AUTO_BEGIN, gate.AUTO_END
+    assert begin in doc and end in doc, "自动段标记缺失（门的产物面变了）"
+    auto = doc.split(begin, 1)[1].split(end, 1)[0]
+    m = re.search(
+        r"具名码\s*(\d+)\s*枚／(\d+)\s*站点\s*·\s*无码站点\s*(\d+)\s*枚（(.*?)）", auto
+    )
+    assert m, f"自动段计数行读不出：{auto[:200]!r}"
+    ok_row = re.search(r"\|\s*`ok: True` 字面量站点\s*\|\s*(\d+)\s*\|", auto)
+    dep_row = re.search(r"\|\s*`Depends` 引用数\s*\|\s*(\d+)\s*\|", auto)
+    assert ok_row and dep_row, "自动段 §2.4 两行（ok: True／Depends）读不出"
+    return {
+        "codes": int(m.group(1)),
+        "coded": int(m.group(2)),
+        "nocode_total": int(m.group(3)),
+        "nocode_by_level": {k: int(v) for k, v in re.findall(r"([A-Z]+)=(\d+)", m.group(4))},
+        "ok_true": int(ok_row.group(1)),
+        "depends": int(dep_row.group(1)),
+    }
+
+
+
 def _load_gate(path: Path):
     spec = importlib.util.spec_from_file_location(f"obs_gate_{path.parent.name}", path)
     assert spec and spec.loader
@@ -157,8 +185,12 @@ def test_real_repo_named_code_readings_are_pinned(real):
     # （af_service.approve_pending 记账失败告警，+1 站 +1 码）。
     # 95→96 站／92→93 枚（2026-10-31 AF-710 留痕半）：`PAIR_SSE_EVENT_FAILED`
     # （af_api._pair_event_gen 吞异常补留痕，+1 站 +1 码）。
-    assert len(coded) == 102
-    assert len({s["code"] for s in coded}) == 99
+    assert len(coded) == _auto_counts()["coded"], (
+        f"具名码站点现读 {len(coded)} ≠ 自动段 {_auto_counts()['coded']}"
+    )
+    assert len({s["code"] for s in coded}) == _auto_counts()["codes"], (
+        f"具名码枚数现读 {len({s['code'] for s in coded})} ≠ 自动段 {_auto_counts()['codes']}"
+    )
     # 41 站／38 枚＝仓内三例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
     # ① `DEPLOY_AUDIT_PERSIST_FAILED` 同时出自「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」
     #    两条腿——同一句承诺（台账没落稳）；
@@ -174,8 +206,10 @@ def test_real_repo_named_code_readings_are_pinned(real):
         "WATCH_SCRATCH_DELETE_FAILED",
     }, f"重码名单漂了：{dup}"
     nc = Counter(s["level"] for s in real["sites"] if not s["code"])
-    assert sum(nc.values()) == 114
-    assert nc["warning"] == 72 and nc["exception"] == 11 and nc["info"] == 7
+    ac0 = _auto_counts()
+    assert sum(nc.values()) == ac0["nocode_total"], f"无码站点现读 {sum(nc.values())} ≠ 自动段 {ac0['nocode_total']}"
+    for _lv, _n in nc.items():
+        assert _n == ac0["nocode_by_level"].get(_lv.upper()), (_lv, _n, ac0["nocode_by_level"])
 
 
 Q83_CODES = ("DEVICE_GUARD_CATALOG_INJECT_FAILED", "DEVICE_ACL_LOAD_FAILED")
@@ -231,7 +265,8 @@ def test_real_repo_every_named_code_is_registered(real):
     # `INBOX_REJECT_STALE` 两枚新码入 §三（af_live.read_answer_inbox），同上。
     # 86 → 87 枚／89 → 90 站（2026-10-26 返工 5.1③）：`PAIR_LINK_FAILURE_COUNT_WRITE_FAILED`
     # 入 §三（af_api._pair_record_failure 吞异常改留痕），同上。
-    assert info["codes"] == 99 and info["coded"] == 102
+    ac1 = _auto_counts()
+    assert info["codes"] == ac1["codes"] and info["coded"] == ac1["coded"], (info, ac1)
 
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
@@ -290,8 +325,10 @@ def test_real_repo_http_face_readings_are_pinned(real):
     # ⚠️ 这两格与 `docs/可观测性清单.md` §二 的自动段（`ok: True` 29 枚／`Depends` 111 枚）
     # **同值**——§二 带账可对、这里无账可对，两处必须一起动（改代码不动 pin ⇒ CI 红；
     # 改 pin 不动代码 ⇒ 这条腿失去牙齿）。
-    assert http["ok_true"] == 29
-    assert http["depends"] == 111
+    ac2 = _auto_counts()
+    assert ac2["ok_true"] > 0 and ac2["depends"] > 0, ac2
+    assert http["ok_true"] == ac2["ok_true"], (http["ok_true"], ac2["ok_true"])
+    assert http["depends"] == ac2["depends"], (http["depends"], ac2["depends"])
 
 
 def test_real_repo_debt_rows_match_fresh_readings(real):
