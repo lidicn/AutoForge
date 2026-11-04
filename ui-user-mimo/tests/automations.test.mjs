@@ -87,6 +87,25 @@ test('trialMeta 异常路径：无试演记录 / 未知状态 / 有 anomaly', ()
   assert.equal(bad.anomaly, '4 分钟内重复上锁 7 次')
 })
 
+test('trialMeta 后端运行事实词表：observing/verified 落条上，rolled_back/failed 给显式文案', () => {
+  const observing = trialMeta({ state: 'observing', since: 'x', until: 'y', anomaly: null })
+  assert.equal(observing.activeIndex, 1)
+  assert.equal(observing.stateLabel, '观察中')
+  assert.equal(observing.until, 'y')
+
+  const verified = trialMeta({ state: 'verified', since: 'x', anomaly: null })
+  assert.equal(verified.activeIndex, 2)
+  assert.equal(verified.stateLabel, '已转正')
+  assert.equal(verified.until, null)
+
+  const rolled = trialMeta({ state: 'rolled_back', since: 'x', anomaly: null })
+  assert.equal(rolled.activeIndex, -1)
+  assert.equal(rolled.stateLabel, '已回滚')
+
+  const failed = trialMeta({ state: 'failed', since: 'x', anomaly: null })
+  assert.equal(failed.stateLabel, '试演失败')
+})
+
 test('blastMeta 关键词映射到红色分级角标', () => {
   assert.equal(blastMeta('low').level, 'low')
   assert.equal(blastMeta('medium').level, 'medium')

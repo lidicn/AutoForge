@@ -148,6 +148,7 @@ function mapAutomation (c: any): Automation {
       ? {
           state: c.trial.state,
           since: toIso(c.trial.since) ?? '',
+          until: toIso(c.trial.until) ?? null,
           anomaly: c.trial.anomaly ? String(c.trial.anomaly) : null,
         }
       : null,

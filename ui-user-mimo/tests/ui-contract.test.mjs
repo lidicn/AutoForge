@@ -26,6 +26,12 @@ test('§1 契约文件结构未被改动（8 个导出 + 关键联合类型逐�
   assert.ok(!src.includes('export default'))
 })
 
+test('§1 运行期事实接线点：trial.until 必须透传（⛔ 后端给了、前端丢掉＝观察期无从显示）', () => {
+  has('src/api/http.ts', 'until: toIso(c.trial.until)')
+  has('src/logic/automations.ts', 'TRIAL_STATE_TO_STEP')
+  has('src/types/api.ts', `export type TrialRuntimeState = 'observing' | 'verified' | 'rolled_back' | 'failed'`)
+})
+
 test('顶栏标题 AutoForge + 底部小字 ForgeSight + 三 Tab + 600px 居中', () => {
   has('src/views/MainLayout.vue', 'AutoForge')
   has('src/views/MainLayout.vue', 'ForgeSight')
