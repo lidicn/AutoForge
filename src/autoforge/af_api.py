@@ -129,6 +129,9 @@ class PendingListBody(BaseModel):
 
 class PendingApproveBody(BaseModel):
     op_id: str
+    #: 部署授权码（AF-401/AF-734 双通道）：owner 令牌本身即可批；非 owner 的 agent 可凭
+    #: 一枚有效授权码批准部署（授权码＝用户批准，短期码一次性、长期码可复用）。空＝不带码。
+    auth_code: str = ""
 
 
 class PendingRejectBody(BaseModel):
@@ -706,12 +709,44 @@ def build_app(
     def api_pending_approve(
         body: PendingApproveBody, info: TokenInfo | None = Depends(_write)
     ) -> dict[str, Any]:
-        # AF-734：批准待部署＝**owner 专属**（agent 一律不能批）；提交者＝审批者另由
-        # 服务层 P0-13 拒。权级拒绝用「无权」形，⛔ 不点提交者名、不泄露待批内容。
+        # 部署双通道（出资人原始设计，AF-734 的 owner gate 曾把通道②堵死）：
+        #   ① owner 面令牌 ⇒ 直接批（人审通道，AF-734 语义不变）；
+        #   ② 非 owner（agent）持**有效授权码** ⇒ 授权码即用户批准，validate→consume 后放行，
+        #      审计记 authorized_by=auth_code（短期码一次性、长期码可复用，consume 按 kind 分型）。
+        #   两条都不过 ⇒ 403（⛔ 不点提交者名、不泄露待批内容）。
+        # 自批（P0-13）仍由服务层拒：reviewer=auth_code:xx*** 不会与真实提交主体相等。
+        via_auth_code = False
         if info is not None and not _caller_is_owner(info):
-            raise HTTPException(status_code=403, detail="无权批准待部署（仅 owner 面可批）")
-        reviewer = info.subject if info else "human"
-        return _svc(svc.approve_pending, store, body.op_id, reviewer)
+            code = str(body.auth_code or "").strip()
+            if not code:
+                raise HTTPException(
+                    status_code=403,
+                    detail="无权批准待部署（仅 owner 面可批，或随请求携带有效授权码）",
+                )
+            # 与 MCP af_save 通道逐字同形：validate→consume 两步，consume 失败（并发抢占/已撤销）
+            # 不静默继续；授权码闸在服务层单源（AF-401），这里复用同一 AuthCodeStore。
+            from .af_auth import AuthCodeStore as _ACS
+            acs = _ACS(Path(store.root) / ".auth" / "auth_codes.json")
+            if not acs.validate(code):
+                acs.record_failure(code)  # 连续失败锁定走既有机制
+                raise HTTPException(
+                    status_code=403,
+                    detail="授权码无效（不存在/已消耗/已过期/已锁定之一），批准已拒绝",
+                )
+            if not acs.consume(code):
+                acs.record_failure(code)
+                raise HTTPException(
+                    status_code=403, detail="授权码在消耗阶段失效（可能被并发消耗），批准已拒绝"
+                )
+            via_auth_code = True
+            reviewer = f"auth_code:{code[:2]}***"
+        else:
+            reviewer = info.subject if info else "human"
+        result = _svc(svc.approve_pending, store, body.op_id, reviewer)
+        if via_auth_code and isinstance(result, dict):
+            result["deployed_via"] = "auth_code"
+            result["authorized_by"] = "auth_code"  # 审计：本次批准由授权码放行
+        return result
 
     @app.post("/api/pending/reject", dependencies=[Depends(_write)])
     def api_pending_reject(
