@@ -132,9 +132,9 @@ def test_real_repo_site_readings_are_pinned(real):
     # WATCH_IR_RECONCILE_FAILED（af_live._loop）＋ APPROVE_PENDING_AUDIT_RECORD_FAILED
     # （af_service.approve_pending）＋ WATCH_HEALTH_SIDECAR_SKIPPED／
     # WATCH_ALIVE_PROBE_SKIPPED（af_service._watch_health）——六枚新留痕（debug+2／warning+4）。
-    assert len(real["sites"]) == 216
+    assert len(real["sites"]) == 217
     assert len({s["path"] for s in real["sites"]}) == 32
-    assert dict(lv) == {"debug": 24, "info": 9, "warning": 148, "error": 24, "exception": 11}
+    assert dict(lv) == {"debug": 24, "info": 9, "warning": 149, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -271,7 +271,7 @@ def test_real_repo_every_named_code_is_registered(real):
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
     """信封侧有 trace_id、HTTP 请求侧没有——这个不对称是登记过的现状，不是漏读。"""
-    assert len(real["env"]) == 6
+    assert len(real["env"]) == 7
     assert len({e["path"] for e in real["env"]}) == 3
     paths = {e["path"] for e in real["env"]}
     assert "src/autoforge/af_mqtt_bridge.py" in paths

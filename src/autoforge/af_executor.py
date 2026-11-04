@@ -142,6 +142,9 @@ class NodeExecutor:
     #: v0.4.0 订阅侧：发布成功后的回调（Runtime 注入 `scheduler.handle_event`），
     #: 让 emit 出去的事件能真正驱动订阅它的自动化（发布 → 订阅闭环）
     on_emit: Any | None = None
+    #: ask 触发时的额外 MQTT 播报回调（DCD 裁定 2026-11-04 阶段1 乙）：
+    #: `(trace_id, text, room) -> None`；未注入（无桥/单测）时零副作用，⛔ 不影响 ask 核心逻辑。
+    on_ask_speak: Any | None = None
 
     def __post_init__(self) -> None:
         self.pending_asks: dict[str, AskSession] = {}
@@ -989,6 +992,19 @@ class NodeExecutor:
                 prompt=node.prompt,
                 ask_spec=node.ask,
             )
+            # DCD 裁定 2026-11-04 阶段1（乙）：ask 触发（实例暂停＋待答写入后）**额外**发一条
+            # MQTT 播报到 butler/inbox/speak。⛔ 不改 ask 核心逻辑（暂停/恢复/超时不动），
+            # ⛔ 记不住就吞（旁路留痕，失败不许弄崩 ask）。trace_id=instance_id（DB §2 非空≤64）。
+            if self.on_ask_speak is not None:
+                try:
+                    self.on_ask_speak(
+                        str(instance.instance_id), str(node.prompt or ""), str(node.room or ""),
+                    )
+                except Exception:  # noqa: BLE001 —— 播报旁路失败绝不改 ask 行为
+                    logger.warning(
+                        "ASK_SPEAK_PUBLISH_FAILED ask 播报旁路异常（不影响 ask 核心） instance=%s",
+                        instance.instance_id, exc_info=True,
+                    )
 
     # `_suspend_for_confirm`（确认会话挂起点）已随 DCD 裁定 20261031（Q1 甲）撤除——
     # 运行期闸不存在，确认会话无起点；本函数刻意不留空壳，调用点同批删除。

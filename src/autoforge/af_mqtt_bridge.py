@@ -702,6 +702,46 @@ class AfMqttBridge:
         """实例方法形态的收件箱投递（记账与状态翻转都在桥上，见 `inbox_publish`）。"""
         return inbox_publish(kind, fields=fields, bridge=self, dry_run=dry_run)
 
+    #: speak 主题（DB 只订三条精确主题之一；⛔ 变体，见交接单 §1 坑1）
+    SPEAK_TOPIC = "butler/inbox/speak"
+
+    def publish_speak(
+        self,
+        *,
+        trace_id: str,
+        text: str,
+        room: str = "",
+        source: str = "autoforge",
+        priority: int = 1,
+    ) -> dict[str, Any]:
+        """经桥的 client 向 `butler/inbox/speak` 发一条播报（DB §3 最小载荷，QoS1 不 retain）。
+
+        ★ 为什么 raw 发而不是走 `inbox_publish('speak')`：DB 交接单 §2/§3 的**线缆契约**读
+        `room`（room→小爱的绑定，缺则不出声，§6 坑3）与 `source`（按来源分桶限流）。而本镜像
+        装的 `homesdk==0.3.2` 的 `presence.speak()` 只产出 `{trace_id,ts,text,role?,priority?,expires_at?}`
+        ——**没有 room/source**，且 `inbox_publish` 会把 `room`/`source` 当"契约外键"拒发。
+        DB 读的是 JSON 里的键（§2「这些是代码真正读的字段」），不是 homesdk 的函数签名，所以
+        按 DB §3 的 wire 形状 raw 发是正确的；`role`/`expires_at` 等 homesdk 字段 DB「当前代码不读」。
+        记账/降级复用桥同一套（`_account_publish_error`／`_note_published`），失败⛔ 不冒到执行链。
+        """
+        payload: dict[str, Any] = {
+            "trace_id": str(trace_id),
+            "text": str(text),
+            "source": str(source or "autoforge"),
+            "priority": int(priority),
+        }
+        if room:
+            payload["room"] = str(room)
+        try:
+            _raise_if_refused(
+                _mqtt.publish(self.client, self.SPEAK_TOPIC, payload, qos=1, retain=False),
+                self.SPEAK_TOPIC,
+            )
+        except Exception as exc:  # noqa: BLE001 —— broker 抖动不许弄崩 ask
+            return self._account_publish_error(self.SPEAK_TOPIC, exc)
+        self._note_published(self.SPEAK_TOPIC, payload)
+        return {"published": True, "topic": self.SPEAK_TOPIC, "payload": payload}
+
     def observe_terminal(self, instance: Any, state: str) -> dict[str, Any] | None:
         """`Runtime.add_terminal_observer` 的适配器：done→fired，failed→failed，其余不发。
 

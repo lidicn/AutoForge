@@ -74,6 +74,17 @@ class Runtime:
         )
         # v0.4.0：`emit` 发布的事件必须驱动 `on event` 订阅者（发布 → 订阅闭环）
         self.executor.on_emit = self.scheduler.handle_event
+        # DCD 裁定 2026-11-04 阶段1（乙）：ask 触发时经现有 MQTT 桥向 butler/inbox/speak 额外播报。
+        # ⚠️ 桥在 serve 里是 build_app 之后才 attach（见 af_mqtt_bridge.current_bridge 注释）⇒
+        # 这里**闭包惰性取** current_bridge()，⛔ 构造期抓引用会永远抓到 None（装配期无桥）。
+        # 无桥 ⇒ 直接 no-op（零副作用）。⛔ 不改 ask 核心逻辑，播报失败不冒到执行链。
+        def _speak_ask(trace_id: str, text: str, room: str) -> None:
+            bridge = _bridge.current_bridge()
+            if bridge is None or not text:
+                return
+            bridge.publish_speak(trace_id=trace_id, text=text, room=room)
+
+        self.executor.on_ask_speak = _speak_ask
         self.conf.seed(self.graph)
 
         # ── P1 实例持久化与崩溃恢复 ──────────────────────────────────
