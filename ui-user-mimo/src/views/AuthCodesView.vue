@@ -6,9 +6,11 @@ import type { AuthCode } from '../types/api.ts'
 import { useMainStore } from '../stores/main.ts'
 import { errorMessage, formatCountdown, formatDateTime } from '../logic/format.ts'
 import {
+  CODE_STATUS_LABEL,
   SHORT_MAX_MINUTES,
   SHORT_MIN_MINUTES,
   codeKindMeta,
+  codeStatus,
   validateShortMinutes,
 } from '../logic/authcodes.ts'
 
@@ -21,6 +23,14 @@ const copiedKey = ref<string | null>(null)
 
 const short = computed(() => store.activeShort)
 const remain = computed(() => store.shortRemain)
+// 2026-11-04：最近一枚短期码（含已消耗/已过期）⇒ 用来显示「已消耗/已过期」，停掉倒计时与复制/作废
+const lastShort = computed(() => store.latestShort)
+const lastStatus = computed<null | 'consumed' | 'revoked' | 'expired'>(() => {
+  const c = lastShort.value
+  if (!c) return null
+  const s = codeStatus(c, store.now)
+  return s === 'active' ? null : s
+})
 const valid = computed(() => validateShortMinutes(minutes.value))
 const shortDigits = computed(() => (short.value ? short.value.code.split('') : []))
 const hot = computed(() => remain.value > 0 && remain.value < 60000)
@@ -124,7 +134,33 @@ async function revoke (code: string) {
         </div>
       </template>
 
-      <template v-else>
+      <!-- 2026-11-04 缺陷修复：短期码已被消耗/过期/作废时，⛔ 不再显示倒计时与复制/作废按钮，
+           改为灰化 + 状态标注（出资人：「使用了就没必要继续倒计时了，显示已经被使用过了」）。 -->
+      <template v-if="!short && lastShort && lastStatus">
+        <div style="opacity: 0.5; filter: grayscale(1); pointer-events: none">
+          <div class="cells">
+            <span
+              v-for="(d, i) in lastShort.code.split('')"
+              :key="`spent-${lastShort.code}-${i}`"
+              class="cell"
+            >{{ d }}</span>
+          </div>
+        </div>
+        <p class="hint" style="margin-top: 10px">
+          <n-tag size="tiny" :bordered="false" type="default">{{ CODE_STATUS_LABEL[lastStatus] }}</n-tag>
+          <template v-if="lastStatus === 'consumed'">
+            该短期码已被使用，不能再用于部署审批<template v-if="lastShort.consumed_at">（{{ formatDateTime(lastShort.consumed_at) }}）</template>
+          </template>
+          <template v-else-if="lastStatus === 'expired'">该短期码已过期，不可再用</template>
+          <template v-else>该短期码已作废，不可再用</template>
+        </p>
+        <p class="meta num">
+          生成于 {{ formatDateTime(lastShort.created_at) }} ·
+          {{ lastStatus === 'expired' ? '过期于' : '有效期至' }} {{ formatDateTime(lastShort.expires_at) }}
+        </p>
+      </template>
+
+      <template v-if="!short">
         <p class="hint">短期码限时有效，过期即失效；同一时刻最多存在一个。</p>
         <div class="slider-row">
           <span class="num minutes">{{ minutes }} 分钟</span>
@@ -156,31 +192,40 @@ async function revoke (code: string) {
     <ul v-if="store.longCodes.length" class="list">
       <li v-for="c in store.longCodes" :key="c.code" class="card code-row">
         <div class="code-main">
-          <code class="code num">{{ c.code }}</code>
+          <code class="code num" :style="codeStatus(c, store.now) !== 'active' ? 'opacity:.5' : ''">{{ c.code }}</code>
           <div class="meta">
             <n-tag size="tiny" :bordered="false" :type="codeKindMeta(c.type).tagType">
               {{ codeKindMeta(c.type).label }}
             </n-tag>
+            <!-- 2026-11-04：已作废/已消耗的长期码要显形，⛔ 不许看起来和活码一样 -->
+            <n-tag
+              v-if="codeStatus(c, store.now) !== 'active'"
+              size="tiny"
+              :bordered="false"
+              type="default"
+            >{{ CODE_STATUS_LABEL[codeStatus(c, store.now)] }}</n-tag>
             <span class="num time">{{ formatDateTime(c.created_at) }} 创建</span>
             <!-- v2.6（gap #9）：长期码不清码只计数，已用次数要看得见（0 次不占位） -->
             <span v-if="c.use_count" class="num time used">已用 {{ c.use_count }} 次</span>
           </div>
         </div>
         <div class="code-actions">
-          <button
-            class="copy-btn"
-            :class="{ copied: copiedKey === c.code }"
-            @click="copyCode(c.code, c.code)"
-          >
-            <ui-icon name="copy" :size="12" />
-            {{ copiedKey === c.code ? '已复制' : '复制' }}
-          </button>
-          <n-popconfirm @positive-click="revoke(c.code)" positive-text="作废" negative-text="取消">
-            <template #trigger>
-              <button class="icon-btn danger" title="作废"><ui-icon name="trash" :size="16" /></button>
-            </template>
-            作废后该授权码立即失效，确认？
-          </n-popconfirm>
+          <template v-if="codeStatus(c, store.now) === 'active'">
+            <button
+              class="copy-btn"
+              :class="{ copied: copiedKey === c.code }"
+              @click="copyCode(c.code, c.code)"
+            >
+              <ui-icon name="copy" :size="12" />
+              {{ copiedKey === c.code ? '已复制' : '复制' }}
+            </button>
+            <n-popconfirm @positive-click="revoke(c.code)" positive-text="作废" negative-text="取消">
+              <template #trigger>
+                <button class="icon-btn danger" title="作废"><ui-icon name="trash" :size="16" /></button>
+              </template>
+              作废后该授权码立即失效，确认？
+            </n-popconfirm>
+          </template>
         </div>
       </li>
     </ul>

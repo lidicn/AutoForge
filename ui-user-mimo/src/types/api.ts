@@ -69,6 +69,10 @@ export interface AuthCode {
   // use_count = 长期码累计使用次数（长期码不清码，只有 revoked 才失效）。
   consumed?: boolean
   use_count?: number
+  // 2026-11-04：作废标记（后端 `/api/user/auth-codes` 一直在返回，前端此前没类型化）。
+  revoked?: boolean
+  // 可选：后端若将来补「消耗时刻」再显示「已消耗于 <时刻>」；当前没有 ⇒ 只显示「已消耗」。
+  consumed_at?: string | null
 }
 
 // ===== Pending =====

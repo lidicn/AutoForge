@@ -4,7 +4,7 @@ import type { Agent, AuthCode, Automation, PairLink, PairRequest, PendingItem, P
 import { api } from '../api/index.ts'
 import { USE_MOCK } from '../api/env.ts'
 import { closePairStream, onPairRequest, openPairStream, restoreSession } from '../api/http.ts'
-import { activeShortCode, shortRemainMs } from '../logic/authcodes.ts'
+import { activeShortCode, latestShortCode, shortRemainMs } from '../logic/authcodes.ts'
 import { groupByAgent, splitByArchived } from '../logic/automations.ts'
 import { deleteKey, readJSON, writeJSON } from '../logic/storage.ts'
 
@@ -36,6 +36,8 @@ export const useMainStore = defineStore('main', () => {
       .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)))
   const activeShort = computed(() => activeShortCode(authCodes.value, now.value))
   const shortRemain = computed(() => (activeShort.value ? shortRemainMs(activeShort.value, now.value) : 0))
+  // 2026-11-04：用来展示「已消耗/已过期」那枚最近短期码（⛔ 不是可用的 activeShort）
+  const latestShort = computed(() => latestShortCode(authCodes.value))
 
   // ---------- 会话 ----------
   function bootstrap (): void {
@@ -254,6 +256,7 @@ export const useMainStore = defineStore('main', () => {
   return {
     user, agents, automations, pendings, authCodes, pair, now, loading, booted, lastError, darkMode,
     split, enabledGroups, archivedGroups, archivedCount, pendingCount, longCodes, activeShort, shortRemain,
+    latestShort,
     bootstrap, login, logout, refresh, tick, toggleTheme, restore,
     startPair, finishPair, cancelPair, createPairLink,
     renameAgent, deleteAgent,

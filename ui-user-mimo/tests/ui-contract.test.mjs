@@ -101,6 +101,19 @@ test('授权码 Tab：长期码列表 + 短期码滑块 5–30 分钟 + 实时 M
   has('src/views/AuthCodesView.vue', '短期码')
 })
 
+test('授权码 Tab：已消耗/已过期的码要显形（⛔ 不再倒计时、复制/作废要收掉）——2026-11-04 缺陷', () => {
+  // 出资人：「使用了就没必要继续倒计时了，在 webui 里显示已经被使用过了」。
+  // 判定单源＝logic 的 codeStatus；视图只要引用它 + 两条状态文案 + 收按钮即可。
+  has('src/views/AuthCodesView.vue', 'codeStatus')
+  has('src/views/AuthCodesView.vue', 'CODE_STATUS_LABEL')
+  has('src/views/AuthCodesView.vue', 'lastStatus')
+  has('src/logic/authcodes.ts', "consumed")
+  has('src/logic/authcodes.ts', "已消耗")
+  // F-21 的原意是「不得当可用码展示」，不是「从界面消失」：短码必须保留终态那一枚，
+  // 否则界面只能退回「还没生成过」的表单，用户永远看不到「已消耗」。
+  has('src/api/http.ts', "c.kind === 'short' ? true : (!c.revoked && !c.consumed)")
+})
+
 test('登录页：居中卡片 + 用户名密码', () => {
   has('src/views/LoginView.vue', '用户名')
   has('src/views/LoginView.vue', '密码')
