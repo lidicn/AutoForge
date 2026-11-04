@@ -76,14 +76,29 @@ const lastLabel = computed(() => formatAgo(props.item.last_triggered, props.now)
           <n-button size="tiny" tertiary @click="$emit('toggle', item)">
             {{ item.status === 'enabled' ? '停用' : '启用' }}
           </n-button>
-          <n-button size="tiny" tertiary @click="$emit('archive', item)">归档</n-button>
+          <n-button
+            size="tiny"
+            tertiary
+            title="归档（软操作：不删除，归档后可在「归档」页取消归档恢复回来）"
+            @click="$emit('archive', item)"
+          >归档</n-button>
         </template>
         <template v-else>
-          <n-button size="tiny" tertiary @click="$emit('restore', item)">恢复</n-button>
+          <n-button
+            size="tiny"
+            tertiary
+            title="取消归档（软操作：把自动化从「归档」页放回「启用」页，数据不丢）"
+            @click="$emit('restore', item)"
+          >取消归档</n-button>
         </template>
         <n-popconfirm @positive-click="$emit('remove', item)" positive-text="删除" negative-text="取消">
           <template #trigger>
-            <n-button size="tiny" tertiary type="error">删除</n-button>
+            <n-button
+              size="tiny"
+              tertiary
+              type="error"
+              title="删除（硬操作：与「归档」不同，删除后不可恢复）"
+            >删除</n-button>
           </template>
           删除后不可恢复，确认删除「{{ item.name }}」？
         </n-popconfirm>

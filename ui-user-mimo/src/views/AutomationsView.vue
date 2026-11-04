@@ -130,7 +130,7 @@ async function onReject (p: PendingItem) {
           v-for="it in g.items"
           :key="it.id"
           :item="it"
-          :view="tab"
+          :view="tab === 'archived' ? 'archived' : 'active'"
           :now="store.now"
           @toggle="onToggle"
           @archive="onArchive"

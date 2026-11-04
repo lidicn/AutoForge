@@ -73,6 +73,25 @@ test('自动化 Tab：启用/归档子 Tab + 待批红角标置顶 + Agent 折�
   has('src/components/AutomationCard.vue', 'trigger_7d')
 })
 
+test('自动化卡片：归档 / 取消归档 / 删除三枚动作都在位，且归档是软操作（⛔ 与删除不同）', () => {
+  // 出资人 2026-11-04 实测：归档页卡片只见「恢复」「删除」⇒「恢复」这个词不显式说明它是取消归档。
+  // 钉三件事：① 启用页有「归档」并 emit archive ② 归档页有「取消归档」并 emit restore
+  // ③「删除」仍在，且 title 把「软操作（可恢复）」与「硬操作（不可恢复）」分开，⛔ 不许混成一句。
+  has('src/components/AutomationCard.vue', "$emit('archive', item)")
+  has('src/components/AutomationCard.vue', '归档</n-button>')
+  has('src/components/AutomationCard.vue', '取消归档</n-button>')
+  has('src/components/AutomationCard.vue', "$emit('restore', item)")
+  has('src/components/AutomationCard.vue', '软操作')
+  has('src/components/AutomationCard.vue', '硬操作')
+})
+
+test('自动化卡片视图档位：列表必须传 active/archived（⛔ 不许直传 tab＝enabled/archived）', () => {
+  // 出资人 2026-11-04 实测「启用页卡片只有恢复/删除、没有归档」。
+  // 根因＝AutomationCard 的 prop 只认 'active' | 'archived'，而列表原先直传 tab（'enabled' | 'archived'）
+  // ⇒ `view === 'active'` 永不成立 ⇒ 启用页永远走归档分支。这条钉死接线，⛔ 不许改回直传。
+  has('src/views/AutomationsView.vue', "tab === 'archived' ? 'archived' : 'active'")
+})
+
 test('授权码 Tab：长期码列表 + 短期码滑块 5–30 分钟 + 实时 MM:SS 倒计时', () => {
   has('src/views/AuthCodesView.vue', 'SHORT_MIN_MINUTES')
   has('src/views/AuthCodesView.vue', 'SHORT_MAX_MINUTES')
