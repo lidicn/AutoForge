@@ -881,6 +881,18 @@ class NodeExecutor:
                 "error": result.error,
             }
 
+        # T2（2026-11-04 climate.set_temperature 不生效）：**每次 do 下发结果留痕**。
+        # 成功路径此前一条记录都没有（只有失败的 ACTION_FAILED 审计）⇒ 现场无法回答
+        # 「这条 do 到底发出去没有、HA 回了什么」。trace 随实例持久化（af_instance.to_dict），
+        # 读 store 里的实例快照即可逐条核对；⛔ 不改动作/边选择，纯留痕。
+        instance.trace(
+            node.id,
+            note=(
+                f"do {node.adapter}.{node.action} "
+                + ("ok" if result.success else f"failed: {result.error}")
+            ),
+        )
+
         if result.success:
             # 一次真实动作落地 → 视为新一轮交互上下文，连问计数清零
             instance.ctx.context["_ask_rounds"] = 0
