@@ -71,7 +71,9 @@ export interface AuthCode {
   use_count?: number
   // 2026-11-04：作废标记（后端 `/api/user/auth-codes` 一直在返回，前端此前没类型化）。
   revoked?: boolean
-  // 可选：后端若将来补「消耗时刻」再显示「已消耗于 <时刻>」；当前没有 ⇒ 只显示「已消耗」。
+  // 后端派生态（AF-Core `d1fb08e` 起）：前端优先采信；缺失时按 consumed/revoked/到期兜底。
+  status?: 'active' | 'consumed' | 'expired' | 'revoked'
+  // 消耗时刻（后端补），有则显示「已消耗于 <时刻>」；无则只显示「已消耗」。
   consumed_at?: string | null
 }
 

@@ -83,6 +83,18 @@ test('已作废 / 已过期的短期码同样不算生效中；consumed 优先�
   assert.equal(codeStatus({ ...revoked, consumed: true }, NOW), 'consumed')
 })
 
+test('后端已给 status 时优先采信（⛔ 不另造第二口径）；唯一例外是 active→本地到期降级', () => {
+  const base = { code: '888888', type: 'short', created_at: new Date(NOW - 60_000).toISOString(), expires_at: new Date(NOW + 600_000).toISOString() }
+  assert.equal(codeStatus({ ...base, status: 'consumed' }, NOW), 'consumed')
+  assert.equal(codeStatus({ ...base, status: 'revoked' }, NOW), 'revoked')
+  assert.equal(codeStatus({ ...base, status: 'active' }, NOW), 'active')
+  // 页面开着、本地钟越过过期点：即便后端上次抓取还说 active，也要降级成 expired（不能停在 00:00）
+  assert.equal(codeStatus({ ...base, status: 'active' }, NOW + 700_000), 'expired')
+  // 旧后端（无 status）走兜底：consumed 优先于 revoked
+  const legacy = { ...base, consumed: true, revoked: true }
+  assert.equal(codeStatus(legacy, NOW), 'consumed')
+})
+
 test('latestShortCode 取最近一枚短期码（含已消耗），长期码不参与；标签齐全', () => {
   const older = { code: '666666', type: 'short', created_at: new Date(NOW - 900_000).toISOString(), expires_at: new Date(NOW - 300_000).toISOString(), consumed: true }
   const newer = { code: '777777', type: 'short', created_at: new Date(NOW - 60_000).toISOString(), expires_at: new Date(NOW + 240_000).toISOString() }

@@ -40,6 +40,13 @@ export const CODE_STATUS_LABEL: Record<CodeStatus, string> = {
 }
 
 export function codeStatus (c: AuthCode, nowMs: number): CodeStatus {
+  // 后端自 `d1fb08e` 起直接派生 status（revoked→consumed→expired→active）⇒ 优先采信，⛔ 不另造第二口径。
+  if (c.status) {
+    // 唯一例外：后端说 active 但页面开着且本地钟已越过过期点 ⇒ 降级为 expired（倒计时归零后要停，不能停在 00:00）。
+    if (c.status === 'active' && c.type === 'short' && shortRemainMs(c, nowMs) <= 0) return 'expired'
+    return c.status
+  }
+  // 旧后端无 status：前端兜底（同优先序）
   if (c.consumed) return 'consumed'
   if (c.revoked) return 'revoked'
   if (c.type === 'short' && shortRemainMs(c, nowMs) <= 0) return 'expired'
