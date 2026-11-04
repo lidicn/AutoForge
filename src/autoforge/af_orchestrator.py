@@ -867,7 +867,11 @@ schema:
 3) 信息不足就把字段留空/null，编排器会追问，不要猜；
 4) 用户只是想要"某个房间的自动化"而没说清做什么 → intent_kind=recommend。"""
 
-AREA_WORDS = ["书房", "客厅", "主卧", "次卧", "儿童房", "卧室", "厨房", "卫生间", "阳台", "玄关", "餐厅"]
+# DCD 2026-11-04 裁定（`20261104-DB-房间定义统一到HA区域三仓契约-裁定.md` T3-AF）：
+# **删除**原先硬编码的 11 个 `AREA_WORDS`（含 HA 根本没有的 次卧/儿童房/阳台/玄关/餐厅）。
+# 房间名不再是仓内常量，唯一真值是 HA 的 area registry，由调用方喂入的 catalog 现读。
+# 运行期口径（`room` 一律 HA `area_id`）与「解析不到 ⇒ 拒投递 + `AREA_UNRESOLVED`」在
+# `af_runtime.Runtime.resolve_room`（走库侧 `homesdk.areas.resolve`）。
 DEVICE_PATTERNS = [
     (r"人体|有人|人来| motion", "motion"), (r"温度|温度计", "temp"), (r"光照|亮度|太暗", "illum"),
     (r"门|窗", "door"), (r"空调", "climate"), (r"灯", "light"), (r"锁", "lock"), (r"湿度", "hum"),
@@ -903,9 +907,11 @@ class HeuristicIntentParser:
     def parse(self, text: str, catalog: Sequence[Mapping[str, Any]] = ()) -> dict:
         out = {"intent_kind": "build", "area": None, "triggers": [], "conditions": [],
                "actions": [], "asks": [], "refs": [], "expect": []}
-        for w in AREA_WORDS:
-            if w in text:
-                out["area"] = w
+        # 房间名只从**调用方喂入的 catalog** 现读（DCD T3-AF：⛔ 不再有仓内硬编码房间词表）。
+        # 与 P3 追问同一来源；catalog 为空 ⇒ 不猜房间（信息不足留给追问，不猜）。
+        for name in sorted({_area_of(e) for e in catalog if _area_of(e)}):
+            if name and name in text:
+                out["area"] = name
                 break
         kinds = [k for pat, k in DEVICE_PATTERNS if re.search(pat, text)]
         if not kinds:
@@ -1366,8 +1372,7 @@ def detect_gaps(draft: AutomationDraft, catalog: Sequence[Mapping[str, Any]] = (
     if not draft.area and not any(_area_of(e) for e in ents):
         areas = sorted({_area_of(e) for e in catalog if _area_of(e)})
         gaps.append(Gap(slot="area", question="是哪个房间的自动化？",
-                        options=[{"label": a, "value": a} for a in areas] or
-                                [{"label": w, "value": w} for w in AREA_WORDS[:6]],
+                        options=[{"label": a, "value": a} for a in areas],
                         priority=3, kind="choice", reason="缺少房间",
                         apply=lambda v: setattr(draft, "area", v)))
 

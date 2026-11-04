@@ -136,9 +136,10 @@ def test_real_repo_site_readings_are_pinned(real):
     # RUNTIME_FACTS_TRIGGER_FAILED／RUNTIME_FACTS_READ_FAILED——四枚新带码站点（debug+1／warning+3）。
     # 220 → 221（2026-11-04 T1 do 播报）：DO_SPEAK_PUBLISH_FAILED（af_executor._speak_for_do）一枚带码 WARNING。
     # 221 → 222（同批合并运行期事实后复算真值：221 是我按 216 基线手推、漏了 af_runtime_facts 新文件的独立站点）。
-    assert len(real["sites"]) == 222
-    assert len({s["path"] for s in real["sites"]}) == 33
-    assert dict(lv) == {"debug": 25, "info": 9, "warning": 153, "error": 24, "exception": 11}
+    # 222 → 223（2026-11-04 ②房间口径）：AREA_UNRESOLVED（af_runtime.resolve_room）一枚带码 WARNING。
+    assert len(real["sites"]) == 223
+    assert len({s["path"] for s in real["sites"]}) == 34
+    assert dict(lv) == {"debug": 25, "info": 9, "warning": 154, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 

@@ -9,9 +9,21 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterable
+
+#: DCD 2026-11-04（T2/T3-AF）：房间口径统一到 HA `area_id`，解析机制**唯一真值**在库侧
+#: `homesdk.areas`（0.3.3 起）。缺失 ⇒ 解析一律 None（fail-closed：宁可不出声，不静默投错房间）。
+try:  # pragma: no cover - 环境面分支
+    from homesdk import areas as _areas
+except Exception:  # pragma: no cover - 旧版/未装
+    _areas = None  # type: ignore[assignment]
+
+logger = logging.getLogger("autoforge.runtime")
 
 from .af_adapters import HAAdapter, HTTPAdapter, InboxAdapter, MaAdapter, MockAdapter, AdapterRegistry
 from .af_audit import (
@@ -54,6 +66,12 @@ class Runtime:
     #: 运行期事实落盘根（PM 卡 2026-11-04）；None = 关闭（旧行为，不落触发/试演事实）。
     #: 非 None 时，触发计数与 canary 试演状态写 `<store_root>/<archive>.runtime.json`。
     store_root: str | None = None
+    #: 区域表 `area_id → area_name`（DCD 2026-11-04 裁定 T3-AF：房间口径统一到 HA `area_id`）。
+    #: 调用方从自己的 HA 读（AF 走 `.catalog/catalog.json` 的 `area_id`/`area`）；空 ⇒ 解析一律 None，
+    #: 按契约拒投递并打 `AREA_UNRESOLVED`（⛔ 静默 accepted）。
+    area_map: dict[str, str] = field(default_factory=dict)
+    #: 旧中文名 → area_id 的过渡别名表（各仓历史数据自己提供；homesdk 不内置任何固定表）。
+    room_aliases: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.bus = EventBus(self.clock, self.audit)
@@ -108,7 +126,10 @@ class Runtime:
             bridge = _bridge.current_bridge()
             if bridge is None or not text:
                 return
-            bridge.publish_speak(trace_id=trace_id, text=text, room=room)
+            area_id = self.resolve_room(room, source="ask")
+            if area_id is None:
+                return  # DCD T3-AF 硬判据：解析不到 ⇒ 拒投递（已打 AREA_UNRESOLVED）
+            bridge.publish_speak(trace_id=trace_id, text=text, room=area_id)
 
         self.executor.on_ask_speak = _speak_ask
         # T1（2026-11-04）：非 ask 自动化 do 动作下发前同样经桥播报一声（同一 publish_speak 腿）。
@@ -117,7 +138,10 @@ class Runtime:
             bridge = _bridge.current_bridge()
             if bridge is None or not text:
                 return
-            bridge.publish_speak(trace_id=trace_id, text=text, room=room)
+            area_id = self.resolve_room(room, source="do")
+            if area_id is None:
+                return
+            bridge.publish_speak(trace_id=trace_id, text=text, room=area_id)
 
         self.executor.on_do_speak = _speak_do
         self.conf.seed(self.graph)
@@ -137,6 +161,10 @@ class Runtime:
         if self.persist is not None:
             self.restored = self.restore_persisted()
 
+        # 区域表懒加载：给了 store_root 就从 `.catalog/catalog.json` 取 `area_id → area_name`；
+        # ⛔ 不内置固定房间表（DCD 2026-11-04 T3-AF：唯一真值是 HA 的 area registry，由各仓自己读）。
+        self._area_map_cache: dict[str, str] | None = None
+
         # ── mimo #19: conf 分级引擎（可选，默认关闭） ──────────────────
         # 环境变量 AUTOFORGE_CONF_GRADING=1 启用；启用后 ShadowRunner 装饰
         # executor._do，按 conf band 路由（auto 透传 / shadow 只读比对 / ask 挂起），
@@ -151,6 +179,55 @@ class Runtime:
             except Exception as _e:
                 self.audit.add(AuditEvent(type="conf_grading_init_failed", at=self.clock.now(), message=str(_e)))
                 self.grading = None
+
+    # ── 房间口径（DCD 2026-11-04 T3-AF：跨仓共享的 room 一律 HA area_id）──────
+    def _load_area_map(self) -> dict[str, str]:
+        """从 `.catalog/catalog.json` 现读 `area_id → area_name`（懒加载 + 缓存一次）。
+
+        ⛔ 不内置任何固定房间表（`homesdk.areas` 也不内置）：唯一真值是 HA 的 area registry，
+        由各仓从自己的 HA 读。读不到/损坏 ⇒ 空表（后续解析一律 None ⇒ 拒投递，fail-closed）。
+        """
+        if self.area_map:
+            return self.area_map
+        if self._area_map_cache is not None:
+            return self._area_map_cache
+        out: dict[str, str] = {}
+        if self.store_root:
+            path = Path(self.store_root) / ".catalog" / "catalog.json"
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                entities = raw.get("entities") if isinstance(raw, dict) else None
+                if isinstance(entities, dict):
+                    for meta in entities.values():
+                        if not isinstance(meta, dict):
+                            continue
+                        aid = str(meta.get("area_id") or "").strip()
+                        aname = str(meta.get("area") or "").strip()
+                        if aid and aname and aid not in out:
+                            out[aid] = aname
+            except (OSError, ValueError):
+                out = {}
+        self._area_map_cache = out
+        return out
+
+    def resolve_room(self, room_text: str, *, source: str) -> str | None:
+        """把房间文本解析成 HA `area_id`；解析不到 ⇒ 打 `AREA_UNRESOLVED` 并返回 None。
+
+        ★ 契约（DCD 裁定 §2.3 硬判据）：None ⇒ 调用方**拒投递**，⛔ 不许静默 accepted
+        （AF→DB 发声因房间名对不上会静默不出声、台账还记 accepted，这正是要堵的洞）。
+        """
+        area_map = self._load_area_map()
+        if _areas is None:
+            area_id, why = None, "库侧 homesdk.areas 缺席（需 >=0.3.3）"
+        else:
+            area_id = _areas.resolve(area_map, room_text, self.room_aliases or None)
+            why = "房间文本不在 HA 区域表（area_id/别名/中文名三路都不命中）"
+        if area_id is None:
+            logger.warning(
+                "AREA_UNRESOLVED 房间解析不到 HA area_id，拒投递 source=%s room=%r 原因=%s 已知区域=%s",
+                source, room_text, why, sorted(area_map.keys()),
+            )
+        return area_id
 
     # ── 事件 ──────────────────────────────────────────────────────────
     def publish(self, event: BusEvent) -> list[Instance]:
@@ -327,12 +404,15 @@ def build_runtime(
     conf: ConfidenceStore | None = None,
     persist_dir: str | None = None,
     store_root: str | None = None,
+    area_map: dict[str, str] | None = None,
+    room_aliases: dict[str, str] | None = None,
 ) -> Runtime:
     """按默认组合装配一个 Runtime。
 
     默认 `dry_run=True`：HA 适配器只记录下发意图，不写真机。
     传入 `persist_dir` 时启用 P1 实例持久化：构造即恢复上次落盘的活跃实例。
     传入 `store_root` 时启用运行期事实落盘（触发计数/canary 试演写 `<archive>.runtime.json`）。
+    `area_map`/`room_aliases` 是房间解析表（缺省 ⇒ 从 `store_root` 的 catalog 现读；仍为空 ⇒ 拒投递）。
     """
     states = states if states is not None else InMemoryStateProvider()
     clock = clock if clock is not None else VirtualTimeSource(datetime(2026, 9, 14, 8, 0, tzinfo=timezone.utc))
@@ -358,4 +438,6 @@ def build_runtime(
         conf=conf or ConfidenceStore(),
         persist_dir=persist_dir,
         store_root=store_root,
+        area_map=dict(area_map or {}),
+        room_aliases=dict(room_aliases or {}),
     )
