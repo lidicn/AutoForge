@@ -145,6 +145,10 @@ class NodeExecutor:
     #: ask 触发时的额外 MQTT 播报回调（DCD 裁定 2026-11-04 阶段1 乙）：
     #: `(trace_id, text, room) -> None`；未注入（无桥/单测）时零副作用，⛔ 不影响 ask 核心逻辑。
     on_ask_speak: Any | None = None
+    #: do 节点执行前的额外 MQTT 播报回调（T1，2026-11-04）：非 ask 自动化条件命中后、
+    #: do 动作下发前经 `butler/inbox/speak` 播报一声。签名同 on_ask_speak：
+    #: `(trace_id, text, room) -> None`；未注入时零副作用，⛔ 不改 do 执行核心逻辑。
+    on_do_speak: Any | None = None
 
     def __post_init__(self) -> None:
         self.pending_asks: dict[str, AskSession] = {}
@@ -763,6 +767,11 @@ class NodeExecutor:
 
         dry_run = bool(getattr(adapter, "dry_run", False))
 
+        # T1（2026-11-04）：非 ask 自动化条件命中后、do 动作下发前，经 MQTT 桥额外播报一声。
+        # ⛔ 不改 do 执行核心逻辑：播报是纯旁路，失败只吞 warning、绝不改变动作结果或流程。
+        # dry-run 适配器（G1 默认不写真机）不播报——没真动作却出声会误导。
+        self._speak_for_do(instance, node, dry_run=dry_run)
+
         # G4 canary：conf 处于 auto 带且节点标了 canary → 走灰度保护
         # ⚠️ dry-run 适配器（G1 默认不写真机）不改状态，会**永远**被判定为漂移，必须跳过
         canary = node.canary
@@ -1114,6 +1123,31 @@ class NodeExecutor:
     # ─────────────────────────────────────────────────────────────────
     # v0.3.0 跨自动化事件 · 发布侧（IR §4.3）
     # ─────────────────────────────────────────────────────────────────
+    def _speak_for_do(self, instance: Instance, node: Node, *, dry_run: bool) -> None:
+        """T1：do 节点下发前的额外 MQTT 播报（`butler/inbox/speak`）。
+
+        文本取值顺序：节点级 `announce`（IR 扩展字段，node 段 additionalProperties=true）→
+        `<自动化名>：<节点名>` 动态兜底。room 取 node.room（ask 节点同口径）。
+        ⛔ 纯旁路：未注入回调 / dry-run / 取不到文本时直接 no-op；异常只吞 warning，
+        绝不改变 do 的动作结果、边选择或实例状态（与 `on_ask_speak` 同一纪律）。
+        """
+        if self.on_do_speak is None or dry_run:
+            return
+        text = str(node.raw.get("announce") or "").strip()
+        if not text:
+            auto_name = str(getattr(instance.automation, "name", "") or instance.automation.id)
+            node_name = str(node.name or node.id)
+            text = f"{auto_name}：{node_name}"
+        try:
+            self.on_do_speak(
+                str(instance.instance_id), text, str(node.room or ""),
+            )
+        except Exception:  # noqa: BLE001 —— 播报旁路失败绝不改 do 行为
+            logger.warning(
+                "DO_SPEAK_PUBLISH_FAILED do 播报旁路异常（不影响 do 核心） instance=%s node=%s",
+                instance.instance_id, node.id, exc_info=True,
+            )
+
     def _emit(self, instance: Instance, node: Node) -> bool:
         """发布 `emit` 声明的自定义事件。
 

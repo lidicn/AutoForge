@@ -85,6 +85,15 @@ class Runtime:
             bridge.publish_speak(trace_id=trace_id, text=text, room=room)
 
         self.executor.on_ask_speak = _speak_ask
+        # T1（2026-11-04）：非 ask 自动化 do 动作下发前同样经桥播报一声（同一 publish_speak 腿）。
+        # 与 ask 腿共用闭包语义：惰性取桥、无桥 no-op、失败只吞 warning，⛔ 不改 do 核心。
+        def _speak_do(trace_id: str, text: str, room: str) -> None:
+            bridge = _bridge.current_bridge()
+            if bridge is None or not text:
+                return
+            bridge.publish_speak(trace_id=trace_id, text=text, room=room)
+
+        self.executor.on_do_speak = _speak_do
         self.conf.seed(self.graph)
 
         # ── P1 实例持久化与崩溃恢复 ──────────────────────────────────
