@@ -149,6 +149,9 @@ class NodeExecutor:
     #: do 动作下发前经 `butler/inbox/speak` 播报一声。签名同 on_ask_speak：
     #: `(trace_id, text, room) -> None`；未注入时零副作用，⛔ 不改 do 执行核心逻辑。
     on_do_speak: Any | None = None
+    #: 运行期事实落盘（PM 卡 2026-11-04）：canary 试演状态记录回调
+    #: `(state, automation_id, since, until, extra) -> None`；未注入时零副作用。
+    runtime_facts: Any | None = None
 
     def __post_init__(self) -> None:
         self.pending_asks: dict[str, AskSession] = {}
@@ -746,6 +749,19 @@ class NodeExecutor:
         except Exception as exc:  # noqa: BLE001
             logger.warning("af_watch 聚合 canary 证据失败（不影响执行）：%r", exc)
 
+    def _record_trial(self, instance: Instance, node: Node, state: str) -> None:
+        """PM 卡 2026-11-04：把 canary 试演状态落盘（供 UI「试演期」显示）。
+
+        与 `_feed_canary_evidence` 分工：那个进 af_watch 的诚实报告分区；这个进
+        `<archive>.runtime.json` 供列表展示。记账失败不影响执行。
+        """
+        if self.runtime_facts is None:
+            return
+        try:
+            self.runtime_facts(state, instance.automation.id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RUNTIME_FACTS_TRIAL_FAILED 试演状态记账失败（不影响执行）：%r", exc)
+
     def _do(self, instance: Instance, node: Node) -> Iterable[str] | None:
         """`do`：**单次调用**，不重试不降级。
 
@@ -823,6 +839,7 @@ class NodeExecutor:
                     "auto_rollback": guard.auto_rollback,
                 }
                 self.instances.suspend(instance, node.id, canary_duration, kind="canary_observe")
+                self._record_trial(instance, node, "observing")
                 return None
             # 无 duration → 立即检查漂移（原行为）
             if wrapped.expected_state() is None:
@@ -836,6 +853,7 @@ class NodeExecutor:
                 self._feed_canary_evidence(instance, node, "failed", {
                     "reason": "canary 漂移，已自动回滚", "rollback_calls": len(rolled),
                 })
+                self._record_trial(instance, node, "rolled_back")
                 self.audit.add(
                     AuditEvent(
                         type=ENTITY_DRIFT,
@@ -850,6 +868,7 @@ class NodeExecutor:
                 return self._soft_fail(instance, node, RuntimeError(f"canary 漂移，已回滚 {node.action}"))
             else:
                 self._feed_canary_evidence(instance, node, "verified")
+                self._record_trial(instance, node, "verified")
             result = wrapped.result
         else:
             result: CallResult = adapter.call(node.action or "", dict(node.params))

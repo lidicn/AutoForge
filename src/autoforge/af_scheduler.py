@@ -83,6 +83,10 @@ class Scheduler:
     audit: AuditLog = field(default_factory=AuditLog)
     quota: Quota = field(default_factory=Quota)
     fire_recorder: FireRecorder | None = None  # mimo: 当日一次记账落盘，防重启重放
+    #: 运行期事实落盘（PM 卡 2026-11-04）：触发计数单一出口记账。可调用对象
+    #: `(automation_id, node_id, entity_id, via) -> None`；未注入时零副作用（旧行为）。
+    #: 这里用可调用对象而非 RuntimeFacts 实例，避免 scheduler 依赖 store 具体类型、也便于单测。
+    runtime_facts: Any | None = None
 
     def __post_init__(self) -> None:
         self._pending: dict[tuple[str, str, str], _PendingFor] = {}
@@ -278,6 +282,22 @@ class Scheduler:
 
         instance = self.instances.spawn(auto, trigger_event=event)
         instance.ctx.current_node = node.id
+        # 运行期事实：真触发成功 spawn 后记账（单一出口，group/state/time/队列排空都汇此处）。
+        # 记账失败⛔ 不影响执行：可调用对象内部自吞异常，这里再兜一层防御。
+        if self.runtime_facts is not None:
+            try:
+                trig = getattr(node, "trigger", None)
+                via = getattr(trig, "type", "") or ("queued" if event is None else "")
+                self.runtime_facts(
+                    auto.id, node.id,
+                    (event.entity_id if event is not None else ""),
+                    via,
+                )
+            except Exception:  # noqa: BLE001 —— 记账绝不许弄死调度（吞但不静默）
+                logger.warning(
+                    "RUNTIME_FACTS_TRIGGER_FAILED 触发记账失败（不影响执行） auto=%s node=%s",
+                    auto.id, node.id, exc_info=True,
+                )
         self.executor.run(instance)
         return instance
 

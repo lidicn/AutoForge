@@ -51,6 +51,9 @@ class Runtime:
     persist_dir: str | None = None
     #: conf 分级引擎（mimo #19）；None = 未启用，由环境变量 AUTOFORGE_CONF_GRADING=1 激活
     grading: Any = None
+    #: 运行期事实落盘根（PM 卡 2026-11-04）；None = 关闭（旧行为，不落触发/试演事实）。
+    #: 非 None 时，触发计数与 canary 试演状态写 `<store_root>/<archive>.runtime.json`。
+    store_root: str | None = None
 
     def __post_init__(self) -> None:
         self.bus = EventBus(self.clock, self.audit)
@@ -72,6 +75,29 @@ class Runtime:
             audit=self.audit,
             quota=self.quota,
         )
+        # ── 运行期事实落盘（PM 卡 2026-11-04）：触发计数 ＋ canary 试演状态 ──
+        # 只在给了 store_root 时接线；未给 = 零副作用（旧行为不变）。
+        if self.store_root:
+            from .af_runtime_facts import RuntimeFacts
+
+            def _facts_for(automation_id: str):
+                # 归档名 == 自动化 id 是本项目的既定不变量（§1.133 教训：目录名必须=id，
+                # ⛔ 不许别名归档）；运行事实旁车按同一名字落。
+                return RuntimeFacts(self.store_root, automation_id)
+
+            def _record_trigger(automation_id, node_id, entity_id, via):
+                _facts_for(automation_id).record_trigger(
+                    automation_id=automation_id, node_id=node_id,
+                    entity_id=entity_id, via=via,
+                )
+
+            def _record_trial(state, automation_id):
+                _facts_for(automation_id).record_trial(
+                    state=state, automation_id=automation_id,
+                )
+
+            self.scheduler.runtime_facts = _record_trigger
+            self.executor.runtime_facts = _record_trial
         # v0.4.0：`emit` 发布的事件必须驱动 `on event` 订阅者（发布 → 订阅闭环）
         self.executor.on_emit = self.scheduler.handle_event
         # DCD 裁定 2026-11-04 阶段1（乙）：ask 触发时经现有 MQTT 桥向 butler/inbox/speak 额外播报。
@@ -300,11 +326,13 @@ def build_runtime(
     quota: Quota | None = None,
     conf: ConfidenceStore | None = None,
     persist_dir: str | None = None,
+    store_root: str | None = None,
 ) -> Runtime:
     """按默认组合装配一个 Runtime。
 
     默认 `dry_run=True`：HA 适配器只记录下发意图，不写真机。
     传入 `persist_dir` 时启用 P1 实例持久化：构造即恢复上次落盘的活跃实例。
+    传入 `store_root` 时启用运行期事实落盘（触发计数/canary 试演写 `<archive>.runtime.json`）。
     """
     states = states if states is not None else InMemoryStateProvider()
     clock = clock if clock is not None else VirtualTimeSource(datetime(2026, 9, 14, 8, 0, tzinfo=timezone.utc))
@@ -329,4 +357,5 @@ def build_runtime(
         quota=quota or Quota(),
         conf=conf or ConfidenceStore(),
         persist_dir=persist_dir,
+        store_root=store_root,
     )

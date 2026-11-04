@@ -913,6 +913,27 @@ def get_graph(store: GraphStore, name: str, version: int | None = None) -> dict[
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _runtime_facts_fields(store: GraphStore, name: str) -> dict[str, Any]:
+    """从运行期事实旁车读 `trial` / `last_triggered` / `trigger_7d`（PM 卡 2026-11-04）。
+
+    读侧 fail-soft：旁车缺/损坏/无字段 ⇒ 回落旧硬编码值（None/None/0），向后兼容。
+    ⛔ 绝不让"运行事实读不出"变成"列表 500"。
+    """
+    fallback = {"trial": None, "last_triggered": None, "trigger_7d": 0}
+    try:
+        from .af_runtime_facts import RuntimeFacts
+
+        snap = RuntimeFacts(store.root, name).snapshot()
+        return {
+            "trial": snap.get("trial"),
+            "last_triggered": snap.get("last_triggered"),
+            "trigger_7d": int(snap.get("trigger_7d") or 0),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("RUNTIME_FACTS_READ_FAILED archive=%r err=%r", name, exc)
+        return fallback
+
+
 def automation_card(
     store: GraphStore,
     name: str,
@@ -963,13 +984,10 @@ def automation_card(
         "pending_op_id": (pending_map or {}).get(name),
         "saved_at": rec.get("saved_at"),
         "version": rec.get("version"),
-        # 试演期与触发历史**没有可读取的落盘正源**：首演/试演台账按 diff 摘要记账
-        # （af_premiere.enter_trial(store_diff_sha)），不是按自动化名；触发记录只在 watch 进程内存里。
-        # 旧形状在这里硬写 `state: "auto"`，等于替每条自动化宣布"已经走到全自动档"——
-        # 读不出就给 null，前端 trialMeta(null) 会渲染成不点亮的三档 + 「未进入试演」。
-        "trial": None,
-        "last_triggered": None,
-        "trigger_7d": 0,
+        # 试演期与触发历史改从**运行期事实旁车** `<archive>.runtime.json` 现读
+        # （PM 卡 2026-11-04）。此前三字段硬编码 None/None/0；现读缺文件/损坏/无字段时
+        # 回落旧值（None/None/0），向后兼容；读侧 fail-soft，⛔ 不因运行事实读不出让列表 500。
+        **_runtime_facts_fields(store, name),
     }
 
 

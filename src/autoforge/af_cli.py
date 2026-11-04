@@ -296,7 +296,7 @@ def _make_runtime(
         # dry_live：真时钟 + 真 HA 状态，但 do 只记意图不真下发——抓 live 代码路径的 bug，不动设备
         mode_label = "dry-live（真时钟/真状态，do 只记意图不下发）" if dry_live else "真机接线（dry_run=False，真实下发意图）"
         typer.echo(f"· {mode_label}：HA {ha_url}")
-        runtime = build_runtime(graph, persist_dir=persist_dir, clock=SystemTimeSource())
+        runtime = build_runtime(graph, persist_dir=persist_dir, clock=SystemTimeSource(), store_root=store_root)
         provider = HAStateProvider(base_url=ha_url, token=ha_token, cfg=cfg)
         transport = HATransport(base_url=ha_url, token=ha_token, cfg=cfg)
         runtime.states = provider
