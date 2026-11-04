@@ -51,7 +51,7 @@
 
 ```bash
 # 正确：直接装仓内那枚（路径写目录，版本换了也不用改命令）
-pip install docker/homesdk/homesdk-0.3.2-py3-none-any.whl
+pip install docker/homesdk/homesdk-0.3.3-py3-none-any.whl
 
 # 不要用这条：.[homesdk] 这枚 extra 声明的是 homesdk>=0.3.2，而 PyPI 上没有这个包
 pip install -e ".[homesdk]"

@@ -179,7 +179,7 @@ def test_installed_homesdk_is_the_version_the_image_installs():
 #: DCD 20261007 §六 Q2 登记的权威摘要（`E:\NAS\homesdk\dist\VERSIONS.txt` 0.3.2 段）。
 #: 那次裁定明写"这就是权威值"，理由是 0.3.1 吃过"首投 sha 作废"的亏——0.3.2 只构建过一次、
 #: 源码已入库。改这个值只有一条路：新的 DCD 裁定。
-AUTHORITATIVE_WHEEL_SHA256 = "19bc83a67a96931c4556caec52f29c190aaa03a0a7036e0b41c242a533fb5505"
+AUTHORITATIVE_WHEEL_SHA256 = "7cf0596c24f439f2c0aaf4d106ffdf300fc0f115b9f2d2a3307eb2b91d00230b"
 
 
 def test_vendored_wheel_is_the_exact_bytes_dcd_registered():

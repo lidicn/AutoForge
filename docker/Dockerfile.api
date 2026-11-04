@@ -50,8 +50,8 @@ COPY --from=frontend /web/dist /mimo
 # 管理端 UI build 产物烘进镜像，/ui 不再外挂 volume
 COPY --from=frontend-admin /web-admin/dist /ui
 # WO-AF-004 打回 5：homesdk 0.3.2 烘进镜像，文件名钉死（不通配，避免多 wheel 静默装错）
-COPY docker/homesdk/homesdk-0.3.2-py3-none-any.whl /tmp/homesdk/
-RUN pip install --no-cache-dir /tmp/homesdk/homesdk-0.3.2-py3-none-any.whl
+COPY docker/homesdk/homesdk-0.3.3-py3-none-any.whl /tmp/homesdk/
+RUN pip install --no-cache-dir /tmp/homesdk/homesdk-0.3.3-py3-none-any.whl
 
 # v1.6.0-a：同时装 ha extra（websockets），启用 HA websocket 四注册表；
 # 未安装时目录会自动降级（device_id/integration/area 为空），核心能力不受损。
