@@ -148,6 +148,7 @@ function mapAutomation (c: any): Automation {
       ? {
           state: c.trial.state,
           since: toIso(c.trial.since) ?? '',
+          until: toIso(c.trial.until) ?? null,
           anomaly: c.trial.anomaly ? String(c.trial.anomaly) : null,
         }
       : null,
@@ -257,17 +258,27 @@ export const httpApi: ApiClient = {
   },
 
   async listAuthCodes () {
-    // 审计 F-21 修复（v2.6 gap #9）：consumed 的码（用掉的短期码/历史废长期码）不得再当可用码展示——
+    // 审计 F-21 修复（v2.6 gap #9）：consumed 的码（用掉的短期码/历史废长期码）不得再当**可用码**展示——
     // 只按 revoked 过滤会把废码伪装成活的。
-    const data = await req<{ ok: boolean; codes: Array<{ code: string; kind: string; created_at: number; expires_at: number | null; revoked?: boolean; consumed?: boolean; use_count?: number }> }>('/api/user/auth-codes')
+    // 2026-11-04（出资人缺陷）：F-21 的原意是「不得当可用码展示」，不是「从界面上消失」。
+    //   短期码必须**保留最后一枚**（含 consumed/revoked/expired），否则界面只能退回「还没生成过」的表单，
+    //   用户看不到「已消耗」这个终态（他要的就是这句话）。⇒ 长码仍按 F-21 过滤，短码不过滤、由
+    //   `codeStatus()` 单源判态；终态那枚在视图里灰化并收掉复制/作废按钮（⛔ 绝不当可用码用）。
+    const data = await req<{ ok: boolean; codes: Array<{ code: string; kind: string; created_at: number; expires_at: number | null; revoked?: boolean; consumed?: boolean; use_count?: number; status?: string; consumed_at?: number | null }> }>('/api/user/auth-codes')
     return (data.codes || [])
-      .filter((c) => !c.revoked && !c.consumed)
+      .filter((c) => (c.kind === 'short' ? true : (!c.revoked && !c.consumed)))
       .map((c) => ({
         code: c.code,
         type: c.kind === 'short' ? 'short' : 'long',
         created_at: toIso(c.created_at) ?? new Date().toISOString(),
         expires_at: c.expires_at ? toIso(c.expires_at) : null,
         consumed: c.consumed ?? false,
+        revoked: c.revoked ?? false,
+        // 后端 d1fb08e 起派生 status / consumed_at：透传（缺失时 undefined ⇒ logic 兜底判态）
+        status: c.status === 'active' || c.status === 'consumed' || c.status === 'expired' || c.status === 'revoked'
+          ? c.status
+          : undefined,
+        consumed_at: c.consumed_at ? toIso(c.consumed_at) : null,
         use_count: c.use_count ?? 0,
       }))
   },

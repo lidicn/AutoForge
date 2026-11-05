@@ -48,7 +48,7 @@ const lastLabel = computed(() => formatAgo(props.item.last_triggered, props.now)
     <section class="blk">
       <div class="micro">
         <i class="tick" /> 试演期
-        <span class="since num">{{ trial.since ? '起于 ' + formatDateTime(trial.since) : '未进入试演' }}</span>
+        <span class="since num">{{ trial.since ? (trial.stateLabel ? trial.stateLabel + ' · ' : '') + '起于 ' + formatDateTime(trial.since) + (trial.until ? '，观察至 ' + formatDateTime(trial.until) : '') : '未进入试演' }}</span>
       </div>
       <div class="steps" :class="`level-${trial.level}`">
         <div

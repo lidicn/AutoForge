@@ -32,22 +32,41 @@ export interface TrialMeta {
   available: boolean
   steps: TrialStep[]
   activeIndex: number
+  stateLabel: string | null
   anomaly: string | null
   since: string | null
+  until: string | null
   level: 'normal' | 'anomaly'
+}
+
+/** 后端运行事实 → UI 三段放权某一步（⛔ 不改后端词表，映射只活在这一层） */
+const TRIAL_STATE_TO_STEP: Record<string, TrialState> = {
+  observing: 'canary',
+  verified: 'auto',
+}
+
+/** 落不到条上的事实（回滚/失败）用显式文案，⛔ 不给用户一条全灰的条当答案 */
+const TRIAL_STATE_LABEL: Record<string, string> = {
+  observing: '观察中',
+  verified: '已转正',
+  rolled_back: '已回滚',
+  failed: '试演失败',
 }
 
 export function trialMeta (trial: TrialInfo | null): TrialMeta {
   if (!trial) {
-    return { available: false, steps: TRIAL_STEPS, activeIndex: -1, anomaly: null, since: null, level: 'normal' }
+    return { available: false, steps: TRIAL_STEPS, activeIndex: -1, stateLabel: null, anomaly: null, since: null, until: null, level: 'normal' }
   }
-  const activeIndex = TRIAL_STEPS.findIndex(s => s.key === trial.state) // 未知状态 → -1
+  const stepKey = TRIAL_STATE_TO_STEP[trial.state] ?? trial.state
+  const activeIndex = TRIAL_STEPS.findIndex(s => s.key === stepKey) // 映射不到 → -1
   return {
     available: true,
     steps: TRIAL_STEPS,
     activeIndex,
+    stateLabel: TRIAL_STATE_LABEL[trial.state] ?? null,
     anomaly: trial.anomaly,
     since: trial.since,
+    until: trial.until ?? null,
     level: trial.anomaly ? 'anomaly' : 'normal',
   }
 }

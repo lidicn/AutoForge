@@ -1233,6 +1233,9 @@ class AuthCode:
     expires_at: float | None  # None = 未记到期；长期码另按绝对上限补出（见 `list`/`validate`）
     revoked: bool = False
     consumed: bool = False
+    # 短期码被 consume 的墙钟时刻（供前端显示「已消耗于 <时刻>」）；长期码不置此字段。
+    # 兼容历史存档：老记录无该键 ⇒ None（前端只显示「已消耗」不显示时刻）。
+    consumed_at: float | None = None
     failed_attempts: int = 0
     locked_until: float | None = None
     # v2.6 语义修复（gap #9）：长期码不消耗，只累计使用次数（consume 时 +1）。
@@ -1376,6 +1379,19 @@ class AuthCodeStore:
             out: list[dict[str, Any]] = []
             for c in self._codes.values():
                 exp = _longcode_expires_at(c)
+                # status 三态：前端据此停倒计时/灰化/标注，⛔ 不改消耗逻辑本身。
+                #   consumed：已被消耗（短期码一次性；revoked 优先于 consumed/expired 展示）
+                #   revoked ：已作废
+                #   expired ：到期（exp 存在且 <= now）
+                #   active  ：仍可用
+                if c.get("revoked"):
+                    status = "revoked"
+                elif c.get("consumed"):
+                    status = "consumed"
+                elif exp is not None and now > exp:
+                    status = "expired"
+                else:
+                    status = "active"
                 out.append(
                     {
                         "code": c["code"] if reveal else CODE_MASK,
@@ -1387,6 +1403,8 @@ class AuthCodeStore:
                         "expires_in_s": round(exp - now, 1) if exp is not None else None,
                         "revoked": c.get("revoked", False),
                         "consumed": c.get("consumed", False),
+                        "consumed_at": c.get("consumed_at"),
+                        "status": status,
                         "use_count": c.get("use_count", 0),
                         "failed_attempts": c.get("failed_attempts", 0),
                         "locked_until": c.get("locked_until"),
@@ -1471,6 +1489,8 @@ class AuthCodeStore:
             else:
                 # 短期码（及缺 kind 的历史记录）：一次性消耗，防重放语义不变
                 rec["consumed"] = True
+                # 记消耗时刻：供前端「已消耗于 <时刻>」（不在消耗语义里，纯展示旁路字段）
+                rec["consumed_at"] = time.time()
             self._persist()
             return True
 
