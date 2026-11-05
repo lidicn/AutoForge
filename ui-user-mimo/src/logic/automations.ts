@@ -51,6 +51,9 @@ const TRIAL_STATE_LABEL: Record<string, string> = {
   verified: '已转正',
   rolled_back: '已回滚',
   failed: '试演失败',
+  // 2026-11-05 AF-Core D8：动作无预期态映射时会落 unmodeled（不是假绿成 verified），
+  // 界面必须给一行明确文案，⛔ 不许让试演条空着让用户猜。
+  unmodeled: '无预期态对照',
 }
 
 export function trialMeta (trial: TrialInfo | null): TrialMeta {

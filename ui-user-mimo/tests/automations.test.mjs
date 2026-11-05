@@ -104,6 +104,11 @@ test('trialMeta 后端运行事实词表：observing/verified 落条上，rolled
 
   const failed = trialMeta({ state: 'failed', since: 'x', anomaly: null })
   assert.equal(failed.stateLabel, '试演失败')
+
+  // D8 新增终态：动作无预期态映射（⛔ 不假绿成 verified，也⛔ 不许条上留空）
+  const unmodeled = trialMeta({ state: 'unmodeled', since: 'x', anomaly: null })
+  assert.equal(unmodeled.activeIndex, -1)
+  assert.equal(unmodeled.stateLabel, '无预期态对照')
 })
 
 test('blastMeta 关键词映射到红色分级角标', () => {

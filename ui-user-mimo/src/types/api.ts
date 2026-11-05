@@ -35,7 +35,7 @@ export type TrialState = 'auto' | 'shadow' | 'canary'
 // 后端 `af_runtime_facts.record_trial` 落盘的是**另一套词表**（2026-11-04 对接）：
 // observing（canary 观察窗内）/ verified（试演通过转正）/ rolled_back（回滚）/ failed。
 // ⛔ 不把两套词表并成一条 union：UI 三段放权是产品语义，后端状态是运行事实，映射在 logic 层做。
-export type TrialRuntimeState = 'observing' | 'verified' | 'rolled_back' | 'failed'
+export type TrialRuntimeState = 'observing' | 'verified' | 'rolled_back' | 'failed' | 'unmodeled'
 
 export interface DeviceRef {
   friendly_name: string

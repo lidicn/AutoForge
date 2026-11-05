@@ -18,6 +18,9 @@ const allowText = ref('')
 // 事件脚本：后端 `_replay_live` 靠它把触发条件喂进 runtime。此前这里恒传 undefined
 // ⇒ 回放空转，trigger 型自动化在真机档一次都不会命中（F4 ③ 前端残留）。
 const eventsText = ref('')
+// D6（v1.26）：真机下发必须带短期授权码（服务层 `_auth_code_check` 同闸；此前 WebUI 不带码＝
+// REST 免码旁路）。码值只活在输入框里，⛔ 不写 localStorage、⛔ 不回显到结果区。
+const authCode = ref('')
 const confirm = ref(false)
 const undo = ref(true)
 const running = ref(false)
@@ -146,9 +149,14 @@ async function run() {
       return
     }
   }
+  const code = authCode.value.trim()
+  if (!code) {
+    message.warning('必须填一枚短期授权码（真机下发在服务层与服务端同闸，缺码会被拒）')
+    return
+  }
   running.value = true
   try {
-    const res = await facade.liveRun(ir, allow, true, events, undo.value)
+    const res = await facade.liveRun(ir, allow, true, events, undo.value, code)
     result.value = res.data
     message.success(events.length ? `真机下发完成（回放 ${events.length} 条事件）` : '真机下发完成（未提供事件脚本：trigger 型自动化不会命中）')
     await loadUndoList()
@@ -234,6 +242,20 @@ onUnmounted(() => {
             style="font-family: monospace"
           />
         </div>
+        <div>
+          <div class="label">短期授权码（真机下发凭据，必填）</div>
+          <n-input
+            v-model:value="authCode"
+            type="password"
+            show-password-on="click"
+            placeholder="8 位短期码（在 mimo/授权码页生成；⛔ 不落盘、不回显到结果）"
+            :disabled="!status?.enabled"
+            style="font-family: monospace"
+          />
+          <n-text v-if="!status?.enabled" depth="3" style="font-size: 12px">
+            服务端未启用真机下发（或缺 HA 令牌）⇒ 授权码与下发按钮一并置灰，先按上方「禁用原因」处理
+          </n-text>
+        </div>
         <div style="display: flex; align-items: center; gap: 10px">
           <n-switch v-model:value="confirm" />
           <n-text :type="confirm ? 'success' : 'error'">我已确认将真实改变设备状态（confirm=true）</n-text>
@@ -243,7 +265,13 @@ onUnmounted(() => {
           <n-text depth="3">记录动作前快照，窗口内可撤销本次部署（F7 / 决策 E）{{ undoWindowLabel }}</n-text>
         </div>
         <div>
-          <n-button type="error" :loading="running" :disabled="!confirm" @click="run">下发真机</n-button>
+          <n-button
+            type="error"
+            :loading="running"
+            :disabled="!confirm || !status?.enabled || !authCode.trim()"
+            @click="run"
+          >下发真机</n-button>
+          <n-text v-if="!status?.enabled" depth="3" style="font-size: 12px">未启用 ⇒ 按钮置灰</n-text>
         </div>
       </n-space>
     </n-card>

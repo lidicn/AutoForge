@@ -175,8 +175,9 @@ export const api = {
 
   // G 真机下发
   liveStatus: () => request<LiveStatusResponse>('GET', '/live/status'),
-  liveRun: (ir: unknown, live_allow: string[], confirm: boolean, events?: unknown[], undo?: boolean) =>
-    request<LiveRunResponse>('POST', '/live/run', { ir, live_allow, confirm, events, undo }),
+  // D6（v1.26）：真机下发必须带授权码（服务层 `_auth_code_check` 同闸，REST 免码＝绕过）
+  liveRun: (ir: unknown, live_allow: string[], confirm: boolean, events?: unknown[], undo?: boolean, auth_code?: string) =>
+    request<LiveRunResponse>('POST', '/live/run', { ir, live_allow, confirm, events, undo, auth_code: auth_code || '' }),
 
   // F7 撤销：撤销 = 对真实设备再下发一次，闸门与 liveRun 同源（服务端令牌 + live 权限）
   undoAvailable: () => request<UndoAvailableResponse>('GET', '/undo/available'),
