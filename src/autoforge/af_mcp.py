@@ -447,6 +447,11 @@ def _t_save(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | N
     if auth_code:
         acs = _MCP_AUTH_STORE or AuthCodeStore(Path(store.root) / ".auth" / "auth_codes.json")
         if acs.validate(auth_code):
+            # D3（2026-11-05，DCD/Chief 口径）：**先只读预扫描，通过后才 consume**。
+            # 此前是「先 consume 再 submit_pending（扫描在里面）」⇒ 结构非法的 IR 会先把码烧掉
+            # 再报错（实证 32892011 白烧）。预扫描与入队闸同一份实现（svc.precheck_save_ir），
+            # 所以这里通过的，submit_pending 必然也通过——不会出现「预检过、入队被拒」再烧一次。
+            svc.precheck_save_ir(store, payload.get("ir"))
             # 路径 A：持有效授权码 → consume 一次使用额度（短期码置 consumed；长期码计 use_count），
             # 直接部署
             # R17-01：必须检查 consume 返回值——validate/consume 是两步，中间可能被其他进程抢走；

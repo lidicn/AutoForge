@@ -1151,6 +1151,40 @@ def _blast_radius_of(ir: Mapping[str, Any] | None) -> dict[str, Any]:
     return {"affected": affected, "limit": blast_radius_limit()}
 
 
+def precheck_save_ir(store: GraphStore, ir: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """**只读预检**：IR 装载 + 静态扫描（⛔ 不写 pending、⛔ 不碰授权码）。
+
+    D3（2026-11-05，DCD/Chief 口径）：`af_mcp` 的授权码快速通道此前**先 consume 再进
+    `submit_pending`**，而扫描/校验在后者里 ⇒ 结构非法的 IR 会**先把码烧掉再报错**
+    （实证：`32892011` 白烧一枚）。授权码消耗必须排在「确认这次提交真的能过闸」之后。
+    本函数就是那道前置闸——与 `submit_pending` **同一份扫描实现**，⛔ 不另写一套。
+
+    返回 build_warnings（供调用方回执）；不通过即抛 `ServiceError(400)`（与入队闸逐字同文案）。
+    """
+    if ir is None:
+        return []
+    try:
+        graph = _load_ir(ir)
+    except (IRValidationError, ValueError, KeyError) as exc:
+        raise ServiceError(f"拒绝归档：IR 结构非法（{exc}）", status=400)
+    known = _catalog_known_entities(store)
+    scan = StaticScanner(
+        graph,
+        known_entities=known,
+        device_guard=load_device_guard(store),
+        entity_health=load_entity_health(store),
+    ).scan()
+    warnings = [_diag(d) for d in scan.warnings]
+    if not scan.ok:
+        codes = sorted({d.code for d in scan.errors})
+        raise ServiceError(
+            f"拒绝归档：IR 未通过静态扫描（{len(scan.errors)} 个错误：{'、'.join(codes)}）。"
+            f"先修 IR 或改用 af_build 查看诊断。",
+            status=400,
+        )
+    return warnings
+
+
 def submit_pending(
     store: GraphStore,
     tool: str,
@@ -1173,30 +1207,10 @@ def submit_pending(
     entity_check: str | None = None
     build_warnings: list[dict[str, Any]] = []
     if ir is not None:
-        try:
-            graph = _load_ir(ir)
-        except (IRValidationError, ValueError, KeyError) as exc:
-            raise ServiceError(f"拒绝归档：IR 结构非法（{exc}）", status=400)
-        # AF-704：入队闸的实体校验——白名单取 store 设备目录（与 af_build 同源）。
-        # 空则 None（合法首建态 fail-open），但回执必须把 skipped + 警告说给人审。
-        known = _catalog_known_entities(store)
-        scan = StaticScanner(
-            graph,
-            known_entities=known,
-            device_guard=load_device_guard(store),
-            entity_health=load_entity_health(store),
-        ).scan()
-        entity_check = "catalog" if known else "skipped"
-        build_warnings = [_diag(d) for d in scan.warnings]
-        if not scan.ok:
-            # AF-704：消息里带上具名码——人审/agent 拿到的是一句自由文本时，
-            # 分不出「结构非法」与「实体不存在」（裁定 20261006 §二.2 同族）。
-            codes = sorted({d.code for d in scan.errors})
-            raise ServiceError(
-                f"拒绝归档：IR 未通过静态扫描（{len(scan.errors)} 个错误：{'、'.join(codes)}）。"
-                f"先修 IR 或改用 af_build 查看诊断。",
-                status=400,
-            )
+        # D3：与 `precheck_save_ir` 同一份扫描实现（⛔ 不另写一套）——预扫描与入队闸必须
+        # 判出同样的结果，否则「预检通过、入队被拒」会让授权码照样白烧。
+        build_warnings = precheck_save_ir(store, ir)
+        entity_check = "catalog" if _catalog_known_entities(store) else "skipped"
     # P0-13：认证主体强制覆盖调用方自报的 submitted_by
     effective_submitter = authenticated_subject or submitted_by
     ps = PendingStore(store.root)
