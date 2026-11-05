@@ -253,7 +253,14 @@ class NodeExecutor:
         # （用实时 states 作为 guard，pre_snapshot 作为回滚基准），避免 default=str 静默字符串化
         # 后 `wrapped, adapter = "<...>"` 解包成字符、回滚静默失效。
         pending_canary = instance.ctx.context.pop("pending_canary", None)
+        # D8（2026-11-05 真机实证）：canary 观察期到期后，实例必须**按 do 节点的正常边**继续
+        # （验证通过走 `then`、漂移已回滚走 `on_error`），⛔ 不能用 `{on_timeout, default}`——
+        # do 节点只有 then/on_error，`on_timeout` 选不出边 ⇒ 实例被 `_terminate` 掉，
+        # 「观察期结束」被当成「超时」。这里记下该用哪套边，由下面统一的边选段消费。
+        canary_edge_kinds: set[str] | None = None
         if pending_canary is not None and kind == "on_timeout":
+            # 观察期正常走完 ⇒ 默认按「动作已成功」继续；漂移/回滚会把它改成失败腿。
+            canary_edge_kinds = {"then", "default"}
             try:
                 if not isinstance(pending_canary, dict):
                     raise ValueError(f"pending_canary 格式非法（应为 dict，实为 {type(pending_canary).__name__}）：{pending_canary!r}")
@@ -288,6 +295,9 @@ class NodeExecutor:
                         pre_snapshot=pending_canary.get("pre_snapshot", {}),
                     )
                     if wrapped.expected_state() is None:
+                        # D8：无 SERVICE_STATE 映射 ⇒ 漂移不可判。**必须落终态**（unmodeled），
+                        # 否则侧车永远停在 observing、UI 永远显示"试演中"（真机实证）。
+                        self._record_trial(instance, node, "unmodeled")
                         self._feed_canary_evidence(instance, node, "unmodeled", {
                             "reason": "观察期动作无 SERVICE_STATE 映射，漂移不可判",
                         })
@@ -299,6 +309,9 @@ class NodeExecutor:
                             if rolled
                             else "canary 观察期漂移，auto_rollback=false ⇒ 未回滚，留给人判断"
                         )
+                        # D8：漂移＝这次 do 验证失败 ⇒ 走失败腿，并把试演状态落成 rolled_back
+                        canary_edge_kinds = {"on_error", "default"}
+                        self._record_trial(instance, node, "rolled_back")
                         self._feed_canary_evidence(instance, node, "failed", {
                             "reason": reason, "rollback_calls": len(rolled),
                         })
@@ -314,6 +327,9 @@ class NodeExecutor:
                             )
                         )
                     else:
+                        # D8：观察期无漂移 ⇒ 这次 do 验证通过，试演状态落 verified（此前从不落，
+                        # 侧车永远停在 observing ⇒ UI 一直显示「试演中」）
+                        self._record_trial(instance, node, "verified")
                         self._feed_canary_evidence(instance, node, "verified")
             except Exception:
                 # MEDIUM-3（内核安全审计）：漂移检查异常不能静默降级为 verified（假绿）。
@@ -338,7 +354,10 @@ class NodeExecutor:
                         "canary unmodeled 状态落盘也失败（双异常）"
                     )
 
-        edge = auto.pick_edge(node.id, {kind, "default"})
+        # D8：canary 观察期恢复走 do 节点的正常边（verified→then／rolled_back→on_error）；
+        # 其余唤醒（ask 应答、wait、取消…）仍按唤醒 kind 选边，行为不变。
+        edge_kinds = canary_edge_kinds if canary_edge_kinds is not None else {kind, "default"}
+        edge = auto.pick_edge(node.id, edge_kinds)
         if edge is None:
             self._terminate(instance)
             return instance
