@@ -2973,6 +2973,24 @@ def live_run(
     # 检查在本函数更早。放行凭据写进回执（AF-403：过闸无痕=事后查不到哪把放行）。
     code_tag = _auth_code_check(store, auth_code, action="真机下发（live_run）")
 
+    # D5 三门之③（2026-11-05，AF-PM 裁定）：**单发只认短期码**——长期码只准用于部署。
+    # 理由：长期码可复用、只计 use_count，用它开「手动真机单发」等于把一条可反复使用的旁路
+    # 长期挂在手上；短期码一次性的语义与「临时手动开一下」正好对齐。
+    # ⚠️ 边界（Chief 口径）：本条只管**单发通道**，⛔ 不碰 watch 常驻执行与部署主路。
+    if auth_code and store is not None:
+        from .af_auth import AuthCodeStore as _ACS
+
+        try:
+            _recs = _ACS(Path(store.root) / ".auth" / "auth_codes.json").list(reveal=True)
+        except Exception:  # noqa: BLE001 —— 查不出 kind 时 fail-closed，⛔ 不猜测放行
+            raise ServiceError("真机单发无法判定授权码类型：拒绝执行（fail-closed）", status=403)
+        _kind = next((r.get("kind") for r in _recs if r.get("code") == auth_code), None)
+        if _kind != "short":
+            raise ServiceError(
+                "真机单发只认短期码：长期码只准用于部署，⛔ 不用于手动单发（D5 三门之③）",
+                status=403,
+            )
+
     graph = _load_ir(ir)
 
     # ★ 第一道闸：静态扫描（P0-4 修复：未扫描即拒绝）
