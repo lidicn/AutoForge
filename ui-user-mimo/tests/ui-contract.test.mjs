@@ -29,7 +29,25 @@ test('§1 契约文件结构未被改动（8 个导出 + 关键联合类型逐�
 test('§1 运行期事实接线点：trial.until 必须透传（⛔ 后端给了、前端丢掉＝观察期无从显示）', () => {
   has('src/api/http.ts', 'until: toIso(c.trial.until)')
   has('src/logic/automations.ts', 'TRIAL_STATE_TO_STEP')
-  has('src/types/api.ts', `export type TrialRuntimeState = 'observing' | 'verified' | 'rolled_back' | 'failed'`)
+  has('src/types/api.ts', `export type TrialRuntimeState = 'observing' | 'verified' | 'rolled_back' | 'failed' | 'unmodeled'`)
+})
+
+test('D1 后半：Agent 列表身份族徽标必须由 scopes 推导（⛔ 硬编码名单）', () => {
+  has('src/logic/automations.ts', 'export function scopeMeta')
+  has('src/views/AgentsView.vue', 'scopeMeta(a.scopes)')
+  has('src/api/http.ts', 'scopes: Array.isArray(a.scopes)')
+})
+
+test('D7 归档提示：启用页为空且归档有卡时必须显式提示（⛔ 不能只显示"暂无"）', () => {
+  has('src/views/AutomationsView.vue', 'archivedHint')
+  has('src/views/AutomationsView.vue', '去归档页看')
+  has('src/views/AutomationsView.vue', 'store.archivedCount')
+})
+
+test('D6 读数新鲜度：列表必须有「切回页面即刷新」的触发点（⛔ 只挂载拉一次）', () => {
+  has('src/views/MainLayout.vue', `useEventListener(document, 'visibilitychange'`)
+  has('src/views/MainLayout.vue', `useEventListener(window, 'focus'`)
+  has('src/views/MainLayout.vue', 'refreshIfStale')
 })
 
 test('顶栏标题 AutoForge + 底部小字 ForgeSight + 三 Tab + 600px 居中', () => {

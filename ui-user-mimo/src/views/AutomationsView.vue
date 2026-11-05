@@ -17,6 +17,12 @@ const folded = reactive<Record<string, boolean>>({})
 const receipt = ref<{ summary: string; l2: L2Action[] | null } | null>(null)
 
 const groups = computed(() => (tab.value === 'enabled' ? store.enabledGroups : store.archivedGroups))
+// D7（2026-11-05）：启用页为空但归档里还有卡时，「暂无启用中的自动化」会被读成「看不到 agent
+// 部署的自动化」。这里给一行显式提示＋一键跳到归档页（⛔ 不合并两个页签的语义）。
+const activeCount = computed(() => store.split.active.length)
+const archivedHint = computed(
+  () => tab.value === 'enabled' && activeCount.value === 0 && store.archivedCount > 0,
+)
 const blast = (r: string) => blastMeta(r)
 
 function toggleFold (id: string) { folded[id] = !folded[id] }
@@ -145,10 +151,21 @@ async function onReject (p: PendingItem) {
       :description="tab === 'enabled' ? '暂无启用中的自动化' : '归档是空的'"
       size="small"
     />
+    <p v-if="archivedHint" class="archived-hint">
+      启用页为空，但归档页还有 <b class="num">{{ store.archivedCount }}</b> 条
+      （agent 部署的自动化可能已被归档）
+      <n-button size="tiny" text type="primary" @click="tab = 'archived'">去归档页看</n-button>
+    </p>
   </div>
 </template>
 
 <style scoped>
+.archived-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--ink-3);
+  text-align: center;
+}
 .subtabs { display: flex; gap: 8px; margin-bottom: 14px; }
 .subtab {
   display: inline-flex; align-items: center; gap: 6px;
