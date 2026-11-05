@@ -42,7 +42,7 @@ def _d3(canary: dict | None) -> dict:
 D4 = {"id": "d4", "kind": "do", "adapter": "mock", "action": "light.turn_off", "params": {"entity_id": "light.a"}}
 
 
-def _ir(canary: dict | None, *, with_timeout_edge: bool) -> dict:
+def _ir(canary: dict | None, *, with_timeout_edge: bool, with_error_edge: bool = False) -> dict:
     edges = [
         {"from": "a1", "to": "d3", "kind": "then"},
         {"from": "d3", "to": "d4", "kind": "then"},
@@ -50,6 +50,9 @@ def _ir(canary: dict | None, *, with_timeout_edge: bool) -> dict:
     if with_timeout_edge:
         # = af_draft 修复后回填的 on_timeout 边
         edges.append({"from": "d3", "to": "d4", "kind": "on_timeout"})
+    if with_error_edge:
+        # D8 后漂移回滚走 on_error：链要有这条边才不会在判漂移时被断
+        edges.append({"from": "d3", "to": "d4", "kind": "on_error"})
     return {
         "ir_version": "0.2.1",
         "id": "g10",
@@ -65,29 +68,38 @@ def _trace_nodes(instance) -> list[str]:
     return [t["node"] for t in instance.ctx.trace]
 
 
-def _build(canary: dict | None, *, with_timeout_edge: bool):
-    runtime = build_runtime(Graph([load_automation(_ir(canary, with_timeout_edge=with_timeout_edge))]))
+def _build(canary: dict | None, *, with_timeout_edge: bool, with_error_edge: bool = False):
+    runtime = build_runtime(Graph([load_automation(_ir(canary, with_timeout_edge=with_timeout_edge, with_error_edge=with_error_edge))]))
     runtime.states.set_state("light.a", "off")  # canary 取 pre_snapshot 需要已知实体状态
     return runtime
 
 
 def test_canary_with_duration_d4_runs_after_observe_window():
-    """腿1（正向，G10 修复后）：观察期超时恢复 → on_timeout 边命中 d4，d4 真执行。"""
-    runtime = _build({"duration": "0.2s"}, with_timeout_edge=True)
+    """腿1（D8 后翻新，2026-11-05 PM 裁）：观察期到期按 do 正常边推进——
+
+    D8 前的旧行为：恢复按 `{on_timeout, default}` 选边 ⇒ 图缺对应边就被 `_terminate`。
+    D8 后：观察期正常走完=verified→`then`；判漂移回滚=failed→`on_error`。
+    Mock 适配器只记调用、**不应用状态效果** ⇒ `light.a` 停在预置的 `off`，
+    `light.turn_on` 预期 `on` ⇒ 必然判漂移 ⇒ 回滚 ⇒ 走 `on_error`。
+    因此本腿用「带 on_error 边」的图：链不因判漂移而断，d4 经 on_error 真执行。
+    verified→then 的正向对照腿由 `test_canary_evidence_still_recorded_after_fix`
+    （证据仍落）与真实适配器（vhass fake 会应用状态效果）覆盖。
+    """
+    runtime = _build({"duration": "0.2s"}, with_timeout_edge=True, with_error_edge=True)
     runtime.emit("binary_sensor.m", "on")
 
     inst = runtime.instances.all()[0]
     assert inst.state == SUSPENDED  # d3 已下发并挂起观察
     assert "d3" in _trace_nodes(inst)
 
-    runtime.advance(1.0)  # 过观察期 → on_timeout 恢复
+    runtime.advance(1.0)  # 过观察期 → D8 恢复（漂移→回滚→on_error 腿）
 
     nodes = _trace_nodes(inst)
-    assert "d4" in nodes, f"G10：恢复后应经 on_timeout 边到 d4，实际 trace={nodes}"
+    assert "d4" in nodes, f"D8：恢复后（漂移→on_error）应到 d4，实际 trace={nodes}"
     assert inst.state == DONE
-    # PM §1.5 A：d4 的适配器调用真发生（不只是终态对）
+    # 回滚真发生：mock 记录里出现反向动作（漂移回滚=补一次 light.turn_off）
     assert "light.turn_off" in runtime.adapters.get("mock").actions, (
-        f"d4 动作没真下发，actions={runtime.adapters.get('mock').actions}"
+        f"漂移回滚没真发生，actions={runtime.adapters.get('mock').actions}"
     )
 
 
