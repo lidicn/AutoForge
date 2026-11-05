@@ -1158,7 +1158,9 @@ class NodeExecutor:
         """T1：do 节点下发前的额外 MQTT 播报（`butler/inbox/speak`）。
 
         文本取值顺序：节点级 `announce`（IR 扩展字段，node 段 additionalProperties=true）→
-        `<自动化名>：<节点名>` 动态兜底。room 取 node.room（ask 节点同口径）。
+        `<自动化名>：<节点名>` 动态兜底。
+        房间：优先 `node.room`；**缺省时把目标实体传给回调**，由 Runtime 用 catalog 的
+        `entity → area_id` 反查（2026-11-05 真机修：线上 IR 普遍不写 room，缺失不等于不能出声）。
         ⛔ 纯旁路：未注入回调 / dry-run / 取不到文本时直接 no-op；异常只吞 warning，
         绝不改变 do 的动作结果、边选择或实例状态（与 `on_ask_speak` 同一纪律）。
         """
@@ -1169,10 +1171,25 @@ class NodeExecutor:
             auto_name = str(getattr(instance.automation, "name", "") or instance.automation.id)
             node_name = str(node.name or node.id)
             text = f"{auto_name}：{node_name}"
+        # 目标实体：HA 原生 `target.{entity_id}` 形态也要认（IR §7.1 安全约定要求两者都解析）
+        entity_id = str((node.params or {}).get("entity_id") or "").strip()
+        if not entity_id:
+            target = (node.params or {}).get("target")
+            if isinstance(target, dict):
+                entity_id = str(target.get("entity_id") or "").strip()
         try:
             self.on_do_speak(
-                str(instance.instance_id), text, str(node.room or ""),
+                str(instance.instance_id), text, str(node.room or ""), entity_id,
             )
+        except TypeError:
+            # 兼容只接受 (trace_id, text, room) 三参的注入方（老装配/单测桩）
+            try:
+                self.on_do_speak(str(instance.instance_id), text, str(node.room or ""))
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "DO_SPEAK_PUBLISH_FAILED do 播报旁路异常（不影响 do 核心） instance=%s node=%s",
+                    instance.instance_id, node.id, exc_info=True,
+                )
         except Exception:  # noqa: BLE001 —— 播报旁路失败绝不改 do 行为
             logger.warning(
                 "DO_SPEAK_PUBLISH_FAILED do 播报旁路异常（不影响 do 核心） instance=%s node=%s",

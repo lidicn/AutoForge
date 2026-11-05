@@ -134,11 +134,15 @@ class Runtime:
         self.executor.on_ask_speak = _speak_ask
         # T1（2026-11-04）：非 ask 自动化 do 动作下发前同样经桥播报一声（同一 publish_speak 腿）。
         # 与 ask 腿共用闭包语义：惰性取桥、无桥 no-op、失败只吞 warning，⛔ 不改 do 核心。
-        def _speak_do(trace_id: str, text: str, room: str) -> None:
+        # 2026-11-05 修（真机现读）：线上 IR 的 do 节点**没有 room 字段**，而 ② 的硬判据是
+        # 「解析不到 ⇒ 拒投递」⇒ 播报腿被自己的闸焊死（watch.log 实证 2 条 AREA_UNRESOLVED）。
+        # 修法：room 缺失时用 do 的**目标实体**反查 catalog 的区域（`entity → area_id`），
+        # 查到就用；实体也查不到才拒。⛔ 不退回 fail-open。
+        def _speak_do(trace_id: str, text: str, room: str, entity_id: str = "") -> None:
             bridge = _bridge.current_bridge()
             if bridge is None or not text:
                 return
-            area_id = self.resolve_room(room, source="do")
+            area_id = self.resolve_room(room, source="do", entity_id=entity_id)
             if area_id is None:
                 return
             bridge.publish_speak(trace_id=trace_id, text=text, room=area_id)
@@ -164,6 +168,8 @@ class Runtime:
         # 区域表懒加载：给了 store_root 就从 `.catalog/catalog.json` 取 `area_id → area_name`；
         # ⛔ 不内置固定房间表（DCD 2026-11-04 T3-AF：唯一真值是 HA 的 area registry，由各仓自己读）。
         self._area_map_cache: dict[str, str] | None = None
+        #: `entity_id → area_id` 兜底表（同一份 catalog，2026-11-05：IR 没写 room 时按实体反查）
+        self._entity_area_cache: dict[str, str] | None = None
 
         # ── mimo #19: conf 分级引擎（可选，默认关闭） ──────────────────
         # 环境变量 AUTOFORGE_CONF_GRADING=1 启用；启用后 ShadowRunner 装饰
@@ -210,8 +216,34 @@ class Runtime:
         self._area_map_cache = out
         return out
 
-    def resolve_room(self, room_text: str, *, source: str) -> str | None:
+    def _load_entity_area_map(self) -> dict[str, str]:
+        """从 catalog 现读 `entity_id → area_id`（与 `_load_area_map` 同一次读盘、同一缓存）。"""
+        if self._entity_area_cache is not None:
+            return self._entity_area_cache
+        out: dict[str, str] = {}
+        if self.store_root:
+            path = Path(self.store_root) / ".catalog" / "catalog.json"
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                entities = raw.get("entities") if isinstance(raw, dict) else None
+                if isinstance(entities, dict):
+                    for eid, meta in entities.items():
+                        if not isinstance(meta, dict):
+                            continue
+                        aid = str(meta.get("area_id") or "").strip()
+                        if aid:
+                            out[str(eid)] = aid
+            except (OSError, ValueError):
+                out = {}
+        self._entity_area_cache = out
+        return out
+
+    def resolve_room(self, room_text: str, *, source: str, entity_id: str = "") -> str | None:
         """把房间文本解析成 HA `area_id`；解析不到 ⇒ 打 `AREA_UNRESOLVED` 并返回 None。
+
+        `entity_id` 是**兜底腿**（2026-11-05 真机修）：线上 IR 的 do 节点常常根本不写 `room`，
+        此时用该 do 的**目标实体**去 catalog 反查它挂在哪个区域（`entity → area_id`）。
+        ⇒ 「IR 没写房间」不再等于「不能出声」，但**仍然 fail-closed**：房间与实体都查不到才拒。
 
         ★ 契约（DCD 裁定 §2.3 硬判据）：None ⇒ 调用方**拒投递**，⛔ 不许静默 accepted
         （AF→DB 发声因房间名对不上会静默不出声、台账还记 accepted，这正是要堵的洞）。
@@ -222,10 +254,15 @@ class Runtime:
         else:
             area_id = _areas.resolve(area_map, room_text, self.room_aliases or None)
             why = "房间文本不在 HA 区域表（area_id/别名/中文名三路都不命中）"
+        if area_id is None and entity_id:
+            # 兜底：IR 没写（或写错了）房间时，按目标实体反查区域
+            derived = self._load_entity_area_map().get(str(entity_id).strip())
+            if derived:
+                area_id, why = derived, ""
         if area_id is None:
             logger.warning(
-                "AREA_UNRESOLVED 房间解析不到 HA area_id，拒投递 source=%s room=%r 原因=%s 已知区域=%s",
-                source, room_text, why, sorted(area_map.keys()),
+                "AREA_UNRESOLVED 房间解析不到 HA area_id，拒投递 source=%s room=%r entity=%r 原因=%s 已知区域=%s",
+                source, room_text, entity_id, why, sorted(area_map.keys()),
             )
         return area_id
 
