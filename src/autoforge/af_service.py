@@ -2737,6 +2737,39 @@ def _live_config() -> dict[str, Any]:
     }
 
 
+def _advance_canary_windows(runtime: Any, *, max_rounds: int = 8) -> int:
+    """D1 后半（2026-11-05）：**单发模式有界推进 canary 观察窗**。
+
+    `live_run` 是同步单发：跑完一段就返回，**没有任何 ticker** ⇒ 挂在 `canary_observe` 的实例
+    永远等不到 `due_timers()`，L2 动作就此停在 `pending_canary`（真机实证：d2 set_temperature
+    卡死、温度写从未到空调）。这里在返回前把观察窗**有界地**走完：每轮把虚拟钟推到最近一个
+    到期点再 `tick()`，让 D8 的恢复腿把结局落成 verified／rolled_back／unmodeled。
+
+    ⛔ 只推进处于观察期的实例；无 `advance` 能力（真时钟）⇒ 直接 no-op（不伪造时间）。
+    """
+    advanced = 0
+    clock = getattr(runtime, "clock", None)
+    if clock is None or not hasattr(clock, "advance"):
+        return 0
+    for _ in range(max(0, int(max_rounds))):
+        waiting = [
+            i for i in runtime.instances.all()
+            if str(getattr(i, "state", "")) == "suspended"
+            and isinstance(i.ctx.context.get("pending_canary"), dict)
+        ]
+        if not waiting:
+            break
+        wait = 0.0
+        for inst in waiting:
+            timer = getattr(inst, "timer", None)
+            if timer is not None:
+                wait = max(wait, float(getattr(timer, "due_at", 0.0)) - clock.monotonic())
+        clock.advance(wait + 0.001)
+        runtime.tick()
+        advanced += 1
+    return advanced
+
+
 def _dispatch_verdict(runtime) -> dict[str, Any]:
     """live_run 的执行裁决：下发动作的**实际结果**，⛔ 不许让 `writes`（声明清单）冒充。
 
@@ -3007,6 +3040,12 @@ def live_run(
         len(events or []),
         code_tag,
     )
+    # D1 后半（2026-11-05）：单发模式没有 ticker ⇒ 返回前把 canary 观察窗有界走完，
+    # 否则 L2 动作永远停在 pending_canary（真机实证 d2 卡死）。⛔ 只推进观察期实例。
+    try:
+        _advance_canary_windows(runtime)
+    except Exception as exc:  # noqa: BLE001 —— 推进失败不许把已发生的下发回滚掉
+        logger.warning("LIVE_RUN_CANARY_ADVANCE_FAILED 观察窗推进异常（不影响已发生的下发）：%s", exc)
     # DCD 裁定 2026-10-30（AF-403 后半）：过闸凭据标签进审计流水（deploy_audit.jsonl
     # 随 store 根落盘）——回执给调用方，流水给事后追查；过闸无痕＝查不到哪把凭据放行。
     # 记账失败不回滚已发生的下发（口径同 _persist_deploy：操作员连撤销把手都拿不到更糟）。
