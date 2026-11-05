@@ -808,6 +808,17 @@ def enable_by_tag(
     `_assert_archive_mutator` 逐字保持，⛔ 本面借用它拒批。
     """
     names = [n for n, ts in store.all_tags().items() if tag in ts]
+    # D3（2026-11-05 实证）：**archived 标签＝写闸**。带 archived 的归档已从界面"收走"，
+    # 但底层仍可被批量启停翻转/继续真跑（今晨实证：归档件被 MCP 覆盖部署后持续触发 74+19 次）。
+    # 解档的唯一路径是显式 `set_tags` 摘掉 archived 标签。⇒ 批量启停面直接拒，
+    # 而不是"翻转成功但 watch 不认"这种半吊子状态。
+    archived_names = sorted(n for n, ts in store.all_tags().items() if "archived" in ts and n in names)
+    if archived_names:
+        raise ServiceError(
+            f"归档带 archived 标签，⛔ 不许按标签批量启停（先 set_tags 摘标签解档）："
+            f"{archived_names[:5]}{'…' if len(archived_names) > 5 else ''}",
+            status=403,
+        )
     # C-3：范围判定单源 scope_names（D4 的逐名 _assert 在批量面被份额化取代——
     # 逐名 403 会把「别人有一条同标签」放大成整批拒绝，还把他人归档名回给调用方）。
     sub = Subject.from_caller(caller, owner_face=caller_is_owner, token_identity=token_identity)
@@ -1090,6 +1101,14 @@ def save_graph(
             f"归档 {str(name).strip()!r} 归属 {prev_owner!r}，当前主体 {owner!r} 无权覆盖（所有权隔离）",
             status=403,
         )
+    # D3（2026-11-05 实证）：**archived 标签＝写闸**。归档件的语义是"已从界面收走、不该再动"，
+    # 但此前只有展示层认这个标签 ⇒ 归档件照样被覆盖部署（今晨 v4 就是覆盖了一份归档件），
+    # 然后底下持续真跑。解档唯一路径＝显式 `set_tags` 摘标签。
+    if "archived" in (store.get_tags(str(name).strip()) or []):
+        raise ServiceError(
+            f"归档 {str(name).strip()!r} 带 archived 标签，⛔ 不许覆盖部署（先 set_tags 摘标签解档）",
+            status=403,
+        )
     version = store.save(
         graph, str(name).strip(), note=note, tags=tags,
         expect_version=expect_version, owner=owner,
@@ -1350,7 +1369,12 @@ def _build_merged_ir(store: GraphStore) -> dict[str, Any] | None:
             latest[name] = ver
     # 2. 加载所有 automations（用 auto.raw，nodes/edges/meta 都在顶层）
     all_autos: list[dict] = []
+    # D3（2026-11-05 实证）：**archived 标签＝装载闸**——归档件不该被 watch 装进运行时。
+    # 此前只有展示层认这个标签，结果「界面上归档了、底下还在真跑」（今晨实证持续触发）。
+    archived = {n for n, ts in store.all_tags().items() if "archived" in ts}
     for name, ver in latest.items():
+        if name in archived:
+            continue
         try:
             graph = store.load(name, ver)
             for auto in getattr(graph, "automations", []) or []:
