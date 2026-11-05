@@ -147,12 +147,21 @@ def test_enable_reports_watcher_reconciliation(tmp_path, monkeypatch):
                              "probe_failed", "none_to_watch"}, rec
 
 
-def test_disable_does_not_touch_watcher(tmp_path):
+def test_disable_reports_watcher_reconcile(tmp_path):
+    """D4 翻新（2026-11-05 实证＋PM 拍「先停后起」）：禁用不再"不碰监听"。
+
+    旧契约（禁用 watch_reconcile 必为 None）正是当天真机事故的根因：watch 内存
+    咬着旧快照、被禁用的档继续触发。新契约：禁用也回报对账，空 store（无归档可跑）
+    时没有活监听 ⇒ `none_running`（只停不起路径的空转形态）。
+    """
     import autoforge.af_service as svc
 
     store = GraphStore(str(tmp_path / "s"))
     out = svc.enable_by_tag(store, "any", False, allow_bulk=True)
-    assert out["watch_reconcile"] is None, "禁用不该去动监听（也不该假装动了）"
+    rec = out.get("watch_reconcile")
+    assert rec is not None and rec.get("action") in (
+        "none_running", "stopped", "restarted", "stop_failed",
+    ), f"禁用必须回报监听对账（D4），实得 {rec!r}"
 
 
 def test_reconcile_refuses_loudly_when_lock_held(tmp_path, monkeypatch):
