@@ -50,6 +50,12 @@ test('D6 读数新鲜度：列表必须有「切回页面即刷新」的触发�
   has('src/views/MainLayout.vue', 'refreshIfStale')
 })
 
+test('D6 读数新鲜度：列表必须有「切回页面即刷新」的触发点（⛔ 只挂载拉一次）', () => {
+  has('src/views/MainLayout.vue', `useEventListener(document, 'visibilitychange'`)
+  has('src/views/MainLayout.vue', `useEventListener(window, 'focus'`)
+  has('src/views/MainLayout.vue', 'refreshIfStale')
+})
+
 test('顶栏标题 AutoForge + 底部小字 ForgeSight + 三 Tab + 600px 居中', () => {
   has('src/views/MainLayout.vue', 'AutoForge')
   has('src/views/MainLayout.vue', 'ForgeSight')

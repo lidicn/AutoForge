@@ -2,7 +2,7 @@
 import { onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NAlert, useMessage } from 'naive-ui'
-import { useIntervalFn, useOnline } from '@vueuse/core'
+import { useEventListener, useIntervalFn, useOnline } from '@vueuse/core'
 import UiIcon from '../components/UiIcon.vue'
 import { useMainStore } from '../stores/main.ts'
 
@@ -22,6 +22,21 @@ const { pause } = useIntervalFn(() => store.tick(), 1000)
 
 store.tick()
 store.refresh()
+let lastRefreshAt = Date.now()
+
+// D6（2026-11-05 现读）：列表只在挂载时拉一次，`tick()` 只换相对时间不重拉数据
+// ⇒ 页面开着不动时，"最近触发 / 近 7 天"永远停在进入那一刻的读数（新部署/新触发都不自愈）。
+// 切回页面或窗口重新聚焦时补一拉；⛔ 不做秒级轮询（四个列表每秒拉一遍太吵）。
+function refreshIfStale (): void {
+  const now = Date.now()
+  if (now - lastRefreshAt < 5000) return   // 连点/多事件去抖，5s 内只拉一次
+  lastRefreshAt = now
+  store.refresh()
+}
+useEventListener(document, 'visibilitychange', () => {
+  if (document.visibilityState === 'visible') refreshIfStale()
+})
+useEventListener(window, 'focus', refreshIfStale)
 
 onUnmounted(pause)
 
