@@ -87,7 +87,7 @@ def _fire(rt):
 def test_d1_d2_do_runs_and_speaks_before_action():
     rt, ad = _runtime()
     speaks = []
-    rt.executor.on_do_speak = lambda tid, text, room: speaks.append(
+    rt.executor.on_do_speak = lambda tid, text, room, entity_id="": speaks.append(
         {"trace_id": tid, "text": text, "room": room}
     )
     _fire(rt)
@@ -101,7 +101,7 @@ def test_d1_d2_do_runs_and_speaks_before_action():
 def test_d3_announce_text_used():
     rt, _ad = _runtime(AUTO_ANNOUNCE)
     speaks = []
-    rt.executor.on_do_speak = lambda tid, text, room: speaks.append(text)
+    rt.executor.on_do_speak = lambda tid, text, room, entity_id="": speaks.append(text)
     _fire(rt)
     assert speaks == ["书房有点热，我把空调打开"], f"应用节点 announce，实得 {speaks}"
 
@@ -110,7 +110,7 @@ def test_d3_announce_text_used():
 def test_d4_dynamic_fallback_text():
     rt, _ad = _runtime()
     speaks = []
-    rt.executor.on_do_speak = lambda tid, text, room: speaks.append(text)
+    rt.executor.on_do_speak = lambda tid, text, room, entity_id="": speaks.append(text)
     _fire(rt)
     assert len(speaks) == 1
     assert speaks[0].strip(), "无 announce 时必须给非空兜底文本"
@@ -121,7 +121,7 @@ def test_d4_dynamic_fallback_text():
 def test_d5_dry_run_does_not_speak():
     rt, ad = _runtime(adapter=_DryAdapter())
     speaks = []
-    rt.executor.on_do_speak = lambda tid, text, room: speaks.append(text)
+    rt.executor.on_do_speak = lambda tid, text, room, entity_id="": speaks.append(text)
     _fire(rt)
     assert ad.calls, "dry-run 适配器也应被调用"
     assert speaks == [], "dry-run 没真动作，⛔ 不该出声"
@@ -131,7 +131,7 @@ def test_d5_dry_run_does_not_speak():
 def test_d6_speak_exception_does_not_break_do():
     rt, ad = _runtime()
 
-    def _boom(tid, text, room):
+    def _boom(tid, text, room, entity_id=""):
         raise RuntimeError("桥抖了")
 
     rt.executor.on_do_speak = _boom

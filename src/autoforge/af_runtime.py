@@ -148,6 +148,18 @@ class Runtime:
             bridge.publish_speak(trace_id=trace_id, text=text, room=area_id)
 
         self.executor.on_do_speak = _speak_do
+        # emit 播报（AF-PM 裁定 2026-11-05）：emit 事件此前不走任何播报钩子 ⇒ `study_ac_started`
+        # 这类播报永远不出声。与 do **同源同一闭包语义**：三腿（ask/do/emit）同一闸、fail-closed 一致。
+        def _speak_emit(trace_id: str, text: str, room: str, entity_id: str = "") -> None:
+            bridge = _bridge.current_bridge()
+            if bridge is None or not text:
+                return
+            area_id = self.resolve_room(room, source="emit", entity_id=entity_id)
+            if area_id is None:
+                return
+            bridge.publish_speak(trace_id=trace_id, text=text, room=area_id)
+
+        self.executor.on_emit_speak = _speak_emit
         self.conf.seed(self.graph)
 
         # ── P1 实例持久化与崩溃恢复 ──────────────────────────────────

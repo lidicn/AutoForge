@@ -149,6 +149,9 @@ class NodeExecutor:
     #: do 动作下发前经 `butler/inbox/speak` 播报一声。签名同 on_ask_speak：
     #: `(trace_id, text, room) -> None`；未注入时零副作用，⛔ 不改 do 执行核心逻辑。
     on_do_speak: Any | None = None
+    #: emit 发布时的额外 MQTT 播报回调（AF-PM 裁定 2026-11-05）：与 do 同源、同一 room 解析路径。
+    #: 签名同 on_do_speak：`(trace_id, text, room, entity_id) -> None`；未注入时零副作用。
+    on_emit_speak: Any | None = None
     #: 运行期事实落盘（PM 卡 2026-11-04）：canary 试演状态记录回调
     #: `(state, automation_id, since, until, extra) -> None`；未注入时零副作用。
     runtime_facts: Any | None = None
@@ -1173,6 +1176,32 @@ class NodeExecutor:
     # ─────────────────────────────────────────────────────────────────
     # v0.3.0 跨自动化事件 · 发布侧（IR §4.3）
     # ─────────────────────────────────────────────────────────────────
+    def _speak_for_emit(self, instance: Instance, node: Node, data: dict) -> None:
+        """emit 播报（AF-PM 裁定 2026-11-05）：与 do 同源钩子，共用 room 反查＋area 解析。
+
+        房间文本：`node.room` → `emit.data.room`（IR 里 emit 常把房间写在 data 里）；
+        实体兜底：`emit.data.entity_id`（有则交给 Runtime 走 catalog 反查）。
+        ⛔ 纯旁路：未注入回调 / 取不到文本时 no-op；异常只吞 warning，emit 照常发布。
+        """
+        if self.on_emit_speak is None:
+            return
+        text = str(node.raw.get("announce") or "").strip()
+        if not text:
+            auto_name = str(getattr(instance.automation, "name", "") or instance.automation.id)
+            event = ""
+            if node.emit is not None:
+                event = str(node.emit.event or "")
+            text = f"{auto_name}：{event or node.id}"
+        room = str(node.room or (data.get("room") if isinstance(data, dict) else "") or "")
+        entity_id = str((data.get("entity_id") if isinstance(data, dict) else "") or "")
+        try:
+            self.on_emit_speak(str(instance.instance_id), text, room, entity_id)
+        except Exception:  # noqa: BLE001 —— 播报旁路失败绝不改 emit 行为
+            logger.warning(
+                "EMIT_SPEAK_PUBLISH_FAILED emit 播报旁路异常（不影响 emit 核心） instance=%s node=%s",
+                instance.instance_id, node.id, exc_info=True,
+            )
+
     def _speak_for_do(self, instance: Instance, node: Node, *, dry_run: bool) -> None:
         """T1：do 节点下发前的额外 MQTT 播报（`butler/inbox/speak`）。
 
@@ -1200,15 +1229,6 @@ class NodeExecutor:
             self.on_do_speak(
                 str(instance.instance_id), text, str(node.room or ""), entity_id,
             )
-        except TypeError:
-            # 兼容只接受 (trace_id, text, room) 三参的注入方（老装配/单测桩）
-            try:
-                self.on_do_speak(str(instance.instance_id), text, str(node.room or ""))
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "DO_SPEAK_PUBLISH_FAILED do 播报旁路异常（不影响 do 核心） instance=%s node=%s",
-                    instance.instance_id, node.id, exc_info=True,
-                )
         except Exception:  # noqa: BLE001 —— 播报旁路失败绝不改 do 行为
             logger.warning(
                 "DO_SPEAK_PUBLISH_FAILED do 播报旁路异常（不影响 do 核心） instance=%s node=%s",
@@ -1266,6 +1286,10 @@ class NodeExecutor:
         ⚠️ 被限流（`throttled`）或熔断（`breaker_open`）**不视为失败**——
         那是系统保护，不是自动化逻辑错误，因此**不进 `on_error`**，只落审计。
         """
+        # emit 播报（AF-PM 裁定 2026-11-05）：emit 事件此前不走任何播报钩子 ⇒ `study_ac_started`
+        # 这类播报永远不出声。这里挂**与 do 同源**的钩子，共用同一条 room 反查＋area 解析，
+        # 三腿（ask/do/emit）同一闸、fail-closed 语义一致。⛔ 失败不影响 emit 本身。
+        self._speak_for_emit(instance, node, data)
         result = "no_bus"
         if self.bus is not None:
             result = self.bus.publish_custom(event, data)

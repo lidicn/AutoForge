@@ -135,6 +135,52 @@ def test_d4_target_entity_form(tmp_path, bridge):
     assert bridge.speaks[0]["room"] == "ke_ting", f"target.entity_id 也要认，实得 {bridge.speaks[0]['room']!r}"
 
 
+# ── D6 emit 播报走同源钩子（AF-PM 裁定 2026-11-05） ──────────────
+EMIT_AUTO = {
+    "ir_version": "0.2.1", "id": "emit_speak", "name": "emit播报用例", "version": 1,
+    "mode": "restart",
+    "nodes": [
+        {"id": "a1", "kind": "on", "name": "t",
+         "trigger": {"type": "state", "entity_id": "binary_sensor.m", "to": "on"}},
+        {"id": "e1", "kind": "pass", "name": "广播已启动",
+         "emit": {"event": "study_ac_started", "data": {"room": "书房", "action": "cool_26"}}},
+        {"id": "p1", "kind": "pass", "name": "结束"},
+    ],
+    "edges": [
+        {"from": "a1", "to": "e1", "kind": "then"},
+        {"from": "e1", "to": "p1", "kind": "then"},
+    ],
+}
+
+
+def test_d6_emit_node_speaks_via_same_path(tmp_path, bridge):
+    """emit 节点的 data.room 是中文名 ⇒ 经同一条 housesdk 解析路径落成 area_id 并播出去。"""
+    rt = build_runtime(Graph([load_automation(EMIT_AUTO)]), store_root=str(_store(tmp_path)))
+    rt.adapters.register(_Adapter())
+    rt.states.set_state("binary_sensor.m", "off")
+    rt.publish(BusEvent.of("binary_sensor.m", "on"))
+    assert len(bridge.speaks) == 1, f"emit 应播一次（同源钩子），实得 {bridge.speaks}"
+    assert bridge.speaks[0]["room"] == "shu_fang", f"room 应是 area_id，实得 {bridge.speaks[0]['room']!r}"
+    assert "study_ac_started" in bridge.speaks[0]["text"] or bridge.speaks[0]["text"], "文本非空"
+
+
+def test_d7_emit_without_room_still_refused(tmp_path, bridge, caplog):
+    """emit 没写 room、data 里也没有 ⇒ 仍拒发（三腿同一 fail-closed 口径）。"""
+    auto = {**EMIT_AUTO, "nodes": [
+        EMIT_AUTO["nodes"][0],
+        {**EMIT_AUTO["nodes"][1], "emit": {"event": "study_ac_started", "data": {}}},
+        EMIT_AUTO["nodes"][2],
+    ]}
+    rt = build_runtime(Graph([load_automation(auto)]), store_root=str(_store(tmp_path)))
+    rt.adapters.register(_Adapter())
+    with caplog.at_level("WARNING"):
+        rt.states.set_state("binary_sensor.m", "off")
+        rt.publish(BusEvent.of("binary_sensor.m", "on"))
+    assert bridge.speaks == [], "emit 无房间信息时⛔ 不许播"
+    assert any("AREA_UNRESOLVED" in r.message and "emit" in r.message for r in caplog.records), \
+        "应打 AREA_UNRESOLVED 且 source=emit"
+
+
 # ── D5 源码钉 ────────────────────────────────────────────────────
 def test_d5_source_wiring():
     import inspect
