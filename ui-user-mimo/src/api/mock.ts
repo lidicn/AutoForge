@@ -89,8 +89,8 @@ function genLongCode (): string {
 
 function seed (): Db {
   const agents: Agent[] = [
-    { agent_id: 'agt_living', name: '客厅主控', connected_at: agoMin(60 * 24 * 9), last_seen: agoMin(2) },
-    { agent_id: 'agt_lab',    name: '实验沙箱', connected_at: agoMin(60 * 24 * 2), last_seen: agoMin(26 * 60) },
+    { agent_id: 'agt_living', name: '客厅主控', connected_at: agoMin(60 * 24 * 9), last_seen: agoMin(2), scopes: ['read', 'write', 'live'] },
+    { agent_id: 'agt_lab',    name: '实验沙箱', connected_at: agoMin(60 * 24 * 2), last_seen: agoMin(26 * 60), scopes: ['read'] },
   ]
 
   const automations: Automation[] = [

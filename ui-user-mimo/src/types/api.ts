@@ -10,6 +10,8 @@ export interface Agent {
   name: string
   connected_at: string | null
   last_seen: string | null
+  /** 该主体的令牌 scopes（`read`/`write`/`live`/`admin` 子集）——身份族徽标只看它，⛔ 不另造身份表 */
+  scopes: string[]
 }
 
 export interface PairRequest {

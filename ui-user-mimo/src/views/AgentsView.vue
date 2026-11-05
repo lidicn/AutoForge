@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { NButton, NEmpty, NInput, NPopconfirm, NSpin, useMessage } from 'naive-ui'
+import { NButton, NEmpty, NInput, NPopconfirm, NSpin, NTag, useMessage } from 'naive-ui'
 import { useClipboard } from '@vueuse/core'
 import UiIcon from '../components/UiIcon.vue'
 import PairingModal from '../components/PairingModal.vue'
@@ -8,6 +8,7 @@ import type { Agent } from '../types/api.ts'
 import { useMainStore } from '../stores/main.ts'
 import { MCP_URL } from '../api/env.ts'
 import { errorMessage, formatAgo, formatDateTime } from '../logic/format.ts'
+import { scopeMeta } from '../logic/automations.ts'
 
 const store = useMainStore()
 const message = useMessage()
@@ -96,6 +97,12 @@ function onPaired (name: string) { message.success(`新 Agent「${name}」已加
             </div>
             <template v-else>
               <h3 class="name">{{ a.name }}</h3>
+              <n-tag
+                size="small"
+                :bordered="false"
+                :type="scopeMeta(a.scopes).tagType"
+                :title="`身份族＝令牌 scopes 最高档（当前：${(a.scopes || []).join('/') || '无登记'}）`"
+              >{{ scopeMeta(a.scopes).label }}</n-tag>
               <div class="acts">
                 <button class="icon-btn" title="重命名" @click="startRename(a)">
                   <ui-icon name="pencil" :size="16" />

@@ -19,6 +19,17 @@ export function statusMeta (status: string): StatusMeta {
   return STATUS_TABLE[status] ?? { label: String(status), tone: 'neutral', tagType: 'default' }
 }
 
+// ---------- 身份族（D1 后半）----------
+/** 身份族＝令牌 scopes 的**最高档**（admin 蕴含 read/write/live ⇒ 只认这四枚真源，⛔ 不另造第二套身份表） */
+export function scopeMeta (scopes: string[] | undefined | null): StatusMeta {
+  const set = new Set(Array.isArray(scopes) ? scopes : [])
+  if (set.has('admin')) return { label: '管理面', tone: 'error', tagType: 'error' }
+  if (set.has('live')) return { label: '真机', tone: 'warning', tagType: 'warning' }
+  if (set.has('write')) return { label: '可写', tone: 'success', tagType: 'success' }
+  if (set.has('read')) return { label: '只读', tone: 'neutral', tagType: 'default' }
+  return { label: '未知', tone: 'neutral', tagType: 'default' }
+}
+
 // ---------- 试演期状态条 ----------
 export interface TrialStep { key: TrialState; label: string; hint: string }
 

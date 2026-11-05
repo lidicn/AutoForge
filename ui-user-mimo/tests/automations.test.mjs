@@ -6,6 +6,7 @@ import {
   compareAutomation,
   deviceLabel,
   groupByAgent,
+  scopeMeta,
   splitByArchived,
   statusMeta,
   trialMeta,
@@ -109,6 +110,15 @@ test('trialMeta 后端运行事实词表：observing/verified 落条上，rolled
   const unmodeled = trialMeta({ state: 'unmodeled', since: 'x', anomaly: null })
   assert.equal(unmodeled.activeIndex, -1)
   assert.equal(unmodeled.stateLabel, '无预期态对照')
+})
+
+test('scopeMeta 身份族：按 scopes 最高档判定，⛔ 不另造身份表', () => {
+  assert.equal(scopeMeta(['read']).label, '只读')
+  assert.equal(scopeMeta(['read', 'write']).label, '可写')
+  assert.equal(scopeMeta(['read', 'write', 'live']).label, '真机')
+  assert.equal(scopeMeta(['read', 'write', 'live', 'admin']).label, '管理面')
+  assert.equal(scopeMeta([]).label, '未知')
+  assert.equal(scopeMeta(undefined).label, '未知')
 })
 
 test('blastMeta 关键词映射到红色分级角标', () => {

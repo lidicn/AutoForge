@@ -180,6 +180,7 @@ export const httpApi: ApiClient = {
       name: a.name,
       connected_at: null,
       last_seen: null,
+      scopes: Array.isArray(a.scopes) ? a.scopes : [],
     }))
   },
 
