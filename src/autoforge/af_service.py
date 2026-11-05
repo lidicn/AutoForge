@@ -759,14 +759,35 @@ def _ensure_watcher(store: GraphStore, *, enabled: bool):
     `started`（起了新的）、`refused/failed/probe_failed:<原因>`（起不动必须回出去——
     否则就又回到"已启用但永不触发"的假武装）。
     """
-    if not enabled:
-        return None
     root = str(store.root)
     try:
         live = list_watches(root)
         running = [w for w in (live.get("watches") or []) if w.get("alive")]
     except Exception as exc:  # 探活失败也不能静默
         return {"action": "probe_failed", "reason": f"{type(exc).__name__}: {exc}"}
+    if not enabled:
+        # D4（2026-11-05 实证 + AF-PM 拍板「**先停后起**」）：禁用后必须让 watch 重新装载，
+        # 否则它内存里还咬着旧快照、被禁用的档继续触发（实证：禁用后 08:39-08:40 仍在跑）。
+        # ⚠️ 这不是「调用一下 reconcile」——`ir_reconcile_once` 只**报告**漂移、不重装，
+        # 所以这里真做「停旧 → 按新 merged IR 起新」，没有启用项就只停不起。
+        if not running:
+            return {"action": "none_running"}
+        try:
+            stopped = stop_watch(store_root=root)
+        except Exception as exc:  # noqa: BLE001 —— 停不动必须如实报，⛔ 不许假装已停
+            return {"action": "stop_failed", "reason": f"{type(exc).__name__}: {exc}"}
+        merged_after = _build_merged_ir(store)
+        if not merged_after:
+            # 全部禁用/归档 ⇒ 只停不起（这正是「禁用后不再跑」的期望终态）
+            return {"action": "stopped", "stopped": stopped, "restarted": False}
+        try:
+            started = _start_watch_impl(ir=merged_after, store_root=root, dry_live=False)
+        except ServiceError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return {"action": "start_failed", "stopped": stopped,
+                    "reason": f"{type(exc).__name__}: {exc}"}
+        return {"action": "restarted", "stopped": stopped, "started": started}
     if running:
         return {"action": "reused", "watchers": len(running)}
     merged = _build_merged_ir(store)
