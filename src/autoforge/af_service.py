@@ -3242,22 +3242,24 @@ def live_run_receipts(
     from .af_audit import DEPLOY_AUDIT_FILE
 
     path = Path(store_root) / DEPLOY_AUDIT_FILE
-    if not path.is_file():
-        # 台账还没生成（一次都没真机下发过）：如实"空"，⛔ 与"读不出"分开
-        return {"ok": True, "count": 0, "items": []}
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        # v1.28 R3 补（AF-UI 2026-11-07 校准）：此前 `read_jsonl_bounded` 的 fail-soft 会把
-        # "台账读不出"与"没有回执"压成同一个空表，UI 无法分辨 ⇒ 这里显式冒出来给第三档。
-        return {
-            "ok": False,
-            "count": 0,
-            "items": [],
-            "read_error": f"ledger_unreadable:{type(exc).__name__}",
-        }
+    # 三档要在**同一个出口**分开（⛔ 不给缺文件那一档单独 `return {"ok": True}`：字面量 ok
+    # 会被 AST 棘轮判成 fake-ok，而且多出口正是"两档被压成一档"的老形状）：
+    # 缺文件 ⇒ `text=None` ⇒ 空表（ok 由后面的不变式算）；OSError ⇒ 显式 `read_error`。
+    text: str | None = None
+    if path.is_file():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            # v1.28 R3 补（AF-UI 2026-11-07 校准）：此前 `read_jsonl_bounded` 的 fail-soft 会把
+            # "台账读不出"与"没有回执"压成同一个空表，UI 无法分辨 ⇒ 这里显式冒出来给第三档。
+            return {
+                "ok": False,
+                "count": 0,
+                "items": [],
+                "read_error": f"ledger_unreadable:{type(exc).__name__}",
+            }
     events: list[dict[str, Any]] = []
-    for line in text.splitlines():
+    for line in (text or "").splitlines():
         line = line.strip()
         if not line:
             continue
