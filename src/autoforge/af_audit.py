@@ -51,6 +51,11 @@ INSTANCE_COOLDOWNED = "instance_cooldowned"
 #: 但触发计数照记＋审计在案。区别于冷却（INSTANCE_COOLDOWNED）：这是"条件还没回落"的
 #: 主语义抑制，不是时间窗兜底（卡名 AF卡_dispatch_cooldown）。
 INSTANCE_EDGE_HELD = "instance_edge_held"
+#: AF-738（2026-11-06）：执行器**真调用适配器**那一刻的留痕——回执的唯一执行真值源。
+#: 与 `af_action_dispatched`（干预/影子层"要发"的宣告）区分：那是"打算发"，这是"已调用"。
+#: 为什么需要：`live_run` 不接影子层 ⇒ 回执只认 dispatched 时会恒报 `nothing_dispatched`（假红），
+#: 真实下发在回执里看不见（AF-738 根因）。
+ACTION_CALLED = "af_action_called"
 INSTANCE_EXPIRED = "instance_expired"
 #: P1 实例持久化：崩溃恢复时成功挂回 / 因图变更被丢弃
 INSTANCE_RESTORED = "instance_restored"
@@ -116,6 +121,7 @@ ALL_EVENT_TYPES = (
     INSTANCE_DEBOUNCED,
     INSTANCE_COOLDOWNED,
     INSTANCE_EDGE_HELD,
+    ACTION_CALLED,
     INSTANCE_RESTORED,
     INSTANCE_RESTORE_DROPPED,
     INSTANCE_SESSION_LOST,

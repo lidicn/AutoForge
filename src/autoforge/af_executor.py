@@ -24,6 +24,7 @@ _logger = logging.getLogger(__name__)
 
 from .af_adapters import AdapterRegistry, CallResult
 from .af_audit import (
+    ACTION_CALLED,
     ACTION_FAILED,
     ENTITY_DRIFT,
     EVENT_EMITTED,
@@ -858,6 +859,7 @@ class NodeExecutor:
                 self.states,
                 auto_rollback=bool(canary.get("auto_rollback", True)) if isinstance(canary, dict) else True,
             )
+            self._audit_action_called(instance, node)
             try:
                 wrapped = guard.perform(adapter, node.action or "", dict(node.params))
             except UnknownEntity as exc:
@@ -879,7 +881,13 @@ class NodeExecutor:
                             "CANARY_DURATION_PARSE_FAILED canary.duration 解析失败，按无观察期处理（node=%s.%s, dur=%r）: %s",
                             instance.automation.id, node.id, dur_str, exc,
                         )
-            if canary_duration and canary_duration > 0:
+            # AF-738 补（假绿口子）：**调用本身失败**时不许进观察窗——否则实例白挂一个窗口，
+            # 而回执按"已调用"报 executed，读者会以为设备改了。失败直接落到下面的通用失败处理
+            # （`result.success` 判 False ⇒ ACTION_FAILED + on_error），⛔ 不对未生效的动作做漂移回滚。
+            _call_failed = not bool(getattr(wrapped.result, "success", True))
+            if _call_failed:
+                result = wrapped.result
+            elif canary_duration and canary_duration > 0:
                 # 挂起观察：存可序列化元数据（P1-4 修复：原存 (wrapped, adapter) 对象不可序列化，
                 # 崩溃恢复后 default=str 静默字符串化 → 解包成字符 → 回滚静默失效）。恢复路径据此重建。
                 instance.ctx.context["pending_canary"] = {
@@ -893,36 +901,38 @@ class NodeExecutor:
                 self.instances.suspend(instance, node.id, canary_duration, kind="canary_observe")
                 self._record_trial(instance, node, "observing")
                 return None
-            # 无 duration → 立即检查漂移（原行为）
-            if wrapped.expected_state() is None:
-                # F4：动作没有 SERVICE_STATE 映射 → has_drift() 恒 False，**不是**"验过了"，
-                # 是"无从验"。记成 verified 就是 铁律 #5 的假证据，单列 unmodeled 一档。
-                self._feed_canary_evidence(instance, node, "unmodeled", {
-                    "reason": "SERVICE_STATE 无该动作的预期态，漂移不可判",
-                })
-            elif wrapped.has_drift():
-                rolled = guard.check_and_rollback(adapter, wrapped)
-                self._feed_canary_evidence(instance, node, "failed", {
-                    "reason": "canary 漂移，已自动回滚", "rollback_calls": len(rolled),
-                })
-                self._record_trial(instance, node, "rolled_back")
-                self.audit.add(
-                    AuditEvent(
-                        type=ENTITY_DRIFT,
-                        at=self.clock.now(),
-                        message=f"canary 检测到漂移 {node.action}，已自动回滚（{len(rolled)} 次反向下发）",
-                        automation_id=instance.automation.id,
-                        instance_id=instance.instance_id,
-                        node_id=node.id,
-                        data={"params": dict(node.params)},
+            # 无 duration → 立即检查漂移（原行为）；AF-738：调用已失败则跳过（⛔ 对未生效的动作回滚）
+            if not _call_failed:
+                if wrapped.expected_state() is None:
+                    # F4：动作没有 SERVICE_STATE 映射 → has_drift() 恒 False，**不是**"验过了"，
+                    # 是"无从验"。记成 verified 就是 铁律 #5 的假证据，单列 unmodeled 一档。
+                    self._feed_canary_evidence(instance, node, "unmodeled", {
+                        "reason": "SERVICE_STATE 无该动作的预期态，漂移不可判",
+                    })
+                elif wrapped.has_drift():
+                    rolled = guard.check_and_rollback(adapter, wrapped)
+                    self._feed_canary_evidence(instance, node, "failed", {
+                        "reason": "canary 漂移，已自动回滚", "rollback_calls": len(rolled),
+                    })
+                    self._record_trial(instance, node, "rolled_back")
+                    self.audit.add(
+                        AuditEvent(
+                            type=ENTITY_DRIFT,
+                            at=self.clock.now(),
+                            message=f"canary 检测到漂移 {node.action}，已自动回滚（{len(rolled)} 次反向下发）",
+                            automation_id=instance.automation.id,
+                            instance_id=instance.instance_id,
+                            node_id=node.id,
+                            data={"params": dict(node.params)},
+                        )
                     )
-                )
-                return self._soft_fail(instance, node, RuntimeError(f"canary 漂移，已回滚 {node.action}"))
-            else:
-                self._feed_canary_evidence(instance, node, "verified")
-                self._record_trial(instance, node, "verified")
+                    return self._soft_fail(instance, node, RuntimeError(f"canary 漂移，已回滚 {node.action}"))
+                else:
+                    self._feed_canary_evidence(instance, node, "verified")
+                    self._record_trial(instance, node, "verified")
             result = wrapped.result
         else:
+            self._audit_action_called(instance, node)
             result: CallResult = adapter.call(node.action or "", dict(node.params))
 
         # 结果只进 vars，不回写快照（IR §7.2）
@@ -1206,6 +1216,29 @@ class NodeExecutor:
     # ─────────────────────────────────────────────────────────────────
     # v0.3.0 跨自动化事件 · 发布侧（IR §4.3）
     # ─────────────────────────────────────────────────────────────────
+    def _audit_action_called(self, instance: Instance, node: Node) -> None:
+        """AF-738：**真调用适配器那一刻**留痕（回执的唯一执行真值源）。
+
+        为什么单独一枚码：`af_action_dispatched` 由影子/干预层在"要发"时写，
+        而 `live_run` 不接影子层 ⇒ 回执只认它时会恒报 `nothing_dispatched`，
+        真实下发在回执里看不见（假红，AF-738 根因）。本码写在**执行器的调用点**，
+        watch 与单发两条路都有，且不谈实例是否随后终止（审计留得住）。
+
+        ⛔ 纯留痕：不改动作、不改边选择、不改实例状态；审计是内存 append，无失败路径。
+        """
+        entities = sorted(str(e) for e in (node.target_entities() or ()))
+        self.audit.add(
+            AuditEvent(
+                type=ACTION_CALLED,
+                at=self.clock.now(),
+                message=f"调用 {node.adapter}.{node.action}（{', '.join(entities) or '-'}）",
+                automation_id=instance.automation.id,
+                instance_id=instance.instance_id,
+                node_id=node.id,
+                data={"action": f"{node.adapter}.{node.action}", "entities": entities},
+            )
+        )
+
     def _speech_template_text(self, node: Node, fallback_entity_id: str) -> str | None:
         """D11：渲染节点 `speech_template`（实时值插值）；渲不出来返回 `None`（回退静态文案）。
 

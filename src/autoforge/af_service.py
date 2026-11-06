@@ -2785,7 +2785,11 @@ def _dispatch_verdict(runtime) -> dict[str, Any]:
     / `af_action_dispatched` 是唯一执行真值源，从那儿算。
     """
     audit = [e.to_dict() if hasattr(e, "to_dict") else dict(e) for e in runtime.audit]
-    dispatched = [a for a in audit if a.get("type") == "af_action_dispatched"]
+    # AF-738（2026-11-06）：`af_action_dispatched` 由影子/干预层在"要发"时写，而 `live_run`
+    # 不接影子层 ⇒ 只认它会恒报 `nothing_dispatched`（真实下发看不见的假红）。
+    # 执行器现在在**真调用适配器**那一刻写 `af_action_called`（watch 与单发都有）⇒ 优先认它。
+    called = [a for a in audit if a.get("type") == "af_action_called"]
+    dispatched = called or [a for a in audit if a.get("type") == "af_action_dispatched"]
     failed = [a for a in audit if a.get("type") == "action_failed"]
     # 审计 AF-301：我上一版写出 `"failed" if dispatched else "failed"` 这种两支同值的
     # 退化三元——读起来像有分支、实际没有，而且注释承诺过 partially 档却永远出不了。
@@ -2799,6 +2803,11 @@ def _dispatch_verdict(runtime) -> dict[str, Any]:
         verdict = "executed"
     else:
         verdict = "nothing_dispatched"
+    # AF-738 补：`dispatched` 是「尝试下发」数，`failed` 是其中失败数。**一次尝试一次失败**
+    # 必须报 `failed`，⛔ 不许因为「尝试数>0 且 失败数>0」就报 partially_failed（那是把单次失败
+    # 说成"有成功有失败"）。partially_failed 只在**确有成功**时成立。
+    if verdict == "partially_failed" and len(dispatched) <= len(failed):
+        verdict = "failed"
     return {
         "verdict": verdict,
         "dispatched": len(dispatched),
