@@ -11,7 +11,7 @@
 | 路径数／操作数 | **88 路径／94 操作** |
 | 认证方案 | `securitySchemes` = {"HTTPBearer": {"type": "http", "scheme": "bearer"}} |
 | 权限面列来源 | `af_api.py` 的 `Depends(_read/_write/_live/_admin/_readonly_guard)` 现读 |
-| `audit[].type` | **24 枚**（`af_audit.ALL_EVENT_TYPES` 现读逐枚相等） |
+| `audit[].type` | **27 枚**（`af_audit.ALL_EVENT_TYPES` 现读逐枚相等） |
 | `diagnostics[].code` | **52 枚**（`af_scanner.CHECKS` 现读） |
 
 Base：`http://<host>:8787`（NAS 部署：`http://192.168.2.200:8787`）
@@ -255,7 +255,7 @@ Base：`http://<host>:8787`（NAS 部署：`http://192.168.2.200:8787`）
 
 ## 三、关键枚举（全部现读真源）
 
-- `audit[].type`（**24 枚**，真源 `af_audit.ALL_EVENT_TYPES`）：`entity_drift`｜`action_failed`｜`event_emitted`｜`breaker_open`｜`breaker_recover`｜`quota_exceeded`｜`instance_rejected`｜`instance_expired`｜`instance_debounced`｜`instance_restored`｜`instance_restore_dropped`｜`instance_session_lost`｜`write_conflict`｜`instance_lease_held`｜`handler_failed`｜`premiere_issued`｜`premiere_consumed`｜`premiere_trial_started`｜`premiere_trial_paused`｜`trial_assert_failed`｜`token_expired_purged`｜`token_env_legacy_name`｜`token_issued_rejected`｜`approve_pending_applied`
+- `audit[].type`（**27 枚**，真源 `af_audit.ALL_EVENT_TYPES`）：`entity_drift`｜`action_failed`｜`event_emitted`｜`breaker_open`｜`breaker_recover`｜`quota_exceeded`｜`instance_rejected`｜`instance_expired`｜`instance_debounced`｜`instance_cooldowned`｜`instance_edge_held`｜`af_action_called`｜`instance_restored`｜`instance_restore_dropped`｜`instance_session_lost`｜`write_conflict`｜`instance_lease_held`｜`handler_failed`｜`premiere_issued`｜`premiere_consumed`｜`premiere_trial_started`｜`premiere_trial_paused`｜`trial_assert_failed`｜`token_expired_purged`｜`token_env_legacy_name`｜`token_issued_rejected`｜`approve_pending_applied`
 - `diagnostics[].level`：`error`｜`warning`；`diagnostics[].code`（真源 `af_scanner.CHECKS`，**52 枚**）：`L3_ACTION`｜`HTTP_NOT_WHITELISTED`｜`MISSING_TIMEOUT_OR_DEFAULT`｜`ENTITY_DEP_CYCLE`｜`UNRESOLVED_ENTITY`｜`SELF_TRIGGER_LOOP`｜`STATIC_LOOP`｜`CANCEL_SPAWNS_INSTANCE`｜`HIGH_RISK_AFTER_SUSPEND`｜`SHADOW_WRITES_DEVICE`｜`CROSS_AUTOMATION_VAR`｜`ADAPTER_POLICY_PARAM`｜`SNAPSHOT_FALSE_MULTI_AND`｜`ENTITY_NOT_FOUND`｜`ENTITY_WRITE_CONFLICT`｜`L2_NEEDS_CONFIRM`｜`L2_NEEDS_CANARY`｜`LOW_CONF_WRITES_DEVICE`｜`DO_WITHOUT_ON_ERROR`｜`NESTED_SUSPEND_IN_CANCEL`｜`ENTITY_ACL_DENIED`｜`ENTITY_OFFLINE_NOW`｜`TRIGGER_STALE`｜`DUPLICATE_EDGE_PRIORITY`｜`NON_IDEMPOTENT_CONCURRENT`｜`NO_ENTRY_NODE`｜`RESERVED_NOT_IMPLEMENTED`｜`EXPR_INVALID`｜`EXPR_NS_INVALID`｜`TRIGGER_INVALID`｜`PARAMS_TOO_DEEP`｜`INBOX_PARAM_TOO_LONG`｜`UNDECLARED_VAR`｜`NL_COVERAGE`｜`EMIT_SELF_LOOP`｜`CROSS_DEP_CYCLE`｜`EMIT_STORM_LIMIT`｜`LIVE_TOKEN_REQUIRED`｜`LIVE_CONFIRM_REQUIRED`｜`LIVE_WHITELIST_REQUIRED`｜`LIVE_ENTITY_NOT_WHITELISTED`｜`EXPECT_MISSING`｜`EXPECT_UNREACHABLE`｜`EXPECT_STATE_INVALID`｜`ENTITY_GUARD_TIER0`｜`ASK_AT_RUNTIME`｜`TIME_AT_INVALID`｜`SERVICE_UNKNOWN`｜`ENTITY_CHECK_DEGRADED`｜`EDGE_KIND_MISMATCH`｜`ASK_BINARY_NO_DENY_PATH`｜`ASK_STRUCT_NO_THEN`
 - `band`：`auto`（conf ≥ 0.85）｜`shadow`（≥ 0.60）｜`ask`（< 0.60）
 - `instances[].state`：`created`｜`active`｜`suspended`｜`done`｜`cancelled`｜`failed`｜`expired`
