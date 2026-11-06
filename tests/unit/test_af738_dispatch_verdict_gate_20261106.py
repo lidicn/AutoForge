@@ -122,6 +122,50 @@ def test_d5_failure_still_reported():
     assert v["failed"] == 1
 
 
+# ── D7 真实 runtime 的「部分失败」腿（判据翻新：2 发 1 败才是 partial）────────
+def test_d7_real_runtime_partial_failure():
+    """AF-301 的 partially_failed 语义在 AF-738 后被精化：
+    `dispatched`＝尝试数、`failed`＝失败数；**确有成功**才算 partial。
+    本腿用真实 runtime（两次 do，一成一败）钉住这条，⛔ 只测合成事件表是不够的。
+    """
+    ir = {
+        "ir_version": "0.2.1", "id": "partial", "name": "部分失败", "version": 1,
+        "mode": "parallel",
+        "nodes": [
+            {"id": "a1", "kind": "on",
+             "trigger": {"type": "state", "entity_id": "sensor.temp", "to": "hot"}},
+            {"id": "d1", "kind": "do", "adapter": "climate", "action": "set_hvac_mode",
+             "params": {"entity_id": "climate.x", "hvac_mode": "cool"}},
+            {"id": "d2", "kind": "do", "adapter": "climate", "action": "set_temperature",
+             "params": {"entity_id": "climate.x", "temperature": 26}},
+            {"id": "p1", "kind": "pass"},
+        ],
+        "edges": [{"from": "a1", "to": "d1", "kind": "then"},
+                  {"from": "d1", "to": "d2", "kind": "then"},
+                  {"from": "d2", "to": "p1", "kind": "then"}],
+    }
+
+    class _HalfBroken:
+        name = "climate"
+        dry_run = False
+
+        def call(self, action, params):
+            from autoforge.af_adapters.base import CallResult
+            if action == "set_hvac_mode":
+                return CallResult(success=True, data={}, error=None)
+            return CallResult(success=False, data={}, error="device refused")
+
+    rt = build_runtime(Graph([load_automation(ir)]),
+                       clock=VirtualTimeSource(SystemTimeSource().now()))
+    rt.adapters.register(_HalfBroken())
+    rt.states.set_state("sensor.temp", "hot")
+    rt.states.set_state("climate.x", "off")
+    rt.emit("sensor.temp", "hot")
+    v = _dispatch_verdict(rt)
+    assert v["dispatched"] == 2 and v["failed"] == 1, f"两笔尝试、其中一笔失败，实得 {v}"
+    assert v["verdict"] == "partially_failed", f"确有成功+有失败＝partial，实得 {v}"
+
+
 # ── D6 源码钉：两个调用点都留痕；verdict 优先新码 ──────────────────────
 def test_d6_source_pins():
     import inspect

@@ -36,10 +36,17 @@ def test_partial_failure_is_distinguishable_from_total_failure():
     """审计抓到的形状：`"failed" if dispatched else "failed"` 两支同值 + 注释承诺 partially。
 
     判据不许只测"失败"——要测**成败混合**这一格，否则退化三元照样绿。
+
+    AF-738 翻新（2026-11-06）：`dispatched` 是**尝试**数、`failed` 是其中失败数。
+    「一次尝试一次失败」是**全败**（`failed`），⛔ 不许冒充部分失败；部分失败必须**确有成功**。
+    所以混合档要用「**2 发 1 败**」表达，而 1 发 1 败那格单列反证。
     """
-    out = _dispatch_verdict(_Rt(["af_action_dispatched", "action_failed"]))
+    out = _dispatch_verdict(_Rt(["af_action_dispatched", "af_action_dispatched", "action_failed"]))
     assert out["verdict"] == "partially_failed", out
-    assert out["dispatched"] == 1 and out["failed"] == 1
+    assert out["dispatched"] == 2 and out["failed"] == 1
+    # 反证牙：一次尝试一次失败＝全败，不许落到 partially_failed（AF-738 的精化语义）
+    total = _dispatch_verdict(_Rt(["af_action_dispatched", "action_failed"]))
+    assert total["verdict"] == "failed", f"1 发 1 败必须判 failed，实得 {total}"
 
 
 @pytest.mark.parametrize("types,want", [

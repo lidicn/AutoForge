@@ -95,10 +95,20 @@ def test_verdict_nothing_when_no_do_ran():
 
 
 def test_verdict_counts_both_when_partial():
-    out = _dispatch_verdict(_FakeRuntime(["af_action_dispatched", "action_failed"]))
+    out = _dispatch_verdict(_FakeRuntime(
+        ["af_action_dispatched", "af_action_dispatched", "action_failed"]
+    ))
     # AF-301（审计）后：部分失败是独立档。旧断言期望 "failed"——那是退化三元
     # 时代的形状（两支同值把 mixed 吞进 failed）。
-    assert out["verdict"] == "partially_failed" and out["dispatched"] == 1 and out["failed"] == 1
+    # AF-738 翻新（2026-11-06）：dispatched 是**尝试**数、failed 是失败数；
+    # 「一次尝试一次失败」是全败 ⇒ failed，⛔ 不许冒充部分失败。混合档须确有成功（2 发 1 败）。
+    assert out["verdict"] == "partially_failed" and out["dispatched"] == 2 and out["failed"] == 1
+
+
+def test_verdict_single_attempt_failure_is_total_failure():
+    """AF-738 反证腿：1 发 1 败＝全败（⛔ 不许报 partially_failed）。"""
+    out = _dispatch_verdict(_FakeRuntime(["af_action_dispatched", "action_failed"]))
+    assert out["verdict"] == "failed" and out["dispatched"] == 1 and out["failed"] == 1
 
 
 def test_service_error_still_carries_status():
