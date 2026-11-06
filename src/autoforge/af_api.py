@@ -1242,14 +1242,33 @@ def build_app(
     def api_live_status() -> dict[str, Any]:
         return svc.live_status()
 
+    @app.get("/api/live/run/receipts", dependencies=[Depends(_read)])
+    def api_live_run_receipts(limit: int = 20, info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        """最近单发（live_run）回执——v1.28 R3，UI「最近单发回执」的数据源。
+
+        源＝`<store>/deploy_audit.jsonl` 的 `LIVE_RUN_EXECUTED`（已落盘，⛔ 不新建持久化面）。
+        归属按 **list 面纪律**（PM 2026-11-06 核准）：owner 面全量、⛔ 不报 `hidden_count`；
+        非 owner 面只看自己名下、**`hidden_count` 必报**（与 `list_graphs` 正反形状一致）。
+        ⛔ 本端点不用「404 逐字同形」——那是单对象读面的纪律，list 面照旧 200 + 缺口可见。
+        """
+        return svc.live_run_receipts(
+            store.root if store else None,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            limit=limit,
+        )
+
     @app.post("/api/live/run", dependencies=[Depends(_readonly_guard), Depends(_live)])
-    def api_live_run(body: LiveRunBody) -> dict[str, Any]:
+    def api_live_run(body: LiveRunBody, info: TokenInfo | None = Depends(_live)) -> dict[str, Any]:
         # `clock` 刻意**不在** `LiveRunBody` 里：真机证据的时间轴由服务端决定，
         # 请求体能递钟就等于让被审计的一方自己写审计时间。
         # auth_code 同名透传给服务层闸（AF-401：两面同闸，不许 REST 直连绕过）。
+        # v1.28 R3：`caller` 进服务层 ⇒ 审计事件带 `subject`，回执读面才能做归属过滤。
         return _svc(
             svc.live_run, body.ir, body.live_allow, body.events, body.confirm, store, body.undo,
             auth_code=body.auth_code,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
         )
 
     # ── F7 残留（WebUI 撤销按钮，决策 E ⑤）──

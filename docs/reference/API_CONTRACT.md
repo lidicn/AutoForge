@@ -162,6 +162,7 @@ Base：`http://<host>:8787`（NAS 部署：`http://192.168.2.200:8787`）
 | 方法 | 路径 | 权限面 | 说明 |
 |---|---|---|---|
 | `POST` | `/api/live/run` | live／read/write(只读装配期) | —(端点无 docstring) |
+| `GET` | `/api/live/run/receipts` | read | 最近单发（live_run）回执——v1.28 R3，UI「最近单发回执」的数据源。 |
 | `GET` | `/api/live/status` | live | —(端点无 docstring) |
 
 ### mcp（配对引导）
