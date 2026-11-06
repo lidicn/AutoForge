@@ -212,6 +212,44 @@ def test_d7_cooldown_duration_changes_behavior(tmp_path, cooldown_s):
         assert fired == [], "cooldown>0 且未过窗 ⇒ 冷却拦下"
 
 
+# ── D9 真实 IR 形状：条件写在 `if` 节点里，边沿照样生效 ───────────────────
+def test_d9_if_node_condition_also_edged(tmp_path):
+    """线上真实形状是 `on(group or 六实体)` → `if(五条件 and)` → `do`（见 v5test）。
+
+    条件不在入口触发上，而在 `if` 节点里——若不求值它，`_auto_currently_met` 会返 None
+    ⇒ 边沿/冷却全部落空 ⇒ 用户照样被反复念叨。本判据钉住这条腿。
+    """
+    ir = {
+        "ir_version": "0.2.1", "id": "if_shape", "name": "if 形状", "version": 1,
+        "mode": "parallel",
+        "nodes": [
+            {"id": "a1", "kind": "on", "trigger": {"type": "group", "op": "or", "sources": [
+                {"type": "state", "entity_id": "sensor.temp"},
+                {"type": "state", "entity_id": "binary_sensor.pc"},
+            ]}},
+            {"id": "i1", "kind": "if", "expr": {"op": "and", "args": [
+                {"op": "is_on", "value": {"var": "entity.binary_sensor.pc"}},
+                {"op": "gt", "left": {"var": "entity.sensor.temp", "type": "numeric"},
+                 "right": {"const": 28.5}},
+            ]}},
+            {"id": "p1", "kind": "pass"},
+            {"id": "p2", "kind": "pass"},
+        ],
+        "edges": [
+            {"from": "a1", "to": "i1", "kind": "then"},
+            {"from": "i1", "to": "p1", "kind": "yes"},
+            {"from": "i1", "to": "p2", "kind": "no"},
+        ],
+        "cooldown": 0,
+    }
+    rt = _rt(ir, states={"sensor.temp": "29.0", "binary_sensor.pc": "on"},
+             store_root=str(tmp_path))
+    auto = rt.graph.get("if_shape")
+    assert rt.scheduler._auto_currently_met(auto) is True, "if 节点的条件必须能被求值（不是 None）"
+    assert len(rt.emit("sensor.temp", "29.1")) == 1, "五条件全真 ⇒ 跳变沿派发一次"
+    rt.clock.advance(1)
+    assert rt.emit("sensor.temp", "29.2") == [], "条件持续满足 ⇒ 电平维持不重派（真实 IR 形状同样生效）"
+    assert INSTANCE_EDGE_HELD in _audit_types(rt)
 # ── D8 源钉：默认冷却值＋闸在正确落点（不碰三层闸）───────────────────────
 def test_d8_source_pins():
     import inspect

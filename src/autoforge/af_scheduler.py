@@ -21,8 +21,8 @@ from .af_audit import INSTANCE_DEBOUNCED, INSTANCE_EDGE_HELD, INSTANCE_COOLDOWNE
 from .af_bus import EVENT_ENTITY_PREFIX, BusEvent
 from .af_executor import EMIT_TIMER_KIND, NodeExecutor
 from .af_instance import Instance, InstanceManager
-from .af_ir import Automation, Graph, Node, Trigger, check_trigger_depth
-from .af_state import StateProvider
+from .af_ir import Automation, Graph, Node, Trigger, check_trigger_depth, evaluate
+from .af_state import StateProvider, make_resolver
 from .af_time import TimeSource, SystemTimeSource, parse_duration
 from .af_fire_recorder import FireRecorder
 
@@ -534,7 +534,16 @@ class Scheduler:
                 return True
             except Exception:  # noqa: BLE001 —— 求值失败保守判"不满足"（fail-closed，⛔ 不猜）
                 return False
-        # 没有任何 group-and 条件层 ⇒ 无"条件维持"语义，返回 None（不适用边沿/冷却）
+        # 没有任何 group-and 入口触发 ⇒ 再看**条件是不是写在 `if` 节点里**（真实 IR 的常见形状：
+        # `on(group or 六实体)` → `if(五条件 and)` → `do`）。这种形状的条件层真实存在，
+        # 只是不在入口触发上；不求值它就会 `met=None` ⇒ 边沿/冷却全部落空 ⇒ 用户照样被反复念叨。
+        for node in auto.nodes.values():
+            if node.kind == "if" and node.expr:
+                try:
+                    snap = self.states.snapshot(sorted(auto.reads()))
+                    return bool(evaluate(node.expr, make_resolver(snap, {}, {})))
+                except Exception:  # noqa: BLE001 —— 求值失败保守判"不满足"（fail-closed）
+                    return False
         return None if not has_group_and else True
 
     def _group_currently_met(self, trig: Trigger, _depth: int = 0) -> bool:
