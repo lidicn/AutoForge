@@ -1019,8 +1019,10 @@ def build_app(
         与 `/api/asks/pending`（watch sidecar，进程间发现用）不同，本端点读**进程内
         会话**，因此仿真会话下的挂起 ask 也能被发现（sidecar 只在 watch 真机模式写出）。
         含 prompt/room 等敏感信息，与 session 读端点同级需 read 鉴权。
+
+        v1.28 R1（PM 拍板）：附带 `answered`——最近 5 条已应答（含 `answered_via`）。
         """
-        return svc.asks_pending()
+        return svc.asks_pending(str(store.root) if store else None)
 
     @app.get("/api/asks/pending", dependencies=[Depends(_read)])
     def api_asks_pending() -> dict[str, Any]:
@@ -1029,21 +1031,28 @@ def build_app(
         DCD 裁定 20261004 §一 F-1：这一行补 `Depends(_read)`。sidecar 里是待答 ask 的
         `prompt`/`room` 原文（与 `/api/asks` 同级内容），此前只有那半边挂了门禁；DB 侧持
         write 域令牌（write 含 read），对端零改动。契约表由 DCD 登记"GET pending 需 read 令牌"。
+
+        v1.28 R1：与 `/api/asks` **同形**地附带 `answered`（同一位 AF-UI 契约，⛔ 两处不同形）。
         """
         root = store.root if store else None
         if not root:
-            return {"ok": True, "asks": []}
+            return {"ok": True, "asks": [], "answered": []}
         sc = Path(root) / "pending_asks.json"
         if not sc.exists():
-            return {"ok": True, "asks": []}
+            return {"ok": True, "asks": [], "answered": []}
         try:
             data = json.loads(sc.read_text(encoding="utf-8"))
-            return {"ok": True, "asks": data.get("asks", []), "ts": data.get("ts", 0)}
+            return {
+                "ok": True,
+                "asks": data.get("asks", []),
+                "answered": data.get("answered", []),
+                "ts": data.get("ts", 0),
+            }
         except Exception:
             # BUG-L1 修复：读失败不得静默返回 asks:[]，否则调用方把"读失败"当"无待答"，提问被静默丢失。
             # 写侧 af_live.py 已有 logger.warning，读侧补对等留痕 + ok=False 让调用方能区分。
             logger.warning("API_PENDING_ASKS_READ_FAILED pending_asks 读失败，返回 ok=False 而非空列表", exc_info=True)
-            return {"ok": False, "asks": [], "error": "read_failed"}
+            return {"ok": False, "asks": [], "answered": [], "error": "read_failed"}
 
     # 暴露 ask 节点的原生控件元数据（供前端渲染下拉/滑杆/时间轴等）
     @app.get("/api/asks/{name}", dependencies=[Depends(_read)])
@@ -1354,8 +1363,9 @@ def build_app(
             return {"ok": False, "error": "no store"}
         # A6 write-side sign: mirror af_live._read_inbox _expect_sig
         # (ask_id or None / text default "" / room as-is，answer 走 sort_keys JSON)。
-        import hashlib as _hashlib
-        import hmac as _hmac
+        # v1.28 R1：签名实现搬到 `af_ask_bridge.sign_answer`（写侧/读侧唯一真源，
+        # ⛔ 不留第二份抄本——多一份就多一个能各自漂移的地方）。
+        from .af_ask_bridge import ANSWERED_VIA_WEBUI, sign_answer
         key = (os.environ.get("AUTOFORGE_INBOX_KEY") or "").strip()
         inbox = Path(root) / "answer_inbox"
         inbox.mkdir(parents=True, exist_ok=True)
@@ -1364,14 +1374,16 @@ def build_app(
         room = body.get("room")
         answer = body.get("answer")  # v2 M3 结构化应答（AskAnswer dict）
         body = dict(body)
+        # v1.28 R1：来源标＝信道判定（本端点＝WebUI 腿）。读侧缺省也按 webui，
+        # 这里显式落一枚，"文件里没有 via"因此只剩历史遗留一种来源。
+        body["via"] = ANSWERED_VIA_WEBUI
         answer_json = json.dumps(answer or {}, sort_keys=True, ensure_ascii=False)
         if key:
             # AF-001 修复：签名消息带签发时间戳 ts，读侧按新鲜窗口校验。
             # 旧裸 HMAC 无新鲜度，旧/重放 inbox 文件会被无限接受；ts 进签名后，
             # 篡改 ts 即 sig 失效，读侧拒过期文件。
             ts = int(time.time())
-            msg = f"{ask_id}|{text}|{room}|{answer_json}|{ts}".encode("utf-8")
-            body["sig"] = _hmac.new(key.encode("utf-8"), msg, _hashlib.sha256).hexdigest()
+            body["sig"] = sign_answer(key, ask_id, text, room, answer_json, ts)
             body["ts"] = ts
         # R14-03：毫秒时间戳作文件名，同毫秒两条应答后者覆盖前者。
         # 加 uuid 后缀保证唯一性（时间戳保留排序语义）。

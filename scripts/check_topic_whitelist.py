@@ -53,7 +53,18 @@ LEGACY_TOPICS = (
     "butler/dialog/event",
 )
 
-REGISTERED = frozenset(STATUS_TOPICS + EVENT_TOPICS + INBOX_TOPICS + LEGACY_TOPICS)
+#: v1.28 R1 主动问询双向桥（`af_ask_bridge`）——**登记依据＝DCD 裁定 2026-11-04 §2.3 C1/C2**
+#: （`E:\NAS\关键决策部\decisions\20261104-AF-主动问询MQTT跨仓契约-裁定.md`）：
+#: C1 `af/ask/pending`（AF→DB，AF 出 MQTT 版 ask 面＝阶段2 前置）、C2 `af/ask/answer`（DB→AF）。
+#: ⚠️ **跨仓待办（本批不假装已办）**：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
+#: 这张表**尚未**登记这两条（表在 homesdk 仓，不归 AF 席位改）——已报 AF-PM 跟对端补表。
+#: 本处先登记，是因为裁定已把主题名钉死；⛔ 不表示 AF 可以自行给新主题发通行证。
+ASK_TOPICS = (
+    "af/ask/pending",
+    "af/ask/answer",
+)
+
+REGISTERED = frozenset(STATUS_TOPICS + EVENT_TOPICS + INBOX_TOPICS + LEGACY_TOPICS + ASK_TOPICS)
 
 #: 允许出现在代码里的**家族前缀 / 订阅过滤器**形态：它们不是可发布的具体主题，
 #: 而是围绕已登记主题做的防御性判断（`af_mqtt_bridge.FORBIDDEN_SUBSCRIPTIONS`）。
@@ -63,6 +74,7 @@ REGISTERED_FORMS = frozenset({
     "butler/inbox/*",    # MQTT 单级通配过滤器
     "adm/",              # 域名前缀判断
     "af/",
+    "af/ask/",           # v1.28 R1：ask 双向桥的主题族前缀（具体主题见 ASK_TOPICS）
     "ma/",
     "butler/",
 })

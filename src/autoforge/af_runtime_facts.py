@@ -36,7 +36,14 @@ from typing import Any, Mapping
 from .af_atomic import atomic_write_text
 from .af_flock import FileLock
 
-__all__ = ["RuntimeFacts", "RUNTIME_SUFFIX", "WINDOW_DAYS"]
+__all__ = [
+    "RuntimeFacts",
+    "RUNTIME_SUFFIX",
+    "WINDOW_DAYS",
+    "ASK_ANSWERS_KEEP",
+    "ASK_ANSWERS_IN_PAYLOAD",
+    "recent_ask_answers",
+]
 
 logger = logging.getLogger("autoforge.runtime_facts")
 
@@ -53,11 +60,55 @@ _MAX_DAYS = 14
 #: 原始触发流水环形上限（只供观测/调试，⛔ 不参与 trigger_7d 计算）
 _MAX_TRIGGERS = 200
 
+#: v1.28 R1：已应答 ask 的环形上限（落 `<archive>.runtime.json` 的 `ask_answers`）。
+#: 卡 §二.2 明写「持久化复用运行期事实设施」⇒ ⛔ 不新建库、不新建目录。
+ASK_ANSWERS_KEEP = 20
+#: 下发给 UI 的已应答条数（PM 2026-11-06 拍板：asks 载荷附最近 5 条）。
+ASK_ANSWERS_IN_PAYLOAD = 5
+
 
 def _today(now: datetime | None = None) -> str:
     """当天日键（UTC 自然日）。"""
     dt = now or datetime.now(timezone.utc)
     return dt.date().isoformat()
+
+
+def recent_ask_answers(store_root: str | Path | None, limit: int = ASK_ANSWERS_IN_PAYLOAD) -> list[dict[str, Any]]:
+    """跨归档读「最近已应答的 ask」（**新→旧**，最多 `limit` 条）。
+
+    v1.28 R1：asks 载荷里那 5 条历史的正源。走 ``<store_root>/*.runtime.json`` 扫描
+    ——归档名 == 自动化 id 是本项目的既定不变量，所以给定 store 根就能枚举全部旁车，
+    ⛔ 不引入索引文件（多一份索引＝多一处可以漂移的真源）。
+
+    fail-soft：store 缺失/旁车坏 ⇒ 返回空表（列表面不许因为观测面坏掉而 500）。
+    每条补一枚 `archive` 键（= 自动化 id），让 UI/票能指回是哪条自动化的应答。
+    """
+    if store_root is None:
+        return []
+    root = Path(store_root)
+    merged: list[dict[str, Any]] = []
+    try:
+        files = sorted(root.glob(f"*{RUNTIME_SUFFIX}"))
+    except OSError:
+        return []
+    for path in files:
+        archive = path.name[: -len(RUNTIME_SUFFIX)]
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        ring = data.get("ask_answers") if isinstance(data, dict) else None
+        if not isinstance(ring, list):
+            continue
+        for item in ring:
+            if isinstance(item, Mapping):
+                entry = dict(item)
+                entry.setdefault("automation_id", archive)
+                merged.append(entry)
+    # 时间序落盘 ⇒ 倒序即"新→旧"；坏时间戳排到最后（⛔ 不丢条，只降序）
+    merged.sort(key=lambda e: str(e.get("answered_at") or ""), reverse=True)
+    n = max(0, int(limit))
+    return merged[:n]
 
 
 class RuntimeFacts:
@@ -183,6 +234,63 @@ class RuntimeFacts:
             data["trial"] = trial
 
         self._mutate(_apply)
+
+    def record_ask_answer(
+        self,
+        *,
+        ask_id: str,
+        instance_id: str = "",
+        node_id: str = "",
+        room: str | None = None,
+        edge: str = "",
+        answered_via: str = "",
+        payload_kind: str = "",
+        prompt: str = "",
+        at: datetime | None = None,
+    ) -> None:
+        """v1.28 R1：记一条**已应答**的 ask（UI 已应答历史的正源，卡 §二/Q4 拍板）。
+
+        落点：`<archive>.runtime.json` 的 `ask_answers` 有界环形（`ASK_ANSWERS_KEEP`）。
+        ⛔ 不与 `triggers` 混写：触发是"自动化被叫醒"，这里是"人答了哪一问"，
+        两件事的读者不同（前者看频率、后者看来源标 `answered_via`）。
+        """
+        now = at or datetime.now(timezone.utc)
+        entry: dict[str, Any] = {
+            "ask_id": str(ask_id),
+            "instance_id": str(instance_id or ask_id),
+            "node_id": str(node_id),
+            "room": room,
+            "edge": str(edge),
+            "answered_via": str(answered_via),
+            "payload_kind": str(payload_kind),
+            "answered_at": now.isoformat(),
+        }
+        if prompt:
+            entry["prompt"] = str(prompt)
+
+        def _apply(data: dict[str, Any]) -> None:
+            ring = data.get("ask_answers")
+            if not isinstance(ring, list):
+                ring = []
+            ring.append(entry)
+            data["ask_answers"] = ring[-ASK_ANSWERS_KEEP:]
+            data["last_answered_at"] = entry["answered_at"]
+
+        self._mutate(_apply)
+
+    def ask_answers(self, limit: int = ASK_ANSWERS_IN_PAYLOAD) -> list[dict[str, Any]]:
+        """最近 `limit` 条已应答（**新→旧**）；缺文件/坏文件 ⇒ 空表（读侧 fail-soft）。
+
+        读侧只做形状过滤：⛔ 不猜来源标、⛔ 不替 UI 排序（落盘就是时间序，倒序返回即可）。
+        """
+        data = self.read()
+        ring = data.get("ask_answers")
+        if not isinstance(ring, list):
+            return []
+        out = [dict(item) for item in ring if isinstance(item, Mapping)]
+        out.reverse()
+        n = max(0, int(limit))
+        return out[:n]
 
     def clear_trial(self) -> None:
         """试演结束（转正/放弃）⇒ 清掉 trial 格。"""

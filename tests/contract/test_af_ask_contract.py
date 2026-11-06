@@ -274,8 +274,9 @@ def test_signed_answer_is_consumed_by_read_side(tmp_path, monkeypatch):
         def __init__(self) -> None:
             self.calls: list[dict] = []
 
-        def answer(self, *, room, text, ask_id):
-            self.calls.append({"room": room, "text": text, "ask_id": ask_id})
+        def answer(self, *, room, text, ask_id, answered_via="webui"):
+            # v1.28 R1：来源标是契约的一部分——WebUI 腿必须打 webui（读侧缺省同值）
+            self.calls.append({"room": room, "text": text, "ask_id": ask_id, "answered_via": answered_via})
             return SimpleNamespace(instance_id="inst-9")
 
         def answer_structured(self, **kw):
@@ -284,7 +285,9 @@ def test_signed_answer_is_consumed_by_read_side(tmp_path, monkeypatch):
     rt = SimpleNamespace(store=SimpleNamespace(root=str(tmp_path)), executor=_Executor())
     read_answer_inbox(rt)
 
-    assert rt.executor.calls == [{"room": "study", "text": "开", "ask_id": "inst-9"}]
+    assert rt.executor.calls == [
+        {"room": "study", "text": "开", "ask_id": "inst-9", "answered_via": "webui"}
+    ]
     assert list((tmp_path / "answer_inbox").glob("*.json")) == [], "成功消费后应清理"
 
 
@@ -369,7 +372,9 @@ SESSION_VIEW_KEYS = {
 }
 
 #: `ui/src/types/api.ts:AskItem` 的必需键 = `af_service._asks_of()` 的产出键（`session_id` 只在聚合端点出现）
-ASK_ITEM_KEYS = {"ask_id", "instance_id", "node_id", "room", "prompt", "automation_id", "spec", "control"}
+#: v1.28 R1（2026-11-06）：新增 `answered_via`（PM 拍板契约：在途条仅在"已答未消费"时带值，
+#: 缺省 None ⇒ UI 不显示标签）。这条是**契约面变更**，随批重钉，⛔ 不是测试放宽。
+ASK_ITEM_KEYS = {"ask_id", "instance_id", "node_id", "room", "prompt", "automation_id", "spec", "control", "answered_via"}
 
 SESSION_ASK_IR: dict = {
     "ir_version": "0.2.1",
