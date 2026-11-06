@@ -5,7 +5,7 @@ import {
 } from 'naive-ui'
 import { facade } from '@/api'
 import type {
-  LiveStatusResponse, LiveRunResponse, UndoRunResponse,
+  LiveStatusResponse, LiveRunResponse, LiveReceiptsResponse, UndoRunResponse,
 } from '@/types/api'
 
 const message = useMessage()
@@ -26,6 +26,16 @@ const undo = ref(true)
 const running = ref(false)
 const result = ref<LiveRunResponse | null>(null)
 const runError = ref('')
+
+// v1.28 R5 Phase 2：最近单发回执（只读）。后端有三档、前端只渲染两档：
+// ① 台账文件还没生成 / 台账里没有事件 ⇒ `ok:true`＋空表；② 无 store ⇒ `ok:false`＋`read_error:"no_store"`；
+// ③ 台账存在但读不出（OSError）⇒ `ok:false`＋`read_error:"ledger_unreadable:<类型>"`（AF-Core ce7aab8）。
+// 所以 `ok:false` 一律当异常条（并把 `read_error` 原样显示），`ok:true` 才可能是空表；
+// ⛔ 不为「读失败→保留上次读数标黄」另建一档：读失败已由后端如实报 ok:false，不需要 UI 猜。
+const receipts = ref<LiveReceiptsResponse | null>(null)
+const receiptsError = ref('')
+const receiptsBusy = ref(false)
+const receiptsFetchedAt = ref('')
 
 // F7 撤销：撤销 = 再下发一次，二次确认由 popconfirm 承担（对应后端 confirm=true）
 const undoItems = ref<{ deploy_id: string; age_s: number; entities: string[] }[]>([])
@@ -112,6 +122,36 @@ async function revert(id: string) {
   }
 }
 
+async function loadReceipts() {
+  receiptsBusy.value = true
+  try {
+    const res = await facade.liveReceipts()
+    receipts.value = res.data
+    receiptsFetchedAt.value = new Date().toLocaleTimeString()
+    receiptsError.value = ''
+  } catch (e) {
+    // 传输层失败（网络/权限/路由）：保留上一次成功读数并如实标注，
+    // ⛔ 把「请求没成功」清成空表＝把故障显示成「没有回执」。
+    receiptsError.value = String(e)
+  } finally {
+    receiptsBusy.value = false
+  }
+}
+
+// `graph[]`＝一次下发涉及的多个自动化名（multi 图才有多个；只有 1 个是常态，⛔ 不当异常）
+function graphText(g?: string[] | null): string {
+  const names = (g ?? []).filter(Boolean)
+  if (names.length === 0) return '（未记录图名）'
+  if (names.length <= 3) return names.join('、')
+  return `${names.slice(0, 3).join('、')} 等 ${names.length} 个`
+}
+
+// `at` 原值是后端时间戳；显示用本地时间，原值挂 title（不丢精度）。
+function formatReceiptAt(at: string): string {
+  const d = new Date(at)
+  return Number.isNaN(d.getTime()) ? at : d.toLocaleString()
+}
+
 function parseAllow(): string[] {
   return allowText.value
     .split(/[\n,，\s]+/)
@@ -171,6 +211,7 @@ async function run() {
 onMounted(() => {
   loadStatus()
   loadUndoList()
+  loadReceipts()
   undoTimer = window.setInterval(tickUndoList, UNDO_POLL_MS)
 })
 onUnmounted(() => {
@@ -304,13 +345,63 @@ onUnmounted(() => {
       </n-space>
     </n-card>
 
-    <n-card title="最近单发回执" :bordered="false" class="block">
-      <n-alert type="info" :bordered="false" title="未接线（待 R3 端点）">
-        这一格只读：时间 / 图名 / 动作数 / verdict / 授权码掩码，数据由后端 R3 端点提供
-        （路径待 PM 核准，前端不猜）。当前<b>未接线</b> ⇒ 下面显示的是“没接上”，不是“没有回执”——
-        ⛔ 不要据此判断下发记录为空。
+    <n-card title="最近单发回执（只读）" :bordered="false" class="block">
+      <template #header-extra>
+        <n-space align="center" :size="8">
+          <n-text v-if="receiptsFetchedAt" depth="3" style="font-size: 12px">上次读数 {{ receiptsFetchedAt }}</n-text>
+          <n-button text size="small" :loading="receiptsBusy" @click="loadReceipts">刷新回执</n-button>
+        </n-space>
+      </template>
+
+      <n-alert v-if="receiptsError" type="error" title="回执读取失败（传输层）">
+        {{ receiptsError }}
+        <div style="margin-top: 6px; font-size: 12px">
+          ⛔ 这不等于「没有回执」：请求没成功，页面保留上次成功读数（若有）。
+        </div>
       </n-alert>
-      <n-empty description="接口未就绪（待 R3 端点）：未接线，不代表没有回执" size="small" />
+
+      <n-alert
+        v-else-if="receipts && receipts.ok === false"
+        type="error"
+        :title="receipts.read_error ? `回执端点返回失败：${receipts.read_error}` : '回执端点返回失败（ok=false）'"
+      >
+        服务端此刻读不到台账——这是<b>服务端读数问题</b>，⛔ 不要当成「没下发过」。
+      </n-alert>
+
+      <template v-else-if="receipts">
+        <n-alert v-if="receipts.hidden_count" type="warning" :bordered="false" style="margin-bottom: 10px">
+          另有 {{ receipts.hidden_count }} 条不在你名下（非 owner 面只列自己名下的回执）
+        </n-alert>
+        <div v-if="!receipts.items || receipts.items.length === 0">
+          <n-empty description="没有读到回执记录" size="small" />
+          <div style="color: #8b93a7; font-size: 12px; margin-top: 4px">
+            读到空表 ⛔ 不等于「从未下发」：只表示台账里没有 LIVE_RUN_EXECUTED（或台账文件还没生成）；
+            读失败会走上面的 <code>ok=false</code> 档并带 <code>read_error</code>，不会混成空表。
+          </div>
+        </div>
+        <table v-else class="receipts">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>图名</th>
+              <th class="num">动作数</th>
+              <th>verdict</th>
+              <th>授权码</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(r, i) in receipts.items" :key="`${r.at}-${i}`">
+              <td :title="r.at">{{ formatReceiptAt(r.at) }}</td>
+              <td :title="(r.graph || []).join('、')">{{ graphText(r.graph) }}</td>
+              <td class="num">{{ r.actions }}</td>
+              <td><code>{{ r.verdict }}</code></td>
+              <td><code>{{ r.code_mask }}</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </template>
+
+      <n-text v-else depth="3">回执读数未取到（首次加载中）…</n-text>
     </n-card>
 
     <n-card title="可撤销的部署（时间窗内）" :bordered="false" class="block">
@@ -447,5 +538,27 @@ code {
   background: #f1f5f9;
   border-radius: 4px;
   padding: 1px 6px;
+}
+.receipts {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.receipts th,
+.receipts td {
+  text-align: left;
+  padding: 8px 10px;
+  border-top: 1px solid #eef0f4;
+  vertical-align: middle;
+}
+.receipts thead th {
+  border-top: none;
+  color: #8b93a7;
+  font-weight: 600;
+  font-size: 12px;
+}
+.receipts .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 </style>

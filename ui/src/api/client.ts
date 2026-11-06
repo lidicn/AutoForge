@@ -7,7 +7,7 @@ import type {
   PendingListResponse, ApproveResponse, RejectResponse,
   CredentialsResponse, CredentialsUpdateResponse,
   WhoamiResponse, SubjectsResponse, RevokeResponse,
-  LiveStatusResponse, LiveRunResponse,
+  LiveStatusResponse, LiveRunResponse, LiveReceiptsResponse,
   UndoAvailableResponse, UndoPreviewResponse, UndoRunResponse,
   EvidenceProdResponse, WatchListResponse,
   AsksResponse, AskAnswerResponse,
@@ -183,6 +183,9 @@ export const api = {
     ),
   liveRun: (ir: unknown, live_allow: string[], confirm: boolean, events?: unknown[], undo?: boolean, auth_code?: string) =>
     request<LiveRunResponse>('POST', '/live/run', { ir, live_allow, confirm, events, undo, auth_code: auth_code || '' }),
+
+  // v1.28 R5 Phase 2：最近单发回执（只读；owner 面全量、非 owner 只见自己名下＋顶层 hidden_count）
+  liveReceipts: () => request<LiveReceiptsResponse>('GET', '/live/run/receipts?limit=20'),
 
   // F7 撤销：撤销 = 对真实设备再下发一次，闸门与 liveRun 同源（服务端令牌 + live 权限）
   undoAvailable: () => request<UndoAvailableResponse>('GET', '/undo/available'),

@@ -494,6 +494,30 @@ export interface LiveRunResponse {
   missing_entities?: string[]
 }
 
+// ── v1.28 R5 Phase 2：最近单发回执（GET /api/live/run/receipts）──
+// 形状由 AF-Core 定死：`{at, graph[], actions, verdict, code_mask}`。
+// `graph[]`＝一次下发涉及的多个自动化名（multi 图才有多个；只有 1 个是常态，⛔ 不当异常）。
+// 非 owner 面 `hidden_count` 在顶层（owner 面缺省不报）。后端今天只有两档状态：
+// `ok:false`（可带 `read_error`，如 no_store）／`ok:true`（`items` 可能为空）。
+export interface LiveReceiptItem {
+  at: string
+  graph: string[]
+  actions: number
+  verdict: string
+  code_mask: string
+}
+
+export interface LiveReceiptsResponse {
+  ok: boolean
+  count?: number
+  items?: LiveReceiptItem[]
+  /** 非 owner 面顶层必报（只列自己名下）；owner 面缺省不报 */
+  hidden_count?: number
+  /** 仅 ok:false 时出现（如 no_store）；用作异常条说明 */
+  read_error?: string
+  scope?: string
+}
+
 // ── F7 撤销（WebUI 撤销按钮，决策 E）──
 export interface UndoPreviewResponse {
   exists: boolean
