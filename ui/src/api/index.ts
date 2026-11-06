@@ -49,6 +49,8 @@ export const facade = {
   automationDetail: (name: string) => api.automationDetail(name),
   liveRun: (ir: unknown, live_allow: string[], confirm: boolean, events?: unknown[], undo?: boolean, auth_code?: string) =>
     api.liveRun(ir, live_allow, confirm, events, undo, auth_code),
+  // v1.28 R5 Phase 2：最近单发回执（只读；无 mock 夹具——回执来自真实台账，伪造一份等于假安心）
+  liveReceipts: () => api.liveReceipts(),
   // F7 撤销（无 mock 夹具：撤销会写真机，mock 环境不该出现这个动作）
   undoAvailable: () => api.undoAvailable(),
   undoPreview: (deploy_id: string) => api.undoPreview(deploy_id),
