@@ -562,6 +562,10 @@ def _t_live(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     return svc.live_run(
         args["ir"], args.get("live_allow"), args.get("events"), bool(args.get("confirm", False)),
         store=store, auth_code=str(args.get("auth_code") or ""),
+        # R2（v1.28）：`undo` 与 REST `/api/live/run` 同源——MCP 面带 undo=true 时同样
+        # 记录动作前快照并返回 `undo_deploy_id`（`svc.live_run` 已支持，这里透传）。
+        # 缺省/False 与 REST 逐字同形：`undo_enabled=False`、`undo_deploy_id=None`，⛔ 不谎报可撤销。
+        undo=bool(args.get("undo", False)),
     )
 
 
@@ -1317,7 +1321,8 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
         "af_live_run",
         "【live】真机下发（四重闸：服务端开关+令牌、confirm、白名单、**授权码**）。参数：ir(dict 必填)，"
         "live_allow(list[str] 必填：可写白名单)，events(list 可选)，confirm(bool 必填，必须显式 true)，"
-        "auth_code(str 缺码即拒)。需 live 权限。",
+        "undo(bool 可选：记录动作前快照并返回 undo_deploy_id，供事后 /api/undo 撤销——与 REST /api/live/run 同源；"
+        "缺省 false 不记录不谎报)，auth_code(str 缺码即拒)。需 live 权限。",
         {
             "type": "object",
             "properties": {
@@ -1325,6 +1330,7 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
                 "live_allow": {"type": "array", "items": {"type": "string"}, "description": "允许写入的实体白名单"},
                 "events": {"type": "array", "items": {"type": "object"}},
                 "confirm": {"type": "boolean", "description": "必须显式 true 才允许下发"},
+                "undo": {"type": "boolean", "description": "true 记录动作前快照并返回 undo_deploy_id（与 REST 同源）"},
                 "auth_code": {"type": "string", "pattern": "^[0-9]{6,8}$",
                               "description": "授权码（缺码即拒）：真机下发与 af_save 部署同级（裁定 R4-3）"},
             },

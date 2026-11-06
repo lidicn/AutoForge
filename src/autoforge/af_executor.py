@@ -133,6 +133,9 @@ EMIT_TIMER_KIND = "emit"
 # WO-AF-001：同意判定收口到 homesdk.consent，本仓不再持有词表
 from homesdk.consent import YES as _HOMESDK_YES, classify_answer as _homesdk_classify
 
+# v1.28 R1（DCD 裁定 2026-11-04）：ask 双向桥的来源标与"上游已分类"枚举的唯一真源。
+from .af_ask_bridge import DEFAULT_ANSWERED_VIA, VERDICTS, default_ask_timeout_s
+
 
 def classify_answer(text: str) -> str:
     """yes / no（IR §5.2）。判定口径来自 homesdk，本仓不再持有词表。
@@ -156,6 +159,10 @@ class AskSession:
     created_at: float
     prompt: str = ""
     ask_spec: "AskSpec | None" = None
+    #: v1.28 R1（PM 契约）：最近一次**到达但未消费**的应答来源标（`xiaomi`/`webui`）。
+    #: 例：结构化会话被喂自由文本 ⇒ 拒收、保持挂起，但"人确实答过一次"这条事实留着，
+    #: 给 UI 在在途卡上显示来源；⛔ 缺失就是 None（UI 不显示标签、不猜）。
+    answered_via: str | None = None
 
 
 @dataclass
@@ -176,6 +183,10 @@ class NodeExecutor:
     #: ask 触发时的额外 MQTT 播报回调（DCD 裁定 2026-11-04 阶段1 乙）：
     #: `(trace_id, text, room) -> None`；未注入（无桥/单测）时零副作用，⛔ 不影响 ask 核心逻辑。
     on_ask_speak: Any | None = None
+    #: v1.28 R1：ask 挂起时向 `af/ask/pending` 发布挂起问询（DCD 裁定 2026-11-04 阶段2 C1/C3）：
+    #: `(trace_id, text, room, timeout_remaining) -> None`；未注入时零副作用。
+    #: ⛔ 与 `on_ask_speak` 一样是旁路：发布失败只记一行，绝不改 ask 的挂起/恢复/超时语义。
+    on_ask_pending: Any | None = None
     #: do 节点执行前的额外 MQTT 播报回调（T1，2026-11-04）：非 ask 自动化条件命中后、
     #: do 动作下发前经 `butler/inbox/speak` 播报一声。签名同 on_ask_speak：
     #: `(trace_id, text, room) -> None`；未注入时零副作用，⛔ 不改 do 执行核心逻辑。
@@ -186,6 +197,10 @@ class NodeExecutor:
     #: 运行期事实落盘（PM 卡 2026-11-04）：canary 试演状态记录回调
     #: `(state, automation_id, since, until, extra) -> None`；未注入时零副作用。
     runtime_facts: Any | None = None
+    #: v1.28 R1：ask 应答事实记录回调 `(automation_id, payload: dict) -> None`。
+    #: 由 Runtime 注入 `RuntimeFacts.record_ask_answer`；未注入时零副作用（单测隔离）。
+    #: ⛔ 记账失败绝不影响应答消费本身（与 `runtime_facts` 同一条纪律）。
+    ask_answer_recorder: Any | None = None
 
     def __post_init__(self) -> None:
         self.pending_asks: dict[str, AskSession] = {}
@@ -411,8 +426,22 @@ class NodeExecutor:
         candidates = [s for s in self.pending_asks.values() if s.room == room] if room else list(self.pending_asks.values())
         return min(candidates, key=lambda s: s.created_at) if candidates else None
 
-    def answer(self, room: str | None, text: str, ask_id: str | None = None) -> Instance | None:
-        """人类应答。WO-AF-002：统一走 resolve_ask，ask_id 不匹配绝不 fallback。"""
+    def answer(
+        self,
+        room: str | None,
+        text: str,
+        ask_id: str | None = None,
+        answered_via: str = DEFAULT_ANSWERED_VIA,
+        verdict: str | None = None,
+    ) -> Instance | None:
+        """人类应答。WO-AF-002：统一走 resolve_ask，ask_id 不匹配绝不 fallback。
+
+        `verdict` 非空 ⇒ **采信上游已分类的投票**（DCD 裁定 2026-11-04 §2.3 C5：分类归 DB），
+        ⛔ 不对 `text` 再跑一遍 `classify_answer`——那一步把 unknown 映成 `no`，会把小爱腿
+        已判定的 `yes` 悄悄翻成 `no`。自由文本腿（WebUI／文件回注）仍走本仓分类。
+        `answered_via` 是来源标（`xiaomi`/`webui`，PM 卡 §二）：只影响留痕与载荷，
+        ⛔ 不改变选边逻辑。
+        """
         import logging
         logger = logging.getLogger("autoforge.executor")
 
@@ -446,12 +475,21 @@ class NodeExecutor:
                     data={"reason": "cross_channel", "channel": "text"},
                 )
             )
+            # v1.28 R1：拒收但保持挂起 ⇒ 记下"来过一次"的来源标（未消费，故不进已应答历史）
+            session.answered_via = str(answered_via)
             return None
-        verdict = classify_answer(text)
+        if verdict is None:
+            verdict = classify_answer(text)
+        else:
+            # C5：上游（DB）已分类 ⇒ 直通。非法值当场抛，⛔ 不落成"疑似 no"蒙混过关。
+            verdict = str(verdict).strip().lower()
+            if verdict not in VERDICTS:
+                raise ValueError(f"verdict={verdict!r} 不是 yes/no（只认 {sorted(VERDICTS)}）")
         import homesdk
         logger.info(
-            "consent resolved: ask verdict=%s text_len=%d text_head=%r homesdk=%s",
-            verdict, len(text or ""), (text or "")[:2], getattr(homesdk, "__version__", "?"),
+            "consent resolved: ask verdict=%s text_len=%d text_head=%r via=%s homesdk=%s",
+            verdict, len(text or ""), (text or "")[:2], answered_via,
+            getattr(homesdk, "__version__", "?"),
         )
         # B3-AF-02: terminal instance (expired) -> pop ghost, return None so caller keeps evidence file
         # 用 `is True` 而非 truthy：真实 Instance.is_terminal 返回 bool，Mock 对象返回非 bool
@@ -484,15 +522,22 @@ class NodeExecutor:
                 node_id=session.node_id,
                 data={"ask_id": session.instance_id, "edge": verdict, "room": session.room,
                       "rounds": int(instance.ctx.context.get("_ask_rounds", 0)),
-                      "payload_kind": "text", "channel": "text"},
+                      "payload_kind": "text", "channel": "text",
+                      # v1.28 R1：来源标进审计（`xiaomi`＝小爱腿、`webui`＝界面/文件回注腿）
+                      "answered_via": answered_via},
             )
         )
-        return self.resume(instance, verdict)
+        result = self.resume(instance, verdict)
+        self._record_ask_answer(
+            instance, node_id=session.node_id, edge=verdict,
+            answered_via=answered_via, payload_kind="text", room=session.room,
+        )
+        return result
 
     # ─────────────────────────────────────────────────────────────────
     # v2 M3 结构化 Ask：一等公民结构化应答（自由文本 answer 仍保留）
     # ─────────────────────────────────────────────────────────────────
-    def answer_structured(self, room: str | None, payload: "AskAnswer | dict", ask_id: str | None = None) -> Instance | None:
+    def answer_structured(self, room: str | None, payload: "AskAnswer | dict", ask_id: str | None = None, answered_via: str = DEFAULT_ANSWERED_VIA) -> Instance | None:
         """结构化应答。payload 为 AskAnswer 或 dict。
 
         缺省即拒：应答不满足 ask_spec（缺失/越界/类型不符）→ 不脑补默认值，**拒绝并
@@ -560,6 +605,8 @@ class NodeExecutor:
                     data={"channel": "structured", "answer_kind": _pkind},
                 )
             )
+            # v1.28 R1：填错值 ⇒ 拒收保持挂起，但来源标留下（在途卡可显示"答过、未通过"）
+            session.answered_via = str(answered_via)
             return None
         instance.ctx.vars["ask_answer"] = {"kind": payload.kind, "value": payload.value}
         # C-2 §F.1：一次会话至多一条 ASK_RESOLVED（出队即消费，重复应答到不了这里）。
@@ -573,10 +620,53 @@ class NodeExecutor:
                 node_id=session.node_id,
                 data={"ask_id": session.instance_id, "edge": "then", "room": session.room,
                       "rounds": int(instance.ctx.context.get("_ask_rounds", 0)),
-                      "payload_kind": payload.kind, "channel": "structured"},
+                      "payload_kind": payload.kind, "channel": "structured",
+                      # v1.28 R1：来源标进审计（结构化腿同样打标）
+                      "answered_via": answered_via},
             )
         )
-        return self.resume(instance, "then")
+        result = self.resume(instance, "then")
+        self._record_ask_answer(
+            instance, node_id=session.node_id, edge="then",
+            answered_via=answered_via, payload_kind=str(payload.kind), room=session.room,
+        )
+        return result
+
+    def _record_ask_answer(
+        self,
+        instance: Instance,
+        *,
+        node_id: str,
+        edge: str,
+        answered_via: str,
+        payload_kind: str,
+        room: str | None,
+    ) -> None:
+        """v1.28 R1：把"已应答"这一事实记进运行期事实旁车（UI 已应答历史的正源）。
+
+        ⛔ 记账失败绝不冒到应答消费（与 `runtime_facts` 同一条纪律）：宁可少一条历史，
+        也不能因为旁车写失败让一次已经收下的应答看起来"没发生过"。
+        """
+        if self.ask_answer_recorder is None:
+            return
+        try:
+            self.ask_answer_recorder(
+                str(instance.automation.id),
+                {
+                    "ask_id": str(instance.instance_id),
+                    "instance_id": str(instance.instance_id),
+                    "node_id": str(node_id),
+                    "room": room,
+                    "edge": str(edge),
+                    "answered_via": str(answered_via),
+                    "payload_kind": str(payload_kind),
+                },
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "ASK_ANSWER_FACT_FAILED 应答事实记账失败（应答本身已消费）：instance=%s",
+                instance.instance_id, exc_info=True,
+            )
 
     def validate_answer(self, room: str | None, payload: "AskAnswer | dict", ask_id: str | None = None) -> bool:
         """预检结构化应答是否合规（不消费 ask，不恢复实例）。
@@ -681,8 +771,9 @@ class NodeExecutor:
 
         判据只用重启后仍然成立的两格：`state==suspended`、
         `automation.node(ctx.current_node).kind == "ask"`。
-        **不能循 `timer.kind`**——未设 `timeout` 的 ask 挂起时 `timer` 就是 `None`
-        （`af_instance.py` 的 `suspend`），重启后没有任何计时器信号可循；`wait` /
+        **不能循 `timer.kind`**——v1.28 之前未设 `timeout` 的 ask 挂起时 `timer` 就是 `None`
+        （`af_instance.py` 的 `suspend`）；v1.28 起 ask 有 300s 默认兜底（`_suspend`），
+        但**落盘的旧实例**仍可能没有计时器，所以恢复判据不能只看 timer；`wait` /
         `canary_observe` 的节点不是 `ask`，因此天然排除。
         （确认会话的 `pending_confirm` 腿已随 DCD 裁定 20261031·Q1 甲撤除——运行期
         闸不存在，重启后不会再有确认会话要重挂；落盘旧实例若仍带该键，按 ask 之外的
@@ -1068,6 +1159,11 @@ class NodeExecutor:
         try:
             if node.kind == "wait":
                 duration = parse_duration(node.duration)  # type: ignore[arg-type]
+            elif node.kind == "ask":
+                # v1.28 R1（PM 卡 §二.1 补钉）：ask 未写 `timeout` 时**不再无限挂起**，用默认
+                # 300s（env `AUTOFORGE_ASK_TIMEOUT_S` 可覆盖）。到点仍走图作者自己钉的
+                # `on_timeout`/`default` 边——本件只保证"总会有个到点"，⛔ 不替图作者选边。
+                duration = parse_duration(node.timeout) if node.timeout else default_ask_timeout_s()
             elif node.timeout:
                 duration = parse_duration(node.timeout)
         except (ValueError, TypeError) as exc:
@@ -1105,6 +1201,23 @@ class NodeExecutor:
                 except Exception:  # noqa: BLE001 —— 播报旁路失败绝不改 ask 行为
                     logger.warning(
                         "ASK_SPEAK_PUBLISH_FAILED ask 播报旁路异常（不影响 ask 核心） instance=%s",
+                        instance.instance_id, exc_info=True,
+                    )
+            # v1.28 R1（DCD 裁定 2026-11-04 §2.3 C1/C3/C6）：挂起时**额外**发一条
+            # `af/ask/pending`（AF 先出 MQTT 版 ask 面＝阶段 2 的前置）。载荷里的
+            # `timeout_remaining` 就是本次挂起真正要等的秒数（图作者写多少就发多少，
+            # 未写则发默认兜底值），让 DB 不必猜 AF 这一侧等了多久。
+            # ⛔ 与上方 speak 同一条纪律：旁路、失败只记一行、绝不改挂起语义。
+            if self.on_ask_pending is not None:
+                try:
+                    self.on_ask_pending(
+                        str(instance.instance_id), str(node.prompt or ""), str(node.room or ""),
+                        float(duration) if duration else None,
+                    )
+                except Exception:  # noqa: BLE001 —— 发布旁路失败绝不改 ask 行为
+                    logger.warning(
+                        "ASK_PENDING_PUBLISH_FAILED af/ask/pending 发布旁路异常（不影响 ask 核心）"
+                        " instance=%s",
                         instance.instance_id, exc_info=True,
                     )
 

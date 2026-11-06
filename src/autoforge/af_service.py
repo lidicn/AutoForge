@@ -47,6 +47,7 @@ from .af_ownership import (
     visible_error,
 )
 from .af_runtime import Runtime, build_runtime
+from .af_runtime_facts import recent_ask_answers
 from .af_scanner import DeviceGuardRegistry, Diagnostic, ScanResult, StaticScanner
 from .af_spec import SpecError, compile_spec, graph_to_raw, render_spec
 from .af_store import DEFAULT_STORE_ROOT, GraphStore, _bundle_checksum, diff_graphs
@@ -2522,17 +2523,25 @@ def _asks_of(runtime: Runtime) -> list[dict[str, Any]]:
                     if spec is not None
                     else {"widget": "input", "kind": "text", "prompt": session.prompt}
                 ),
+                # v1.28 R1（PM 契约）：来源标只在"已答未消费"时有值（如拒收后保持挂起），
+                # 其余为 None ⇒ UI 不显示标签、⛔ 不猜。
+                "answered_via": getattr(session, "answered_via", None),
             }
         )
     return out
 
 
-def asks_pending() -> dict[str, Any]:
+def asks_pending(store_root: str | None = None) -> dict[str, Any]:
     """v2 M3：聚合所有在途会话的挂起 ask，含 `spec` 与控件 `control` 元数据。
 
     与 `/api/asks/pending`（watch sidecar，进程间发现用）不同，本函数读**进程内
     会话**——仿真会话下的挂起 ask 同样可见（sidecar 只在 watch 真机模式写出）。
     含 prompt/room 等敏感信息，端点需 read 鉴权。
+
+    v1.28 R1（PM 2026-11-06 拍板）：额外附带 `answered`——最近 **5** 条已应答
+    （新→旧，含 `answered_via` ＋ `answered_at`），正源是 `<archive>.runtime.json`
+    的 `ask_answers` 环形。⛔ 不为此新建持久化面；`store_root` 为 None 时
+    （单测/无 store 装配）`answered` 如实给空表，⛔ 不伪造。
     """
     _purge_sessions()
     with _SESSIONS_LOCK:
@@ -2544,7 +2553,12 @@ def asks_pending() -> dict[str, Any]:
             item = dict(ask)
             item["session_id"] = session_id
             out.append(item)
-    return {"ok": True, "total": len(out), "asks": out}
+    return {
+        "ok": True,
+        "total": len(out),
+        "asks": out,
+        "answered": recent_ask_answers(store_root),
+    }
 
 
 def _session_view(sess: Mapping[str, Any]) -> dict[str, Any]:

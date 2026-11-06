@@ -1475,6 +1475,10 @@ def _start_linkage_bridge(clock=None, store_root=DEFAULT_STORE_ROOT):
         version=af_mqtt_bridge.PRESENCE_CAPS_VERSION,
         proposal_sink=af_mqtt_bridge.make_durable_ask_sink(store_root=store_root, clock=clock),
         linkage_sink=feed,
+        # v1.28 R1（DCD 裁定 2026-11-04 阶段2 C2）：小爱腿入向 `af/ask/answer` 的落点。
+        # 与 WebUI 腿同一目录（`<store>/answer_inbox/`）⇒ 消费侧仍是 ticker 那一条，
+        # ⛔ 不新开第二条消费路。没给 store_root ⇒ 不订该主题（⛔ 不摆一条收不到的订阅）。
+        ask_answer_root=store_root,
         clock=clock,
     )
     af_mqtt_bridge.attach(bridge)
@@ -1482,6 +1486,8 @@ def _start_linkage_bridge(clock=None, store_root=DEFAULT_STORE_ROOT):
         f"· MQTT 联动桥已上线：向 adm/{af_mqtt_bridge.PRESENCE_NAME}/status 发布在线态（retained），"
         f"发 {af_mqtt_bridge.FIRED_TOPIC}|{af_mqtt_bridge.FAILED_TOPIC}，"
         f"订 {af_mqtt_bridge.INSIGHTS_TOPIC} + {af_mqtt_bridge.PRESENCE_TOPIC}|{af_mqtt_bridge.DEVICE_HEALTH_TOPIC}"
+        f" + {af_mqtt_bridge.ASK_ANSWER_TOPIC}（小爱腿应答，落 {Path(str(store_root)) / 'answer_inbox'}；"
+        f"ask 挂起发 {af_mqtt_bridge.ASK_PENDING_TOPIC}）"
         f"（洞察提案落 {Path(str(store_root)) / 'insight_proposals'}，只读不部署；"
         f"在场/设备健康落 {feed.root}，只入队不触发——触发要 forge watch 的 ticker 来抽）"
     )

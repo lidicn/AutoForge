@@ -31,11 +31,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+from . import af_ask_bridge as _ask_bridge
 from .af_adapters import DEFAULT_HA_URL
 from .af_adapters.http import guarded_open, host_of
 from .af_atomic import atomic_write_text
 from .af_bus import BusEvent
 from .af_flock import FileLock, owner_id
+from .af_runtime_facts import recent_ask_answers
 from .af_tick_supervisor import TickSupervisor, SseReconnector, ExponentialBackoff, default_fault_policy
 
 __all__ = [
@@ -539,8 +541,15 @@ def start_ticker(
                         if sess.ask_spec
                         else {"widget": "input", "kind": "text", "prompt": sess.prompt}
                     ),
+                    # v1.28 R1：在途条仅在"已答未消费"时带值（与 /api/asks 同形）
+                    "answered_via": getattr(sess, "answered_via", None),
                 })
-            out = {"asks": asks, "ts": time.time()}
+            out = {
+                "asks": asks,
+                # v1.28 R1：最近 5 条已应答（正源＝运行期事实旁车；⛔ 不另存一份）
+                "answered": recent_ask_answers(getattr(runtime, "store_root", None)),
+                "ts": time.time(),
+            }
             # 走原子助手：这份文件是 butler 轮询读的待答清单，崩在半截会被读侧
             # 当成「没有待答」而静默丢弃这一轮提问（判据 E，审计 BUG-05）
             atomic_write_text(
@@ -629,8 +638,9 @@ def read_answer_inbox(runtime: Any, inbox_dir: Optional[str] = None) -> None:
     INBOX_MAX_AGE_S = 300.0
 
     def _expect_sig(ask_id: Any, text: str, room: Any, answer_json: str, ts: Any) -> str:
-        msg = f"{ask_id}|{text}|{room}|{answer_json}|{ts}".encode("utf-8")
-        return hmac.new(key.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+        # v1.28 R1：签名实现搬到 `af_ask_bridge.sign_answer`（写侧/读侧唯一真源）。
+        # ⛔ 本函数只是本文件内的别名，别在这里再写一份 HMAC。
+        return _ask_bridge.sign_answer(key, ask_id, text, room, answer_json, ts)
 
     try:
         for f in sorted(inbox.glob("*.json")):
@@ -643,6 +653,21 @@ def read_answer_inbox(runtime: Any, inbox_dir: Optional[str] = None) -> None:
                 text = data.get("text", "")
                 room = data.get("room")
                 answer = data.get("answer")  # v2 M3 结构化应答（AskAnswer dict）；缺省走自由文本
+                # v1.28 R1（DCD 裁定 2026-11-04 C4/C5）：小爱腿的投票形状是
+                # `answer={"verdict": "yes"|"no"}`（分类归 DB）。它落在被签名的 `answer_json`
+                # 里 ⇒ 投票与原文一起受签名保护；读侧**直接采信**，⛔ 不再对 raw_text 分类。
+                verdict: str | None = None
+                if isinstance(answer, Mapping) and answer.get("verdict") is not None:
+                    verdict = str(answer.get("verdict")).strip().lower()
+                    if verdict not in _ask_bridge.VERDICTS:
+                        logger.warning(
+                            "INBOX_REJECT_BAD_VERDICT inbox reject: answer.verdict=%r 不是 yes/no，"
+                            "未动作（保留证据文件）: %s ask_id=%r",
+                            answer.get("verdict"), f.name, ask_id,
+                        )
+                        continue
+                # v1.28 R1：来源标（xiaomi/webui）。文件回注腿无独立来源语义 ⇒ 缺失按 webui。
+                answered_via = _ask_bridge.normalize_answered_via(data.get("via"))
                 answer_json = json.dumps(answer or {}, sort_keys=True, ensure_ascii=False)
                 sig = str(data.get("sig", "") or "")
                 ts = data.get("ts")
@@ -664,14 +689,27 @@ def read_answer_inbox(runtime: Any, inbox_dir: Optional[str] = None) -> None:
                         f.name, ask_id,
                     )
                     continue
-                if answer:
+                if verdict is not None:
+                    # 小爱腿：DB 已分类（C5）⇒ 直通 verdict，⛔ 不二次分类
+                    result = runtime.executor.answer(
+                        room=room, text=text, ask_id=ask_id,
+                        verdict=verdict, answered_via=answered_via,
+                    )
+                elif answer:
                     # 结构化应答：校验失败按缺省即拒走 no 边（executor 内处理）
-                    result = runtime.executor.answer_structured(room=room, payload=answer, ask_id=ask_id)
+                    result = runtime.executor.answer_structured(
+                        room=room, payload=answer, ask_id=ask_id, answered_via=answered_via
+                    )
                 else:
-                    result = runtime.executor.answer(room=room, text=text, ask_id=ask_id)
+                    result = runtime.executor.answer(
+                        room=room, text=text, ask_id=ask_id, answered_via=answered_via
+                    )
                 if result is not None:
                     f.unlink(missing_ok=True)  # 成功消费后才清理
-                    logger.warning("answer consumed: ask_id=%s room=%s → inst=%s", ask_id, room, result.instance_id)
+                    logger.warning(
+                        "answer consumed: ask_id=%s room=%s via=%s → inst=%s",
+                        ask_id, room, answered_via, result.instance_id,
+                    )
                 else:
                     logger.warning("ANSWER_NOT_CONSUMED answer not consumed (保留证据文件): ask_id=%s room=%s", ask_id, room)
             except Exception:

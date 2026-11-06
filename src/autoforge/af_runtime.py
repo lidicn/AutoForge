@@ -133,9 +133,24 @@ class Runtime:
                     state=state, automation_id=automation_id,
                 )
 
+            def _record_ask_answer(automation_id, payload):
+                # v1.28 R1：已应答 ask 落同一份运行事实旁车（卡 §二.2 复用既有设施）。
+                # payload 由 `NodeExecutor._record_ask_answer` 组装；缺键按空串兜底，⛔ 不抛。
+                facts = _facts_for(automation_id)
+                facts.record_ask_answer(
+                    ask_id=str(payload.get("ask_id") or ""),
+                    instance_id=str(payload.get("instance_id") or ""),
+                    node_id=str(payload.get("node_id") or ""),
+                    room=payload.get("room"),
+                    edge=str(payload.get("edge") or ""),
+                    answered_via=str(payload.get("answered_via") or ""),
+                    payload_kind=str(payload.get("payload_kind") or ""),
+                )
+
             self.scheduler.runtime_facts = _record_trigger
             self.scheduler.met_io = _MetIO
             self.executor.runtime_facts = _record_trial
+            self.executor.ask_answer_recorder = _record_ask_answer
         # v0.4.0：`emit` 发布的事件必须驱动 `on event` 订阅者（发布 → 订阅闭环）
         self.executor.on_emit = self.scheduler.handle_event
         # DCD 裁定 2026-11-04 阶段1（乙）：ask 触发时经现有 MQTT 桥向 butler/inbox/speak 额外播报。
@@ -152,6 +167,26 @@ class Runtime:
             bridge.publish_speak(trace_id=trace_id, text=text, room=area_id)
 
         self.executor.on_ask_speak = _speak_ask
+        # v1.28 R1（DCD 裁定 2026-11-04 §2.3 C1/C3/C6）：挂起时额外发 `af/ask/pending`。
+        # 与 speak 腿**同一套闸**：惰性取桥、room 解析不到即拒投递、失败只吞 warning。
+        # 差别只在载荷与主题：C3 逐字 `{ask_id, room, prompt, source, priority}` ＋ `timeout_remaining`。
+        def _publish_ask_pending(
+            trace_id: str, text: str, room: str, timeout_remaining: float | None = None
+        ) -> None:
+            bridge = _bridge.current_bridge()
+            if bridge is None:
+                return
+            area_id = self.resolve_room(room, source="ask")
+            if area_id is None:
+                return  # 解析不到 ⇒ 拒投递（与 speak 腿同一条 fail-closed）
+            bridge.publish_ask_pending(
+                ask_id=trace_id,
+                room=area_id,
+                prompt=text,
+                timeout_remaining=timeout_remaining,
+            )
+
+        self.executor.on_ask_pending = _publish_ask_pending
         # T1（2026-11-04）：非 ask 自动化 do 动作下发前同样经桥播报一声（同一 publish_speak 腿）。
         # 与 ask 腿共用闭包语义：惰性取桥、无桥 no-op、失败只吞 warning，⛔ 不改 do 核心。
         # 2026-11-05 修（真机现读）：线上 IR 的 do 节点**没有 room 字段**，而 ② 的硬判据是

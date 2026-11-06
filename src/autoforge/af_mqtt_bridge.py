@@ -40,12 +40,15 @@ from homesdk.adm.errors import (
 from homesdk.adm.status import STATE_DEGRADED, STATE_OFFLINE, STATE_ONLINE, encode_status
 from homesdk.config import MissingEnv
 
+from . import af_ask_bridge as _ask_bridge
 from . import af_linkage_feed as _feed
 from .af_feedback import clock_now
 from .af_time import SystemTimeSource, TimeSource, to_house_iso
 
 __all__ = [
     "AfMqttBridge",
+    "ASK_ANSWER_TOPIC",
+    "ASK_PENDING_TOPIC",
     "FIRED_TOPIC",
     "FAILED_TOPIC",
     "INSIGHTS_TOPIC",
@@ -92,6 +95,12 @@ LINKAGE_KIND_BY_TOPIC: dict[str, str] = {
     PRESENCE_TOPIC: _feed.KIND_PRESENCE,
     DEVICE_HEALTH_TOPIC: _feed.KIND_DEVICE_HEALTH,
 }
+#: v1.28 R1「ask 双向桥」小爱腿：AF **自己的** `af/ask/*` 族（⛔ 不是 `butler/inbox/*`——
+#: 那一族是 DB 的所有权面，本仓对它有 `FORBIDDEN_SUBSCRIPTIONS` 护栏）。
+#: 主题名与载荷**逐字出自 DCD 裁定 2026-11-04 阶段2（C1/C2/C3/C4）**；字面量真源在
+#: `af_ask_bridge`，桥与运行时取同一枚常量，⛔ 不在本文件再抄一份。
+ASK_PENDING_TOPIC = _ask_bridge.ASK_PENDING_TOPIC
+ASK_ANSWER_TOPIC = _ask_bridge.ASK_ANSWER_TOPIC
 #: `presence` 没有公开的主题拼装口（`_topic` 是私有的），所以本仓自己拼这一条。
 #: 它**不**复制进 `scripts/verify_adm_window.py`——那条是外部探针，共用常量就成了"读应用自己的
 #: 常数去验应用"的自证，探针就再也读不出"AF 发错了主题"。
@@ -548,12 +557,19 @@ class AfMqttBridge:
         *,
         proposal_sink: Any = None,
         linkage_sink: Any = None,
+        ask_answer_root: str | Path | None = None,
         clock: TimeSource | None = None,
         subscribe_insights: bool = True,
         subscribe_linkage: bool = True,
+        subscribe_ask_answers: bool = True,
     ) -> None:
         self.client = client
         self.proposal_sink = proposal_sink
+        #: v1.28 R1 小爱腿入向的**落点根**（`<store>/answer_inbox/`，与 WebUI 腿同一目录 ⇒
+        #: 消费侧仍是 `af_live.read_answer_inbox` 那一条，不新开第二条消费路）。
+        #: None = 没接线 ⇒ 该主题拒收并留痕（契约 §7.2「禁止静默丢弃」），⛔ 不静默吞下。
+        self.ask_answer_root = ask_answer_root
+        self.subscribe_ask_answers = subscribe_ask_answers
         #: 在场/设备健康的落盘队列（`af_linkage_feed.LinkageFeed`，鸭子类型注入：桥不构造它，
         #: 所以没有 broker、没有可写盘的机器上桥照样能真跑）。None = 没接线 ⇒ 拒收并留痕，
         #: 不静默收下（契约 §7.2「禁止静默丢弃」）。
@@ -576,6 +592,8 @@ class AfMqttBridge:
             "presence_in": 0,
             "device_health_in": 0,
             "linkage_rejected": 0,
+            "ask_answer_in": 0,
+            "ask_answer_rejected": 0,
             "publish_errors": 0,
             "forbidden_seen": 0,
         }
@@ -742,6 +760,44 @@ class AfMqttBridge:
         self._note_published(self.SPEAK_TOPIC, payload)
         return {"published": True, "topic": self.SPEAK_TOPIC, "payload": payload}
 
+    def publish_ask_pending(
+        self,
+        *,
+        ask_id: str,
+        room: str = "",
+        prompt: str = "",
+        source: str = _ask_bridge.ASK_SOURCE,
+        priority: int = _ask_bridge.ASK_PRIORITY,
+        timeout_remaining: float | None = None,
+    ) -> dict[str, Any]:
+        """向 `af/ask/pending` 发一条挂起问询（DCD 裁定 2026-11-04 §2.3 C1/C3/C6）。
+
+        QoS=1、**retain=false**（同 speak 腿：retained 会让对端重连后重复问一遍）。
+        载荷逐字按 **C3** `{ask_id, room, prompt, source, priority}` ＋ C6 点名的
+        `timeout_remaining`；身份不合法（空/超 64）时 `build_pending_payload` **当场抛**——
+        这里不吞：发一条 DB 认不出身份的挂起比不发更糟，而执行链侧只按"旁路失败"记一行。
+
+        失败计数/降级复用桥同一套（`_account_publish_error`／`_note_published`），
+        ⛔ 不冒到 ask 执行链。
+        """
+        payload = _ask_bridge.build_pending_payload(
+            ask_id=ask_id,
+            room=room or None,
+            prompt=prompt,
+            source=source,
+            priority=priority,
+            timeout_remaining=timeout_remaining,
+        )
+        try:
+            _raise_if_refused(
+                _mqtt.publish(self.client, ASK_PENDING_TOPIC, payload, qos=1, retain=False),
+                ASK_PENDING_TOPIC,
+            )
+        except Exception as exc:  # noqa: BLE001 —— broker 抖动不许弄崩 ask
+            return self._account_publish_error(ASK_PENDING_TOPIC, exc)
+        self._note_published(ASK_PENDING_TOPIC, payload)
+        return {"published": True, "topic": ASK_PENDING_TOPIC, "payload": payload}
+
     def observe_terminal(self, instance: Any, state: str) -> dict[str, Any] | None:
         """`Runtime.add_terminal_observer` 的适配器：done→fired，failed→failed，其余不发。
 
@@ -779,7 +835,8 @@ class AfMqttBridge:
             if topic == INSIGHTS_TOPIC:  # 白名单若被误改，宁可启动失败也不越界
                 raise BridgeUnavailable(f"{INSIGHTS_TOPIC} 不该出现在禁订清单里（请核对裁定）")
         self.advertise(caps=caps)
-        if self.subscribe_insights or self.subscribe_linkage:
+        ask_leg = self.subscribe_ask_answers and self.ask_answer_root is not None
+        if self.subscribe_insights or self.subscribe_linkage or ask_leg:
             self.client.on_message = self.handle_message
         if self.subscribe_insights:
             self.client.subscribe(INSIGHTS_TOPIC, qos=_mqtt.QOS)
@@ -788,6 +845,10 @@ class AfMqttBridge:
             # `forbidden_seen` 留痕都收在那里，两条入向线共用一个口才有办法一条腿判红。
             for topic in LINKAGE_TOPICS:
                 self.subscribe_topic(topic)
+        if ask_leg:
+            # v1.28 R1：小爱腿入口。没接线（`ask_answer_root is None`）时**不订**——
+            # 订了却没人接住，等于给对端一个"发过去了"的假信号（与 linkage 同一条纪律）。
+            self.subscribe_topic(ASK_ANSWER_TOPIC)
         self.started = True
 
     def stop(self) -> None:
@@ -823,9 +884,9 @@ class AfMqttBridge:
         return True
 
     def handle_message(self, _client: Any, _userdata: Any, msg: Any) -> dict[str, Any]:
-        """paho 回调：只认 `ma/insights` 与两条联动入向主题，别的主题即使被误投也只是计数。"""
+        """paho 回调：只认 `ma/insights`、两条联动入向主题与 `af/ask/answer`，别的主题即使被误投也只是计数。"""
         topic = msg.topic.decode("utf-8", "replace") if isinstance(msg.topic, bytes) else str(msg.topic)
-        if topic not in LINKAGE_TOPICS and topic != INSIGHTS_TOPIC:
+        if topic not in LINKAGE_TOPICS and topic != INSIGHTS_TOPIC and topic != ASK_ANSWER_TOPIC:
             if topic in FORBIDDEN_SUBSCRIPTIONS or topic.startswith(INBOX_PREFIX):
                 self.counts["forbidden_seen"] += 1
                 self._keep(self.rejected, {"topic": topic, "reason": "forbidden_topic_not_handled"})
@@ -839,15 +900,21 @@ class AfMqttBridge:
         except Exception as exc:  # noqa: BLE001 —— 对端发坏 JSON 是常态，拒收并留痕
             if topic == INSIGHTS_TOPIC:
                 return self._reject("undecodable_payload", repr(exc))
+            if topic == ASK_ANSWER_TOPIC:
+                return self._reject_ask_answer("undecodable_payload", repr(exc))
             return self._reject_linkage(topic, "undecodable_payload", repr(exc))
         if not isinstance(payload, Mapping):
             detail = type(payload).__name__
             if topic == INSIGHTS_TOPIC:
                 return self._reject("payload_not_object", detail)
+            if topic == ASK_ANSWER_TOPIC:
+                return self._reject_ask_answer("payload_not_object", detail)
             return self._reject_linkage(topic, "payload_not_object", detail)
         if topic == INSIGHTS_TOPIC:
             self.counts["insights_in"] += 1
             return self.ingest_insight(payload)
+        if topic == ASK_ANSWER_TOPIC:
+            return self.ingest_ask_answer(payload)
         return self.ingest_linkage(topic, payload)
 
     def _reject(
@@ -1031,6 +1098,76 @@ class AfMqttBridge:
         logger.warning("MQTT_LINKAGE_DROP [mqtt] 丢弃 %s：%s %s（code=%s）", topic, reason, detail, code)
         return {"handled": False, "topic": topic, "reason": reason, "detail": detail, "code": code}
 
+    def ingest_ask_answer(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """小爱腿入向：`af/ask/answer` → 验形 + 签名落 `answer_inbox/`（消费侧仍是 ticker 那条）。
+
+        **载荷逐字按 DCD 裁定 2026-11-04 §2.3 C4**：`{ask_id, answer:"yes"/"no", raw_text}`
+        —— MVP 只两值，带参数回答整条拒（§八.3）。分类**归 DB**（C5），AF 只把 `verdict`
+        落进被签名的 `answer` 格；读侧据此走 `executor.answer(verdict=…)`，⛔ 不对 `raw_text`
+        二次分类（`homesdk` 会把 unknown 映成 `no`，再分一次可能把 yes 悄悄翻成 no）。
+
+        ⛔ 本方法**不推进实例、不碰 runtime**：paho 线程只做"判形状 + 原子写一条"，交棒给
+        `af_live.read_answer_inbox`（与 `ingest_linkage` 同一条纪律：回调线程不驱动执行链）。
+
+        缺密钥（`AUTOFORGE_INBOX_KEY` 未配）⇒ **当场拒**，不写一份读侧必然丢的文件：
+        那正是 AF-732 之前"接口 200、答案蒸发"的假绿形状，本件不复制它。
+        """
+        if self.ask_answer_root is None:
+            return self._reject_ask_answer(
+                "no_ask_answer_root_wired", "AF 侧没接应答落点（answer_inbox）", ADM_ERR_INTERNAL
+            )
+        try:
+            normalized = _ask_bridge.parse_answer_payload(payload)
+        except _ask_bridge.AnswerRejected as exc:
+            return self._reject_ask_answer(exc.reason, exc.detail)
+        try:
+            written = _ask_bridge.write_answer_inbox_file(
+                self.ask_answer_root,
+                ask_id=normalized["ask_id"],
+                # C4：`raw_text` 只当诊断原文，**投票以 `verdict` 为准**（C5：分类归 DB）；
+                # 两者都落进被签名的载荷 ⇒ 分类结果与原文一起受签名保护（⛔ 不可篡改翻转）。
+                text=normalized["raw_text"],
+                room=payload.get("room"),
+                verdict=normalized["verdict"],
+                # 信道判定优先：本腿只可能是小爱，⛔ 不采信载荷自述（自称别的已在解析处拒）。
+                via=_ask_bridge.ANSWERED_VIA_XIAOMI,
+                require_key=True,
+                now=clock_now(self.clock),
+            )
+        except _ask_bridge.AnswerRejected as exc:
+            return self._reject_ask_answer(exc.reason, exc.detail, ADM_ERR_INTERNAL)
+        except Exception as exc:  # noqa: BLE001 —— 落盘异常不冒到 paho 回调外
+            # ⛔ 只记异常类型：detail 会进 `stats()` 的对端可读面，路径/正文一律不外泄。
+            self._keep(self.errors, f"{ASK_ANSWER_TOPIC}: {type(exc).__name__}")
+            return self._reject_ask_answer("write_failed", type(exc).__name__, ADM_ERR_INTERNAL)
+        self.counts["ask_answer_in"] += 1
+        return {
+            "handled": True,
+            "topic": ASK_ANSWER_TOPIC,
+            "ask_id": normalized["ask_id"],
+            "via": written["via"],
+            "inbox": written["name"],  # 只回文件名，⛔ 不回绝对路径
+        }
+
+    def _reject_ask_answer(
+        self, reason: str, detail: str = "", code: str = ADM_ERR_PAYLOAD_INVALID
+    ) -> dict[str, Any]:
+        """小爱腿入向的 fail-closed 拒收：带码、留痕、单独计数（契约 §7.2 禁止静默丢弃）。
+
+        不共用 `_reject()`／`_reject_linkage()`：三条入向线三个对端，混进同一枚计数就分不清
+        "小爱腿断了"与"洞察坏了"——前者意味着 ask 通道整条不生效。
+        """
+        self.counts["ask_answer_rejected"] += 1
+        self._keep(
+            self.rejected,
+            {"topic": ASK_ANSWER_TOPIC, "reason": reason, "detail": detail, "code": code},
+        )
+        logger.warning(
+            "MQTT_ASK_ANSWER_DROP [mqtt] 丢弃 %s：%s %s（code=%s）",
+            ASK_ANSWER_TOPIC, reason, detail, code,
+        )
+        return {"handled": False, "topic": ASK_ANSWER_TOPIC, "reason": reason, "detail": detail, "code": code}
+
     def stats(self) -> dict[str, Any]:
         return {
             "started": self.started,
@@ -1047,6 +1184,7 @@ def start_from_env(
     version: str = PRESENCE_CAPS_VERSION,
     proposal_sink: Any = None,
     linkage_sink: Any = None,
+    ask_answer_root: str | Path | None = None,
     clock: TimeSource | None = None,
     allow_anonymous: bool = False,
 ) -> AfMqttBridge | None:
@@ -1061,7 +1199,13 @@ def start_from_env(
     if not env_enabled():
         return None
     client = make_client(allow_anonymous=allow_anonymous)
-    bridge = AfMqttBridge(client, proposal_sink=proposal_sink, linkage_sink=linkage_sink, clock=clock)
+    bridge = AfMqttBridge(
+        client,
+        proposal_sink=proposal_sink,
+        linkage_sink=linkage_sink,
+        ask_answer_root=ask_answer_root,
+        clock=clock,
+    )
     bridge.start(caps=caps_payload(tools=tools, version=version))
     return bridge
 
