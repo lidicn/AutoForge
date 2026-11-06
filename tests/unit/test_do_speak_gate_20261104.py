@@ -7,11 +7,15 @@ ask 路径的播报（467108c）只覆盖 ask 节点 ⇒ 普通自动化条件�
 修法（⛔ 不改 do 核心）：`_do` 在动作下发前调 `on_do_speak(instance_id, text, room)`，
 Runtime 注入闭包 → `bridge.publish_speak`。dry-run 适配器不播报；失败只吞 warning。
 
+★ v1.27.1 语义收口（2026-11-06，PM 卡 `AF卡_v1271_热修_播报语义收口_20261106.md`）：
+播报改**显式才出声**——`speech_template` 渲出**或** `announce` 非空才播；两者都没有 ⇒ **静默**
+（删掉旧机拼兜底「自动化名：节点名」）。D4 因此由"兜底非空"翻成"必须静默"。
+
 覆盖（编号带卡名）：
   D1 do 动作照常执行（开关行）：注入播报回调后 adapter 仍被调用、边选择不变
   D2 do 下发前触发播报（trace_id=instance_id、room=node.room）
   D3 文本取节点 `announce`（IR 扩展字段）原样播报
-  D4 无 announce ⇒ 动态兜底 `<自动化名>：<节点名>`（非空）
+  D4 无 announce 且无模板 ⇒ 静默（v1.27.1 新契约；旧兜底已删）
   D5 dry-run 适配器不播报（没真动作却出声会误导）
   D6 播报回调抛异常 ⇒ do 照常执行（旁路不许改核心）
   D7 源码钉：`_do` 里播报调用在动作下发之前（防后人挪到动作之后）
@@ -85,7 +89,8 @@ def _fire(rt):
 
 # ── D1 do 照常执行 + D2 播报在动作前触发 ────────────────────────────
 def test_d1_d2_do_runs_and_speaks_before_action():
-    rt, ad = _runtime()
+    # v1.27.1：播报改「显式才出声」⇒ 量这两格必须给显式文案（无文案那格归 D4 的静默）
+    rt, ad = _runtime(AUTO_ANNOUNCE)
     speaks = []
     rt.executor.on_do_speak = lambda tid, text, room, entity_id="": speaks.append(
         {"trace_id": tid, "text": text, "room": room}
@@ -106,15 +111,20 @@ def test_d3_announce_text_used():
     assert speaks == ["书房有点热，我把空调打开"], f"应用节点 announce，实得 {speaks}"
 
 
-# ── D4 无 announce ⇒ 动态兜底非空 ─────────────────────────────────
-def test_d4_dynamic_fallback_text():
-    rt, _ad = _runtime()
+# ── D4 无 announce 且无模板 ⇒ 静默（v1.27.1 语义收口）─────────────
+def test_d4_no_announce_and_no_template_is_silent():
+    """v1.27.1（PM 卡 `AF卡_v1271_热修_播报语义收口_20261106.md`）：**显式才出声**。
+
+    既无 `speech_template`（或渲不出）又无 `announce` ⇒ **静默**，⛔ 不再机拼
+    「自动化名：节点名」。反证腿：本用例在 v1.27.0 上是"必须有非空兜底文本"——
+    那条兜底正是「一次派发念三句」的第三句来源；实现若把机拼加回去，本腿立刻红。
+    """
+    rt, ad = _runtime()
     speaks = []
     rt.executor.on_do_speak = lambda tid, text, room, entity_id="": speaks.append(text)
     _fire(rt)
-    assert len(speaks) == 1
-    assert speaks[0].strip(), "无 announce 时必须给非空兜底文本"
-    assert "do播报用例" in speaks[0], f"兜底文本应含自动化名，实得 {speaks[0]!r}"
+    assert ad.calls, "静默⛔ 不许吃掉 do 动作本身（旁路改语义，核心不动）"
+    assert speaks == [], f"无显式文案必须静默，实得 {speaks}"
 
 
 # ── D5 dry-run 不播报 ─────────────────────────────────────────────

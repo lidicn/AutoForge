@@ -127,6 +127,31 @@ def test_d3_unknown_placeholder_falls_back():
     assert "{humidity}" not in speaks[0]
 
 
+# ── D3b v1.27.1 收口：渲不出且无 announce ⇒ 静默（不机拼、不播占位符）──────
+def test_d3b_render_fail_without_announce_is_silent():
+    """PM 卡 §修法 2：模板渲染失败且无 announce ⇒ **静默**（fail-closed）。
+
+    反证腿：v1.27.0 上这一格会机拼「自动化名：节点名」出声；实现若回退旧兜底，本腿红。
+    """
+    rt = _runtime(_auto())  # 有模板、无 announce、传感器没注册 ⇒ 渲染失败
+    speaks = _capture(rt)
+    _fire(rt)
+    assert speaks == [], f"渲不出且无 announce 必须静默，实得 {speaks}"
+
+
+# ── D3c 卡 §修法 5：读数渲染口径（整数不拖 .0，非整数原样）────────────────
+def test_d3c_integral_reading_drops_trailing_dot_zero():
+    rt = _runtime(_auto(), {SENSOR: "28.0"})
+    speaks = _capture(rt)
+    _fire(rt)
+    assert speaks and "28 度" in speaks[0], f"整数读数应念「28 度」，实得 {speaks[0]!r}"
+    assert "28.0" not in speaks[0], "⛔ 不拖 .0（出资人听到的是「28 度」）"
+    rt2 = _runtime(_auto(), {SENSOR: "28.6"})
+    speaks2 = _capture(rt2)
+    _fire(rt2)
+    assert speaks2 and "28.6" in speaks2[0], f"非整数读数照实念，实得 {speaks2[0]!r}"
+
+
 # ── D4 DSL：编译 + render 往返；未登记字段仍被拒 ────────────────────────
 def test_d4_dsl_accepts_and_roundtrips():
     spec = f"""
