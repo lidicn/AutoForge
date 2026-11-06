@@ -546,7 +546,7 @@ def _t_pair(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _t_live(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
+def _t_live(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
     # R4-3（出资人裁定 2026-10-29）：真机下发补授权码闸。审计 AF-401/408 后闸已
     # **下移到 svc.live_run 服务层**（REST 直连与 MCP 同闸；且排在 events 形状检查与
     # 单写者租约之后——旧版闸在 dispatch 层最先跑，把两条既有不变量打穿，当时的
@@ -566,6 +566,9 @@ def _t_live(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
         # 记录动作前快照并返回 `undo_deploy_id`（`svc.live_run` 已支持，这里透传）。
         # 缺省/False 与 REST 逐字同形：`undo_enabled=False`、`undo_deploy_id=None`，⛔ 不谎报可撤销。
         undo=bool(args.get("undo", False)),
+        # v1.28 R3：MCP 面同样把调用者主体递给服务层 ⇒ 回执归属过滤两面同口径
+        caller=str((current or {}).get("subject") or ""),
+        caller_is_owner=_owner_face(current),
     )
 
 
@@ -885,7 +888,7 @@ def _t_deploy_status(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 #: AF-701 服务层界线钉（2026-10-31）：af_set_tags 入列（透传 subject + token_identity）
 _TOOLS_WITH_CONTEXT = frozenset({
     _t_delete_graph, _t_list_graphs, _t_get_graph,_t_whoami, _t_save, _t_import, _t_enable, _t_deploy,
-    _t_by_tag, _t_conf, _t_diff, _t_export, _t_quarantine, _t_set_tags})
+    _t_by_tag, _t_conf, _t_diff, _t_export, _t_quarantine, _t_set_tags, _t_live})
 
 
 # ─────────────────────────────────────────────────────────────────────

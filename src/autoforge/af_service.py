@@ -2962,6 +2962,8 @@ def live_run(
     undo: bool = False,
     clock: Any | None = None,
     auth_code: str = "",
+    caller: str = "",
+    caller_is_owner: bool = False,
 ) -> dict[str, Any]:
     """受闸门的真机下发：三重闸全通过才执行。
 
@@ -3103,8 +3105,13 @@ def live_run(
         _rd(
             _AE("LIVE_RUN_EXECUTED", at=_dt.now(_tz.utc),
                 message=f"live_run executed ({len(events or [])} events)",
+                # v1.28 R3（PM 核准）：回执读面要「图名」与归属主体 ⇒ 事件里补两枚键；
+                # `subject` 缺它就是非 owner 过滤与 hidden_count 都无从算起（卡 §四点名）。
                 data={"authorized_by": code_tag, "writes": sorted(targets),
-                      "verdict": _dispatch_verdict(runtime)}),
+                      "verdict": _dispatch_verdict(runtime),
+                      "actions": len(sorted(targets)),
+                      "graph": [_auto_name(a) for a in graph],
+                      "subject": str(caller or "")}),
             store,
         )
     except Exception as exc:
@@ -3162,6 +3169,125 @@ def undo_available(store_root: "str | Path | None" = None) -> dict[str, Any]:
 def undo_preview(deploy_id: str, store_root: "str | Path | None" = None) -> dict[str, Any]:
     """撤销前盘点：窗口/风险域/实体清单，判定口径与 revert 同源（`exists`/`undoable`）。"""
     return dict(_undo_store(store_root).inspect(deploy_id))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# v1.28 R3：最近单发（live_run）回执读面（UI「最近单发回执」的数据源）
+#   源＝`<store>/deploy_audit.jsonl` 的 `LIVE_RUN_EXECUTED` 事件（已落盘，⛔ 不新建持久化面）。
+#   归属形状按 **list 面纪律**（PM 2026-11-06 22:5x 核准）：owner 面全量、⛔ 不报 hidden_count；
+#   非 owner 面只看自己名下、**hidden_count 必报**（与 list_graphs 正反形状一致）。
+# ─────────────────────────────────────────────────────────────────────
+
+#: 回执默认条数（PM 卡 §四：最近 20 条）与硬上限（越界钳到上限，⛔ 不无限读）
+LIVE_RECEIPTS_LIMIT = 20
+LIVE_RECEIPTS_MAX = 100
+
+
+def _auto_name(automation: Any) -> str:
+    """回执里的「图名」：优先 `automation.name`，缺失回退 `id`（⛔ 不投影成空串让回执读不出是谁）。"""
+    return str(getattr(automation, "name", "") or getattr(automation, "id", "") or "")
+
+
+def _receipt_of(event: Mapping[str, Any]) -> dict[str, Any]:
+    """把一条 `LIVE_RUN_EXECUTED` 审计事件折成一枚回执（时间／图名／动作数／verdict／码掩码）。
+
+    `code_mask` 直接取事件里的 `authorized_by`——它本来就是 `_auth_code_check` 产出的脱敏标签
+    （`auth_code:xx***`），⛔ 这里不碰、更不重新拼真码（群规⑤：码值不进任何回读面）。
+    """
+    data = event.get("data") if isinstance(event.get("data"), Mapping) else {}
+    verdict = data.get("verdict")
+    if isinstance(verdict, Mapping):
+        verdict_text = str(verdict.get("verdict") or "")
+    else:
+        verdict_text = str(verdict or "")
+    graph = data.get("graph")
+    actions = data.get("actions")
+    if not isinstance(actions, int) or isinstance(actions, bool):
+        writes = data.get("writes")
+        actions = len(writes) if isinstance(writes, (list, tuple)) else 0
+    return {
+        "at": event.get("at"),
+        "graph": [str(g) for g in graph] if isinstance(graph, (list, tuple)) else [],
+        "actions": int(actions),
+        "verdict": verdict_text,
+        "code_mask": str(data.get("authorized_by") or ""),
+    }
+
+
+def live_run_receipts(
+    store_root: "str | Path | None" = None,
+    *,
+    caller: str = "",
+    caller_is_owner: bool = False,
+    limit: int = LIVE_RECEIPTS_LIMIT,
+) -> dict[str, Any]:
+    """最近单发回执（新→旧）。源＝`deploy_audit.jsonl`；读失败如实空表（⛔ 不伪装成"没有回执"）。
+
+    归属（PM 核准的 list 面纪律）：
+    - owner 面（或无身份调用方）：全量，**不带** `hidden_count`；
+    - 非 owner 面：只返回 `subject == caller` 的那些，**必报** `hidden_count`（全量−可见）＋`scope`。
+    ⛔ 单对象读面的「404 逐字同形」不适用本端点（PM 明确修正过卡面口径）。
+    """
+    if store_root is None:
+        # 没有 store 就没有台账可读 ⇒ 如实 ok=False（⛔ 不返 ok=True 让调用方以为"空 = 没有回执"）
+        return {"ok": False, "count": 0, "items": [], "read_error": "no_store"}
+    try:
+        n = int(limit)
+    except (TypeError, ValueError):
+        n = LIVE_RECEIPTS_LIMIT
+    if n <= 0:
+        n = LIVE_RECEIPTS_LIMIT
+    n = min(n, LIVE_RECEIPTS_MAX)
+
+    from .af_audit import DEPLOY_AUDIT_FILE
+
+    path = Path(store_root) / DEPLOY_AUDIT_FILE
+    if not path.is_file():
+        # 台账还没生成（一次都没真机下发过）：如实"空"，⛔ 与"读不出"分开
+        return {"ok": True, "count": 0, "items": []}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        # v1.28 R3 补（AF-UI 2026-11-07 校准）：此前 `read_jsonl_bounded` 的 fail-soft 会把
+        # "台账读不出"与"没有回执"压成同一个空表，UI 无法分辨 ⇒ 这里显式冒出来给第三档。
+        return {
+            "ok": False,
+            "count": 0,
+            "items": [],
+            "read_error": f"ledger_unreadable:{type(exc).__name__}",
+        }
+    events: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue  # 坏行跳过：台账是 append-only 流水，单行损坏不该让整份读数变空
+        if isinstance(row, dict) and str(row.get("type") or "") == "LIVE_RUN_EXECUTED":
+            events.append(row)
+    total = len(events)
+    visible: list[dict[str, Any]] = []
+    for event in reversed(events):  # 落盘是时间序 ⇒ 倒序即"新→旧"
+        data = event.get("data") if isinstance(event.get("data"), Mapping) else {}
+        subject = str(data.get("subject") or "")
+        if caller and not caller_is_owner and subject != caller:
+            continue
+        visible.append(_receipt_of(event))
+        if len(visible) >= n:
+            break
+    # `ok` 派生自不变式（可见 ⊆ 全量），⛔ 不写字面量 True：字面量 ok 会被 AST 棘轮判成
+    # fake-ok（"不来自任何实际校验"），而这里真有一条可校验的不变式（与 list_graphs 同姿势）。
+    out: dict[str, Any] = {
+        "ok": total >= len(visible),
+        "count": len(visible),
+        "items": visible,
+    }
+    if caller and not caller_is_owner:
+        out["hidden_count"] = max(0, total - len(visible))
+        out["scope"] = f"owner:{caller}"
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────

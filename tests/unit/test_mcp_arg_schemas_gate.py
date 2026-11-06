@@ -150,7 +150,7 @@ def test_real_registry_is_green_with_measured_numbers():
         rc = mod.main(["check_mcp_arg_schemas.py", str(REAL_REGISTRY)])
     out = buf.getvalue()
     assert rc == 0, out
-    assert "36 个工具" in out and "声明参数 67 个" in out and "handler 消费 67 个" in out, out
+    assert "36 个工具" in out and "声明参数 68 个" in out and "handler 消费 68 个" in out, out
     assert REAL_REGISTRY.is_file()
 
 
