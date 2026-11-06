@@ -304,6 +304,15 @@ onUnmounted(() => {
       </n-space>
     </n-card>
 
+    <n-card title="最近单发回执" :bordered="false" class="block">
+      <n-alert type="info" :bordered="false" title="未接线（待 R3 端点）">
+        这一格只读：时间 / 图名 / 动作数 / verdict / 授权码掩码，数据由后端 R3 端点提供
+        （路径待 PM 核准，前端不猜）。当前<b>未接线</b> ⇒ 下面显示的是“没接上”，不是“没有回执”——
+        ⛔ 不要据此判断下发记录为空。
+      </n-alert>
+      <n-empty description="接口未就绪（待 R3 端点）：未接线，不代表没有回执" size="small" />
+    </n-card>
+
     <n-card title="可撤销的部署（时间窗内）" :bordered="false" class="block">
       <n-alert v-if="undoError" type="error" title="撤销请求失败" style="margin-bottom: 12px">
         {{ undoError }}
