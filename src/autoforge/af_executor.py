@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
@@ -23,6 +24,7 @@ _logger = logging.getLogger(__name__)
 
 from .af_adapters import AdapterRegistry, CallResult
 from .af_audit import (
+    ACTION_CALLED,
     ACTION_FAILED,
     ENTITY_DRIFT,
     EVENT_EMITTED,
@@ -60,7 +62,36 @@ __all__ = [
     "CAP_WARNING",
     "classify_answer",
     "EMIT_TIMER_KIND",
+    "SPEECH_TEMPLATE_PLACEHOLDERS",
+    "render_speech_template",
 ]
+
+# ── D11（2026-11-06）：播报文案模板 ─────────────────────────────────────
+#: `speech_template` 支持的占位符**白名单**（初始只 `{temperature}`）。
+#: ⚠️ 这份清单是 UI 侧编辑器校验的唯一真源：新增占位符必须同批给 AF-UI，
+#: ⛔ 两边各编一套（卡面「占位符白名单以 Core 落 DSL 时给的清单为准」）。
+SPEECH_TEMPLATE_PLACEHOLDERS = frozenset({"temperature"})
+
+#: 模板占位符语法：`{name}`，name 为标识符。**只认白名单**——未知占位符一律视为"渲不出来"，
+#: 由调用方回退静态文案（fail-closed：⛔ 不播占位符原文、⛔ 不播 unknown）。
+_SPEECH_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def render_speech_template(template: str, values: Mapping[str, str]) -> str | None:
+    """把模板里的白名单占位符换成实时值；渲不出来返回 `None`（调用方回退静态文案）。
+
+    纯函数（不碰状态源）：值由调用方解析好后传入，便于单测与"实体不可读"分支独立验证。
+    返回 None 的三种情形：① 出现白名单外的占位符 ② 有占位符缺值 ③ 模板为空/非字符串。
+    """
+    if not isinstance(template, str) or not template.strip():
+        return None
+    names = set(_SPEECH_PLACEHOLDER_RE.findall(template))
+    if not names or not names <= SPEECH_TEMPLATE_PLACEHOLDERS:
+        return None
+    for name in names:
+        if values.get(name) in (None, ""):
+            return None
+    return _SPEECH_PLACEHOLDER_RE.sub(lambda m: str(values[m.group(1)]), template)
 
 #: 求值段最大步数——静态图死循环的最后一道防线（静态扫描应提前拦住）
 MAX_STEPS_PER_SEGMENT = 1000
@@ -828,6 +859,7 @@ class NodeExecutor:
                 self.states,
                 auto_rollback=bool(canary.get("auto_rollback", True)) if isinstance(canary, dict) else True,
             )
+            self._audit_action_called(instance, node)
             try:
                 wrapped = guard.perform(adapter, node.action or "", dict(node.params))
             except UnknownEntity as exc:
@@ -849,7 +881,13 @@ class NodeExecutor:
                             "CANARY_DURATION_PARSE_FAILED canary.duration 解析失败，按无观察期处理（node=%s.%s, dur=%r）: %s",
                             instance.automation.id, node.id, dur_str, exc,
                         )
-            if canary_duration and canary_duration > 0:
+            # AF-738 补（假绿口子）：**调用本身失败**时不许进观察窗——否则实例白挂一个窗口，
+            # 而回执按"已调用"报 executed，读者会以为设备改了。失败直接落到下面的通用失败处理
+            # （`result.success` 判 False ⇒ ACTION_FAILED + on_error），⛔ 不对未生效的动作做漂移回滚。
+            _call_failed = not bool(getattr(wrapped.result, "success", True))
+            if _call_failed:
+                result = wrapped.result
+            elif canary_duration and canary_duration > 0:
                 # 挂起观察：存可序列化元数据（P1-4 修复：原存 (wrapped, adapter) 对象不可序列化，
                 # 崩溃恢复后 default=str 静默字符串化 → 解包成字符 → 回滚静默失效）。恢复路径据此重建。
                 instance.ctx.context["pending_canary"] = {
@@ -863,36 +901,38 @@ class NodeExecutor:
                 self.instances.suspend(instance, node.id, canary_duration, kind="canary_observe")
                 self._record_trial(instance, node, "observing")
                 return None
-            # 无 duration → 立即检查漂移（原行为）
-            if wrapped.expected_state() is None:
-                # F4：动作没有 SERVICE_STATE 映射 → has_drift() 恒 False，**不是**"验过了"，
-                # 是"无从验"。记成 verified 就是 铁律 #5 的假证据，单列 unmodeled 一档。
-                self._feed_canary_evidence(instance, node, "unmodeled", {
-                    "reason": "SERVICE_STATE 无该动作的预期态，漂移不可判",
-                })
-            elif wrapped.has_drift():
-                rolled = guard.check_and_rollback(adapter, wrapped)
-                self._feed_canary_evidence(instance, node, "failed", {
-                    "reason": "canary 漂移，已自动回滚", "rollback_calls": len(rolled),
-                })
-                self._record_trial(instance, node, "rolled_back")
-                self.audit.add(
-                    AuditEvent(
-                        type=ENTITY_DRIFT,
-                        at=self.clock.now(),
-                        message=f"canary 检测到漂移 {node.action}，已自动回滚（{len(rolled)} 次反向下发）",
-                        automation_id=instance.automation.id,
-                        instance_id=instance.instance_id,
-                        node_id=node.id,
-                        data={"params": dict(node.params)},
+            # 无 duration → 立即检查漂移（原行为）；AF-738：调用已失败则跳过（⛔ 对未生效的动作回滚）
+            if not _call_failed:
+                if wrapped.expected_state() is None:
+                    # F4：动作没有 SERVICE_STATE 映射 → has_drift() 恒 False，**不是**"验过了"，
+                    # 是"无从验"。记成 verified 就是 铁律 #5 的假证据，单列 unmodeled 一档。
+                    self._feed_canary_evidence(instance, node, "unmodeled", {
+                        "reason": "SERVICE_STATE 无该动作的预期态，漂移不可判",
+                    })
+                elif wrapped.has_drift():
+                    rolled = guard.check_and_rollback(adapter, wrapped)
+                    self._feed_canary_evidence(instance, node, "failed", {
+                        "reason": "canary 漂移，已自动回滚", "rollback_calls": len(rolled),
+                    })
+                    self._record_trial(instance, node, "rolled_back")
+                    self.audit.add(
+                        AuditEvent(
+                            type=ENTITY_DRIFT,
+                            at=self.clock.now(),
+                            message=f"canary 检测到漂移 {node.action}，已自动回滚（{len(rolled)} 次反向下发）",
+                            automation_id=instance.automation.id,
+                            instance_id=instance.instance_id,
+                            node_id=node.id,
+                            data={"params": dict(node.params)},
+                        )
                     )
-                )
-                return self._soft_fail(instance, node, RuntimeError(f"canary 漂移，已回滚 {node.action}"))
-            else:
-                self._feed_canary_evidence(instance, node, "verified")
-                self._record_trial(instance, node, "verified")
+                    return self._soft_fail(instance, node, RuntimeError(f"canary 漂移，已回滚 {node.action}"))
+                else:
+                    self._feed_canary_evidence(instance, node, "verified")
+                    self._record_trial(instance, node, "verified")
             result = wrapped.result
         else:
+            self._audit_action_called(instance, node)
             result: CallResult = adapter.call(node.action or "", dict(node.params))
 
         # 结果只进 vars，不回写快照（IR §7.2）
@@ -1176,6 +1216,69 @@ class NodeExecutor:
     # ─────────────────────────────────────────────────────────────────
     # v0.3.0 跨自动化事件 · 发布侧（IR §4.3）
     # ─────────────────────────────────────────────────────────────────
+    def _audit_action_called(self, instance: Instance, node: Node) -> None:
+        """AF-738：**真调用适配器那一刻**留痕（回执的唯一执行真值源）。
+
+        为什么单独一枚码：`af_action_dispatched` 由影子/干预层在"要发"时写，
+        而 `live_run` 不接影子层 ⇒ 回执只认它时会恒报 `nothing_dispatched`，
+        真实下发在回执里看不见（假红，AF-738 根因）。本码写在**执行器的调用点**，
+        watch 与单发两条路都有，且不谈实例是否随后终止（审计留得住）。
+
+        ⛔ 纯留痕：不改动作、不改边选择、不改实例状态；审计是内存 append，无失败路径。
+        """
+        entities = sorted(str(e) for e in (node.target_entities() or ()))
+        self.audit.add(
+            AuditEvent(
+                type=ACTION_CALLED,
+                at=self.clock.now(),
+                message=f"调用 {node.adapter}.{node.action}（{', '.join(entities) or '-'}）",
+                automation_id=instance.automation.id,
+                instance_id=instance.instance_id,
+                node_id=node.id,
+                data={"action": f"{node.adapter}.{node.action}", "entities": entities},
+            )
+        )
+
+    def _speech_template_text(self, node: Node, fallback_entity_id: str) -> str | None:
+        """D11：渲染节点 `speech_template`（实时值插值）；渲不出来返回 `None`（回退静态文案）。
+
+        实体源顺序：节点 `speech_entity`（显式指定，如杜克温度计）→ `fallback_entity_id`
+        （do 的目标实体／emit 载荷里的 entity_id）。读数顺序：先 `<实体>.<占位符>` 属性
+        （climate 的 `temperature` 在 attributes 里），再退实体状态值（sensor 的 state 就是读数）。
+
+        ⛔ fail-closed 三禁：不假装读数（读不到就 None）、不播占位符原文、不播「unknown」。
+        ⛔ 纯旁路：任何异常都返回 None，绝不改 do/emit 的核心行为。
+        """
+        raw_tpl = node.raw.get("speech_template")
+        if not isinstance(raw_tpl, str) or not raw_tpl.strip():
+            return None
+        src = str(node.raw.get("speech_entity") or "").strip() or str(fallback_entity_id or "").strip()
+        if not src or self.states is None:
+            return None
+        names = set(_SPEECH_PLACEHOLDER_RE.findall(raw_tpl))
+        if not names or not names <= SPEECH_TEMPLATE_PLACEHOLDERS:
+            return None
+        try:
+            snap = self.states.snapshot([src])
+        except Exception:  # noqa: BLE001 —— 实体不可读 ⇒ 回退静态（fail-closed）
+            return None
+        values: dict[str, str] = {}
+        for name in names:
+            val: Any = None
+            try:
+                val = snap.get(f"{src}.{name}")  # 属性形态：`climate.x.temperature`
+            except Exception:  # noqa: BLE001 —— 没有该属性 ⇒ 退到状态值
+                val = None
+            if val is None or val == "":
+                try:
+                    val = snap.get(src)  # 状态值形态：`sensor.x` 的 state 就是读数
+                except Exception:  # noqa: BLE001
+                    return None
+            if val is None or val == "":
+                return None
+            values[name] = str(val)
+        return render_speech_template(raw_tpl, values)
+
     def _speak_for_emit(self, instance: Instance, node: Node, data: dict) -> None:
         """emit 播报（AF-PM 裁定 2026-11-05）：与 do 同源钩子，共用 room 反查＋area 解析。
 
@@ -1185,7 +1288,11 @@ class NodeExecutor:
         """
         if self.on_emit_speak is None:
             return
-        text = str(node.raw.get("announce") or "").strip()
+        entity_id = str((data.get("entity_id") if isinstance(data, dict) else "") or "")
+        # D11：模板优先（实时值插值）；渲不出来（实体不可读/未知占位符）⇒ 回退下面的静态文案
+        text = self._speech_template_text(node, entity_id) or ""
+        if not text:
+            text = str(node.raw.get("announce") or "").strip()
         if not text:
             auto_name = str(getattr(instance.automation, "name", "") or instance.automation.id)
             event = ""
@@ -1193,7 +1300,6 @@ class NodeExecutor:
                 event = str(node.emit.event or "")
             text = f"{auto_name}：{event or node.id}"
         room = str(node.room or (data.get("room") if isinstance(data, dict) else "") or "")
-        entity_id = str((data.get("entity_id") if isinstance(data, dict) else "") or "")
         try:
             self.on_emit_speak(str(instance.instance_id), text, room, entity_id)
         except Exception:  # noqa: BLE001 —— 播报旁路失败绝不改 emit 行为
@@ -1214,17 +1320,20 @@ class NodeExecutor:
         """
         if self.on_do_speak is None or dry_run:
             return
-        text = str(node.raw.get("announce") or "").strip()
-        if not text:
-            auto_name = str(getattr(instance.automation, "name", "") or instance.automation.id)
-            node_name = str(node.name or node.id)
-            text = f"{auto_name}：{node_name}"
         # 目标实体：HA 原生 `target.{entity_id}` 形态也要认（IR §7.1 安全约定要求两者都解析）
         entity_id = str((node.params or {}).get("entity_id") or "").strip()
         if not entity_id:
             target = (node.params or {}).get("target")
             if isinstance(target, dict):
                 entity_id = str(target.get("entity_id") or "").strip()
+        # D11：模板优先（实时值插值）；渲不出来 ⇒ 回退下面的静态文案
+        text = self._speech_template_text(node, entity_id) or ""
+        if not text:
+            text = str(node.raw.get("announce") or "").strip()
+        if not text:
+            auto_name = str(getattr(instance.automation, "name", "") or instance.automation.id)
+            node_name = str(node.name or node.id)
+            text = f"{auto_name}：{node_name}"
         try:
             self.on_do_speak(
                 str(instance.instance_id), text, str(node.room or ""), entity_id,

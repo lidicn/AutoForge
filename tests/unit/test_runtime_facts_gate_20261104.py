@@ -107,15 +107,20 @@ def test_d5_automation_card_reads_runtime_facts(tmp_path):
     from autoforge.af_service import _runtime_facts_fields
 
     store = _mk_store(tmp_path)
-    # 无侧车 ⇒ 回落旧值
+    # 无侧车 ⇒ 回落旧值（D10 第二面：`last_met`/`last_dispatched_at` 一并回落 None）
     fb = _runtime_facts_fields(store, "a1arc")
-    assert fb == {"trial": None, "last_triggered": None, "trigger_7d": 0}
+    assert fb == {"trial": None, "last_triggered": None, "trigger_7d": 0,
+                  "last_met": None, "last_dispatched_at": None}
     # 写侧车 ⇒ 现读
     rf = RuntimeFacts(store.root, "a1arc")
     rf.record_trigger(automation_id="a1arc", node_id="a1", via="group")
     rf.record_trial(state="observing", automation_id="a1arc")
     got = _runtime_facts_fields(store, "a1arc")
     assert got["trigger_7d"] == 1 and got["trial"]["state"] == "observing"
+    # D10 第二面：record_met 后详情带 last_met/last_dispatched_at
+    rf.record_met(met=True)
+    got2 = _runtime_facts_fields(store, "a1arc")
+    assert got2["last_met"] is True and got2["last_dispatched_at"] is not None
 
 
 def test_d5b_corrupt_sidecar_failsoft(tmp_path):
@@ -124,7 +129,8 @@ def test_d5b_corrupt_sidecar_failsoft(tmp_path):
     store = _mk_store(tmp_path)
     (store.root / "a1arc.runtime.json").write_text("NOT JSON{{{", encoding="utf-8")
     got = _runtime_facts_fields(store, "a1arc")
-    assert got == {"trial": None, "last_triggered": None, "trigger_7d": 0}, "损坏必须 fail-soft 回落"
+    assert got == {"trial": None, "last_triggered": None, "trigger_7d": 0,
+                   "last_met": None, "last_dispatched_at": None}, "损坏必须 fail-soft 回落"
 
 
 # ── D6 单一出口接线（源码钉）────────────────────────────────────────
@@ -134,9 +140,15 @@ def test_d6_scheduler_has_single_exit_accounting():
     from autoforge.af_scheduler import Scheduler
 
     src = inspect.getsource(Scheduler._try_fire)
-    assert "runtime_facts" in src, "_try_fire 必须含运行期事实记账点"
-    # 记账必须在 spawn 成功之后（同一出口），不依赖trigger形状
-    assert src.index("instances.spawn") < src.index("runtime_facts"), "记账必须在 spawn 之后"
+    assert "runtime_facts" in src or "_record_trigger_facts" in src, "_try_fire 必须含运行期事实记账点"
+    # D10（2026-11-06）改版：`_try_fire` 现在有**两条**记账点——
+    # ① 抑制路径（计数照记、不派发，D10 卡）② spawn 成功路径（单一出口，防重复计数）。
+    # 记账实现收敛到 `Scheduler._record_trigger_facts` 一个方法（⛔ 不各写一份）。
+    # 旧断言 `spawn < runtime_facts` 假设只有一条记账点且内联在 _try_fire，D10 加抑制腿后不再成立。
+    # 新断言：**成功后仍有记账调用**（且在 spawn 之后）＋**抑制腿也照记**（计数是事实）。
+    after_spawn = src.split("instances.spawn", 1)[1]
+    assert "_record_trigger_facts" in after_spawn, "成功派发的记账必须在 spawn 之后（单出口）"
+    assert "计数照记" in src, "D10：抑制腿必须照记触发计数（计数是事实、派发是决策）"
 
 
 def test_d6b_executor_records_trial():

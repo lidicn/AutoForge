@@ -13,16 +13,16 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, NamedTuple
+from typing import Any, Callable, Iterable, Mapping, NamedTuple
 
 logger = logging.getLogger(__name__)
 
-from .af_audit import INSTANCE_DEBOUNCED, INSTANCE_REJECTED, QUOTA_EXCEEDED, AuditEvent, AuditLog
+from .af_audit import INSTANCE_DEBOUNCED, INSTANCE_EDGE_HELD, INSTANCE_COOLDOWNED, INSTANCE_REJECTED, QUOTA_EXCEEDED, AuditEvent, AuditLog
 from .af_bus import EVENT_ENTITY_PREFIX, BusEvent
 from .af_executor import EMIT_TIMER_KIND, NodeExecutor
 from .af_instance import Instance, InstanceManager
-from .af_ir import Automation, Graph, Node, Trigger, check_trigger_depth
-from .af_state import StateProvider
+from .af_ir import Automation, Graph, Node, Trigger, check_trigger_depth, evaluate
+from .af_state import StateProvider, make_resolver
 from .af_time import TimeSource, SystemTimeSource, parse_duration
 from .af_fire_recorder import FireRecorder
 
@@ -41,6 +41,10 @@ REJECTIONS_MAX = 200
 #: 满了不静默淘汰：排队满 ⇒ 抛，调用方（`af_conflict_runtime._on_pending_ready`）本来就带
 #: `except` 兜底——它会留 `schedule` 降级痕并退回同步重试，比"重试悄悄消失"诚实。
 DELAYED_MAX = 256
+
+#: D10（2026-11-06）：派发冷却期默认 10 分钟。IR 元数据可配（`cooldown`，auto 级覆盖），
+#: 配置缺失取此默认。冷却只拦"派发"（spawn），⛔ 不拦触发计数（卡名 AF卡_dispatch_cooldown）。
+DEFAULT_COOLDOWN_S = 600.0
 
 
 @dataclass(frozen=True)
@@ -87,6 +91,10 @@ class Scheduler:
     #: `(automation_id, node_id, entity_id, via) -> None`；未注入时零副作用（旧行为）。
     #: 这里用可调用对象而非 RuntimeFacts 实例，避免 scheduler 依赖 store 具体类型、也便于单测。
     runtime_facts: Any | None = None
+    #: D10（2026-11-06）：边沿触发的**事实 IO**——`read_last_met(auto_id)->bool|None`（None=无历史）＋
+    #: `record_met(auto_id, met: bool)`。由 `af_runtime` 注成 RuntimeFacts 的闭包（落盘持久化）；
+    #: 未注入 ⇒ 调度器退回内存 `_last_met`（可单测、重启即空——持久化只在 serve 装配时给）。
+    met_io: Any | None = None
 
     def __post_init__(self) -> None:
         self._pending: dict[tuple[str, str, str], _PendingFor] = {}
@@ -95,6 +103,14 @@ class Scheduler:
         self._time_fired: set[tuple[str, str, str]] = set()
         self.rejections: list[str] = []
         self._delayed: list[tuple[float, Callable[[], Any]]] = []  # bounded-cache: exempt(调度器的延迟回调队列，不是缓存：每次 tick 由 `_run_delayed()` 按 deadline 排空，读点就在同方法；上限 `DELAYED_MAX` 走"满了即抛"、由调用方退回同步重试，不静默淘汰待重试项。没有 TTL 腿——到点前把它抹掉等于让一次重试悄悄消失，所以不进 BOUNDED_CACHES 给一条不存在的腿盖章)
+        #: D10（2026-11-06）：派发冷却——每个自动化上次成功派发的单调钟时刻。冷却期内再命中
+        #: ⇒ 计数照记＋`INSTANCE_COOLDOWNED` 审计、不 spawn（卡名 AF卡_dispatch_cooldown）。
+        #: ⛔ 这是内存态（重启即空）：`last_met` 落盘由 `runtime_facts.record_met` 管，
+        #: 冷却本身不落盘——重启后首轮无冷却（可接受：冷却只是高频念叨的兜底，边沿触发是主闸）。
+        self._cooldown: dict[str, float] = {}  # bounded-cache: exempt(冷却起点：键＝自动化 id，成员数上界＝图里自动化总数（有界），每次派发覆盖写、同 id 不新增键；无 TTL 腿——到点前抹掉会让自动化立刻重派，等于把冷却关了，所以不进 BOUNDED_CACHES 给一条不存在的腿盖章)
+        #: D10：内存版 `last_met`（上轮全条件布尔）。`met_io` 未注入（单测/无 store）时用这个；
+        #: 注入了 `met_io` ⇒ 读写都走它（`af_runtime` 落盘），本 dict 不参与。
+        self._last_met: dict[str, bool] = {}  # bounded-cache: exempt(边沿触发内存 last_met：键＝自动化 id，成员数上界＝图里自动化总数（有界），覆盖写不增长；无 TTL 腿——落盘持久化由 met_io 管，内存版只是 serve 未接线时的单测退回，不配 TTL 语义，所以不进 BOUNDED_CACHES 给一条不存在的腿盖章)
 
     # ─────────────────────────────────────────────────────────────────
     # 事件入口
@@ -116,6 +132,11 @@ class Scheduler:
                     instance = self._try_fire(auto, node, event)
                     if instance is not None:
                         fired.append(instance)
+                else:
+                    # D10（2026-11-06）：条件**不满**也要推进 `last_met=False`——否则
+                    # "条件打破"没被记下，下一次满足就不算跳变沿（先断后立失效）。
+                    # 只对 group-and 自动化生效（无该条件层 ⇒ 无"条件维持"语义，不记）。
+                    self._record_met_if_applicable(auto, met=False)
         return fired
 
     def tick(self) -> list[Instance]:
@@ -280,25 +301,35 @@ class Scheduler:
                 self._reject(auto, "parallel 达到单条并发上限")
                 return None
 
+        # ── D10 第四层闸：边沿触发（主）＋冷却兜底 ──
+        # 命中抑制 ⇒ **计数照记**（调 runtime_facts 记账，与 spawn 出口同单源）、不 spawn、审计在案。
+        # 分层铁律：计数是事实、派发是决策——抑制只拦派发，⛔ 不拦触发计数（卡名 AF卡_dispatch_cooldown）。
+        # ⛔ 只在这里加"派发"闸，不碰装载(archived)/触发(enabled)三层语义（台账 §1.173）。
+        _allowed, _why = self._dispatch_allowed(auto)
+        if not _allowed:
+            # 计数照记（即使不 spawn）：抑制也是"条件又命中了"的事实，别让它从计数里消失。
+            self._record_trigger_facts(auto, node, event)
+            _ev = INSTANCE_COOLDOWNED if _why == "cooldown" else INSTANCE_EDGE_HELD
+            self.audit.add(
+                AuditEvent(
+                    type=_ev,
+                    at=self.clock.now(),
+                    message=(f"自动化 {auto.id} 冷却期内命中，不派发（计数照记）" if _why == "cooldown"
+                             else f"自动化 {auto.id} 条件持续满足（电平维持），不重复派发（计数照记）"),
+                    automation_id=auto.id,
+                    node_id=node.id,
+                )
+            )
+            return None
+
         instance = self.instances.spawn(auto, trigger_event=event)
         instance.ctx.current_node = node.id
         # 运行期事实：真触发成功 spawn 后记账（单一出口，group/state/time/队列排空都汇此处）。
         # 记账失败⛔ 不影响执行：可调用对象内部自吞异常，这里再兜一层防御。
-        if self.runtime_facts is not None:
-            try:
-                trig = getattr(node, "trigger", None)
-                via = getattr(trig, "type", "") or ("queued" if event is None else "")
-                self.runtime_facts(
-                    auto.id, node.id,
-                    (event.entity_id if event is not None else ""),
-                    via,
-                )
-            except Exception:  # noqa: BLE001 —— 记账绝不许弄死调度（吞但不静默）
-                logger.warning(
-                    "RUNTIME_FACTS_TRIGGER_FAILED 触发记账失败（不影响执行） auto=%s node=%s",
-                    auto.id, node.id, exc_info=True,
-                )
+        self._record_trigger_facts(auto, node, event)
         self.executor.run(instance)
+        # D10：成功派发 ⇒ 记冷却起点（下一次冷却期的计时基准）。
+        self._cooldown[auto.id] = self.clock.monotonic()
         return instance
 
     def _within_quota(self, auto: Automation) -> bool:
@@ -454,6 +485,194 @@ class Scheduler:
             duration=parse_duration(node.for_ or "0s"),
             event=event,
         )
+
+    def _auto_currently_met(self, auto: Automation) -> bool | None:
+        """D10（2026-11-06）：求自动化**入口触发**的"全条件布尔"——不依赖单个触发事件。
+
+        边沿触发的承重前提：判断"条件从不满→满足的跳变沿"必须用**当前状态**求整组条件，
+        而不能只看"这次来的那个事件匹配了没有"。对 AC 这类「六实体任一变化→重查五条件」的
+        形状，入口 `on` 节点的 trigger 是 `group and` 五条状态条件——这里对每条子条件
+        取当前状态快照判定，返回全布尔。
+
+        返回 `None` = 该自动化**没有 group-and 条件层**（入口是单条状态/event/time/group-or/
+        无触发）⇒ 无"条件维持"语义，边沿触发与冷却都不适用，**每次事件命中即派发**（旧行为）。
+        返回 `bool` = 有 group-and 条件层，`True`=当前全条件成立。
+
+        ⛔ 这是**决策**（是否在跳变沿派发），与触发计数（`runtime_facts.record_trigger`）分层——
+        计数是事实、派发是决策，两边独立（D10 卡 §一）。
+        """
+        has_group_and = False
+        for node in auto.entry_nodes():
+            trig = node.trigger
+            if trig is None:
+                continue
+            trig = _normalize(trig)
+            if trig.type != "group" or trig.op != "and":
+                continue
+            has_group_and = True
+            try:
+                # 每条子条件按当前状态快照判定（state 型查快照；event 型无法由状态求值 ⇒ 保守 False）
+                for sub in trig.sources:
+                    sub = _normalize(sub)
+                    if sub.type == "state":
+                        if not sub.entity_id:
+                            return False
+                        snap = self.states.snapshot([sub.entity_id])
+                        current = snap.get(sub.entity_id)
+                        if sub.to is not None and current != sub.to:
+                            return False
+                        if sub.from_ is not None:
+                            # from_ 的"前一态"只对事件求值有意义，状态快照没有旧态 ⇒ 保守 False
+                            return False
+                    elif sub.type == "group":
+                        # 嵌套 group：递归求布尔（`_satisfied` 对 group 走快照，这里同口径）
+                        if not self._group_currently_met(sub):
+                            return False
+                    else:
+                        # event/time/sun：非状态驱动，无法由当前状态求"持续满足" ⇒ 保守 False
+                        return False
+                return True
+            except Exception:  # noqa: BLE001 —— 求值失败保守判"不满足"（fail-closed，⛔ 不猜）
+                return False
+        # 没有任何 group-and 入口触发 ⇒ 再看**条件是不是写在 `if` 节点里**（真实 IR 的常见形状：
+        # `on(group or 六实体)` → `if(五条件 and)` → `do`）。这种形状的条件层真实存在，
+        # 只是不在入口触发上；不求值它就会 `met=None` ⇒ 边沿/冷却全部落空 ⇒ 用户照样被反复念叨。
+        for node in auto.nodes.values():
+            if node.kind == "if" and node.expr:
+                try:
+                    snap = self.states.snapshot(sorted(auto.reads()))
+                    return bool(evaluate(node.expr, make_resolver(snap, {}, {})))
+                except Exception:  # noqa: BLE001 —— 求值失败保守判"不满足"（fail-closed）
+                    return False
+        return None if not has_group_and else True
+
+    def _group_currently_met(self, trig: Trigger, _depth: int = 0) -> bool:
+        """D10：嵌套 `group` 的当前状态求值（供 `_auto_currently_met` 递归）。"""
+        check_trigger_depth(_depth, "scheduler._group_currently_met")
+        trig = _normalize(trig)
+        if trig.type != "group":
+            # 单条状态子：按快照判
+            if trig.type == "state" and trig.entity_id:
+                if trig.from_ is not None:
+                    return False
+                try:
+                    snap = self.states.snapshot([trig.entity_id])
+                    current = snap.get(trig.entity_id)
+                    return trig.to is None or current == trig.to
+                except Exception:
+                    return False
+            return False
+        if trig.op == "and":
+            return all(self._group_currently_met(sub, _depth + 1) for sub in trig.sources)
+        return any(self._group_currently_met(sub, _depth + 1) for sub in trig.sources)
+
+    # ─────────────────────────────────────────────────────────────────
+    # D10：边沿触发的 last_met 事实存取（met_io 落盘 / 内存退回）
+    # ─────────────────────────────────────────────────────────────────
+    def _read_last_met(self, auto_id: str) -> bool | None:
+        """读上轮全条件布尔。`met_io` 注入（serve）⇒ 走落盘；否则内存 dict。"""
+        if self.met_io is not None:
+            try:
+                read = getattr(self.met_io, "read_last_met", None)
+                return read(auto_id) if callable(read) else None
+            except Exception:  # noqa: BLE001 —— 读失败保守"无历史"（None），不阻塞派发
+                return None
+        return self._last_met.get(auto_id)
+
+    def _record_met(self, auto_id: str, met: bool) -> None:
+        """记本轮全条件布尔。`met_io` 注入 ⇒ 走落盘；否则内存 dict。"""
+        if self.met_io is not None:
+            try:
+                rec = getattr(self.met_io, "record_met", None)
+                if callable(rec):
+                    rec(auto_id, met)
+                return
+            except Exception:  # noqa: BLE001 —— 记失败不影响派发（落盘是决策的留痕，不是闸）
+                return
+        self._last_met[auto_id] = met
+
+    def _record_met_if_applicable(self, auto: Automation, *, met: bool) -> None:
+        """D10：只有**带 group-and 条件层**的自动化才记 `last_met`（其余无"条件维持"语义）。
+
+        `handle_event` 在条件不满（`satisfied=False`）时调这里把 `last_met` 推进成 False，
+        保证"条件打破"被记下 ⇒ 下一次满足才算跳变沿（先断后立成立）。⛔ 不给单条 state/
+        event/time 自动化记——它们不走边沿语义，记了反而会误伤旧行为。
+        """
+        if self._auto_currently_met(auto) is None:
+            return
+        self._record_met(auto.id, met)
+
+    def _record_trigger_facts(self, auto: Automation, node: Node, event: BusEvent | None) -> None:
+        """D10：触发计数记账的**唯一实现点**（spawn 出口与抑制腿共用，⛔ 不各写一份）。
+
+        计数是事实、派发是决策（D10 卡 §一）：抑制（边沿维持/冷却）也要照记，
+        所以两处都调这里。记账失败⛔ 不影响调度：吞成一行 warning（与 approve 审计同口径）。
+        """
+        if self.runtime_facts is None:
+            return
+        try:
+            trig = getattr(node, "trigger", None)
+            via = getattr(trig, "type", "") or ("queued" if event is None else "")
+            self.runtime_facts(
+                auto.id, node.id,
+                (event.entity_id if event is not None else ""),
+                via,
+            )
+        except Exception:  # noqa: BLE001 —— 记账绝不许弄死调度（吞但不静默）
+            logger.warning(
+                "RUNTIME_FACTS_TRIGGER_FAILED 触发记账失败（不影响执行） auto=%s node=%s",
+                auto.id, node.id, exc_info=True,
+            )
+
+    def _cooldown_seconds(self, auto: Automation) -> float:
+        """D10：冷却期解析——IR 元数据可配（`cooldown`），缺失取默认 10 分钟。"""
+        meta = getattr(auto, "raw", {}) or {}
+        raw = meta.get("cooldown") if isinstance(meta, Mapping) else None
+        if raw is not None:
+            try:
+                val = float(raw)
+                if val >= 0:
+                    return val
+            except (TypeError, ValueError):
+                pass
+        return DEFAULT_COOLDOWN_S
+
+    def _in_cooldown(self, auto_id: str, now: float, cooldown: float) -> bool:
+        """D10：该自动化是否仍在冷却期（距上次成功派发 < cooldown）。"""
+        last = self._cooldown.get(auto_id)
+        return last is not None and (now - last) < cooldown
+
+    def _dispatch_allowed(self, auto: Automation) -> tuple[bool, str]:
+        """D10 主闸：边沿触发（条件不满→满足才派发）＋冷却兜底。
+
+        返回 `(allowed, why)`：`allowed=False` 时 `why` 是抑制原因
+        （`edge_held`＝条件持续满足电平维持／`cooldown`＝冷却期内）。
+        触发计数照记（调用方在 spawn 出口记）——**计数是事实、派发是决策**。
+
+        ⛔ 仅对**有 group-and 条件层**的自动化生效（AC 这类"条件维持"形状）。
+        入口是单条状态/event/time/group-or/无触发 ⇒ `_auto_currently_met` 返 None ⇒
+        无"条件维持"语义，**每次事件命中即派发**（旧行为，不施加边沿/冷却）。
+
+        ⚠️ 这是**第四层闸**（装载=archived／触发=enabled／派发=本闸／执行）。
+        只在本函数加"派发"闸，⛔ 不碰 watch 装载/触发三层闸语义（台账 §1.173）。
+        """
+        # 边沿主路（优先）：求当前全条件布尔，只有 不满→满足 的跳变沿才派发。
+        # 条件仍全满足（上轮已 True）⇒ 电平维持，最直接的主语义抑制。
+        met = self._auto_currently_met(auto)
+        if met is None:
+            # 无 group-and 条件层 ⇒ 不适用边沿/冷却（无"条件维持"语义），直接放行
+            return True, ""
+        prev = self._read_last_met(auto.id)
+        self._record_met(auto.id, met)
+        if met and prev:
+            # 条件持续满足（上轮已 True）：电平维持 ⇒ 不重派（判据①边沿主路，优先级最高）
+            return False, "edge_held"
+        # 冷却兜底（只对 group-and 自动化）：新回合来得太快 ⇒ 仍不派发
+        cooldown = self._cooldown_seconds(auto)
+        now = self.clock.monotonic()
+        if self._in_cooldown(auto.id, now, cooldown):
+            return False, "cooldown"
+        return True, ""
 
     def _fire_time_triggers(self) -> list[Instance]:
         fired: list[Instance] = []

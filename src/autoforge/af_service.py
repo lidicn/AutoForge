@@ -950,8 +950,13 @@ def _runtime_facts_fields(store: GraphStore, name: str) -> dict[str, Any]:
 
     读侧 fail-soft：旁车缺/损坏/无字段 ⇒ 回落旧硬编码值（None/None/0），向后兼容。
     ⛔ 绝不让"运行事实读不出"变成"列表 500"。
+
+    D10 第二面（2026-11-06）：额外暴露 `last_met`（本轮全条件是否已成立并派发）＋
+    `last_dispatched_at`（上次派发时刻 ISO|null）——供 UI 详情页三态显示。
+    ⛔ 分层铁律：计数是事实、派发是决策——`last_met` 与 `trigger_7d` 独立，⛔ 不从计数反推。
     """
-    fallback = {"trial": None, "last_triggered": None, "trigger_7d": 0}
+    fallback = {"trial": None, "last_triggered": None, "trigger_7d": 0,
+                "last_met": None, "last_dispatched_at": None}
     try:
         from .af_runtime_facts import RuntimeFacts
 
@@ -960,6 +965,8 @@ def _runtime_facts_fields(store: GraphStore, name: str) -> dict[str, Any]:
             "trial": snap.get("trial"),
             "last_triggered": snap.get("last_triggered"),
             "trigger_7d": int(snap.get("trigger_7d") or 0),
+            "last_met": snap.get("last_met"),
+            "last_dispatched_at": snap.get("last_dispatched_at"),
         }
     except Exception as exc:  # noqa: BLE001
         logger.debug("RUNTIME_FACTS_READ_FAILED archive=%r err=%r", name, exc)
@@ -2778,7 +2785,11 @@ def _dispatch_verdict(runtime) -> dict[str, Any]:
     / `af_action_dispatched` 是唯一执行真值源，从那儿算。
     """
     audit = [e.to_dict() if hasattr(e, "to_dict") else dict(e) for e in runtime.audit]
-    dispatched = [a for a in audit if a.get("type") == "af_action_dispatched"]
+    # AF-738（2026-11-06）：`af_action_dispatched` 由影子/干预层在"要发"时写，而 `live_run`
+    # 不接影子层 ⇒ 只认它会恒报 `nothing_dispatched`（真实下发看不见的假红）。
+    # 执行器现在在**真调用适配器**那一刻写 `af_action_called`（watch 与单发都有）⇒ 优先认它。
+    called = [a for a in audit if a.get("type") == "af_action_called"]
+    dispatched = called or [a for a in audit if a.get("type") == "af_action_dispatched"]
     failed = [a for a in audit if a.get("type") == "action_failed"]
     # 审计 AF-301：我上一版写出 `"failed" if dispatched else "failed"` 这种两支同值的
     # 退化三元——读起来像有分支、实际没有，而且注释承诺过 partially 档却永远出不了。
@@ -2792,6 +2803,11 @@ def _dispatch_verdict(runtime) -> dict[str, Any]:
         verdict = "executed"
     else:
         verdict = "nothing_dispatched"
+    # AF-738 补：`dispatched` 是「尝试下发」数，`failed` 是其中失败数。**一次尝试一次失败**
+    # 必须报 `failed`，⛔ 不许因为「尝试数>0 且 失败数>0」就报 partially_failed（那是把单次失败
+    # 说成"有成功有失败"）。partially_failed 只在**确有成功**时成立。
+    if verdict == "partially_failed" and len(dispatched) <= len(failed):
+        verdict = "failed"
     return {
         "verdict": verdict,
         "dispatched": len(dispatched),

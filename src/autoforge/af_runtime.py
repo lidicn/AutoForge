@@ -109,12 +109,32 @@ class Runtime:
                     entity_id=entity_id, via=via,
                 )
 
+            def _read_last_met(automation_id):
+                # D10（2026-11-06）：读上轮全条件布尔（落盘）。缺/损坏 ⇒ None（无历史）。
+                return _facts_for(automation_id).snapshot().get("last_met")
+
+            def _record_met(automation_id, met):
+                # D10：记本轮全条件布尔（落盘，FileLock+原子替换；记失败⛔ 不影响派发）。
+                _facts_for(automation_id).record_met(met=bool(met))
+
+            class _MetIO:
+                """D10：scheduler 边沿触发的 last_met 事实 IO 适配。"""
+
+                @staticmethod
+                def read_last_met(automation_id):
+                    return _read_last_met(automation_id)
+
+                @staticmethod
+                def record_met(automation_id, met):
+                    _record_met(automation_id, met)
+
             def _record_trial(state, automation_id):
                 _facts_for(automation_id).record_trial(
                     state=state, automation_id=automation_id,
                 )
 
             self.scheduler.runtime_facts = _record_trigger
+            self.scheduler.met_io = _MetIO
             self.executor.runtime_facts = _record_trial
         # v0.4.0：`emit` 发布的事件必须驱动 `on event` 订阅者（发布 → 订阅闭环）
         self.executor.on_emit = self.scheduler.handle_event

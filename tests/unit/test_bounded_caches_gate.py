@@ -678,6 +678,12 @@ def test_real_repo_measurements_are_pinned():
     基线 114 → 113（裁定 20261011 §3 Q3 乙）：`af_auth.py::TokenRegistry._revoked` 从基线移出，改进
     `MONOTONIC_PERSISTENT_SETS`。挪走的不是数字，是**性质**——基线冻的是"这一枚先当作有界的存量"，
     而撤销黑名单按设计无界且不许淘汰（裁掉一条 = 那个 jti 可能重新被接受）。
+
+    扫到 134 → 136（v1.27 D10，2026-11-06）：`af_scheduler.py::Scheduler._cooldown`／`._last_met`
+    是 D10 派发闸的两枚**按自动化 id 记账**的内存表（键＝自动化 id、成员数上界＝图内自动化总数、
+    覆盖写不新增键），声明行带就地豁免标记（⛔ 不进注册表：两枚都不给 TTL——冷却到点前抹掉会让
+    自动化立刻重派、等于把冷却关了；`_last_met` 的落盘持久化由 `met_io` 管，内存版只是 serve
+    未接线时的单测退回）。封顶与语义腿见 `tests/unit/test_dispatch_cooldown_gate_20261106.py`。
     """
     gate = _gate()
     src = ROOT / "src" / "autoforge"
@@ -687,7 +693,7 @@ def test_real_repo_measurements_are_pinned():
     # 批 2（D6）：TokenRegistry._issued（运行期签发令牌摘要索引）登记进 BOUNDED_CACHES
     # （cap=MAX_ISSUED / ttl=ISSUED_TTL_S / trim=_purge_expired_locked）⇒ bounded 5→6、扫到容器 133→134。
     assert len(bounded) == 6 and len(fixed) == 3
-    assert len(containers) == 134 and len(gate.BASELINE) == 113
+    assert len(containers) == 136 and len(gate.BASELINE) == 113
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"
