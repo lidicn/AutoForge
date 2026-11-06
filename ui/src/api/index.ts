@@ -46,6 +46,7 @@ export const facade = {
   revokeBySubject: (subject: string) => api.revokeBySubject(subject),
   issueAgentToken: (agent_name: string) => api.issueAgentToken(agent_name),
   liveStatus: () => api.liveStatus(),
+  automationDetail: (name: string) => api.automationDetail(name),
   liveRun: (ir: unknown, live_allow: string[], confirm: boolean, events?: unknown[], undo?: boolean, auth_code?: string) =>
     api.liveRun(ir, live_allow, confirm, events, undo, auth_code),
   // F7 撤销（无 mock 夹具：撤销会写真机，mock 环境不该出现这个动作）
