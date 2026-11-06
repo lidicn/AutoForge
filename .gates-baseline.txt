@@ -83,3 +83,4 @@ src/autoforge/af_mcp.py#fake-ok-const#_t_deploy
 src/autoforge/af_mcp.py#fake-ok-const#_t_deploy_status
 src/autoforge/af_service.py#fake-ok-const#stop_watch
 src/autoforge/af_api.py#fake-ok-const#build_app.api_system_version
+src/autoforge/af_service.py#fake-ok-const#live_run_receipts
