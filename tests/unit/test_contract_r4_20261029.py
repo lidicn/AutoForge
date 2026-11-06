@@ -95,10 +95,20 @@ def test_verdict_nothing_when_no_do_ran():
 
 
 def test_verdict_counts_both_when_partial():
-    out = _dispatch_verdict(_FakeRuntime(["af_action_dispatched", "action_failed"]))
+    out = _dispatch_verdict(_FakeRuntime(
+        ["af_action_dispatched", "af_action_dispatched", "action_failed"]
+    ))
     # AF-301（审计）后：部分失败是独立档。旧断言期望 "failed"——那是退化三元
     # 时代的形状（两支同值把 mixed 吞进 failed）。
-    assert out["verdict"] == "partially_failed" and out["dispatched"] == 1 and out["failed"] == 1
+    # AF-738 翻新（2026-11-06）：dispatched 是**尝试**数、failed 是失败数；
+    # 「一次尝试一次失败」是全败 ⇒ failed，⛔ 不许冒充部分失败。混合档须确有成功（2 发 1 败）。
+    assert out["verdict"] == "partially_failed" and out["dispatched"] == 2 and out["failed"] == 1
+
+
+def test_verdict_single_attempt_failure_is_total_failure():
+    """AF-738 反证腿：1 发 1 败＝全败（⛔ 不许报 partially_failed）。"""
+    out = _dispatch_verdict(_FakeRuntime(["af_action_dispatched", "action_failed"]))
+    assert out["verdict"] == "failed" and out["dispatched"] == 1 and out["failed"] == 1
 
 
 def test_service_error_still_carries_status():
@@ -145,10 +155,17 @@ def test_enable_by_tag_warns_about_fake_armed(tmp_path):
     # 结果落在 watch_reconcile；watch_note 只在禁用时说话。
     assert "watch_reconcile" in out, "启用必须回报监听对账结果"
     assert out["watch_reconcile"] is not None and out["watch_reconcile"]["action"]
-    # 禁用方案 A 后的契约：不碰监听 ⇒ `watch_reconcile` 必为 None（"没做"要说没做），
-    # watch_note 转为解释"禁用不触碰监听"。旧断言（禁用时 note 为 None）已被裁定 A 取代。
+    # D4 翻新（2026-11-05 实证＋PM 拍「先停后起」）：禁用**不再**是"不碰监听"——
+    # 旧语义（禁用 watch_reconcile 必为 None）正是今天上午的真机事故根因：watch 内存
+    # 咬着旧快照、被禁用的档继续触发（08:39-08:40 三次实证）。新契约：禁用也回报对账，
+    # 形状 = {action: none_running（本来就没在跑）| stopped（只停不起）| restarted（停旧起新）}
+    # | stop_failed（停不动如实报）；watch_note 说明"禁用会重装监听"。
     out2 = enable_by_tag(store, "qa_r4", False, allow_bulk=False)
-    assert out2.get("watch_reconcile") is None, "禁用不该去动监听，也不该假装动了"
+    rec = out2.get("watch_reconcile")
+    assert rec is not None and rec.get("action") in (
+        "none_running", "stopped", "restarted", "stop_failed",
+    ), f"禁用必须回报监听对账（D4），实得 {rec!r}"
+    assert out2.get("watch_note"), "禁用要用 watch_note 说明重装语义"
 
 
 def test_live_run_uses_unified_token_not_env_only(tmp_path, monkeypatch):
@@ -237,7 +254,11 @@ def test_enable_needs_code_disable_does_not(tmp_path):
     assert on["ok"] is False and on["code"] == "ADM_ERR_AUTH_REQUIRED"
     off = _gate_call("af_enable_by_tag", {"tag": "qa", "enabled": False}, tmp_path)
     assert off["ok"] is True, "禁用被码闸挡住＝故障时无法止损"
-    assert off.get("watch_reconcile") is None, "禁用不该去动监听（也不该假装动了）"
+    # D4 翻新（2026-11-05）：禁用免码不变，但对账回报必须有（先停后起/只停不起）
+    rec = off.get("watch_reconcile")
+    assert rec is not None and rec.get("action") in ("none_running", "stopped", "restarted", "stop_failed"), (
+        f"禁用必须回报监听对账（D4），实得 {rec!r}"
+    )
 
 
 def test_bad_code_is_refused_without_revealing_why(tmp_path, monkeypatch):
