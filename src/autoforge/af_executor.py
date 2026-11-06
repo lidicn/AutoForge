@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
@@ -60,7 +61,36 @@ __all__ = [
     "CAP_WARNING",
     "classify_answer",
     "EMIT_TIMER_KIND",
+    "SPEECH_TEMPLATE_PLACEHOLDERS",
+    "render_speech_template",
 ]
+
+# ── D11（2026-11-06）：播报文案模板 ─────────────────────────────────────
+#: `speech_template` 支持的占位符**白名单**（初始只 `{temperature}`）。
+#: ⚠️ 这份清单是 UI 侧编辑器校验的唯一真源：新增占位符必须同批给 AF-UI，
+#: ⛔ 两边各编一套（卡面「占位符白名单以 Core 落 DSL 时给的清单为准」）。
+SPEECH_TEMPLATE_PLACEHOLDERS = frozenset({"temperature"})
+
+#: 模板占位符语法：`{name}`，name 为标识符。**只认白名单**——未知占位符一律视为"渲不出来"，
+#: 由调用方回退静态文案（fail-closed：⛔ 不播占位符原文、⛔ 不播 unknown）。
+_SPEECH_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def render_speech_template(template: str, values: Mapping[str, str]) -> str | None:
+    """把模板里的白名单占位符换成实时值；渲不出来返回 `None`（调用方回退静态文案）。
+
+    纯函数（不碰状态源）：值由调用方解析好后传入，便于单测与"实体不可读"分支独立验证。
+    返回 None 的三种情形：① 出现白名单外的占位符 ② 有占位符缺值 ③ 模板为空/非字符串。
+    """
+    if not isinstance(template, str) or not template.strip():
+        return None
+    names = set(_SPEECH_PLACEHOLDER_RE.findall(template))
+    if not names or not names <= SPEECH_TEMPLATE_PLACEHOLDERS:
+        return None
+    for name in names:
+        if values.get(name) in (None, ""):
+            return None
+    return _SPEECH_PLACEHOLDER_RE.sub(lambda m: str(values[m.group(1)]), template)
 
 #: 求值段最大步数——静态图死循环的最后一道防线（静态扫描应提前拦住）
 MAX_STEPS_PER_SEGMENT = 1000
@@ -1176,6 +1206,46 @@ class NodeExecutor:
     # ─────────────────────────────────────────────────────────────────
     # v0.3.0 跨自动化事件 · 发布侧（IR §4.3）
     # ─────────────────────────────────────────────────────────────────
+    def _speech_template_text(self, node: Node, fallback_entity_id: str) -> str | None:
+        """D11：渲染节点 `speech_template`（实时值插值）；渲不出来返回 `None`（回退静态文案）。
+
+        实体源顺序：节点 `speech_entity`（显式指定，如杜克温度计）→ `fallback_entity_id`
+        （do 的目标实体／emit 载荷里的 entity_id）。读数顺序：先 `<实体>.<占位符>` 属性
+        （climate 的 `temperature` 在 attributes 里），再退实体状态值（sensor 的 state 就是读数）。
+
+        ⛔ fail-closed 三禁：不假装读数（读不到就 None）、不播占位符原文、不播「unknown」。
+        ⛔ 纯旁路：任何异常都返回 None，绝不改 do/emit 的核心行为。
+        """
+        raw_tpl = node.raw.get("speech_template")
+        if not isinstance(raw_tpl, str) or not raw_tpl.strip():
+            return None
+        src = str(node.raw.get("speech_entity") or "").strip() or str(fallback_entity_id or "").strip()
+        if not src or self.states is None:
+            return None
+        names = set(_SPEECH_PLACEHOLDER_RE.findall(raw_tpl))
+        if not names or not names <= SPEECH_TEMPLATE_PLACEHOLDERS:
+            return None
+        try:
+            snap = self.states.snapshot([src])
+        except Exception:  # noqa: BLE001 —— 实体不可读 ⇒ 回退静态（fail-closed）
+            return None
+        values: dict[str, str] = {}
+        for name in names:
+            val: Any = None
+            try:
+                val = snap.get(f"{src}.{name}")  # 属性形态：`climate.x.temperature`
+            except Exception:  # noqa: BLE001 —— 没有该属性 ⇒ 退到状态值
+                val = None
+            if val is None or val == "":
+                try:
+                    val = snap.get(src)  # 状态值形态：`sensor.x` 的 state 就是读数
+                except Exception:  # noqa: BLE001
+                    return None
+            if val is None or val == "":
+                return None
+            values[name] = str(val)
+        return render_speech_template(raw_tpl, values)
+
     def _speak_for_emit(self, instance: Instance, node: Node, data: dict) -> None:
         """emit 播报（AF-PM 裁定 2026-11-05）：与 do 同源钩子，共用 room 反查＋area 解析。
 
@@ -1185,7 +1255,11 @@ class NodeExecutor:
         """
         if self.on_emit_speak is None:
             return
-        text = str(node.raw.get("announce") or "").strip()
+        entity_id = str((data.get("entity_id") if isinstance(data, dict) else "") or "")
+        # D11：模板优先（实时值插值）；渲不出来（实体不可读/未知占位符）⇒ 回退下面的静态文案
+        text = self._speech_template_text(node, entity_id) or ""
+        if not text:
+            text = str(node.raw.get("announce") or "").strip()
         if not text:
             auto_name = str(getattr(instance.automation, "name", "") or instance.automation.id)
             event = ""
@@ -1193,7 +1267,6 @@ class NodeExecutor:
                 event = str(node.emit.event or "")
             text = f"{auto_name}：{event or node.id}"
         room = str(node.room or (data.get("room") if isinstance(data, dict) else "") or "")
-        entity_id = str((data.get("entity_id") if isinstance(data, dict) else "") or "")
         try:
             self.on_emit_speak(str(instance.instance_id), text, room, entity_id)
         except Exception:  # noqa: BLE001 —— 播报旁路失败绝不改 emit 行为
@@ -1214,17 +1287,20 @@ class NodeExecutor:
         """
         if self.on_do_speak is None or dry_run:
             return
-        text = str(node.raw.get("announce") or "").strip()
-        if not text:
-            auto_name = str(getattr(instance.automation, "name", "") or instance.automation.id)
-            node_name = str(node.name or node.id)
-            text = f"{auto_name}：{node_name}"
         # 目标实体：HA 原生 `target.{entity_id}` 形态也要认（IR §7.1 安全约定要求两者都解析）
         entity_id = str((node.params or {}).get("entity_id") or "").strip()
         if not entity_id:
             target = (node.params or {}).get("target")
             if isinstance(target, dict):
                 entity_id = str(target.get("entity_id") or "").strip()
+        # D11：模板优先（实时值插值）；渲不出来 ⇒ 回退下面的静态文案
+        text = self._speech_template_text(node, entity_id) or ""
+        if not text:
+            text = str(node.raw.get("announce") or "").strip()
+        if not text:
+            auto_name = str(getattr(instance.automation, "name", "") or instance.automation.id)
+            node_name = str(node.name or node.id)
+            text = f"{auto_name}：{node_name}"
         try:
             self.on_do_speak(
                 str(instance.instance_id), text, str(node.room or ""), entity_id,

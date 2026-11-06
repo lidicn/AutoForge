@@ -77,7 +77,11 @@ _OPTION_KEYWORDS = (
 _NODE_FIELDS: dict[str, tuple[str, ...]] = {
     "on": ("for", "debounce", "emit", "name"),
     "if": ("name", "emit"),
-    "do": ("atomic", "confirm", "requires_confirm", "canary", "result", "emit", "name"),
+    # D11（2026-11-06）：`speech_template`＝播报文案模板（占位符 `{temperature}` 等，触发时填实时值）；
+    # `speech_entity`＝模板读数的实体源（缺省用节点目标实体 ⇒ 读 `<实体>.temperature` 属性、再退状态值）。
+    # 与 `announce`（静态文案）区分：模板支持传感器实时值插值；实体不可读回退静态（fail-closed）。
+    "do": ("atomic", "confirm", "requires_confirm", "canary", "result", "emit", "name",
+           "speech_template", "speech_entity"),
     "ask": ("room", "timeout", "session", "emit", "name", "ask"),
     "wait": ("name", "emit"),
     "set": ("name", "emit"),
@@ -327,6 +331,14 @@ def _parse_node(kind: str, tokens: list[str], lineno: int) -> dict[str, Any]:
             elif tok == "name":
                 i += 1
                 data["name"] = _str(take("name 值"))
+            elif tok == "speech_template":
+                # D11（2026-11-06）：播报文案模板（含 `{temperature}` 等白名单占位符）
+                i += 1
+                data["speech_template"] = _str(take("speech_template 模板文本"))
+            elif tok == "speech_entity":
+                # D11：模板读数的实体源（缺省用节点目标实体）
+                i += 1
+                data["speech_entity"] = _str(take("speech_entity 实体 id"))
             else:
                 raise SpecError(
                     f"第 {lineno} 行：do 节点多余 token {tok!r}",
@@ -500,6 +512,11 @@ def _render_node(node: Any) -> str:
             parts += ["canary", _dumps(raw["canary"])]
         if "result_var" in raw:
             parts += ["result", _dumps(raw["result_var"])]
+        # D11（2026-11-06）：播报模板与实体源必须能 render 回去（编辑器 round-trip 不断链）
+        if raw.get("speech_template"):
+            parts += ["speech_template", _dumps(raw["speech_template"])]
+        if raw.get("speech_entity"):
+            parts += ["speech_entity", _dumps(raw["speech_entity"])]
     elif node.kind == "ask":
         parts.append(_dumps(raw.get("prompt", "")))
         for key in ("room", "timeout", "session"):

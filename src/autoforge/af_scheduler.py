@@ -107,12 +107,10 @@ class Scheduler:
         #: ⇒ 计数照记＋`INSTANCE_COOLDOWNED` 审计、不 spawn（卡名 AF卡_dispatch_cooldown）。
         #: ⛔ 这是内存态（重启即空）：`last_met` 落盘由 `runtime_facts.record_met` 管，
         #: 冷却本身不落盘——重启后首轮无冷却（可接受：冷却只是高频念叨的兜底，边沿触发是主闸）。
-        # bounded-cache: exempt(冷却起点：键＝自动化 id，成员数上界＝图里自动化总数（有界），每次派发覆盖写、同 id 不新增键；无 TTL 腿——到点前抹掉会让自动化立刻重派，等于把冷却关了，所以不进 BOUNDED_CACHES 给一条不存在的腿盖章)
-        self._cooldown: dict[str, float] = {}
+        self._cooldown: dict[str, float] = {}  # bounded-cache: exempt(冷却起点：键＝自动化 id，成员数上界＝图里自动化总数（有界），每次派发覆盖写、同 id 不新增键；无 TTL 腿——到点前抹掉会让自动化立刻重派，等于把冷却关了，所以不进 BOUNDED_CACHES 给一条不存在的腿盖章)
         #: D10：内存版 `last_met`（上轮全条件布尔）。`met_io` 未注入（单测/无 store）时用这个；
         #: 注入了 `met_io` ⇒ 读写都走它（`af_runtime` 落盘），本 dict 不参与。
-        # bounded-cache: exempt(边沿触发内存 last_met：键＝自动化 id，成员数上界＝图里自动化总数（有界），覆盖写不增长；无 TTL 腿——它的落盘持久化由 `met_io` 管，内存版只是 serve 未接线时的单测退回，不配 TTL 语义，所以不进 BOUNDED_CACHES 给一条不存在的腿盖章)
-        self._last_met: dict[str, bool] = {}
+        self._last_met: dict[str, bool] = {}  # bounded-cache: exempt(边沿触发内存 last_met：键＝自动化 id，成员数上界＝图里自动化总数（有界），覆盖写不增长；无 TTL 腿——落盘持久化由 met_io 管，内存版只是 serve 未接线时的单测退回，不配 TTL 语义，所以不进 BOUNDED_CACHES 给一条不存在的腿盖章)
 
     # ─────────────────────────────────────────────────────────────────
     # 事件入口
