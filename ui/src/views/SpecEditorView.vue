@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   NAlert,
   NButton,
@@ -15,6 +15,7 @@ import {
   NSpace,
   NSpin,
   NTag,
+  NText,
   NThing,
   useMessage,
 } from 'naive-ui'
@@ -226,6 +227,69 @@ function applyExpects() {
   expectDirty.value = false
   message.success('expect 已写入编辑器，请重新编译验证')
 }
+
+// ── v1.27 D11：播报文案模板（speech_template / speech_entity）──
+// 占位符白名单的**唯一真源**在后端 `autoforge.af_executor.SPEECH_TEMPLATE_PLACEHOLDERS`
+// （AF-Core 契约：初始 {"temperature"}）。这里镜像同一清单做本地校验，⛔ 不各编一套：
+// 要加占位符 ⇒ 与 Core 同批改（他改常量、我改这份镜像）。
+const SPEECH_PLACEHOLDERS = ['temperature'] as const
+
+const speechNodeId = ref<string | null>(null)
+const speechTemplate = ref('')
+const speechEntity = ref('')
+
+const speechNodes = computed(() => {
+  const nodes = ((result.value?.ir as unknown as { nodes?: unknown[] } | null)?.nodes ?? []) as Array<{
+    id?: string
+    kind?: string
+    name?: string
+  }>
+  return nodes
+    .filter((n) => ['do', 'ask', 'pass'].includes(String(n.kind)))
+    .map((n) => ({
+      label: `${n.id} · ${n.kind}${n.name ? ' · ' + n.name : ''}`,
+      value: String(n.id),
+    }))
+})
+
+const speechUnknown = computed(() => {
+  const used = new Set<string>()
+  for (const m of speechTemplate.value.matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g)) used.add(m[1])
+  return [...used].filter((name) => !(SPEECH_PLACEHOLDERS as readonly string[]).includes(name))
+})
+
+/** 预览：已登记占位符用样例值替换，未登记的保持原样（同时会被红字拦住不允许写入） */
+const speechPreview = computed(() =>
+  speechTemplate.value.replace(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g, (all, name: string) => {
+    if (!(SPEECH_PLACEHOLDERS as readonly string[]).includes(name)) return all
+    return name === 'temperature' ? '26.0' : `<${name}>`
+  }),
+)
+
+/** 把模板写到该节点行尾（替换旧值、⛔ 不动该行其它内容、⛔ 不重排全文） */
+function applySpeechTemplate () {
+  const nodeId = speechNodeId.value
+  const tpl = speechTemplate.value.trim()
+  if (!nodeId) { message.warning('先选择一个节点（do/ask/pass）'); return }
+  if (!tpl) { message.warning('模板不能为空'); return }
+  if (speechUnknown.value.length) {
+    message.error(`未登记占位符：${speechUnknown.value.join('、')}（白名单：{temperature}）`)
+    return
+  }
+  const lines = specText.value.split('\n')
+  const re = new RegExp(`^\\s*${nodeId}\\s`)
+  const hit = lines.findIndex((l) => re.test(l))
+  if (hit === -1) { message.error(`编辑器里找不到节点行：${nodeId}`); return }
+  let line = lines[hit]
+    .replace(/\s+speech_template\s+"(?:[^"\\]|\\.)*"/g, '')
+    .replace(/\s+speech_entity\s+"(?:[^"\\]|\\.)*"/g, '')
+  line = line.trimEnd() + ` speech_template ${JSON.stringify(tpl)}`
+  const ent = speechEntity.value.trim()
+  if (ent) line += ` speech_entity ${JSON.stringify(ent)}`
+  lines[hit] = line
+  specText.value = lines.join('\n')
+  message.success('模板已写入该节点行，请重新编译验证 round-trip')
+}
 </script>
 
 <template>
@@ -242,6 +306,42 @@ function applyExpects() {
           <n-space style="margin-top: 12px">
             <n-button type="primary" :loading="loading" @click="compile">▶ 编译</n-button>
             <n-button :loading="binding" :disabled="!result?.ir" @click="bindDevices">🔗 绑定设备</n-button>
+          </n-space>
+        </n-card>
+
+        <!-- v1.27 D11：播报文案模板（IR 字段 speech_template / speech_entity，DSL 关键字同名） -->
+        <n-card title="播报文案模板" :bordered="false" class="block" style="margin-top: 16px">
+          <p class="expect-hint">
+            写进选中节点行尾：<code>speech_template "…"</code>（可选 <code>speech_entity "…"</code>）。
+            触发时读实时值填入；实体不可读或占位符未登记 ⇒ 后端回退静态文案。
+          </p>
+          <n-space vertical :size="10">
+            <n-select
+              v-model:value="speechNodeId"
+              :options="speechNodes"
+              placeholder="选择节点（do / ask / pass）——选项来自最近一次编译结果"
+              clearable
+            />
+            <n-input
+              v-model:value="speechTemplate"
+              type="textarea"
+              :rows="3"
+              placeholder="例：当前书房温度是 {temperature} 度，已经帮你设置空调为制冷模式26摄氏度"
+            />
+            <n-input
+              v-model:value="speechEntity"
+              placeholder="读数实体源（可选），例：sensor.duke_th2；不填则退回该节点目标实体"
+            />
+            <n-text v-if="speechUnknown.length" type="error" style="font-size: 12px">
+              未登记占位符：{{ speechUnknown.join('、') }}（白名单：{temperature}）⇒ 写入被禁用
+            </n-text>
+            <n-text v-else-if="speechTemplate" depth="3" style="font-size: 12px">
+              预览（样例值）：{{ speechPreview }}
+            </n-text>
+            <n-button
+              :disabled="!speechNodeId || !speechTemplate.trim() || speechUnknown.length > 0"
+              @click="applySpeechTemplate"
+            >写入该节点行</n-button>
           </n-space>
         </n-card>
 
