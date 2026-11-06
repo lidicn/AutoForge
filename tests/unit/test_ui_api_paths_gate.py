@@ -471,9 +471,10 @@ def test_real_ui_and_src_are_clean_and_counted():
     assert mod.check(sites, routes) == []
     # 批 3：新增 revokeBySubject 一枚 /auth/revoke 调用点 ⇒ sites 61→62、live 59→60。
     # DB-09：client.ts issueAgentToken 一枚 POST /user/agent-token ⇒ sites 62→63、live 60→61。
-    assert len(sites) == 63 and len(excluded) == 2
+    # v1.27（D10 触发沿徽标）：AutomationDetailView 新增 /api/automations/{name} 读取 ⇒ sites 63→64、live 61→62。
+    assert len(sites) == 64 and len(excluded) == 2
     live = [s for s in sites if "transport" not in s["kinds"]]
-    assert len(live) == 61 and len(sites) - len(live) == 2   # +2 = `api/client.ts` 的 `fetch`/`authRequest` 两枚包装
+    assert len(live) == 62 and len(sites) - len(live) == 2   # +2 = `api/client.ts` 的 `fetch`/`authRequest` 两枚包装
     mounted = sum(1 for r in routes if r["how"] == "add_api_route")
     assert mounted == 5                              # af_conflict_runtime._ROUTES
     assert len(routes) - mounted + len(excluded) == 94   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（现读 94；批 4 +POST /api/user/agent-token，批 5 +POST /api/user/pair-link +GET /pair ⇒ +3）
@@ -659,7 +660,8 @@ def test_all_trees_of_this_repo_are_in_scope_and_green(capsys):
     # （client.ts revokeBySubject）⇒ ui 59 → 60。
     # 批 5（D10）：mimo PairingModal 改调 owner 面 POST /api/user/pair-link ⇒ mimo 22 → 23。
     # DB-09：GovernanceView 加签发开发者令牌卡，client.ts issueAgentToken → POST /user/agent-token ⇒ ui 60 → 61。
-    for name in ("ui 61", "ui-user 19", "ui-user-mimo 23"):
+    # v1.27（D10 触发沿徽标）：AutomationDetailView 新增 /api/automations/{name} 读取（运行期卡）⇒ ui 61 → 62。
+    for name in ("ui 62", "ui-user 19", "ui-user-mimo 23"):
         assert name in out, out
     assert "传输层包装 4 处" in out, out
     assert "SSE 建流 2 处" in out, out
