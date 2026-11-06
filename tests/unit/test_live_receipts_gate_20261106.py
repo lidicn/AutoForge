@@ -118,8 +118,30 @@ def test_d3_empty_ledger_is_empty_not_error(tmp_path):
     out = svc.live_run_receipts(str(tmp_path), caller="alice", caller_is_owner=True)
     assert out["ok"] is True and out["items"] == [] and out["count"] == 0
     assert "read_error" not in out, "文件还没生成＝空，⛔ 不是读失败"
-    # 无 store 才是"读不了"，且如实报
-    assert svc.live_run_receipts(None)["read_error"] == "no_store"
+    # 无 store 才是"读不了"，且如实报（ok 必须 False——三档不许压成两档）
+    none_out = svc.live_run_receipts(None)
+    assert none_out["ok"] is False and none_out["read_error"] == "no_store"
+
+
+def test_d3_unreadable_ledger_gets_its_own_tier(tmp_path, monkeypatch):
+    """第三档（AF-UI 2026-11-07 校准）：台账存在但读不出 ⇒ `ok:false` ＋ 具名 `read_error`。
+
+    反证腿：修前 `read_jsonl_bounded` 的 fail-soft 会把它压成"空表 ＋ ok:true"，
+    UI 就分不清"没有回执"与"台账读不出"——本腿把那两档钉开。
+    """
+    _write_ledger(tmp_path, [_event("alice", at="2026-11-06T22:00:00+00:00", graph=["图"], actions=1)])
+    real_read = Path.read_text
+
+    def _boom(self, *a, **kw):
+        if self.name == DEPLOY_AUDIT_FILE:
+            raise OSError("simulated unreadable ledger")
+        return real_read(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", _boom)
+    out = svc.live_run_receipts(str(tmp_path), caller="alice", caller_is_owner=True)
+    assert out["ok"] is False, "读不出必须如实 ok=false，⛔ 不许压成空表"
+    assert out["items"] == [] and out["count"] == 0
+    assert str(out["read_error"]).startswith("ledger_unreadable:"), out["read_error"]
 
 
 # ── D4 limit 边界（默认 20 / 下限回默认 / 上限钳 100）─────────────────

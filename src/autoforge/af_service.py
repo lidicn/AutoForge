@@ -3240,12 +3240,35 @@ def live_run_receipts(
     n = min(n, LIVE_RECEIPTS_MAX)
 
     from .af_audit import DEPLOY_AUDIT_FILE
-    from .af_store import read_jsonl_bounded
 
     path = Path(store_root) / DEPLOY_AUDIT_FILE
-    # 同一份台账里还混着部署仪式事件 ⇒ 先多读窗口，再在内存里按类型筛。
-    rows = read_jsonl_bounded(path, limit=max(n * 5, 200))
-    events = [row for row in rows if str(row.get("type") or "") == "LIVE_RUN_EXECUTED"]
+    # 三档要在**同一个出口**分开（⛔ 不给缺文件那一档单独 `return {"ok": True}`：字面量 ok
+    # 会被 AST 棘轮判成 fake-ok，而且多出口正是"两档被压成一档"的老形状）：
+    # 缺文件 ⇒ `text=None` ⇒ 空表（ok 由后面的不变式算）；OSError ⇒ 显式 `read_error`。
+    text: str | None = None
+    if path.is_file():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            # v1.28 R3 补（AF-UI 2026-11-07 校准）：此前 `read_jsonl_bounded` 的 fail-soft 会把
+            # "台账读不出"与"没有回执"压成同一个空表，UI 无法分辨 ⇒ 这里显式冒出来给第三档。
+            return {
+                "ok": False,
+                "count": 0,
+                "items": [],
+                "read_error": f"ledger_unreadable:{type(exc).__name__}",
+            }
+    events: list[dict[str, Any]] = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue  # 坏行跳过：台账是 append-only 流水，单行损坏不该让整份读数变空
+        if isinstance(row, dict) and str(row.get("type") or "") == "LIVE_RUN_EXECUTED":
+            events.append(row)
     total = len(events)
     visible: list[dict[str, Any]] = []
     for event in reversed(events):  # 落盘是时间序 ⇒ 倒序即"新→旧"
