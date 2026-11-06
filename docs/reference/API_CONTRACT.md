@@ -8,7 +8,7 @@
 |---|---|
 | 发布树版本（`autoforge.__version__`，取自本次生成所用源码树） | `1.27.0` |
 | 生成时线上实例 OpenAPI 版本 | `1.27.0`（⛔ **不作发布版号**：发布那一刻线上还跑着上一版；部署后自动对齐） |
-| 路径数／操作数 | **88 路径／94 操作** |
+| 路径数／操作数 | **89 路径／95 操作** |
 | 认证方案 | `securitySchemes` = {"HTTPBearer": {"type": "http", "scheme": "bearer"}} |
 | 权限面列来源 | `af_api.py` 的 `Depends(_read/_write/_live/_admin/_readonly_guard)` 现读 |
 | `audit[].type` | **27 枚**（`af_audit.ALL_EVENT_TYPES` 现读逐枚相等） |
@@ -35,13 +35,6 @@ Base：`http://<host>:8787`（NAS 部署：`http://192.168.2.200:8787`）
 | `POST` | `/api/asks/answer` | write | 写答案到 watch 的 answer_inbox（由 watch ticker 注入 runtime）。 |
 | `GET` | `/api/asks/pending` | read | 读 watch 进程写出的 pending_asks sidecar（供 DB 轮询发现挂起 ask）。 |
 | `GET` | `/api/asks/{name}` | read | 读取归档内 ask 节点的控件元数据（AF-730 ⑬：与 graphs/{name} 同一单源闸）。 |
-
-> **v1.28 R1（ask 双向桥）契约增量**：`/api/asks` 与 `/api/asks/pending` **同形**新增顶层
-> `answered` 数组——最近 **5** 条已应答 ask（新→旧，各含 `answered_via`＋`answered_at`），
-> 正源是 `<archive>.runtime.json` 的 `ask_answers` 环形（运行期事实旁车，复用既有设施）。
-> 在途 `asks[]` 每项另增 `answered_via`：仅在"已答未消费"时带值，缺省 `None`（UI 缺字段不显示）。
-> `answered_via ∈ {"xiaomi","webui"}`（DCD 裁定 2026-11-04 §2.3 C4/C5：分类归 DB，AF 打来源标）。
-> MQTT 侧：AF 发 `af/ask/pending`（C1，QoS=1 不 retain），订 `af/ask/answer`（C2）。
 
 ### auth（登录/令牌/主体）
 

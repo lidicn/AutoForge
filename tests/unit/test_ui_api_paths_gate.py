@@ -477,8 +477,8 @@ def test_real_ui_and_src_are_clean_and_counted():
     assert len(live) == 62 and len(sites) - len(live) == 2   # +2 = `api/client.ts` 的 `fetch`/`authRequest` 两枚包装
     mounted = sum(1 for r in routes if r["how"] == "add_api_route")
     assert mounted == 5                              # af_conflict_runtime._ROUTES
-    assert len(routes) - mounted + len(excluded) == 94   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（现读 94；批 4 +POST /api/user/agent-token，批 5 +POST /api/user/pair-link +GET /pair ⇒ +3）
-    assert len(routes) == 97                          # 92 条参与匹配的装饰器路由 + 5 挂载表（af_api 的装饰器行共 94＝92＋被排除的 /mcp 与 /{full_path:path}）
+    assert len(routes) - mounted + len(excluded) == 95   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（现读 95；批 4 +POST /api/user/agent-token，批 5 +POST /api/user/pair-link +GET /pair ⇒ +3）
+    assert len(routes) == 98                          # 93 条参与匹配的装饰器路由 + 5 挂载表（af_api 的装饰器行共 95＝93＋被排除的 /mcp 与 /{full_path:path}）
     assert boundary == ["src/autoforge/af_runtime_plugins.py"]
     assert sum(1 for s in sites if s["exempt"]) == 0
 
@@ -665,7 +665,7 @@ def test_all_trees_of_this_repo_are_in_scope_and_green(capsys):
         assert name in out, out
     assert "传输层包装 4 处" in out, out
     assert "SSE 建流 2 处" in out, out
-    assert "跨 3 棵树仍未被调用 16 条" in out, out
+    assert "跨 3 棵树仍未被调用 17 条" in out, out
 
 
 # ── 第四张调用脸：视图里直接 `fetch(`${base}/watch/start`)`（前缀是变量）──────
@@ -803,16 +803,17 @@ def test_helper_names_have_one_source():
 def test_reverse_reading_of_this_repo_is_a_named_list(capsys):
     """`--list-uncalled` 逐条打到盘上：一个总数定不了"还剩谁在用"这件事，只能逐条定性。
 
-    16 这个数是棘轮——删一条活接口、或给某条补上前端调用点，都要在这里留名。
+    17 这个数是棘轮（v1.28 R3 新增 `GET /api/live/run/receipts`，UI 尚未接）——删一条活接口、
+    或给某条补上前端调用点，都要在这里留名。
     """
     mod = _module()
     assert mod.main(["check_ui_api_paths.py", "--list-uncalled"]) == 0
     out = capsys.readouterr().out
     lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("—")]
-    assert len(lines) == 16, out
+    assert len(lines) == 17, out
     assert "/api/watch/start" not in out and "/api/watch/stop" not in out   # 已被 fetch 那张脸认领
     assert "pair-request" not in out                                       # 已被 SSE 那张脸认领
-    assert "反向读数 16 条" in out, out
+    assert "反向读数 17 条" in out, out
     # 整个集合逐条钉住（不是只钉总数）：这 15 条的定性写在执行记录 §二之四十四，
     # 谁给某条补上前端调用点、或删掉某条路由，都必须同时动这张表和这段名单——
     # 只数数不记名的话，下一批又会把"门读不出"当成"接口没人用"。
@@ -833,6 +834,7 @@ def test_reverse_reading_of_this_repo_is_a_named_list(capsys):
         "POST /api/sessions/{session_id}/cancel",
         "POST /api/sessions/{session_id}/tick",
         "GET /pair",                                                       # 批 5：匿名配对链接落地页（agent/浏览器直接访问，UI 不调）
+        "GET /api/live/run/receipts",                                       # v1.28 R3：单发回执读面，UI Phase 2 未接
     }, out
 
 

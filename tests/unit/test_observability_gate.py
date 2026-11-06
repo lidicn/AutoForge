@@ -139,9 +139,12 @@ def test_real_repo_site_readings_are_pinned(real):
     # 222 → 223（2026-11-04 ②房间口径）：AREA_UNRESOLVED（af_runtime.resolve_room）一枚带码 WARNING。
     # 223 → 224（2026-11-05 D9 emit 播报）：EMIT_SPEAK_PUBLISH_FAILED（af_executor._speak_for_emit）一枚带码 WARNING。
     # 224 → 225（2026-11-05 D1 后半）：LIVE_RUN_CANARY_ADVANCE_FAILED（af_service.live_run）一枚带码 WARNING。
-    assert len(real["sites"]) == 225
-    assert len({s["path"] for s in real["sites"]}) == 34
-    assert dict(lv) == {"debug": 25, "info": 9, "warning": 156, "error": 24, "exception": 11}
+    # 225 → 230（2026-11-06 v1.28 R1 ask 双向桥）：ASK_VIA_UNKNOWN／ASK_PENDING_PUBLISH_FAILED／
+    # ASK_ANSWER_FACT_FAILED／INBOX_REJECT_BAD_VERDICT／MQTT_ASK_ANSWER_DROP——五枚新带码 WARNING
+    # （af_ask_bridge 新文件 +1 文件，warning 156→161）。
+    assert len(real["sites"]) == 230
+    assert len({s["path"] for s in real["sites"]}) == 35
+    assert dict(lv) == {"debug": 25, "info": 9, "warning": 161, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 

@@ -356,7 +356,7 @@ def test_real_repo_is_green_and_pinned():
     # scope 档，anon 仍 10、ungated 全登记 14，无裸奔。
     # 返工 5.1：批 4 加 POST /api/user/agent-token（94→95），批 5 加 POST /api/user/pair-link
     # （write）与 GET /pair（anon）⇒ 95→97、ungated 14→15（新匿名面 GET /pair 已进 §三 登记）。
-    assert info["rows"] == 97
+    assert info["rows"] == 98
     assert info["ungated"] == 15
     assert info["register"] == 15
     assert info["found_installers"] == [
@@ -377,7 +377,7 @@ def test_real_repo_tier_counts_are_the_batch_reading():
     # （write）⇒ write 36→38；+GET /pair（anon）⇒ anon 10→11。db 批 5 把清单 --write 刷到
     # 97 却没同步本 pin（§1.9：台账 regen 与测试 pin 是两套），返工 5.1 对齐。
     assert counts == {
-        "scope:write": 38, "scope:read": 33, "scope:live": 3, "scope:admin": 4,
+        "scope:write": 38, "scope:read": 34, "scope:live": 3, "scope:admin": 4,
         "anon": 11, "optional": 2, "bearer-in-handler": 2, "builtin": 4,
     }
 
@@ -399,10 +399,10 @@ def test_two_reports_counts_reconciled_in_inventory_doc():
     记录，不该跟着今天漂）⇒ 改锚 count 行的现读字面，历史对账行保持原样。
     """
     text = (ROOT / mod.DOC_REL).read_text(encoding="utf-8")
-    assert "scope:read=33" in text and "scope:write=38" in text and "scope:live=3" in text
+    assert "scope:read=34" in text and "scope:write=38" in text and "scope:live=3" in text
     assert "scope:admin=4" in text
     assert "anon=11" in text and "optional=2" in text and "bearer-in-handler=2" in text
-    assert "97 条路由对象" in text
+    assert "98 条路由对象" in text
 
 
 # --------------------------------------------------------------------------------------
