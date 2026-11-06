@@ -41,8 +41,11 @@ AUTO = {
     "nodes": [
         {"id": "a1", "kind": "on", "name": "人",
          "trigger": {"type": "state", "entity_id": "binary_sensor.m", "to": "on"}},
+        # v1.27.1 起播报「显式才出声」⇒ 本卡量的是**房间解析**，必须给显式 announce
+        # 才能把 speak 腿跑起来（无文案那格由 do_speak 判据 D4 的静默断言覆盖）。
         {"id": "d1", "kind": "do", "name": "开空调", "adapter": "climate", "action": "set_temp",
-         "params": {"entity_id": "climate.ac", "temperature": 26}},   # 注意：没有 room
+         "params": {"entity_id": "climate.ac", "temperature": 26},   # 注意：没有 room
+         "announce": "我把空调打开"},
         {"id": "p1", "kind": "pass", "name": "结束"},
     ],
     "edges": [
@@ -143,6 +146,7 @@ EMIT_AUTO = {
         {"id": "a1", "kind": "on", "name": "t",
          "trigger": {"type": "state", "entity_id": "binary_sensor.m", "to": "on"}},
         {"id": "e1", "kind": "pass", "name": "广播已启动",
+         "announce": "书房空调已启动",
          "emit": {"event": "study_ac_started", "data": {"room": "书房", "action": "cool_26"}}},
         {"id": "p1", "kind": "pass", "name": "结束"},
     ],
