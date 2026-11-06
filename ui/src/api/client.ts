@@ -176,6 +176,11 @@ export const api = {
   // G 真机下发
   liveStatus: () => request<LiveStatusResponse>('GET', '/live/status'),
   // D6（v1.26）：真机下发必须带授权码（服务层 `_auth_code_check` 同闸，REST 免码＝绕过）
+  // v1.27 D10：自动化详情（卡片口径）——运行期事实 last_met/last_dispatched_at 在这里
+  automationDetail: (name: string) =>
+    request<{ ok: boolean; automation: Record<string, unknown> }>(
+      'GET', `/automations/${encodeURIComponent(name)}`,
+    ),
   liveRun: (ir: unknown, live_allow: string[], confirm: boolean, events?: unknown[], undo?: boolean, auth_code?: string) =>
     request<LiveRunResponse>('POST', '/live/run', { ir, live_allow, confirm, events, undo, auth_code: auth_code || '' }),
 
