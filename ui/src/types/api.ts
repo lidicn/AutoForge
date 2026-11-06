@@ -612,6 +612,10 @@ export interface AskSpecMeta {
   entity_domain?: string
 }
 
+// v1.28 R4：应答来源（MQTT 小爱 / WebUI）。后端枚举只有这两个值；
+// 缺字段或 null 表示「没带来源」——前端⛔ 不猜、不补一个「未知」标签。
+export type AskAnsweredVia = 'xiaomi' | 'webui'
+
 export interface AskItem {
   ask_id: string
   instance_id: string
@@ -622,12 +626,29 @@ export interface AskItem {
   session_id?: string
   spec?: AskSpecMeta | null
   control: AskControlMeta
+  /** 仅「已答未消费」时后端才带值；其余为 null/缺省 */
+  answered_via?: AskAnsweredVia | null
+}
+
+/** `answered[]` 单条：最近已应答历史（新→旧，最多 5 条） */
+export interface AskAnswerHistoryItem {
+  ask_id: string
+  instance_id?: string
+  automation_id?: string
+  node_id?: string
+  room?: string | null
+  prompt?: string
+  edge?: string | null
+  answered_via?: AskAnsweredVia | null
+  answered_at?: string | null
 }
 
 export interface AsksResponse {
   ok: boolean
   total: number
   asks: AskItem[]
+  /** 字段缺失＝这份读数没带历史；空数组＝最近确实没有应答。两者⛔ 不许混为一谈 */
+  answered?: AskAnswerHistoryItem[]
 }
 
 export interface AskAnswerResponse {
