@@ -91,13 +91,11 @@ DEFAULT_ANSWERED_VIA = ANSWERED_VIA_WEBUI
 #: `answer_inbox/` 的签名密钥（与 `af_api` 写侧、`af_live` 读侧同一把）。
 INBOX_KEY_ENV = "AUTOFORGE_INBOX_KEY"
 
-#: 挂起超时默认（PM v1.28 卡 §二.1 补钉：300s，与 canary 观察窗同数量级；env 可覆盖）。
-#: ⚠️ **与 DCD 裁定 C6 的张力争执已报 PM**：裁定写「AF 的 ask timeout（60s）不改」，
-#: 卡面写默认 300s。本模块取**卡面默认 300s ＋ env 可覆盖**（`AUTOFORGE_ASK_TIMEOUT_S=60`
-#: 即可逐字回到裁定取值），并把真实剩余时长作为 `timeout_remaining` 发给出向主题，
-#: 让 DB 不必猜 AF 这一侧到底等了多久。
+#: 挂起超时默认（**PM 2026-11-06 22:5x 拍板：按 DCD 裁定 C6 逐字 60s**，卡面原写 300s 已作废；
+#: env `AUTOFORGE_ASK_TIMEOUT_S` 仍可覆盖）。语义是"无人应答就不无限挂死"：到点走图作者自己钉的
+#: `on_timeout`/`default` 边，⛔ 不在这里替图作者选边。
 ASK_TIMEOUT_ENV = "AUTOFORGE_ASK_TIMEOUT_S"
-DEFAULT_ASK_TIMEOUT_S = 300.0
+DEFAULT_ASK_TIMEOUT_S = 60.0
 
 #: C3：`ask_id` 沿用 `trace_id` 约束——非空、≤64（裁定逐字）。
 MAX_ASK_ID_CHARS = 64

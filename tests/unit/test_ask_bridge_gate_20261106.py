@@ -42,7 +42,7 @@ from autoforge.af_runtime_facts import RuntimeFacts, recent_ask_answers
 
 ROOM = "study"
 
-#: 二元会话（yes/no 边），**不写 timeout** ⇒ 走 v1.28 的 300s 默认兜底（超时腿 D6）
+#: 二元会话（yes/no 边），**不写 timeout** ⇒ 走 v1.28 的 60s 默认兜底（DCD C6；超时腿 D6）
 AUTO_BINARY: dict[str, Any] = {
     "ir_version": "0.2.1",
     "id": "gate_ask_binary",
@@ -106,11 +106,11 @@ def _suspend(monkeypatch: pytest.MonkeyPatch, auto: dict[str, Any], *, area: str
 
 def test_d1_pending_payload_is_c3_verbatim():
     payload = build_pending_payload(
-        ask_id="inst-1", room="shu_fang", prompt="开空调吗？", timeout_remaining=300.0
+        ask_id="inst-1", room="shu_fang", prompt="开空调吗？", timeout_remaining=60.0
     )
     assert set(payload) == {"ask_id", "room", "prompt", "source", "priority", "timeout_remaining"}
     assert payload["source"] == "autoforge" and payload["priority"] == 1
-    assert payload["timeout_remaining"] == 300.0
+    assert payload["timeout_remaining"] == 60.0
     # 反证腿：身份不合 C3 约束（空/超 64）⇒ 当场拒，⛔ 不发一条 DB 认不出身份的挂起
     with pytest.raises(AnswerRejected):
         build_pending_payload(ask_id="", room="shu_fang", prompt="x")
@@ -125,7 +125,7 @@ def test_d1_suspend_publishes_pending_without_touching_ask_core(monkeypatch):
     ask_id = next(iter(rt.executor.pending_asks))
     assert call["ask_id"] == ask_id
     assert call["room"] == "shu_fang" and call["prompt"] == "现在开空调吗？"
-    assert call["timeout_remaining"] == 300.0, "未写 timeout ⇒ 默认兜底值随载荷发出（C6）"
+    assert call["timeout_remaining"] == 60.0, "未写 timeout ⇒ 默认兜底值（DCD C6＝60s）随载荷发出"
     # ask 核心不被旁路改动：仍挂起、不误派发
     assert ask_id in rt.executor.pending_asks
     inst = rt.instances.get(ask_id)
@@ -303,7 +303,7 @@ def test_d5_bad_verdict_in_file_is_refused(tmp_path, monkeypatch):
     assert f.exists(), "证据文件保留"
 
 
-# ── D6 超时腿：默认 300s 兜底 ＋ 到点收尾 ───────────────────────────────
+# ── D6 超时腿：默认 60s 兜底（DCD C6）＋ 到点收尾 ─────────────────────────
 
 def test_d6_ask_without_timeout_gets_default_deadline(monkeypatch):
     rt, _ = _suspend(monkeypatch, AUTO_BINARY)
@@ -312,7 +312,7 @@ def test_d6_ask_without_timeout_gets_default_deadline(monkeypatch):
     assert inst.timer is not None, "未写 timeout 也必须有个到点（否则永久挂起）"
     assert inst.timer.kind == "ask"
     remaining = inst.timer.due_at - rt.clock.monotonic()
-    assert 295.0 < remaining <= 300.5, f"默认兜底应为 300s 量级，实得 {remaining}"
+    assert 55.0 < remaining <= 60.5, f"默认兜底应为 60s（DCD C6），实得 {remaining}"
 
 
 def test_d6_ir_timeout_still_wins_and_timeout_reaches_edge(monkeypatch):
