@@ -44,6 +44,13 @@ QUOTA_EXCEEDED = "quota_exceeded"
 INSTANCE_REJECTED = "instance_rejected"
 #: P2-4：触发被去抖（debounce）抑制，此前无任何观测记录
 INSTANCE_DEBOUNCED = "instance_debounced"
+#: D10（2026-11-06）：派发冷却期命中——计数照记、审计在案，但不 spawn、不进队列。
+#: 分层铁律：计数是事实、派发是决策——冷却只拦派发，⛔ 不拦触发计数（卡名 AF卡_dispatch_cooldown）。
+INSTANCE_COOLDOWNED = "instance_cooldowned"
+#: D10（2026-11-06）：边沿触发的**电平维持**——条件持续满足重复命中 ⇒ 不重派（不重复派发），
+#: 但触发计数照记＋审计在案。区别于冷却（INSTANCE_COOLDOWNED）：这是"条件还没回落"的
+#: 主语义抑制，不是时间窗兜底（卡名 AF卡_dispatch_cooldown）。
+INSTANCE_EDGE_HELD = "instance_edge_held"
 INSTANCE_EXPIRED = "instance_expired"
 #: P1 实例持久化：崩溃恢复时成功挂回 / 因图变更被丢弃
 INSTANCE_RESTORED = "instance_restored"
@@ -107,6 +114,8 @@ ALL_EVENT_TYPES = (
     INSTANCE_REJECTED,
     INSTANCE_EXPIRED,
     INSTANCE_DEBOUNCED,
+    INSTANCE_COOLDOWNED,
+    INSTANCE_EDGE_HELD,
     INSTANCE_RESTORED,
     INSTANCE_RESTORE_DROPPED,
     INSTANCE_SESSION_LOST,
