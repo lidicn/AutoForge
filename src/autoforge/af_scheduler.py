@@ -540,13 +540,23 @@ class Scheduler:
         # 没有任何 group-and 入口触发 ⇒ 再看**条件是不是写在 `if` 节点里**（真实 IR 的常见形状：
         # `on(group or 六实体)` → `if(五条件 and)` → `do`）。这种形状的条件层真实存在，
         # 只是不在入口触发上；不求值它就会 `met=None` ⇒ 边沿/冷却全部落空 ⇒ 用户照样被反复念叨。
-        for node in auto.nodes.values():
-            if node.kind == "if" and node.expr:
-                try:
-                    snap = self.states.snapshot(sorted(auto.reads()))
-                    return bool(evaluate(node.expr, make_resolver(snap, {}, {})))
-                except Exception:  # noqa: BLE001 —— 求值失败保守判"不满足"（fail-closed）
-                    return False
+        # AF-740（2026-11-07）：第二段**只对「入口触发是 group（or/and）」的 AC 形状**生效——
+        # ⛔ 单 state/event/time 入口的 `if` 是"触发后的决策节点"，不是入口条件层（AF-739
+        # 判据 L3/L4 依赖这个：on 单条件命中即派发、if 假走 no 边留 instance_no_action）。
+        # 若不分形状一律把 if 当入口条件，单-state 入口也会被边沿闸拦"条件不满"⇒ 破坏旧行为。
+        has_group_entry = any(
+            node.trigger is not None
+            and _normalize(node.trigger).type == "group"
+            for node in auto.entry_nodes()
+        )
+        if has_group_entry:
+            for node in auto.nodes.values():
+                if node.kind == "if" and node.expr:
+                    try:
+                        snap = self.states.snapshot(sorted(auto.reads()))
+                        return bool(evaluate(node.expr, make_resolver(snap, {}, {})))
+                    except Exception:  # noqa: BLE001 —— 求值失败保守判"不满足"（fail-closed）
+                        return False
         return None if not has_group_and else True
 
     def _group_currently_met(self, trig: Trigger, _depth: int = 0) -> bool:
@@ -687,6 +697,14 @@ class Scheduler:
         if met and prev:
             # 条件持续满足（上轮已 True）：电平维持 ⇒ 不重派（判据①边沿主路，优先级最高）
             return False, "edge_held"
+        if not met:
+            # AF-740（2026-11-07）：条件**不满** ⛔ 不派发。D10 边沿语义是
+            # "不满→满足的跳变沿才派发"——met=False（无论上轮是 True/False/None 首次）
+            # 都不是跳变沿，条件未成立就 spawn 会白记 last_dispatched_at、executor 走 no 边
+            # 零动作收尾（现场实证：v6 温度 26.5<28.5 时 last_dispatched_at 被反复推进、
+            # 审计 instance_no_action）。这是电平维持的另一半：不满维持同样不该重派。
+            return False, "edge_held"
+        # met=True and not prev（跳变沿）或 prev=None（首次满足）⇒ 落到冷却兜底
         # 冷却兜底（只对 group-and 自动化）：新回合来得太快 ⇒ 仍不派发
         cooldown = self._cooldown_seconds(auto)
         now = self.clock.monotonic()
