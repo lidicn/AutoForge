@@ -192,23 +192,37 @@ class RuntimeFacts:
         self._mutate(_apply)
 
     def record_met(self, *, met: bool, at: datetime | None = None) -> None:
-        """D10（2026-11-06）：记**触发沿事实**——本轮所有条件是否已成立（且已派发）。
+        """D10（2026-11-06）：记**触发沿事实**——本轮所有条件是否已成立。
 
-        `met=True` 表示「本轮条件从不满→满足的跳变沿已派发一次」，`met=False` 表示
-        「条件已回落（不满），下一轮重新满足＝新回合才再派发」。`last_dispatched_at`
-        只在 `met=True` 时更新（派发那刻的时间戳）；`met=False` 保留上一次派发时刻，
-        让 UI 能区分「上回合派发过、本回合已回落」与「从未派发」。
+        `met=True` 表示「本轮条件成立（跳变沿或电平维持）」，`met=False` 表示「条件已回落」。
 
-        分层铁律：计数是事实、派发是决策——本字段与 `record_trigger` 的触发计数
-        是**两个独立记录**，⛔ 不由计数反推（D10 卡 §一）。
+        ★ AF-739（2026-11-07）改正：**这里⛔ 不再写 `last_dispatched_at`**。
+        旧实现把「条件成立」直接当「已派发」写时间戳 ⇒ **被边沿闸抑制（电平维持）的那一轮也刷新
+        "已派发"时刻**；现场读起来就是「盘上写着 10:19:37 派发过，设备没动、播报零、trial 未动」
+        ——事实层与决策层打架，把"没派发"写成了"派发过"（AF-739 根因）。
+        派发时刻改由**唯一真派发点**记：`record_dispatched()`，只在 `_try_fire` 真 spawn 后调用。
+        `last_met`＝条件布尔（每轮都记，附 `last_met_at`）；`last_dispatched_at`＝真派发时刻。
         """
         now = at or datetime.now(timezone.utc)
 
         def _apply(data: dict[str, Any]) -> None:
             data["last_met"] = bool(met)
-            if met:
-                data["last_dispatched_at"] = now.isoformat()
-            else:
-                data.setdefault("last_dispatched_at", None)
+            data["last_met_at"] = now.isoformat()
+            # 兼容旧读数：本方法⛔ 不再写 last_dispatched_at（见 docstring；AF-739）
+            data.setdefault("last_dispatched_at", None)
+
+        self._mutate(_apply)
+
+    def record_dispatched(self, *, at: datetime | None = None) -> None:
+        """AF-739（2026-11-07）：**真派发**时刻——只在调度器 spawn 出实例那一刻记。
+
+        与 `record_met` 分层：条件成立 ≠ 派发（边沿维持／冷却都会抑制派发）。
+        现场判据：`last_dispatched_at` 有值 ⇒ 那一刻**确实 spawn 过实例**；实例是否真执行，
+        由审计 `instance_no_action`／`instance_no_edge` 与生命周期日志回答。
+        """
+        now = at or datetime.now(timezone.utc)
+
+        def _apply(data: dict[str, Any]) -> None:
+            data["last_dispatched_at"] = now.isoformat()
 
         self._mutate(_apply)

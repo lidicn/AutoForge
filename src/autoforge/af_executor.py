@@ -28,6 +28,8 @@ from .af_audit import (
     ACTION_FAILED,
     ENTITY_DRIFT,
     EVENT_EMITTED,
+    INSTANCE_NO_ACTION,
+    INSTANCE_NO_EDGE,
     INSTANCE_SESSION_LOST,
     AuditEvent,
     AuditLog,
@@ -209,10 +211,35 @@ class NodeExecutor:
     # ─────────────────────────────────────────────────────────────────
     # 主循环
     # ─────────────────────────────────────────────────────────────────
+    def _lifecycle(self, instance: Instance, stage: str, node_id: str = "", **extra: Any) -> None:
+        """AF-739（2026-11-07）：实例生命周期**单一**留痕入口。
+
+        `stage` ∈ spawn／segment／suspend／resume／complete／cancel／fail／no_edge／no_action。
+        ⛔ 刻意**不做逐节点 INFO**：1000 步的环会刷爆 watch.log；节点级路径已在
+        `instance.trace`（有界、随实例持久化）。这条日志是 AF-739 的直接教训——
+        实例只存内存、坏了盘上零痕迹，根因只能靠推断；生命周期必须落进 watch.log 可查。
+        """
+        extra_text = (" " + " ".join(f"{k}={v}" for k, v in extra.items())) if extra else ""
+        logger.info(
+            "INSTANCE_LIFECYCLE stage=%s auto=%s inst=%s node=%s state=%s actions=%d segments=%d%s",
+            stage,
+            str(getattr(instance.automation, "id", "")),
+            instance.instance_id,
+            node_id,
+            str(instance.state),
+            int(getattr(instance.ctx, "actions", 0)),
+            int(instance.ctx.segments),
+            extra_text,
+        )
+
     def run(self, instance: Instance) -> Instance:
         """执行一个求值段：从 `current_node` 走到挂起或终态。"""
         auto = instance.automation
         instance.ctx.segments += 1
+        # AF-739：第一段＝spawn 后的真执行起点（调度器 `_try_fire` spawn 完就调本方法）；
+        # 之后每段记 segment。这条是"实例到底跑没跑"的第一手读数。
+        self._lifecycle(instance, "spawn" if instance.ctx.segments == 1 else "segment",
+                        instance.ctx.current_node)
         if self._over_cap(instance):
             return instance
         steps = 0
@@ -251,6 +278,25 @@ class NodeExecutor:
 
             edge = auto.pick_edge(node.id, kinds)
             if edge is None:
+                # AF-739：这条路径此前**静默终止**（`_terminate` 不落审计）⇒ 图里缺兜底边时
+                # 实例"消失"而无痕迹。现在显式留痕：节点、可用的边类型、该节点实际有哪些出边。
+                available = sorted({str(e.kind) for e in auto.outgoing(node.id)})
+                self.audit.add(
+                    AuditEvent(
+                        type=INSTANCE_NO_EDGE,
+                        at=self.clock.now(),
+                        message=(
+                            f"节点 {node.id} 选不出一条可用边 ⇒ 实例终止（可用 kinds={sorted(kinds)}"
+                            f"，该节点现有出边={available}）"
+                        ),
+                        automation_id=instance.automation.id,
+                        instance_id=instance.instance_id,
+                        node_id=node.id,
+                        data={"kinds": sorted(kinds), "available": available,
+                              "actions": int(instance.ctx.actions)},
+                    )
+                )
+                self._lifecycle(instance, "no_edge", node.id, kinds=",".join(sorted(kinds)))
                 self._terminate(instance)
                 return instance
 
@@ -266,6 +312,7 @@ class NodeExecutor:
     # ─────────────────────────────────────────────────────────────────
     def resume(self, instance: Instance, kind: str) -> Instance:
         """用给定的边类型唤醒挂起实例（yes / no / default / on_timeout / on_cancel）。"""
+        self._lifecycle(instance, "resume", instance.ctx.current_node, kind=str(kind))
         # B3-AF-02: pop pending_asks BEFORE terminal check (was after, leaving ghost in queue)
         # C-2 §F.1：ask 的 on_timeout 到点 ⇒ 会话未经应答即消亡 ⇒ ASK_EXPIRED
         # (reason=timeout)。canary 的 on_timeout 不进 pending_asks（timer 挂起不入
@@ -951,6 +998,10 @@ class NodeExecutor:
             self._audit_action_called(instance, node)
             result: CallResult = adapter.call(node.action or "", dict(node.params))
 
+        # AF-739（2026-11-07）：真下发计数（wrapped/shadow 两条腿都算"动作已交出去"）。
+        # 实例终态时 `actions==0` 且图里有 `do` ⇒ 落 `instance_no_action`。
+        instance.ctx.actions += 1
+
         # 结果只进 vars，不回写快照（IR §7.2）
         if node.result_var:
             instance.ctx.vars[node.result_var] = {
@@ -1100,6 +1151,8 @@ class NodeExecutor:
         # 落盘发生在状态转换那一刻（`_transition` → `Runtime._on_instance_change` → `persist.save`）：
         # 挂起期要用、且重启后要据此重挂会话的上下文，必须在 `suspend()` **之前**写进 ctx。
         self.instances.suspend(instance, node.id, duration, kind=node.kind)
+        # AF-739：挂起点留痕（阶段粒度；节点级路径另有 instance.trace）
+        self._lifecycle(instance, "suspend", node.id, kind=str(node.kind))
 
         if node.kind == "ask":
             self.pending_asks[instance.instance_id] = AskSession(
@@ -1133,14 +1186,39 @@ class NodeExecutor:
     def _terminate(self, instance: Instance) -> None:
         """走到终点。若之前请求过取消，则落到 cancelled（取消不回滚，只标记状态）。"""
         pending = instance.ctx.context.pop("pending_terminal", None)
+        # AF-739（2026-11-07）：**零动作收尾必须留痕**。这条路径此前完全静默——线上出现
+        # 「last_dispatched_at 有、设备没动、播报没有、trial 没动」时，盘上没有任何一行能
+        # 说明"实例其实跑完了、只是走了 no 边/空图"。判定：一次动作都没下发，而图里确有 `do`。
+        if int(getattr(instance.ctx, "actions", 0)) == 0:
+            has_do = any(n.kind == "do" for n in instance.automation.nodes.values())
+            if has_do:
+                self.audit.add(
+                    AuditEvent(
+                        type=INSTANCE_NO_ACTION,
+                        at=self.clock.now(),
+                        message=(
+                            f"实例走到终点但一次动作都没下发（图里有 do 节点）：inst={instance.instance_id} "
+                            f"末节点={instance.ctx.current_node or '(空)'} 段数={instance.ctx.segments} "
+                            f"步数={instance.ctx.steps}"
+                        ),
+                        automation_id=instance.automation.id,
+                        instance_id=instance.instance_id,
+                        node_id=instance.ctx.current_node or "",
+                        data={"segments": int(instance.ctx.segments),
+                              "steps": int(instance.ctx.steps)},
+                    )
+                )
+                self._lifecycle(instance, "no_action", instance.ctx.current_node)
         if pending == CANCELLED:
             if instance.state == SUSPENDED:
                 self.instances.resume(instance)
             self.instances.cancel(instance, instance.ctx.context.get("cancel_reason", ""))
+            self._lifecycle(instance, "cancel", instance.ctx.current_node)
         else:
             if instance.state == SUSPENDED:
                 self.instances.resume(instance)
             self.instances.done(instance)
+            self._lifecycle(instance, "complete", instance.ctx.current_node)
 
     def _over_cap(self, instance: Instance) -> bool:
         """跨段累计封顶（DCD 裁定 20261006 §二 问题一 · A+B 组合）。返回 True ⇒ 本段已结束。
@@ -1206,6 +1284,7 @@ class NodeExecutor:
         if instance.state == SUSPENDED:
             self.instances.resume(instance)
         self.instances.fail(instance, reason)
+        self._lifecycle(instance, "fail", instance.ctx.current_node, reason=reason[:60])
 
     # ─────────────────────────────────────────────────────────────────
     # 工具

@@ -139,9 +139,11 @@ def test_real_repo_site_readings_are_pinned(real):
     # 222 → 223（2026-11-04 ②房间口径）：AREA_UNRESOLVED（af_runtime.resolve_room）一枚带码 WARNING。
     # 223 → 224（2026-11-05 D9 emit 播报）：EMIT_SPEAK_PUBLISH_FAILED（af_executor._speak_for_emit）一枚带码 WARNING。
     # 224 → 225（2026-11-05 D1 后半）：LIVE_RUN_CANARY_ADVANCE_FAILED（af_service.live_run）一枚带码 WARNING。
-    assert len(real["sites"]) == 225
+    # 225 → 226（2026-11-07 AF-739 实例生命周期）：`INSTANCE_LIFECYCLE` 一枚 INFO 站点
+    # （af_executor._lifecycle，阶段粒度）——事故当时实例只存内存、盘上零痕迹，见台账 §1.178。
+    assert len(real["sites"]) == 226
     assert len({s["path"] for s in real["sites"]}) == 34
-    assert dict(lv) == {"debug": 25, "info": 9, "warning": 156, "error": 24, "exception": 11}
+    assert dict(lv) == {"debug": 25, "info": 10, "warning": 156, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 

@@ -128,6 +128,11 @@ class Runtime:
                 def record_met(automation_id, met):
                     _record_met(automation_id, met)
 
+                @staticmethod
+                def record_dispatched(automation_id):
+                    # AF-739：真派发时刻（唯一调用点＝scheduler._try_fire 的 spawn 出口）
+                    _facts_for(automation_id).record_dispatched()
+
             def _record_trial(state, automation_id):
                 _facts_for(automation_id).record_trial(
                     state=state, automation_id=automation_id,

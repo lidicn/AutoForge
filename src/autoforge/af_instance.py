@@ -119,6 +119,13 @@ class InstanceContext:
     steps: int = 0
     #: 告警只在首次越档时发一次：否则 2000 段会刷出 1000 条 WARNING + 1000 条审计事件
     cap_warned: bool = False
+    #: AF-739（2026-11-07）：本实例**真下发过几次动作**（`_do` 真调用适配器那一刻 +1）。
+    #: 存在的理由＝"spawn 后什么都没发生"必须可分：v1.27.0 线上出现过
+    #: 「派发记录在案（last_dispatched_at）＋空调没动＋没有播报＋trial 未动」——实例到底
+    #: 是没跑、跑空、还是被静默终止，当时**盘上零痕迹**（实例只存内存、无生命周期日志）。
+    #: 有了这个计数，实例终态时 `actions==0` 且图里确有 `do` 节点 ⇒ 落一条
+    #: `instance_no_action` 审计，把"派发过但零动作"从假设变成读数。
+    actions: int = 0
     #: v0.9.0 实例归属：创建/持有本实例的进程身份（owner_id()），恢复仲裁用
     owner: str = ""
 
@@ -141,6 +148,7 @@ class InstanceContext:
             "steps": self.steps,
             "cap_warned": self.cap_warned,
             "owner": self.owner,
+            "actions": self.actions,  # AF-739：真下发次数要随实例持久化往返（重启后仍可判"零动作"）
         }
 
 
