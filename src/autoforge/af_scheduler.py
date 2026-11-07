@@ -327,6 +327,9 @@ class Scheduler:
         # 运行期事实：真触发成功 spawn 后记账（单一出口，group/state/time/队列排空都汇此处）。
         # 记账失败⛔ 不影响执行：可调用对象内部自吞异常，这里再兜一层防御。
         self._record_trigger_facts(auto, node, event)
+        # AF-739（2026-11-07）：**唯一真派发点**——`last_dispatched_at` 只在这里写。
+        # 抑制腿（edge_held/cooldown）在上面的闸就 return 了，⛔ 到不了这行。
+        self._record_dispatched(auto.id)
         self.executor.run(instance)
         # D10：成功派发 ⇒ 记冷却起点（下一次冷却期的计时基准）。
         self._cooldown[auto.id] = self.clock.monotonic()
@@ -590,6 +593,23 @@ class Scheduler:
             except Exception:  # noqa: BLE001 —— 记失败不影响派发（落盘是决策的留痕，不是闸）
                 return
         self._last_met[auto_id] = met
+
+    def _record_dispatched(self, auto_id: str) -> None:
+        """AF-739（2026-11-07）：记**真派发**时刻——只在 spawn 出实例那一刻调（唯一调用点）。
+
+        与 `_record_met`（条件布尔，每轮都记）分开：旧实现把 met=True 顺带写成「已派发」，
+        边沿抑制的那一轮也刷新时间戳 ⇒ 盘上出现"派发过"而实际零执行（AF-739 根因）。
+        ⛔ 只在 spawn 后调；抑制腿（edge_held／cooldown）⛔ 不调。
+        """
+        if self.met_io is not None:
+            try:
+                rec = getattr(self.met_io, "record_dispatched", None)
+                if callable(rec):
+                    rec(auto_id)
+                return
+            except Exception:  # noqa: BLE001 —— 记账失败不影响派发（同 _record_met 口径）
+                return
+        # 无 met_io（内存档）：没有"派发时刻"的落盘点，⛔ 不假装记上了
 
     def _record_met_if_applicable(self, auto: Automation, *, met: bool) -> None:
         """D10：只有**带 group-and 条件层**的自动化才记 `last_met`（其余无"条件维持"语义）。

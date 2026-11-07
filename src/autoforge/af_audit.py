@@ -56,6 +56,15 @@ INSTANCE_EDGE_HELD = "instance_edge_held"
 #: 为什么需要：`live_run` 不接影子层 ⇒ 回执只认 dispatched 时会恒报 `nothing_dispatched`（假红），
 #: 真实下发在回执里看不见（AF-738 根因）。
 ACTION_CALLED = "af_action_called"
+#: AF-739（2026-11-07）：实例走到终点时**一次动作都没下发**，而该自动化图里确有 `do` 节点。
+#: 存在的理由＝把"派发过但什么都没发生"从假设变成读数：v1.27.0 现场出现过
+#: 「last_dispatched_at 有、空调没动、播报没有、trial 没动」而盘上零痕迹（实例只存内存）。
+#: 典型触发形状：D10 派发闸按当前状态判"条件满足"⇒ spawn，但实例内 `if` 条件此刻为假 ⇒
+#: 走 `no` 边到 `pass` 收尾——**合法路径、零动作、此前无任何留痕**。
+INSTANCE_NO_ACTION = "instance_no_action"
+#: AF-739（2026-11-07）：节点选不出一条可用边（`pick_edge` 返回 None）⇒ 实例被终止。
+#: 此前这条路径**静默**（`_terminate` 不落审计）⇒ 图里缺兜底边时，实例"消失"而无痕迹。
+INSTANCE_NO_EDGE = "instance_no_edge"
 INSTANCE_EXPIRED = "instance_expired"
 #: P1 实例持久化：崩溃恢复时成功挂回 / 因图变更被丢弃
 INSTANCE_RESTORED = "instance_restored"
@@ -122,6 +131,8 @@ ALL_EVENT_TYPES = (
     INSTANCE_COOLDOWNED,
     INSTANCE_EDGE_HELD,
     ACTION_CALLED,
+    INSTANCE_NO_ACTION,
+    INSTANCE_NO_EDGE,
     INSTANCE_RESTORED,
     INSTANCE_RESTORE_DROPPED,
     INSTANCE_SESSION_LOST,

@@ -35,8 +35,9 @@ AUTO = {
     "nodes": [
         {"id": "a1", "kind": "on", "name": "人",
          "trigger": {"type": "state", "entity_id": "binary_sensor.motion", "to": "on"}},
+        # v1.27.1 起播报「显式才出声」⇒ 本卡量的是区域解析，必须给显式 announce 才会发声
         {"id": "d1", "kind": "do", "name": "开灯", "adapter": "light", "action": "turn_on",
-         "params": {"entity_id": "light.x"}, "room": "书房"},
+         "params": {"entity_id": "light.x"}, "room": "书房", "announce": "把书房的灯打开"},
         {"id": "p1", "kind": "pass", "name": "结束"},
     ],
     "edges": [

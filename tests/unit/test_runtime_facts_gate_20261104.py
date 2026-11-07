@@ -117,10 +117,19 @@ def test_d5_automation_card_reads_runtime_facts(tmp_path):
     rf.record_trial(state="observing", automation_id="a1arc")
     got = _runtime_facts_fields(store, "a1arc")
     assert got["trigger_7d"] == 1 and got["trial"]["state"] == "observing"
-    # D10 第二面：record_met 后详情带 last_met/last_dispatched_at
+    # D10 第二面：record_met 后详情带 last_met
+    # ★ AF-739（2026-11-07）语义收口：`record_met` 只记**条件布尔**，⛔ 不再写派发时刻
+    #   （旧实现把"条件成立"当"已派发"，电平维持的那一轮也刷新时间戳 ⇒ 事实层撒谎）。
+    #   派发时刻改由唯一真派发点 `record_dispatched()` 记。
     rf.record_met(met=True)
     got2 = _runtime_facts_fields(store, "a1arc")
-    assert got2["last_met"] is True and got2["last_dispatched_at"] is not None
+    assert got2["last_met"] is True
+    assert got2["last_dispatched_at"] is None, \
+        "条件成立⛔ 不等于已派发：只有 record_dispatched 才写派发时刻（AF-739）"
+    rf.record_dispatched()
+    got3 = _runtime_facts_fields(store, "a1arc")
+    assert got3["last_met"] is True and got3["last_dispatched_at"] is not None, \
+        "真派发后必须带派发时刻"
 
 
 def test_d5b_corrupt_sidecar_failsoft(tmp_path):

@@ -28,6 +28,8 @@ from .af_audit import (
     ACTION_FAILED,
     ENTITY_DRIFT,
     EVENT_EMITTED,
+    INSTANCE_NO_ACTION,
+    INSTANCE_NO_EDGE,
     INSTANCE_SESSION_LOST,
     AuditEvent,
     AuditLog,
@@ -137,6 +139,22 @@ from homesdk.consent import YES as _HOMESDK_YES, classify_answer as _homesdk_cla
 from .af_ask_bridge import DEFAULT_ANSWERED_VIA, VERDICTS, default_ask_timeout_s
 
 
+def _speech_value_text(val: Any) -> str:
+    """播报里的读数文本（v1.27.1 口径，卡 §修法 5）：整数读数不拖 `.0`，其余原样。
+
+    `28.0` ⇒ `28`（出资人听到的是"28 度"，⛔ 不念"二十八点零"）；`28.6` ⇒ `28.6`（照实念）；
+    非数值（`"on"`/`"unknown"`/空）原样返回字符串——⛔ 不把非数值当 0 或空吞掉。
+    """
+    text = str(val)
+    try:
+        num = float(text)
+    except (TypeError, ValueError):
+        return text
+    if num.is_integer() and abs(num) < 1e15:
+        return str(int(num))
+    return text
+
+
 def classify_answer(text: str) -> str:
     """yes / no（IR §5.2）。判定口径来自 homesdk，本仓不再持有词表。
 
@@ -208,10 +226,35 @@ class NodeExecutor:
     # ─────────────────────────────────────────────────────────────────
     # 主循环
     # ─────────────────────────────────────────────────────────────────
+    def _lifecycle(self, instance: Instance, stage: str, node_id: str = "", **extra: Any) -> None:
+        """AF-739（2026-11-07）：实例生命周期**单一**留痕入口。
+
+        `stage` ∈ spawn／segment／suspend／resume／complete／cancel／fail／no_edge／no_action。
+        ⛔ 刻意**不做逐节点 INFO**：1000 步的环会刷爆 watch.log；节点级路径已在
+        `instance.trace`（有界、随实例持久化）。这条日志是 AF-739 的直接教训——
+        实例只存内存、坏了盘上零痕迹，根因只能靠推断；生命周期必须落进 watch.log 可查。
+        """
+        extra_text = (" " + " ".join(f"{k}={v}" for k, v in extra.items())) if extra else ""
+        logger.info(
+            "INSTANCE_LIFECYCLE stage=%s auto=%s inst=%s node=%s state=%s actions=%d segments=%d%s",
+            stage,
+            str(getattr(instance.automation, "id", "")),
+            instance.instance_id,
+            node_id,
+            str(instance.state),
+            int(getattr(instance.ctx, "actions", 0)),
+            int(instance.ctx.segments),
+            extra_text,
+        )
+
     def run(self, instance: Instance) -> Instance:
         """执行一个求值段：从 `current_node` 走到挂起或终态。"""
         auto = instance.automation
         instance.ctx.segments += 1
+        # AF-739：第一段＝spawn 后的真执行起点（调度器 `_try_fire` spawn 完就调本方法）；
+        # 之后每段记 segment。这条是"实例到底跑没跑"的第一手读数。
+        self._lifecycle(instance, "spawn" if instance.ctx.segments == 1 else "segment",
+                        instance.ctx.current_node)
         if self._over_cap(instance):
             return instance
         steps = 0
@@ -250,6 +293,25 @@ class NodeExecutor:
 
             edge = auto.pick_edge(node.id, kinds)
             if edge is None:
+                # AF-739：这条路径此前**静默终止**（`_terminate` 不落审计）⇒ 图里缺兜底边时
+                # 实例"消失"而无痕迹。现在显式留痕：节点、可用的边类型、该节点实际有哪些出边。
+                available = sorted({str(e.kind) for e in auto.outgoing(node.id)})
+                self.audit.add(
+                    AuditEvent(
+                        type=INSTANCE_NO_EDGE,
+                        at=self.clock.now(),
+                        message=(
+                            f"节点 {node.id} 选不出一条可用边 ⇒ 实例终止（可用 kinds={sorted(kinds)}"
+                            f"，该节点现有出边={available}）"
+                        ),
+                        automation_id=instance.automation.id,
+                        instance_id=instance.instance_id,
+                        node_id=node.id,
+                        data={"kinds": sorted(kinds), "available": available,
+                              "actions": int(instance.ctx.actions)},
+                    )
+                )
+                self._lifecycle(instance, "no_edge", node.id, kinds=",".join(sorted(kinds)))
                 self._terminate(instance)
                 return instance
 
@@ -265,6 +327,7 @@ class NodeExecutor:
     # ─────────────────────────────────────────────────────────────────
     def resume(self, instance: Instance, kind: str) -> Instance:
         """用给定的边类型唤醒挂起实例（yes / no / default / on_timeout / on_cancel）。"""
+        self._lifecycle(instance, "resume", instance.ctx.current_node, kind=str(kind))
         # B3-AF-02: pop pending_asks BEFORE terminal check (was after, leaving ghost in queue)
         # C-2 §F.1：ask 的 on_timeout 到点 ⇒ 会话未经应答即消亡 ⇒ ASK_EXPIRED
         # (reason=timeout)。canary 的 on_timeout 不进 pending_asks（timer 挂起不入
@@ -1026,6 +1089,10 @@ class NodeExecutor:
             self._audit_action_called(instance, node)
             result: CallResult = adapter.call(node.action or "", dict(node.params))
 
+        # AF-739（2026-11-07）：真下发计数（wrapped/shadow 两条腿都算"动作已交出去"）。
+        # 实例终态时 `actions==0` 且图里有 `do` ⇒ 落 `instance_no_action`。
+        instance.ctx.actions += 1
+
         # 结果只进 vars，不回写快照（IR §7.2）
         if node.result_var:
             instance.ctx.vars[node.result_var] = {
@@ -1180,6 +1247,8 @@ class NodeExecutor:
         # 落盘发生在状态转换那一刻（`_transition` → `Runtime._on_instance_change` → `persist.save`）：
         # 挂起期要用、且重启后要据此重挂会话的上下文，必须在 `suspend()` **之前**写进 ctx。
         self.instances.suspend(instance, node.id, duration, kind=node.kind)
+        # AF-739：挂起点留痕（阶段粒度；节点级路径另有 instance.trace）
+        self._lifecycle(instance, "suspend", node.id, kind=str(node.kind))
 
         if node.kind == "ask":
             self.pending_asks[instance.instance_id] = AskSession(
@@ -1230,14 +1299,39 @@ class NodeExecutor:
     def _terminate(self, instance: Instance) -> None:
         """走到终点。若之前请求过取消，则落到 cancelled（取消不回滚，只标记状态）。"""
         pending = instance.ctx.context.pop("pending_terminal", None)
+        # AF-739（2026-11-07）：**零动作收尾必须留痕**。这条路径此前完全静默——线上出现
+        # 「last_dispatched_at 有、设备没动、播报没有、trial 没动」时，盘上没有任何一行能
+        # 说明"实例其实跑完了、只是走了 no 边/空图"。判定：一次动作都没下发，而图里确有 `do`。
+        if int(getattr(instance.ctx, "actions", 0)) == 0:
+            has_do = any(n.kind == "do" for n in instance.automation.nodes.values())
+            if has_do:
+                self.audit.add(
+                    AuditEvent(
+                        type=INSTANCE_NO_ACTION,
+                        at=self.clock.now(),
+                        message=(
+                            f"实例走到终点但一次动作都没下发（图里有 do 节点）：inst={instance.instance_id} "
+                            f"末节点={instance.ctx.current_node or '(空)'} 段数={instance.ctx.segments} "
+                            f"步数={instance.ctx.steps}"
+                        ),
+                        automation_id=instance.automation.id,
+                        instance_id=instance.instance_id,
+                        node_id=instance.ctx.current_node or "",
+                        data={"segments": int(instance.ctx.segments),
+                              "steps": int(instance.ctx.steps)},
+                    )
+                )
+                self._lifecycle(instance, "no_action", instance.ctx.current_node)
         if pending == CANCELLED:
             if instance.state == SUSPENDED:
                 self.instances.resume(instance)
             self.instances.cancel(instance, instance.ctx.context.get("cancel_reason", ""))
+            self._lifecycle(instance, "cancel", instance.ctx.current_node)
         else:
             if instance.state == SUSPENDED:
                 self.instances.resume(instance)
             self.instances.done(instance)
+            self._lifecycle(instance, "complete", instance.ctx.current_node)
 
     def _over_cap(self, instance: Instance) -> bool:
         """跨段累计封顶（DCD 裁定 20261006 §二 问题一 · A+B 组合）。返回 True ⇒ 本段已结束。
@@ -1303,6 +1397,7 @@ class NodeExecutor:
         if instance.state == SUSPENDED:
             self.instances.resume(instance)
         self.instances.fail(instance, reason)
+        self._lifecycle(instance, "fail", instance.ctx.current_node, reason=reason[:60])
 
     # ─────────────────────────────────────────────────────────────────
     # 工具
@@ -1389,29 +1484,32 @@ class NodeExecutor:
                     return None
             if val is None or val == "":
                 return None
-            values[name] = str(val)
+            values[name] = _speech_value_text(val)
         return render_speech_template(raw_tpl, values)
 
     def _speak_for_emit(self, instance: Instance, node: Node, data: dict) -> None:
-        """emit 播报（AF-PM 裁定 2026-11-05）：与 do 同源钩子，共用 room 反查＋area 解析。
+        """emit 播报（AF-PM 裁定 2026-11-05；v1.27.1 语义收口 2026-11-06）。
 
         房间文本：`node.room` → `emit.data.room`（IR 里 emit 常把房间写在 data 里）；
         实体兜底：`emit.data.entity_id`（有则交给 Runtime 走 catalog 反查）。
         ⛔ 纯旁路：未注入回调 / 取不到文本时 no-op；异常只吞 warning，emit 照常发布。
+
+        ★ v1.27.1 新契约（PM 卡 `AF卡_v1271_热修_播报语义收口_20261106.md`）：
+        **显式才出声**——`speech_template` 渲染成功**或** `announce` 非空才播；
+        两者都没有 ⇒ **静默**（⛔ 不再机拼「自动化名：事件名」兜底）。
+        旧兜底正是「一次派发念三句」的第三句：它让 d1/d2 这类没写文案的节点也出声，
+        被 canary 观察窗隔成 5 分钟一句，出资人真机反馈的重复感即由此而来。
         """
         if self.on_emit_speak is None:
             return
         entity_id = str((data.get("entity_id") if isinstance(data, dict) else "") or "")
-        # D11：模板优先（实时值插值）；渲不出来（实体不可读/未知占位符）⇒ 回退下面的静态文案
+        # D11：模板优先（实时值插值）；渲不出来（实体不可读/未知占位符）⇒ 回退静态 announce
         text = self._speech_template_text(node, entity_id) or ""
         if not text:
             text = str(node.raw.get("announce") or "").strip()
         if not text:
-            auto_name = str(getattr(instance.automation, "name", "") or instance.automation.id)
-            event = ""
-            if node.emit is not None:
-                event = str(node.emit.event or "")
-            text = f"{auto_name}：{event or node.id}"
+            # fail-closed 静默：既无模板又无 announce ⇒ 不假装读数、不播占位符原文
+            return
         room = str(node.room or (data.get("room") if isinstance(data, dict) else "") or "")
         try:
             self.on_emit_speak(str(instance.instance_id), text, room, entity_id)
@@ -1424,8 +1522,10 @@ class NodeExecutor:
     def _speak_for_do(self, instance: Instance, node: Node, *, dry_run: bool) -> None:
         """T1：do 节点下发前的额外 MQTT 播报（`butler/inbox/speak`）。
 
-        文本取值顺序：节点级 `announce`（IR 扩展字段，node 段 additionalProperties=true）→
-        `<自动化名>：<节点名>` 动态兜底。
+        文本取值顺序（v1.27.1 收口后）：节点级 `speech_template` 渲染成功 → 节点级
+        `announce`（IR 扩展字段，node 段 additionalProperties=true）→ **静默**。
+        ⛔ 不再机拼「`<自动化名>：<节点名>`」：那条兜底让没写文案的 do 也出声，
+        一次派发因此念多句（PM 卡定性：出资人体感「重复」的真因）。
         房间：优先 `node.room`；**缺省时把目标实体传给回调**，由 Runtime 用 catalog 的
         `entity → area_id` 反查（2026-11-05 真机修：线上 IR 普遍不写 room，缺失不等于不能出声）。
         ⛔ 纯旁路：未注入回调 / dry-run / 取不到文本时直接 no-op；异常只吞 warning，
@@ -1439,14 +1539,13 @@ class NodeExecutor:
             target = (node.params or {}).get("target")
             if isinstance(target, dict):
                 entity_id = str(target.get("entity_id") or "").strip()
-        # D11：模板优先（实时值插值）；渲不出来 ⇒ 回退下面的静态文案
+        # D11：模板优先（实时值插值）；渲不出来 ⇒ 回退静态 announce
         text = self._speech_template_text(node, entity_id) or ""
         if not text:
             text = str(node.raw.get("announce") or "").strip()
         if not text:
-            auto_name = str(getattr(instance.automation, "name", "") or instance.automation.id)
-            node_name = str(node.name or node.id)
-            text = f"{auto_name}：{node_name}"
+            # fail-closed 静默（同上）：显式才出声，⛔ 不机拼
+            return
         try:
             self.on_do_speak(
                 str(instance.instance_id), text, str(node.room or ""), entity_id,
