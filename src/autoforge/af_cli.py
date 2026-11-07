@@ -612,6 +612,16 @@ def watch(
     传入 `--persist-dir` 后进程重启即恢复 `persist=true` 的活跃实例（含崩溃期间
     已错过的 `on_timeout`），把"常驻"升级为"崩溃可续跑"。
     """
+    # AF-740（2026-11-07）：watch 子进程 logging 显式接 stderr（由 `start_watch` 重定向进
+    # watch.log）——否则 `logger.info`（如 executor 的 `INSTANCE_LIFECYCLE` 阶段日志）在
+    # 无 handler 的 root logger 上被丢弃（Python 默认 INFO 不出声），部署面 watch.log 零痕迹。
+    # 只在常驻监听子进程配，⛔ 不污染 serve/一次性 CLI 的输出面。
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            stream=sys.stderr,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
     graph = _load(path)
     if not _gate(graph, show_nl=True, entities_path=entities or None, acl_path=acl or None):
         raise typer.Exit(code=EXIT_SCAN_ERROR)
