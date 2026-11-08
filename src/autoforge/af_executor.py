@@ -212,6 +212,11 @@ class NodeExecutor:
     #: emit 发布时的额外 MQTT 播报回调（AF-PM 裁定 2026-11-05）：与 do 同源、同一 room 解析路径。
     #: 签名同 on_do_speak：`(trace_id, text, room, entity_id) -> None`；未注入时零副作用。
     on_emit_speak: Any | None = None
+    #: **动作失败**播报回调（出资人 2026-11-08 19:34 亲令：失败必须念出「失败动作＋原因」，
+    #: ⛔ 不许静默哑掉）。签名同 on_do_speak；未注入时零副作用。
+    #: 与三条播报腿**同一条投递体**（`Runtime._speak_deliver`）：取桥→解析房间→发布→记账，
+    #: ⛔ 不另造一套解析（两套口径必分叉）。纯旁路：异常/失败绝不改动作结果与边选择。
+    on_fail_speak: Any | None = None
     #: 运行期事实落盘（PM 卡 2026-11-04）：canary 试演状态记录回调
     #: `(state, automation_id, since, until, extra) -> None`；未注入时零副作用。
     runtime_facts: Any | None = None
@@ -1221,6 +1226,9 @@ class NodeExecutor:
                 data={"params": dict(node.params)},
             )
         )
+        # 出资人 2026-11-08 19:34 亲令：失败必须**出声**（文本走与 do/emit 同一条投递体）。
+        # 位置在审计之后、边选择之前：先把事实记下来，再念——念失败也改不了判定。
+        self._speak_for_failure(instance, node, result)
         kinds = ["on_error", "default"]
         if instance.automation.pick_edge(node.id, kinds) is None:
             self._fail(instance, f"{node.action} 失败且无 on_error/default 兜底：{result.error}")
@@ -1659,6 +1667,38 @@ class NodeExecutor:
         except Exception:  # noqa: BLE001 —— 播报旁路失败绝不改 do 行为
             logger.warning(
                 "DO_SPEAK_PUBLISH_FAILED do 播报旁路异常（不影响 do 核心） instance=%s node=%s",
+                instance.instance_id, node.id, exc_info=True,
+            )
+
+    def _speak_for_failure(self, instance: Instance, node: Node, result: CallResult) -> None:
+        """**动作失败播报**（出资人 2026-11-08 19:34 亲令，卡名 `AF卡_v7_完整自动化` §八）。
+
+        现场：18:29 那轮 `climate.set_temperature` 被拒，出资人在屋里**什么都没听到**——失败
+        只进了 watch.log 与审计，人不看日志就等于"自动化没动静"。这条腿把失败念出来：
+        文本＝「`<适配器>.<动作>` 执行失败：`<原因>`」。
+
+        - 原因压成**单行**并截断：错误原文里有空格/换行/英文栈，直接念出来 TTS 断句全乱；
+        - 房间/实体取法与 `_speak_for_do` **同源**（`node.room` → 目标实体交 Runtime 反查 catalog），
+          ⛔ 不另造一套解析；
+        - ⛔ 纯旁路：未注入回调即 no-op；异常只吞一行 warning，绝不改动作结果/边选择/实例状态。
+        """
+        if self.on_fail_speak is None:
+            return
+        action = f"{node.adapter}.{node.action}".strip(".")
+        reason = " ".join(str(result.error or "").split()) or "未知原因"
+        text = f"{action} 执行失败：{reason[:120]}"
+        entity_id = str((node.params or {}).get("entity_id") or "").strip()
+        if not entity_id:
+            target = (node.params or {}).get("target")
+            if isinstance(target, dict):
+                entity_id = str(target.get("entity_id") or "").strip()
+        try:
+            self.on_fail_speak(
+                str(instance.instance_id), text, str(node.room or ""), entity_id,
+            )
+        except Exception:  # noqa: BLE001 —— 播报旁路失败绝不改失败判定
+            logger.warning(
+                "FAIL_SPEAK_PUBLISH_FAILED 失败播报旁路异常（不影响失败判定） instance=%s node=%s",
                 instance.instance_id, node.id, exc_info=True,
             )
 

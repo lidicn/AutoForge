@@ -957,7 +957,7 @@ def _runtime_facts_fields(store: GraphStore, name: str) -> dict[str, Any]:
     ⛔ 分层铁律：计数是事实、派发是决策——`last_met` 与 `trigger_7d` 独立，⛔ 不从计数反推。
     """
     fallback = {"trial": None, "last_triggered": None, "trigger_7d": 0,
-                "last_met": None, "last_dispatched_at": None}
+                "last_met": None, "last_dispatched_at": None, "vars": {}}
     try:
         from .af_runtime_facts import RuntimeFacts
 
@@ -968,6 +968,10 @@ def _runtime_facts_fields(store: GraphStore, name: str) -> dict[str, Any]:
             "trigger_7d": int(snap.get("trigger_7d") or 0),
             "last_met": snap.get("last_met"),
             "last_dispatched_at": snap.get("last_dispatched_at"),
+            # AF-746（2026-11-08）：持久变量读数（`vars.<名>`）。加上它是为了让「重启后归属还在
+            # 不在」能从**既有列表读面**看，而不是只能进容器翻 `.runtime.json`。
+            # 缺段 ⇒ 空表（与改前形状等价，⛔ 不影响旧前端）。
+            "vars": dict(snap.get("vars") or {}),
         }
     except Exception as exc:  # noqa: BLE001
         logger.debug("RUNTIME_FACTS_READ_FAILED archive=%r err=%r", name, exc)

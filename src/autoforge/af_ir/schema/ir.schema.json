@@ -360,7 +360,11 @@
       "properties": {
         "type": { "enum": ["numeric", "boolean", "string", "enum"] },
         "value": {},
-        "enum": { "type": "array", "items": { "type": "string" } }
+        "enum": { "type": "array", "items": { "type": "string" } },
+        "persist": {
+          "type": "boolean",
+          "description": "AF-746：true ⇒ 该变量跨实例／跨重启存活（set 写 `<archive>.runtime.json` 的 vars 段，spawn 时读回）。默认 false＝实例内存，语义不变。"
+        }
       }
     }
   }

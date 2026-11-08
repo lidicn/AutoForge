@@ -149,9 +149,12 @@ def test_real_repo_site_readings_are_pinned(real):
     # 232 → 233（2026-11-08 AF-744 watch 关停）：`WATCH_RELEASE_SKIPPED` 一枚 WARNING 站点
     # （af_cli._release_lease_after_stop：活写者在场时**故意跳过**租约释放，必须可查——
     # 静默跳过会让下次排查把"没放锁"误判成锁泄漏）。台账 §1.183。⛔ 无码存量与 §四 上限不动。
-    assert len(real["sites"]) == 233
+    # 233 → 234（2026-11-08 AF-746 失败播报）：`FAIL_SPEAK_PUBLISH_FAILED` 一枚 WARNING 站点
+    # （af_executor._speak_for_failure：失败播报旁路自己抛了；出资人 19:34 亲令"失败必须出声"，
+    # 那么"出声这条腿自己哑了"更必须可查）。台账 §1.187 之后一段。⛔ 无码存量与 §四 上限不动。
+    assert len(real["sites"]) == 234
     assert len({s["path"] for s in real["sites"]}) == 35
-    assert dict(lv) == {"debug": 25, "info": 10, "warning": 163, "error": 24, "exception": 11}
+    assert dict(lv) == {"debug": 25, "info": 10, "warning": 164, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 

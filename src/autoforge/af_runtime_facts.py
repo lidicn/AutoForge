@@ -162,6 +162,9 @@ class RuntimeFacts:
             "trial": trial if isinstance(trial, Mapping) else None,
             "last_met": last_met if isinstance(last_met, bool) else None,
             "last_dispatched_at": last_dispatched_at if isinstance(last_dispatched_at, str) else None,
+            # AF-746（2026-11-08）：持久变量读数（⛔ 不藏起来——"重启后归属还在不在"必须能从
+            # 既有读面看，不能再靠翻文件）。缺段 ⇒ 空表（与改前行为等价）。
+            "vars": self.vars(),
         }
 
     # ── 写 ────────────────────────────────────────────────────────────
@@ -291,6 +294,45 @@ class RuntimeFacts:
         out.reverse()
         n = max(0, int(limit))
         return out[:n]
+
+    # ── 持久变量（AF-746，2026-11-08）───────────────────────────────────
+    #: 为什么落在这里：本旁车已经是「运行期事实」的正源（触发/试演/应答），持久变量是**同一类
+    #: 事实**（"跨实例仍然成立的运行期状态"）⇒ ⛔ 不新建库、不新建目录（沿用 v1.28 R1 的口径）。
+    def vars(self) -> dict[str, Any]:
+        """读**持久变量**段（`vars`）：缺文件/坏文件/无该段 ⇒ 空表（读侧 fail-soft）。
+
+        ⛔ 不在这里做类型校验/强转：声明与转换的单一真源是 `af_instance._coerce_declared`
+        （两处各写一套口径必分叉）。
+        """
+        data = self.read()
+        box = data.get("vars")
+        if not isinstance(box, Mapping):
+            return {}
+        return {str(k): v for k, v in box.items()}
+
+    def set_var(self, name: str, value: Any, *, at: datetime | None = None) -> None:
+        """写一枚持久变量：锁内 read-modify-write ＋ 原子替换。
+
+        落点 `vars.<名>`；另记 `vars_updated_at.<名>`——「这个归属是什么时候变的」必须能事后回答
+        （现场排查"手动开的空调为什么被关"时，光有当前值不够）。
+        写失败⛔ 不冒到执行链：`_mutate` 已吞成一行 `RUNTIME_FACTS_WRITE_FAILED`（既有站点/具名码，
+        ⛔ 不新增），执行链不因记账失败中断（与 ask 应答记账同一条纪律）。
+        """
+        now = at or datetime.now(timezone.utc)
+
+        def _apply(data: dict[str, Any]) -> None:
+            box = data.get("vars")
+            if not isinstance(box, dict):
+                box = {}
+            box[str(name)] = value
+            data["vars"] = box
+            stamps = data.get("vars_updated_at")
+            if not isinstance(stamps, dict):
+                stamps = {}
+            stamps[str(name)] = now.isoformat()
+            data["vars_updated_at"] = stamps
+
+        self._mutate(_apply)
 
     def clear_trial(self) -> None:
         """试演结束（转正/放弃）⇒ 清掉 trial 格。"""

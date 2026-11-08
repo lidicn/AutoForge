@@ -236,6 +236,11 @@ class InstanceManager:
         self.on_spawn: Callable[[Instance], None] | None = None
         #: 实例终态回调（Runtime 用它累加成功 / 失败；state 为 DONE / FAILED 之一）
         self.on_terminal: Callable[[Instance, str], None] | None = None
+        #: AF-746（2026-11-08）：持久变量 IO —— Runtime 注入，None＝未接线（旧行为）。
+        #: 读 `(automation_id) -> {名: 值}`；写 `(automation_id, 名, 值) -> None`。
+        #: ⛔ 本模块不 import store：落点由注入的闭包决定（模型层保持零存储依赖）。
+        self.var_loader: Callable[[str], Mapping[str, Any]] | None = None
+        self.var_writer: Callable[[str, str, Any], None] | None = None
 
     # ── 查询 ──────────────────────────────────────────────────────────
     def get(self, instance_id: str) -> Instance:
@@ -283,6 +288,10 @@ class InstanceManager:
         # 初始化声明过的实例变量
         for name, decl in automation.vars.items():
             ctx.vars[name] = _initial_value(decl)
+        # AF-746（2026-11-08）：声明 `persist` 的变量**先读回落盘事实**，读不到才用声明初值。
+        # 现场意义：归属变量 `ac_owned` 必须活过「开机实例 → 关机实例」与容器重启
+        # （v7 规格 §二 洞6；ctx.vars 原是实例内存，实例一消亡归属就失忆 ⇒ 关机段失效）。
+        self._load_persistent_vars(instance, automation, ctx)
 
         self._instances[instance_id] = instance
         self._refresh_snapshot(instance)
@@ -411,12 +420,53 @@ class InstanceManager:
 
     # ── vars ──────────────────────────────────────────────────────────
     def set_var(self, instance: Instance, name: str, value: Any) -> None:
-        """写 `vars.*`。类型以 automation 里的声明为准（禁止隐式转换）。"""
+        """写 `vars.*`。类型以 automation 里的声明为准（禁止隐式转换）。
+
+        AF-746（2026-11-08）：声明了 `persist=true` 的变量**写穿到运行事实旁车**
+        （`<archive>.runtime.json` 的 `vars` 段），跨实例／跨重启存活。
+        写失败⛔ 不回滚已经生效的内存值（内存值才是本实例的判定依据），只把失败记进
+        `ctx.context["persist_vars_error"]` 供回执/实例快照读出——⛔ 不静默。
+        """
         decl = instance.automation.vars.get(name)
-        instance.ctx.vars[name] = _coerce_declared(value, decl, name)
+        coerced = _coerce_declared(value, decl, name)
+        instance.ctx.vars[name] = coerced
+        if decl is not None and getattr(decl, "persist", False) and self.var_writer is not None:
+            try:
+                self.var_writer(instance.automation.id, name, coerced)
+            except Exception as exc:  # noqa: BLE001 —— 记账失败⛔ 不打断执行链
+                instance.ctx.context["persist_vars_error"] = (
+                    f"write:{name}:{type(exc).__name__}"
+                )
 
     def get_var(self, instance: Instance, name: str, default: Any = None) -> Any:
         return instance.ctx.vars.get(name, default)
+
+    def _load_persistent_vars(self, instance: Instance, automation: Automation, ctx: Any) -> None:
+        """AF-746：把落盘的持久变量读回本实例的 `ctx.vars`（读失败⛔ 不阻止实例启动）。
+
+        读不到／类型不符时**落回声明初值**，并把原因写进 `context.persist_vars_error`：
+        盘上的值不符合当前声明（IR 改过类型）不该让整个实例起不来，但也不许假装读到了。
+        `context.persist_vars_loaded` 是正例证据（哪些变量真的从盘上回来了）。
+        """
+        persisted = [n for n, d in automation.vars.items() if getattr(d, "persist", False)]
+        if not persisted or self.var_loader is None:
+            return
+        try:
+            stored = self.var_loader(automation.id) or {}
+        except Exception as exc:  # noqa: BLE001 —— 读事实失败不许把实例卡死
+            ctx.context["persist_vars_error"] = f"load:{type(exc).__name__}"
+            return
+        loaded: list[str] = []
+        for name in persisted:
+            if name not in stored:
+                continue
+            try:
+                ctx.vars[name] = _coerce_declared(stored[name], automation.vars[name], name)
+            except (TypeError, ValueError) as exc:
+                ctx.context["persist_vars_error"] = f"coerce:{name}:{type(exc).__name__}"
+                continue
+            loaded.append(name)
+        ctx.context["persist_vars_loaded"] = sorted(loaded)
 
     # ── 内部 ──────────────────────────────────────────────────────────
     def _refresh_snapshot(self, instance: Instance) -> None:

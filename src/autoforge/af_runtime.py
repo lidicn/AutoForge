@@ -156,6 +156,19 @@ class Runtime:
             self.scheduler.met_io = _MetIO
             self.executor.runtime_facts = _record_trial
             self.executor.ask_answer_recorder = _record_ask_answer
+
+            # AF-746（2026-11-08）：**持久变量**接线——IR 里 `vars.<名>.persist=true` 的变量
+            # 跨实例／跨重启存活（v7 归属变量 ac_owned 靠它活过「开机实例→关机实例」）。
+            # 落点复用同一份运行事实旁车（`<archive>.runtime.json` 的 `vars` 段），
+            # ⛔ 不新建库/目录；写失败由 RuntimeFacts._mutate 吞成既有 `RUNTIME_FACTS_WRITE_FAILED`。
+            def _load_persist_vars(automation_id):
+                return _facts_for(automation_id).vars()
+
+            def _write_persist_var(automation_id, name, value):
+                _facts_for(automation_id).set_var(name, value)
+
+            self.instances.var_loader = _load_persist_vars
+            self.instances.var_writer = _write_persist_var
         # v0.4.0：`emit` 发布的事件必须驱动 `on event` 订阅者（发布 → 订阅闭环）
         self.executor.on_emit = self.scheduler.handle_event
         # AF-745（2026-11-08）：三条播报腿（ask／do／emit）共用的**事实计数**。
@@ -249,6 +262,13 @@ class Runtime:
             _speak_deliver(trace_id, text, room, entity_id, "emit")
 
         self.executor.on_emit_speak = _speak_emit
+        # 失败播报（出资人 2026-11-08 19:34 亲令）：动作失败必须念出「失败动作＋原因」。
+        # 与三条腿**同一投递体**（取桥→解析房间→发布→记账），⛔ 不另造一套解析；
+        # 记账落进同一份 `speak_stats`，回执/日志两面都能看出"失败播报到底出没出去"。
+        def _speak_fail_leg(trace_id: str, text: str, room: str, entity_id: str = "") -> None:
+            _speak_deliver(trace_id, text, room, entity_id, "fail")
+
+        self.executor.on_fail_speak = _speak_fail_leg
         self.conf.seed(self.graph)
 
         # ── P1 实例持久化与崩溃恢复 ──────────────────────────────────

@@ -109,8 +109,10 @@ def test_d5_automation_card_reads_runtime_facts(tmp_path):
     store = _mk_store(tmp_path)
     # 无侧车 ⇒ 回落旧值（D10 第二面：`last_met`/`last_dispatched_at` 一并回落 None）
     fb = _runtime_facts_fields(store, "a1arc")
+    # AF-746（2026-11-08）：卡片多携带一枚 `vars`（持久变量读数）——「重启后归属还在不在」
+    # 必须能从既有列表读面看，⛔ 只能进容器翻 `.runtime.json`。缺段 ⇒ 空表。
     assert fb == {"trial": None, "last_triggered": None, "trigger_7d": 0,
-                  "last_met": None, "last_dispatched_at": None}
+                  "last_met": None, "last_dispatched_at": None, "vars": {}}
     # 写侧车 ⇒ 现读
     rf = RuntimeFacts(store.root, "a1arc")
     rf.record_trigger(automation_id="a1arc", node_id="a1", via="group")
@@ -139,7 +141,9 @@ def test_d5b_corrupt_sidecar_failsoft(tmp_path):
     (store.root / "a1arc.runtime.json").write_text("NOT JSON{{{", encoding="utf-8")
     got = _runtime_facts_fields(store, "a1arc")
     assert got == {"trial": None, "last_triggered": None, "trigger_7d": 0,
-                   "last_met": None, "last_dispatched_at": None}, "损坏必须 fail-soft 回落"
+                   "last_met": None, "last_dispatched_at": None, "vars": {}}, (
+        "损坏必须 fail-soft 回落"
+    )
 
 
 # ── D6 单一出口接线（源码钉）────────────────────────────────────────

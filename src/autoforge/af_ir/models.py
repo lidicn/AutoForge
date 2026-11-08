@@ -592,11 +592,19 @@ class Edge:
 
 @dataclass(frozen=True)
 class VarDecl:
-    """实例变量声明：类型必须显式，禁止隐式转换（IR §3.1 / §14-10）。"""
+    """实例变量声明：类型必须显式，禁止隐式转换（IR §3.1 / §14-10）。
+
+    `persist=True`（AF-746，2026-11-08）：该变量**跨实例、跨重启存活**——`set` 写它时同时落到
+    `<store_root>/<archive>.runtime.json` 的 `vars` 段，新实例 spawn 时先读回那份事实再跑。
+    为什么需要：`ctx.vars` 是实例内存，随实例消亡 ⇒ 「空调是自动化开的」这类**归属变量**
+    活不过一次 20 分钟无人腿，也活不过容器重启（v7 规格 §二洞6）。
+    ⛔ 默认 `False`：既有 IR 的变量语义一个字不改（不显式声明就不持久化）。
+    """
 
     type: str
     value: Any = None
     enum: tuple[str, ...] = ()
+    persist: bool = False
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "VarDecl":
@@ -604,6 +612,7 @@ class VarDecl:
             type=data["type"],
             value=data.get("value"),
             enum=tuple(data.get("enum", ())),
+            persist=bool(data.get("persist", False)),
         )
 
 
