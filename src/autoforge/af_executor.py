@@ -229,23 +229,66 @@ class NodeExecutor:
     def _lifecycle(self, instance: Instance, stage: str, node_id: str = "", **extra: Any) -> None:
         """AF-739（2026-11-07）：实例生命周期**单一**留痕入口。
 
-        `stage` ∈ spawn／segment／suspend／resume／complete／cancel／fail／no_edge／no_action。
+        `stage` ∈ spawn／segment／suspend／resume／complete／cancel／fail／no_edge／no_action／
+        action_failed（AF-742 新增：动作级失败，见 `_do`）。
         ⛔ 刻意**不做逐节点 INFO**：1000 步的环会刷爆 watch.log；节点级路径已在
         `instance.trace`（有界、随实例持久化）。这条日志是 AF-739 的直接教训——
         实例只存内存、坏了盘上零痕迹，根因只能靠推断；生命周期必须落进 watch.log 可查。
+
+        AF-742（2026-11-08）：行里加 `failed_actions`——否则 `complete actions=1` 分不清
+        「一次就干净收尾」与「一次成功＋一次失败→on_error 短路」（现场 02:01 d2
+        `climate.set_temperature` 失败短路，读数与干净完成长得一模一样）。
         """
         extra_text = (" " + " ".join(f"{k}={v}" for k, v in extra.items())) if extra else ""
         logger.info(
-            "INSTANCE_LIFECYCLE stage=%s auto=%s inst=%s node=%s state=%s actions=%d segments=%d%s",
+            "INSTANCE_LIFECYCLE stage=%s auto=%s inst=%s node=%s state=%s actions=%d "
+            "failed_actions=%d segments=%d%s",
             stage,
             str(getattr(instance.automation, "id", "")),
             instance.instance_id,
             node_id,
             str(instance.state),
             int(getattr(instance.ctx, "actions", 0)),
+            int(getattr(instance.ctx, "failed_actions", 0)),
             int(instance.ctx.segments),
             extra_text,
         )
+
+    #: AF-742（2026-11-08）：动作失败时要钉进 watch.log 的设备态属性（只读快照）。
+    #: 现场需要的是「设备当时长什么样」：HA 侧 `xiaomi_home.climate.async_set_temperature`
+    #: 抛 `RuntimeError: 执行错误, 未知错误, code=-706010002 ... target-temperature`
+    #: 只在某些过渡态出现，没有这份现场态，下次仍只能靠猜。
+    FAILURE_STATE_ATTRS = ("hvac_mode", "temperature", "current_temperature", "fan_mode", "swing_mode")
+
+    def _failure_state_note(self, node: Node) -> str:
+        """AF-742：失败动作**当时**的设备态（只读快照，⛔ 不重试、⛔ 不写设备）。
+
+        取不到就返回空串——诊断是旁路，⛔ 不许因为读不到状态而改变失败判定或抛出去。
+        """
+        if self.states is None:
+            return ""
+        entity_id = str((node.params or {}).get("entity_id") or "")
+        if not entity_id:
+            return ""
+        try:
+            snap = self.states.snapshot([entity_id])
+        except Exception:  # noqa: BLE001 —— 实体读不到 ⇒ 不写这段诊断
+            return ""
+        parts: list[str] = []
+        try:
+            state = snap.get(entity_id)
+        except Exception:  # noqa: BLE001
+            state = None
+        if state not in (None, ""):
+            parts.append(f"state={_speech_value_text(state)}")
+        for attr in self.FAILURE_STATE_ATTRS:
+            try:
+                val = snap.get(f"{entity_id}.{attr}")
+            except Exception:  # noqa: BLE001 —— 该实体没有这个属性（Snapshot 对缺失属性抛 UnknownEntity）
+                continue
+            if val not in (None, ""):
+                parts.append(f"{attr}={_speech_value_text(val)}")
+        return ",".join(parts)
 
     def run(self, instance: Instance) -> Instance:
         """执行一个求值段：从 `current_node` 走到挂起或终态。"""
@@ -1021,6 +1064,18 @@ class NodeExecutor:
                 # `perform` 在**下发之前**取快照，所以这里一条动作都还没发出去；
                 # 异常不许穿出 `step()`——穿出就是整次 tick 陪葬（第二轮审计那一类）。
                 return self._soft_fail(instance, node, exc)
+            except Exception as exc:  # noqa: BLE001 —— AF-742：调用抛错＝动作失败，⛔ 穿出 run()
+                # 适配器/传输层抛错（连接重置、序列化错误…）此前没有任何处置：异常穿到
+                # `scheduler._try_fire` 之外，实例停在 active、盘上零痕迹。这里收敛成一次
+                # 失败动作，走与 `result.success=False` 完全相同的收口（计数＋持久留痕＋选边）。
+                instance.ctx.actions += 1
+                instance.trace(
+                    node.id,
+                    note=f"do {node.adapter}.{node.action} raised: {type(exc).__name__}: {exc}",
+                )
+                return self._action_failed_result(
+                    instance, node, CallResult.fail(f"{type(exc).__name__}: {exc}"),
+                )
             # P1-11：canary.duration 接入——动作下发后挂起观察 duration，超时恢复时检查漂移
             canary_duration = None
             if isinstance(canary, dict):
@@ -1039,6 +1094,11 @@ class NodeExecutor:
             # 而回执按"已调用"报 executed，读者会以为设备改了。失败直接落到下面的通用失败处理
             # （`result.success` 判 False ⇒ ACTION_FAILED + on_error），⛔ 不对未生效的动作做漂移回滚。
             _call_failed = not bool(getattr(wrapped.result, "success", True))
+            # AF-742：动作**已经交出去**了，先计数再决定是否挂起观察窗——旧实现在下面
+            # 挂起分支 `return None` 之后才 `actions += 1`，于是"动作真发了、实例挂起观察"
+            # 这一轮的读数停在 actions=0（现场 2026-11-08 01:56 d1 就是这个形状，终态
+            # 把两次真实调用报成一次）。计数是事实，⛔ 不随挂起与否打折。
+            instance.ctx.actions += 1
             if _call_failed:
                 result = wrapped.result
             elif canary_duration and canary_duration > 0:
@@ -1087,11 +1147,17 @@ class NodeExecutor:
             result = wrapped.result
         else:
             self._audit_action_called(instance, node)
-            result: CallResult = adapter.call(node.action or "", dict(node.params))
+            # AF-742：适配器**抛异常**也要落成一次失败动作。旧实现让它直接穿出 `run()`
+            # ⇒ 这一轮既没有 `ACTION_FAILED` 也没有 trace（异常路径连审计都到不了），
+            # 实例还停在 active，「动作失败零留痕」的另一种形状。
+            try:
+                result = adapter.call(node.action or "", dict(node.params))
+            except Exception as exc:  # noqa: BLE001 —— 调用异常＝动作失败，⛔ 不许穿出 run()
+                result = CallResult.fail(f"{type(exc).__name__}: {exc}")
+            instance.ctx.actions += 1
 
         # AF-739（2026-11-07）：真下发计数（wrapped/shadow 两条腿都算"动作已交出去"）。
-        # 实例终态时 `actions==0` 且图里有 `do` ⇒ 落 `instance_no_action`。
-        instance.ctx.actions += 1
+        # AF-742：计数已上移到两条腿各自的调用点（canary 挂起腿也要算），这里不再加。
 
         # 结果只进 vars，不回写快照（IR §7.2）
         if node.result_var:
@@ -1118,6 +1184,32 @@ class NodeExecutor:
             instance.ctx.context["_ask_rounds"] = 0
             return {"then"}
 
+        return self._action_failed_result(instance, node, result)
+
+    def _action_failed_result(
+        self, instance: Instance, node: Node, result: CallResult,
+    ) -> Iterable[str] | None:
+        """AF-742（2026-11-08）：动作失败**统一收口**（`_do` 的正常失败腿与 canary 抛错腿共用）。
+
+        为什么必须持久留痕：运行期 `AuditLog` 只在内存（`af_audit.AUDIT_SCOPE_NOTE`：只有部署
+        仪式台账落盘），实例 trace 也只在 `persist=true` 才落盘 ⇒ 现场 2026-11-08 02:01 的 d2
+        `climate.set_temperature` 失败，事后**一条都读不到**（watch.log 那 1.5 秒零 INFO 零
+        WARNING，只有 stage=segment 与 stage=complete 两行）。这里补三样：
+        ① `failed_actions` 计数——终态读数能分「干净完成」与「短路完成」；
+        ② `action_failed` 生命周期行——watch.log 是唯一持久面，带动作名、错误原文、现场设备态；
+        ③ `ACTION_FAILED` 审计——进程内可查（与既有审计面同口径，不新增码）。
+        """
+        instance.ctx.failed_actions += 1
+        # 失败现场的设备态（只读）。有了它，下一次同类拒绝能直接看出
+        # 「当时 hvac_mode / target / current 是什么」——即 PM 要钉的"具体触发态"。
+        _dev_note = self._failure_state_note(node)
+        self._lifecycle(
+            instance, "action_failed", node.id,
+            action=f"{node.adapter}.{node.action}",
+            # 生命周期行的 extra 是空格分隔的 `k=v`：错误原文压成单 token，别让空格把行长歪
+            error="_".join(str(result.error or "").split())[:120] or "unknown",
+            dev=_dev_note or "-",
+        )
         self.audit.add(
             AuditEvent(
                 type=ACTION_FAILED,
@@ -1165,6 +1257,14 @@ class NodeExecutor:
     def _soft_fail(self, instance: Instance, node: Node, exc: BaseException) -> Iterable[str] | None:
         """实体漂移 / 表达式错误 → 软失效：走 `on_error`，无则 failed（**不直接 failed**）。"""
         entity_id = exc.args[0] if isinstance(exc, UnknownEntity) and exc.args else ""
+        # AF-742（2026-11-08）：软失效＝「这个 do 节点没成」——失败计数与生命周期行同口径，
+        # 与 `_do` 里 `result.success=False` 那条腿共用同一个读数面（含 canary 漂移回滚）。
+        instance.ctx.failed_actions += 1
+        self._lifecycle(
+            instance, "action_failed", node.id,
+            action=f"{node.adapter}.{node.action or ''}",
+            error="_".join(str(exc).split())[:120] or type(exc).__name__,
+        )
         self.audit.add(
             AuditEvent(
                 type=ENTITY_DRIFT,
@@ -1302,7 +1402,13 @@ class NodeExecutor:
         # AF-739（2026-11-07）：**零动作收尾必须留痕**。这条路径此前完全静默——线上出现
         # 「last_dispatched_at 有、设备没动、播报没有、trial 没动」时，盘上没有任何一行能
         # 说明"实例其实跑完了、只是走了 no 边/空图"。判定：一次动作都没下发，而图里确有 `do`。
-        if int(getattr(instance.ctx, "actions", 0)) == 0:
+        # AF-742（2026-11-08）：再加一条前置——`failed_actions==0`。失败动作（尤其调用前就
+        # 软失效的那种）会让 `actions` 停在 0，但那次 run **不是"零动作"，是"动作失败"**；
+        # 两个读数并存只会让读者把"试过并失败"又读成"什么都没做"（现场 02:01 正是这么被误读）。
+        if (
+            int(getattr(instance.ctx, "actions", 0)) == 0
+            and int(getattr(instance.ctx, "failed_actions", 0)) == 0
+        ):
             has_do = any(n.kind == "do" for n in instance.automation.nodes.values())
             if has_do:
                 self.audit.add(

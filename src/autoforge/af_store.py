@@ -1091,6 +1091,11 @@ def restore_context(data: Mapping[str, Any]) -> InstanceContext:
         steps=int(data.get("steps", 0)),
         cap_warned=bool(data.get("cap_warned", False)),
         owner=str(data.get("owner", "")),
+        # AF-742（2026-11-08）：这两枚计数也必须往返——AF-739 只补了 `to_dict` 的 `actions`，
+        # 恢复侧一直漏读 ⇒ 重启后 `actions` 归 0，`instance_no_action` 会把"重启前真发过动作"
+        # 的实例误判成零动作。`failed_actions` 同批随行。
+        actions=int(data.get("actions", 0)),
+        failed_actions=int(data.get("failed_actions", 0)),
     )
 
 
