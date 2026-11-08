@@ -146,9 +146,12 @@ def test_real_repo_site_readings_are_pinned(real):
     # 231 → 232（2026-11-08 AF-742 瞬态退避重试）：`HA_TRANSIENT_RETRY` 一枚 WARNING 站点
     # （af_adapters/ha.py 的 `call`，attempts/ok/error 一并报）——设备过渡态拒收写入的退避重发必须可查，
     # 台账 §1.181。⛔ 无码存量与 §四 上限不动（新站带码 ⇒ 不吃那一格）。
-    assert len(real["sites"]) == 232
-    assert len({s["path"] for s in real["sites"]}) == 35
-    assert dict(lv) == {"debug": 25, "info": 10, "warning": 162, "error": 24, "exception": 11}
+    # 232 → 233（2026-11-08 AF-744 watch 关停）：`WATCH_RELEASE_SKIPPED` 一枚 WARNING 站点
+    # （af_cli._release_lease_after_stop：活写者在场时**故意跳过**租约释放，必须可查——
+    # 静默跳过会让下次排查把"没放锁"误判成锁泄漏）。台账 §1.183。⛔ 无码存量与 §四 上限不动。
+    assert len(real["sites"]) == 233
+    assert len({s["path"] for s in real["sites"]}) == 36
+    assert dict(lv) == {"debug": 25, "info": 10, "warning": 163, "error": 24, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
