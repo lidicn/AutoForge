@@ -158,18 +158,59 @@ class Runtime:
             self.executor.ask_answer_recorder = _record_ask_answer
         # v0.4.0：`emit` 发布的事件必须驱动 `on event` 订阅者（发布 → 订阅闭环）
         self.executor.on_emit = self.scheduler.handle_event
+        # AF-745（2026-11-08）：三条播报腿（ask／do／emit）共用的**事实计数**。
+        # 为什么要有：这三条腿失败时全部"静默旁路"——无桥直接 no-op、房间解析不到就拒投递、
+        # 发布异常只吞 warning；而 api 进程此前没接日志线 ⇒ 单发「播报哑掉」在**回执里也看不见**
+        # （现场：出资人三连跑纯播报 IR，实例都走到 e1 done，收件账零新增、docker logs 零命中）。
+        # 这里把每次播报的去向记成四个数，供 `live_run` 回执与健康面读数；⛔ 不改播报语义，
+        # 也不把失败冒到执行链（三条腿仍然 fail-closed／吞异常）。
+        speak_stats: dict[str, Any] = {
+            "requested": 0,   # 钩子被调用的次数（含随后失败的那些）
+            "published": 0,   # 真投出去且 broker 收下的次数
+            "failed": 0,      # 没投出去 / 被拒的次数
+            "last_error": None,  # no_bridge／empty_text／area_unresolved／publish:CODE／publish_raised:TYPE
+            "last_room": None,   # 最后一次成功投递的 area_id（诊断用）
+        }
+        self.executor.speak_stats = speak_stats
+
+        def _speak_fail(reason: str) -> None:
+            speak_stats["failed"] = int(speak_stats["failed"]) + 1
+            speak_stats["last_error"] = reason
+
+        def _speak_ok(area_id: str) -> None:
+            speak_stats["published"] = int(speak_stats["published"]) + 1
+            speak_stats["last_room"] = area_id
+
+        def _speak_deliver(trace_id: str, text: str, room: str, entity_id: str, source: str) -> None:
+            """三条腿共用的投递体：取桥 → 解析房间 → 发布 → 记账（AF-745 抽出来防三份漂移）。"""
+            speak_stats["requested"] = int(speak_stats["requested"]) + 1
+            bridge = _bridge.current_bridge()
+            if bridge is None:
+                _speak_fail("no_bridge")
+                return
+            if not text:
+                _speak_fail("empty_text")
+                return
+            area_id = self.resolve_room(room, source=source, entity_id=entity_id)
+            if area_id is None:
+                _speak_fail("area_unresolved")
+                return
+            try:
+                out = bridge.publish_speak(trace_id=trace_id, text=text, room=area_id)
+            except Exception as exc:  # noqa: BLE001 —— 播报旁路失败⛔ 冒到执行链
+                _speak_fail(f"publish_raised:{type(exc).__name__}")
+                return
+            if isinstance(out, dict) and out.get("published") is False:
+                _speak_fail(f"publish:{out.get('code') or out.get('error') or 'not_published'}")
+                return
+            _speak_ok(area_id)
+
         # DCD 裁定 2026-11-04 阶段1（乙）：ask 触发时经现有 MQTT 桥向 butler/inbox/speak 额外播报。
         # ⚠️ 桥在 serve 里是 build_app 之后才 attach（见 af_mqtt_bridge.current_bridge 注释）⇒
         # 这里**闭包惰性取** current_bridge()，⛔ 构造期抓引用会永远抓到 None（装配期无桥）。
         # 无桥 ⇒ 直接 no-op（零副作用）。⛔ 不改 ask 核心逻辑，播报失败不冒到执行链。
         def _speak_ask(trace_id: str, text: str, room: str) -> None:
-            bridge = _bridge.current_bridge()
-            if bridge is None or not text:
-                return
-            area_id = self.resolve_room(room, source="ask")
-            if area_id is None:
-                return  # DCD T3-AF 硬判据：解析不到 ⇒ 拒投递（已打 AREA_UNRESOLVED）
-            bridge.publish_speak(trace_id=trace_id, text=text, room=area_id)
+            _speak_deliver(trace_id, text, room, "", "ask")
 
         self.executor.on_ask_speak = _speak_ask
         # v1.28 R1（DCD 裁定 2026-11-04 §2.3 C1/C3/C6）：挂起时额外发 `af/ask/pending`。
@@ -199,25 +240,13 @@ class Runtime:
         # 修法：room 缺失时用 do 的**目标实体**反查 catalog 的区域（`entity → area_id`），
         # 查到就用；实体也查不到才拒。⛔ 不退回 fail-open。
         def _speak_do(trace_id: str, text: str, room: str, entity_id: str = "") -> None:
-            bridge = _bridge.current_bridge()
-            if bridge is None or not text:
-                return
-            area_id = self.resolve_room(room, source="do", entity_id=entity_id)
-            if area_id is None:
-                return
-            bridge.publish_speak(trace_id=trace_id, text=text, room=area_id)
+            _speak_deliver(trace_id, text, room, entity_id, "do")
 
         self.executor.on_do_speak = _speak_do
         # emit 播报（AF-PM 裁定 2026-11-05）：emit 事件此前不走任何播报钩子 ⇒ `study_ac_started`
         # 这类播报永远不出声。与 do **同源同一闭包语义**：三腿（ask/do/emit）同一闸、fail-closed 一致。
         def _speak_emit(trace_id: str, text: str, room: str, entity_id: str = "") -> None:
-            bridge = _bridge.current_bridge()
-            if bridge is None or not text:
-                return
-            area_id = self.resolve_room(room, source="emit", entity_id=entity_id)
-            if area_id is None:
-                return
-            bridge.publish_speak(trace_id=trace_id, text=text, room=area_id)
+            _speak_deliver(trace_id, text, room, entity_id, "emit")
 
         self.executor.on_emit_speak = _speak_emit
         self.conf.seed(self.graph)

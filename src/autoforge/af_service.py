@@ -3141,6 +3141,12 @@ def live_run(
         # HA 401 那次回执 ok:true + writes:[吊灯] —— 自相矛盾。这里把"实际执行裁决"
         # 显式化：全部实例终态决定 dispatched/failed/partially/nothing。
         "dispatch_result": _dispatch_verdict(runtime),
+        # AF-745（2026-11-08）：**播报去回执**。现场（出资人三连跑纯播报 IR）实例全部走到
+        # e1 done、收件账零新增、docker logs 零命中——播报是纯旁路，失败时三条腿都静默
+        # （无桥 no-op／房间解析不到拒投／发布异常只吞 warning），回执里连"有没有试过"都看不出。
+        # 这里把三条腿的事实计数原样带回：requested／published／failed／last_error／last_room。
+        # ⛔ 不改变 `ok`／`dispatch_result` 语义（播报失败不等于下发失败），⛔ 不静默。
+        "speech": dict(getattr(runtime.executor, "speak_stats", None) or {}),
     }
 
 

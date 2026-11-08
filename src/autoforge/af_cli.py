@@ -1694,6 +1694,10 @@ def serve(
     # `finally`／`atexit` 两条腿都不跑。补一枚只翻旗子的处理器能把它接回 `finally`，代价是退出状态
     # 143→0、compose `restart:` 读到的语义跟着变 ⇒ ⛔ 不自决，那格记在 `docs/进程模型清单.md` §六 问 4。
     atexit.register(reap_watch_child, store_root, readonly)
+    # AF-745（2026-11-08）：给 api／uvicorn 进程接日志线（与 AF-740 给 watch 子进程接的是同一条
+    # 纪律）。位置刻意在 `atexit.register` **之后**：进程模型门的 F／E 锚点钉着上面那两处站点，
+    # 插在它们之前会把行号钉位顶掉（本仓台账按行号对撞）。
+    _configure_serve_logging()
     # 裁定 20261011 §3 Q8.1 的最小告警线：三档（ERROR／EXCEPTION／CRITICAL）进 owner 收件箱。
     # 射程、"没桥就不装"与去重口径都在 `af_alert`；这里只负责在 `uvicorn.run` 之前把它挂上。
     from .af_alert import install_owner_alert
@@ -1767,6 +1771,37 @@ def _print_stats(runtime: Runtime) -> None:
 
 def main() -> None:
     app()
+
+
+def _configure_serve_logging(level: int | None = None) -> None:
+    """AF-745（2026-11-08）：给 **api／uvicorn 进程**的 `autoforge.*` logger 接上 stderr 出口。
+
+    现场（台账 §1.184）：出资人三连跑纯播报 IR，实例全部走到 e1 done，但 docker logs 里
+    `LIVE RUN`／`AREA_UNRESOLVED`／`EMIT_SPEAK_PUBLISH_FAILED` **全部零命中**——不是事件没发生，
+    而是 api 进程没有把它们送到 stderr：
+
+    - uvicorn 只给 `uvicorn`／`uvicorn.error`／`uvicorn.access` 三个 logger 配 handler，root 一直空；
+    - `af_alert.install_owner_alert` 装的是**收件箱腿**，而且只收 ERROR／EXCEPTION／CRITICAL；
+    - 于是 `autoforge.*` 的 INFO 全丢、WARNING 也进不了 docker logs（AF-740 只接了 watch 子进程）。
+
+    这里给 `autoforge` 这棵 logger 挂一枚 stderr handler（**幂等**：重复调用不再叠加），级别默认
+    INFO，可用 `AUTOFORGE_LOG_LEVEL` 覆盖；行式带时间/级别/logger 名，与 watch 子进程那套同格式。
+    ⛔ 不动 uvicorn 自己的 logger（那边 `log_level="info"` 已配好），⛔ 不给 root 加 handler
+    （避免把第三方库的 INFO 一并放大）。
+    """
+    name = (os.environ.get("AUTOFORGE_LOG_LEVEL") or "").strip().upper()
+    lvl = level if level is not None else (getattr(logging, name, logging.INFO) if name else logging.INFO)
+    if not isinstance(lvl, int):  # 环境变量写了怪值 ⇒ 退回 INFO，⛔ 不抛
+        lvl = logging.INFO
+    lg = logging.getLogger("autoforge")
+    lg.setLevel(lvl)
+    if any(getattr(h, "_autoforge_stderr", False) for h in lg.handlers):
+        return  # 幂等：同一进程重复调不叠加 handler
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(lvl)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    handler._autoforge_stderr = True  # 幂等锚点
+    lg.addHandler(handler)
 
 
 if __name__ == "__main__":  # pragma: no cover
