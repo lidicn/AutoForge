@@ -2830,6 +2830,31 @@ def _dispatch_verdict(runtime) -> dict[str, Any]:
     }
 
 
+#: 点火面读数（AF-745 追加，2026-11-08 台账 §1.184 三发实测）。`live_run` 不是"提交就跑"：
+#: 触发器只在回放 events 时才被喂到，**零 events ⇒ 图根本没跑**（`instances=[]`）。而回执此前
+#: 只给 `dispatch_result=nothing_dispatched`——这一个档同时罩住"没点火"、"点了没匹配到条件"、
+#: "跑了但没动作"三种情形，操作员分不清是「我的调用方式错了」还是「设备/下发失败」。
+IGNITION_NO_EVENTS = "no_events"
+IGNITION_NO_TRIGGER = "events_no_trigger"
+
+
+def _ignition_of(events: Sequence[Mapping[str, Any]] | None, runtime: Any) -> dict[str, Any]:
+    """把"图到底跑没跑"单独量出来：`ignited`／`reason`／`events`／`instances`。
+
+    ⛔ 与 `_dispatch_verdict`（跑起来之后动作成没成）**正交**，两面各自如实报：
+    - 零 events ⇒ `no_events`（调用方漏注入 events，图没跑，⛔ 不许当成下发失败）；
+    - 有 events 但一个实例都没起 ⇒ `events_no_trigger`（触发条件未满足，去查实体/条件）；
+    - 起了实例 ⇒ `ignited=True`；动作成败仍看 `dispatch_result`（"点火成功＋执行失败"是合法组合）。
+    """
+    n_events = len(events or [])
+    n_instances = len(runtime.instances.all())
+    if n_events <= 0:
+        return {"ignited": False, "reason": IGNITION_NO_EVENTS, "events": 0, "instances": n_instances}
+    if n_instances <= 0:
+        return {"ignited": False, "reason": IGNITION_NO_TRIGGER, "events": n_events, "instances": 0}
+    return {"ignited": True, "reason": "", "events": n_events, "instances": n_instances}
+
+
 def live_status() -> dict[str, Any]:
     """真机下发的可用性（供前端渲染开关/禁用原因）。"""
     cfg = _live_config()
@@ -3096,6 +3121,9 @@ def live_run(
         _advance_canary_windows(runtime)
     except Exception as exc:  # noqa: BLE001 —— 推进失败不许把已发生的下发回滚掉
         logger.warning("LIVE_RUN_CANARY_ADVANCE_FAILED 观察窗推进异常（不影响已发生的下发）：%s", exc)
+    # AF-745 追加（2026-11-08）：点火面读数取在**下发与观察窗之后**——它要反映"图最终跑出哪些
+    # 实例"，⛔ 不是"events 列表长度"。同一枚事实进两处：审计流水（列表面据它分档）与回执。
+    ignition = _ignition_of(events, runtime)
     # DCD 裁定 2026-10-30（AF-403 后半）：过闸凭据标签进审计流水（deploy_audit.jsonl
     # 随 store 根落盘）——回执给调用方，流水给事后追查；过闸无痕＝查不到哪把凭据放行。
     # 记账失败不回滚已发生的下发（口径同 _persist_deploy：操作员连撤销把手都拿不到更糟）。
@@ -3110,6 +3138,8 @@ def live_run(
                 data={"authorized_by": code_tag, "writes": sorted(targets),
                       "verdict": _dispatch_verdict(runtime),
                       "actions": len(sorted(targets)),
+                      # AF-745 追加：点火档进流水，列表面才分得开「没点火」与「跑了没动作」
+                      "ignition": str(ignition["reason"] or "ignited"),
                       "graph": [_auto_name(a) for a in graph],
                       "subject": str(caller or "")}),
             store,
@@ -3140,6 +3170,11 @@ def live_run(
         # 契约 R4-2（2026-10-29）：`writes` 是 IR **声明**的写目标清单，不是执行记录；
         # HA 401 那次回执 ok:true + writes:[吊灯] —— 自相矛盾。这里把"实际执行裁决"
         # 显式化：全部实例终态决定 dispatched/failed/partially/nothing。
+        # AF-745 追加（2026-11-08，卡面新增证据）：**点火面与执行面分开报**。零 events 时
+        # `instances=[]`＋`dispatch_result=nothing_dispatched`，此前回执读起来像"跑了但没动作"，
+        # 实情是**图根本没跑**（`_replay_live` 只在有 events 时才 emit）。`ignition.ignited=false`
+        # 直接指向调用方式/触发条件，⛔ 不改 `ok`／`dispatch_result` 语义（未点火也不是下发失败）。
+        "ignition": ignition,
         "dispatch_result": _dispatch_verdict(runtime),
         # AF-745（2026-11-08）：**播报去回执**。现场（出资人三连跑纯播报 IR）实例全部走到
         # e1 done、收件账零新增、docker logs 零命中——播报是纯旁路，失败时三条腿都静默
@@ -3216,6 +3251,9 @@ def _receipt_of(event: Mapping[str, Any]) -> dict[str, Any]:
         "graph": [str(g) for g in graph] if isinstance(graph, (list, tuple)) else [],
         "actions": int(actions),
         "verdict": verdict_text,
+        # AF-745 追加：点火档（`ignited`／`no_events`／`events_no_trigger`）。老流水里没有这枚键
+        # ⇒ 空串＝**未知**，⛔ 不许回退成 `ignited`（那会把"查不出"说成"跑过"）。
+        "ignition": str(data.get("ignition") or ""),
         "code_mask": str(data.get("authorized_by") or ""),
     }
 
