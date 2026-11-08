@@ -36,6 +36,10 @@
 - **E watch SIGTERM 收尾形状**：装 `signal.signal(signal.SIGTERM, …)` 的那个函数体内必须有一个 `try`，
   其 finalbody 同时含 `stop.set()`／`ticker.join(`／`coord.release()`。§二之九十三 的原话是「把 SIGTERM
   接回既有 `finally`」，本判据就是那句的实现面锚点。
+  AF-744（2026-11-08）：收尾允许**路由**到 `_release_lease_after_stop(...)`（join 后验 `is_alive`，
+  有活写者就**跳过** release）。这时本判据额外核那枚辅助函数的函数体：必须同时读得出
+  `ticker.join(`／`is_alive()`／`coord.release()` —— 路由不许变成"把 join 或 release 弄丢"，
+  更不许把验活那一步省掉（省掉就退回"带着活写者放租约"的原 bug）。
 - **F serve 退出兜底形状**（裁定 §3 Q7.2）：`af_cli.py` 里必须同时读得出三件事——①一枚
   `atexit.register(reap_watch_child, …)`，注册对象必须**指名**那枚收子进程的函数（注册一枚空函数或
   只印一行日志的钩子不算）；②`reap_watch_child` 函数体内有 `stop_watch(` 调用，也就是复用既有那条
@@ -415,6 +419,31 @@ def serve_teardown_shape(trees: dict[Path, ast.Module], root: Path) -> list[str]
     return []
 
 
+def _watch_release_helper_ok(tree: ast.Module) -> bool:
+    """AF-744：`_release_lease_after_stop(...)` 的路由腿本身是否仍守住收尾不变量。
+
+    必须同时读得出 `ticker.join(`／`is_alive()`／`coord.release()`：少了 `is_alive()` 就退回
+    「带着活写者放租约」，少了 join 或 release 就是把收尾弄丢——路由不是免检牌照。
+    """
+    fn = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+         and n.name == "_release_lease_after_stop"),
+        None,
+    )
+    if fn is None:
+        return False
+    # 只扫**语句体**（⛔ 排除 docstring）：docstring 里可能提到旧实现的 `is_alive()`／`coord.release()`
+    # （本函数的模块头就写了），把 docstring 算进去会让"代码里其实删掉了"也能恒绿——判据失牙。
+    stmts = [
+        ast.unparse(x)
+        for x in fn.body
+        if not (isinstance(x, ast.Expr) and isinstance(x.value, ast.Constant))
+    ]
+    body = "\n".join(stmts)
+    return all(x in body for x in ("ticker.join(", "is_alive()", "coord.release()"))
+
+
 def watch_sigterm_shape(trees: dict[Path, ast.Module], root: Path) -> list[str]:
     p = _snap(root).base / CLI_REL
     tree = trees.get(p)
@@ -441,16 +470,25 @@ def watch_sigterm_shape(trees: dict[Path, ast.Module], root: Path) -> list[str]:
             findings.append(f"E：SIGTERM 处理器装在 `{owner}`，却找不到那个函数节点")
             continue
         ok = False
+        helper_ok = _watch_release_helper_ok(tree)
         for t in ast.walk(fn):
             if not isinstance(t, ast.Try) or not t.finalbody:
                 continue
             fin = ast.unparse(t.finalbody)
-            if all(x in fin for x in ("stop.set()", "ticker.join(", "coord.release()")):
+            if "stop.set()" not in fin:
+                continue
+            if all(x in fin for x in ("ticker.join(", "coord.release()")):
+                ok = True
+            # AF-744：允许路由到统一入口，但辅助函数体必须自己守住 join／验活／release
+            elif "_release_lease_after_stop(" in fin and helper_ok:
                 ok = True
         if not ok:
             findings.append(
                 f"E：`{owner}` 里装了 SIGTERM 处理器，却没有一个 `finally` 同时做 `stop.set()`／`ticker.join(`／"
                 "`coord.release()`——SIGTERM 与 Ctrl+C 不再是同一条收尾路径"
+                "（AF-744 起允许路由到 `_release_lease_after_stop(...)`，但那枚辅助函数的语句体里必须同时"
+                "读得出 `ticker.join(`／`is_alive()`／`coord.release()`；少 `is_alive()` 就退回"
+                "「带着活写者放租约」，少 join／release 就是把收尾弄丢）"
             )
     return findings
 

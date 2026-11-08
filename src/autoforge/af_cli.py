@@ -579,6 +579,45 @@ def _watch_targets_deployed(store: Any, graph: Any) -> bool:
         return False
 
 
+#: AF-744（2026-11-08）：`forge watch` 关停时等后台写线程退出的预算（秒）。
+WATCH_SHUTDOWN_JOIN_S = 2.0
+
+
+def _release_lease_after_stop(
+    coord: Any,
+    ticker: Any,
+    reconcile: Any = None,
+    join_s: float = WATCH_SHUTDOWN_JOIN_S,
+) -> bool:
+    """关停收尾：**永不带活写者放租约**（AF-744）。
+
+    旧实现在 `ticker.join(timeout=2.0)` 之后**不看 `is_alive()`** 就 `coord.release()`：
+    tick 卡在 HA/MQTT IO 上超过 2 秒时，租约已经放掉、旧 daemon ticker 还在写 store；
+    紧接着 `af_save` 热重载拉起的下一个 watch 进程立刻抢到锁 ⇒ **两个写者同写 store**
+    （违反 `SERVE_LOCK_NAME` 自立的约）。
+
+    判定：join 预算用尽后，只要**任何一个后台写线程**（ticker／IR 对账）还活着 ⇒ 跳过释放，
+    靠本进程退出时 fd 关闭释放内核锁（flock 生命周期挂在打开文件描述上，进程退出即释放；
+    本函数所在的 `watch` 命令紧接着就返回，不会把租约留在盘上）。
+
+    返回 True＝真的放了租约；False＝有活写者、**故意没放**（⛔ 不是失败：这是更安全的那个选择）。
+    """
+    if ticker is not None:
+        ticker.join(timeout=join_s)
+    if reconcile is not None:
+        reconcile.join(timeout=join_s)
+    live = [t for t in (ticker, reconcile) if t is not None and t.is_alive()]
+    if live:
+        logging.getLogger("autoforge.cli").warning(
+            "WATCH_RELEASE_SKIPPED 关停时仍有后台写线程存活，跳过租约释放"
+            "（靠进程退出关闭 fd 释放内核锁）：threads=%s",
+            ",".join(str(getattr(t, "name", "?")) for t in live),
+        )
+        return False
+    coord.release()
+    return True
+
+
 @app.command()
 def watch(
     path: Path = typer.Argument(..., help="IR 文件路径（.json）"),
@@ -745,10 +784,8 @@ def watch(
         result = {"published": -1, "stopped": True}
     finally:
         stop.set()
-        ticker.join(timeout=2.0)
-        if _reconcile is not None:
-            _reconcile.join(timeout=2.0)
-        coord.release()
+        # AF-744：join 之后必须验活；有活写者 ⇒ 不放租约（见 `_release_lease_after_stop`）。
+        _release_lease_after_stop(coord, ticker, _reconcile)
     typer.echo(f"· 常驻监听结束，累计处理事件：{result.get('published')}")
     _print_stats(runtime)
 
