@@ -157,7 +157,15 @@ class FileLock:
             return
         fd, self._fd = self._fd, None
         self._owner_thread = None
-        _LOCAL_HELD.discard(_key(self.path))
+        # AF-743（2026-11-08）：摘牌必须**晚于**内核解锁与关句柄。
+        # 旧实现先 `_LOCAL_HELD.discard(...)` 再 `flock(LOCK_UN)`（中间还隔着一次 syscall），
+        # 那个窗口里本进程的锁牌已经没了、内核 flock 还攥在手里；此刻**别的线程**调
+        # `held_by_other()` 会另开一个 fd 去 non-blocking 抢锁——flock 的粒度是**打开文件描述**，
+        # 同进程异 fd 一样互斥 ⇒ 抢不到 ⇒ 读成「别人在写」（serve 租约读侧 / live_run 写者
+        # 判定的偶发自误判）。顺序改成 unlock → close → discard 之后窗口消失：
+        # 解锁前有牌 ⇒ 读侧直接 False；解锁后解锁成功 ⇒ 抢得到 ⇒ False。
+        # `discard` 落在 finally：解锁/关闭抛异常时内核态已经由 close 释放，表里再留着这张牌
+        # 就是反向失真（永远报「没人写」）——异常路径同样必须对齐内核态。
         try:
             if _POSIX:
                 _fcntl.flock(fd, _fcntl.LOCK_UN)
@@ -165,7 +173,10 @@ class FileLock:
                 os.lseek(fd, 0, os.SEEK_SET)
                 _msvcrt.locking(fd, _msvcrt.LK_UNLCK, 1)
         finally:
-            os.close(fd)
+            try:
+                os.close(fd)
+            finally:
+                _LOCAL_HELD.discard(_key(self.path))
 
     # ── 诊断 ──
     @property
@@ -183,7 +194,13 @@ class FileLock:
             return {}
 
     def _stamp(self) -> None:
-        """写持有者信息到 sidecar（best effort；失败不影响锁语义）。"""
+        """写持有者信息到 sidecar（best effort；失败不影响锁语义）。
+
+        AF-743（2026-11-08）：`self.info` 必须**先铺底**、诊断字段后置覆盖。
+        旧写法 `{"owner": …, "acquired_at": …, **self.info}` 让调用方的 info 能盖掉
+        `owner`／`acquired_at`——两个都是本模块自己的诊断字段（谁持有、何时拿到），
+        被覆盖之后 `holder()` 报的是调用方随便写的东西，事故现场会指向错误的人/时间。
+        """
         try:
             # POSIX：mkstemp 建的临时文件天生是 0o600，`os.replace` 之后 sidecar 继承这个位
             # （ADM B-14 的"锁信息文件限权"因此不靠显式 chmod）。Windows 上这句不成立（F-10 实测）。
@@ -191,9 +208,10 @@ class FileLock:
                 self._info_path,
                 json.dumps(
                     {
+                        # AF-743：info 先铺底，诊断字段后置 ⇒ 调用方⛔ 盖不掉 owner/acquired_at
+                        **self.info,
                         "owner": owner_id(),
                         "acquired_at": datetime.now(timezone.utc).isoformat(),
-                        **self.info,
                     },
                     ensure_ascii=False,
                 ),
