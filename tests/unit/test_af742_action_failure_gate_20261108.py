@@ -309,3 +309,110 @@ def test_a7_no_action_not_reported_when_action_failed():
     assert "entity_drift" in types, types
     assert "instance_no_action" not in types, \
         "动作失败过的 run ⛔ 不许再被标成『零动作』（两个读数并存会把人带回错误归因）"
+
+# ── R 族：HA 瞬态设备错误退避重试（第三件，PM 卡「三件并 v1.28.2」）────────────
+# 现场：`xiaomi_home/climate.py:168 async_set_temperature` 在模式写入/开机后约 1 秒的
+# 过渡态抛 `RuntimeError: 执行错误, 未知错误, code=-706010002 … target-temperature`；
+# 稳态对照样本同一 IR 成功 ⇒ 瞬态。适配器层只对这类标记退避重发**同一动作同一参数**。
+
+
+class _FlakyTransport:
+    """按脚本返回结果的下发桩（不碰网络），记录调用次数与退避时长。"""
+
+    def __init__(self, script: list[bool], error: str = "HA 返回 400：RuntimeError: 执行错误, 未知错误, code=-706010002, target-temperature"):
+        self.script = list(script)
+        self.error = error
+        self.calls = 0
+
+    def __call__(self, action, params):
+        from autoforge.af_adapters.base import CallResult
+
+        ok = self.script.pop(0) if self.script else False
+        self.calls += 1
+        if ok:
+            return CallResult.ok({"action": action})
+        return CallResult.fail(self.error, action=action)
+
+
+def _transport(script, error=None):
+    from autoforge.af_adapters import ha
+
+    sleeps: list[float] = []
+
+    class _T(ha.HATransport):
+        def __init__(self):
+            super().__init__(base_url="http://ha.local")
+            self._script = list(script)
+            self._error = error or (
+                "HA 返回 400：RuntimeError: 执行错误, 未知错误, code=-706010002, "
+                "climate.x, target-temperature"
+            )
+            self.calls = 0
+
+        def _call_once(self, action, params):
+            from autoforge.af_adapters.base import CallResult
+
+            ok = self._script.pop(0) if self._script else False
+            self.calls += 1
+            if ok:
+                return CallResult.ok({"action": action})
+            return CallResult.fail(self._error, action=action, params=dict(params))
+
+    orig = ha._sleep
+    ha._sleep = sleeps.append
+    return _T(), sleeps, lambda: setattr(ha, "_sleep", orig)
+
+
+def test_r1_transient_error_is_retried_then_recovers(caplog):
+    """瞬态拒绝 2 次后成功 ⇒ 重试 2 次、指数退避 3s/6s、一次性 warning 报 ok=True。"""
+    t, sleeps, restore = _transport([False, False, True])
+    try:
+        with caplog.at_level(logging.WARNING, logger="autoforge.af_adapters.ha"):
+            out = t("climate.set_temperature", {"entity_id": "climate.x", "temperature": 26})
+    finally:
+        restore()
+    assert out.success is True, out
+    assert t.calls == 3, f"应共下发 3 次（1 次 + 2 次重试），实得 {t.calls}"
+    assert sleeps == [3.0, 6.0], f"指数退避应为 3s、6s，实得 {sleeps}"
+    lines = [r.getMessage() for r in caplog.records if "HA_TRANSIENT_RETRY" in r.getMessage()]
+    assert len(lines) == 1, f"重试面只该出一条（avoid 刷屏），实得 {lines}"
+    assert "attempts=2" in lines[0] and "ok=True" in lines[0], lines[0]
+
+
+def test_r2_non_transient_error_is_not_retried(caplog):
+    """鉴权/参数类失败**一次都不重试**（否则会把真故障拖成 6 秒空转，还掩盖 401）。"""
+    t, sleeps, restore = _transport([False] * 3, error="HA 返回 401：unauthorized")
+    try:
+        with caplog.at_level(logging.WARNING, logger="autoforge.af_adapters.ha"):
+            out = t("climate.set_temperature", {"entity_id": "climate.x", "temperature": 26})
+    finally:
+        restore()
+    assert out.success is False
+    assert t.calls == 1, f"非瞬态失败⛔ 不许重试，实得 {t.calls} 次"
+    assert sleeps == [], f"非瞬态失败⛔ 不许退避，实得 {sleeps}"
+    assert not [r for r in caplog.records if "HA_TRANSIENT_RETRY" in r.getMessage()]
+
+
+def test_r3_transient_exhausted_reports_single_failure(caplog):
+    """瞬态耗尽 ⇒ 重试 2 次后交回失败（attempts=2 ok=False），上层仍只写一条失败动作。"""
+    t, sleeps, restore = _transport([False, False, False])
+    try:
+        with caplog.at_level(logging.WARNING, logger="autoforge.af_adapters.ha"):
+            out = t("climate.set_temperature", {"entity_id": "climate.x", "temperature": 26})
+    finally:
+        restore()
+    assert out.success is False
+    assert t.calls == 3 and sleeps == [3.0, 6.0]
+    line = [r.getMessage() for r in caplog.records if "HA_TRANSIENT_RETRY" in r.getMessage()][0]
+    assert "attempts=2" in line and "ok=False" in line, line
+    assert "-706010002" in line, f"错误原文要留在重试行里：{line}"
+
+
+def test_r4_transient_marker_list_is_tight():
+    """标记表只认写明的瞬态码——⛔ 不许把 401/参数错也算瞬态。"""
+    from autoforge.af_adapters import ha
+
+    assert ha.is_transient_device_error("... code=-706010002, target-temperature") is True
+    assert ha.is_transient_device_error("HA 返回 401：unauthorized") is False
+    assert ha.is_transient_device_error("非法动作（应为 domain.service）") is False
+    assert ha.is_transient_device_error(None) is False

@@ -14,6 +14,12 @@
 
 边界（KICKOFF §4.6）：传输层（连接/鉴权/套接超时）归适配器，语义层（重试/退避/降级）归 IR。
 本模块**只做单次下发**，不含 retry/fallback。
+
+⚠️ 2026-11-08 修订（AF-742；PM 卡「三件并 v1.28.2」明确授权）：唯一例外是**瞬态设备拒绝**——
+设备在过渡态直接拒收本次写入（`code=-706010002` 类，见 `TRANSIENT_DEVICE_ERROR_MARKERS`），
+状态**没有被改变**，退避后重发**同一动作、同一参数**属于传输层重发，不是语义降级
+（不换动作、不改边、不 fallback）。默认 2 次、指数退避 3s／6s；⛔ 其余失败（鉴权/参数非法/
+实体不存在）一次都不重试。IR 侧语义不变，图上看不到这层。
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Iterable, Mapping
@@ -34,6 +41,28 @@ __all__ = ["HAAdapter", "HATransport", "HAStateProvider"]
 
 #: transport(action, params) -> CallResult
 Transport = Callable[[str, Mapping[str, Any]], CallResult]
+
+# ── AF-742（2026-11-08）：瞬态设备错误的退避重试 ───────────────────────────
+#: 现场铁证：米家在「模式写入/开机后约 1 秒」的过渡态会拒收 `target-temperature`——
+#: HA 侧 `custom_components/xiaomi_home/climate.py:168 async_set_temperature` 抛
+#: `RuntimeError: 执行错误, 未知错误, code=-706010002, …, target-temperature`。
+#: 这类拒绝是**瞬态**的：设备压根没接受写入（状态没变），退避后重发是等价重试，
+#: ⛔ 不改变 IR 语义、⛔ 不改边选择；稳态下同一 IR 会成功（当晚对照样本即如此）。
+#: ⛔ 只认下面这组瞬时标记：鉴权失败、参数非法、实体不存在等**一次都不重试**。
+TRANSIENT_DEVICE_ERROR_MARKERS: tuple[str, ...] = ("-706010002",)
+#: 最多重试次数（不含第一次调用）与退避基数（秒，指数退避：3s、6s）。
+TRANSIENT_RETRY_MAX = 2
+TRANSIENT_RETRY_BASE_DELAY_S = 3.0
+
+#: 可替换的睡眠钩子（单测 monkeypatch 它，⛔ 不真睡）。
+_sleep: Callable[[float], None] = time.sleep
+
+
+def is_transient_device_error(error: str | None) -> bool:
+    """错误文本是否属于「瞬态设备拒绝」（值得退避重发）。"""
+    text = error or ""
+    return any(marker in text for marker in TRANSIENT_DEVICE_ERROR_MARKERS)
+
 
 # R-39：不再硬编码内网 HA 地址；从环境变量 AUTOFORGE_HA_URL 读。
 # 未配置时为空，构造 HATransport/HAStateProvider 会明确报错。
@@ -98,6 +127,35 @@ class HATransport:
         return self.call(action, params)
 
     def call(self, action: str, params: Mapping[str, Any]) -> CallResult:
+        """下发 `domain.service`；**仅对瞬态设备拒绝**做退避重试（见模块头 2026-11-08 修订）。
+
+        `attempts`＝本次调用额外重发的次数（0＝一次成功）。只有全部尝试失败时才把最后一次
+        的 `CallResult` 交回上层 ⇒ 上层（executor）照旧只写一条 `action_failed`，
+        ⛔ 不会把"重试 2 次"写成三次失败动作。
+        """
+        result = self._call_once(action, params)
+        attempts = 0
+        while (
+            not result.success
+            and attempts < TRANSIENT_RETRY_MAX
+            and is_transient_device_error(result.error)
+        ):
+            attempts += 1
+            delay = TRANSIENT_RETRY_BASE_DELAY_S * (2 ** (attempts - 1))
+            _sleep(delay)
+            result = self._call_once(action, params)
+        if attempts:
+            # 单一站点、单一码：attempts/ok 一起报，运维一眼看出「重试过、最后成没成」。
+            logging.getLogger(__name__).warning(
+                "HA_TRANSIENT_RETRY 瞬态设备错误已重试（attempts=%d ok=%s action=%s error=%s）",
+                attempts,
+                result.success,
+                action,
+                (result.error or "")[:160],
+            )
+        return result
+
+    def _call_once(self, action: str, params: Mapping[str, Any]) -> CallResult:
         """单次下发：`domain.service` → `POST /api/services/{domain}/{service}`。"""
         self._refresh_if_stale()
         domain, _, service = action.partition(".")
