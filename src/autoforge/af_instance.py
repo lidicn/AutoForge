@@ -126,6 +126,13 @@ class InstanceContext:
     #: 有了这个计数，实例终态时 `actions==0` 且图里确有 `do` 节点 ⇒ 落一条
     #: `instance_no_action` 审计，把"派发过但零动作"从假设变成读数。
     actions: int = 0
+    #: AF-742（2026-11-08）：本实例**失败过几次动作**（`ACTION_FAILED` 那条路＋软失效＋调用抛错）。
+    #: 存在的理由＝终态读数分不清「干净完成」与「短路完成」：现场 2026-11-08 02:01
+    #: `complete actions=1` 看上去像"一次动作就结束了"，实际是 d2 `climate.set_temperature`
+    #: 失败→`on_error` 短路到 `p1`（跳过 e1 播报）。只有 `actions` 一个数读不出这件事。
+    #: 与 `actions` 分开记：`actions` 是**交出去几次**（事实），`failed_actions` 是**其中几次失败**
+    #: （也是事实），两者都不是决策，⛔ 不参与边选择。
+    failed_actions: int = 0
     #: v0.9.0 实例归属：创建/持有本实例的进程身份（owner_id()），恢复仲裁用
     owner: str = ""
 
@@ -149,6 +156,8 @@ class InstanceContext:
             "cap_warned": self.cap_warned,
             "owner": self.owner,
             "actions": self.actions,  # AF-739：真下发次数要随实例持久化往返（重启后仍可判"零动作"）
+            # AF-742：失败动作计数随实例往返——终态读数要能分「干净完成」与「短路完成」
+            "failed_actions": self.failed_actions,
         }
 
 
