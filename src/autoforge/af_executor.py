@@ -220,6 +220,16 @@ class NodeExecutor:
     #: 运行期事实落盘（PM 卡 2026-11-04）：canary 试演状态记录回调
     #: `(state, automation_id, since, until, extra) -> None`；未注入时零副作用。
     runtime_facts: Any | None = None
+    #: **写后回读**统计（AF-746b / v1.28.6，2026-11-08 22:2x 出资人 A+ 裁决）。
+    #: 口径（卡 §十.4.1，**实现前先读**）：HA 回读**不是**设备真值——
+    #: `xiaomi_home` 的 `set_property_async` 写完即 `_prop_value_map=value` ＋ `async_write_ha_state()`，
+    #: 自回显与设备推送在 HA REST 上完全同形，`last_updated` 同样被自回显刷新 ⇒ **没有可作证据的新鲜度信号**。
+    #: 所以只有两档结论：`mismatch`（读到别的值 ⇒ 有牙，记 failed）与 `unverified`（读到写入值，
+    #: **⛔ 永不落 passed**）。⛔ 不许把 unverified 当通过——那是今晚「26/20」坑的假绿形状。
+    readback_stats: dict[str, Any] = field(default_factory=lambda: {
+        "checks": 0, "mismatches": 0,
+        "last_verdict": None, "last_actual": None, "last_expected": None, "last_node": None,
+    })
     #: v1.28 R1：ask 应答事实记录回调 `(automation_id, payload: dict) -> None`。
     #: 由 Runtime 注入 `RuntimeFacts.record_ask_answer`；未注入时零副作用（单测隔离）。
     #: ⛔ 记账失败绝不影响应答消费本身（与 `runtime_facts` 同一条纪律）。
@@ -303,6 +313,9 @@ class NodeExecutor:
         # 之后每段记 segment。这条是"实例到底跑没跑"的第一手读数。
         self._lifecycle(instance, "spawn" if instance.ctx.segments == 1 else "segment",
                         instance.ctx.current_node)
+        # AF-746b（v1.28.6）：到点的写后回读先结账，再继续本段——挂起等 3s 的那条腿就是在
+        # 「resume 后的第一段」到点的（`due_at` 用时钟比，⛔ 不靠墙钟猜）。
+        self._maybe_check_readback(instance)
         if self._over_cap(instance):
             return instance
         steps = 0
@@ -457,6 +470,12 @@ class NodeExecutor:
                     if wrapped.expected_state() is None:
                         # D8：无 SERVICE_STATE 映射 ⇒ 漂移不可判。**必须落终态**（unmodeled），
                         # 否则侧车永远停在 observing、UI 永远显示"试演中"（真机实证）。
+                        # AF-746b（v1.28.6）：**正是这种"判不了"的动作最需要回读**——
+                        # climate.set_temperature 就落这一档（无 SERVICE_STATE 映射），
+                        # 所以这里也登记回读；不登记就等于 A+ 在最需要它的地方失效。
+                        _rb_unmodeled = self._readback_spec(node)
+                        if _rb_unmodeled:
+                            self._schedule_readback(instance, node, _rb_unmodeled)
                         self._record_trial(instance, node, "unmodeled")
                         self._feed_canary_evidence(instance, node, "unmodeled", {
                             "reason": "观察期动作无 SERVICE_STATE 映射，漂移不可判",
@@ -491,6 +510,11 @@ class NodeExecutor:
                         # 侧车永远停在 observing ⇒ UI 一直显示「试演中」）
                         self._record_trial(instance, node, "verified")
                         self._feed_canary_evidence(instance, node, "verified")
+                        # AF-746b（v1.28.6）：canary 节点的 do 成功在**这里**才算数（`_do` 早就
+                        # 挂起了，成功分支的回读登记跑不到）⇒ 通过处登记回读。
+                        _rb = self._readback_spec(node)
+                        if _rb:
+                            self._schedule_readback(instance, node, _rb)
             except Exception:
                 # MEDIUM-3（内核安全审计）：漂移检查异常不能静默降级为 verified（假绿）。
                 # 落 unmodeled 状态 + 审计事件，让可观测性看到这次检查没跑完。
@@ -1187,6 +1211,10 @@ class NodeExecutor:
         if result.success:
             # 一次真实动作落地 → 视为新一轮交互上下文，连问计数清零
             instance.ctx.context["_ask_rounds"] = 0
+            # AF-746b（v1.28.6）：声明了 `readback` 的 do，成功后**登记**一次回读（⛔ 不阻塞本段）。
+            spec = self._readback_spec(node)
+            if spec:
+                self._schedule_readback(instance, node, spec)
             return {"then"}
 
         return self._action_failed_result(instance, node, result)
@@ -1234,6 +1262,110 @@ class NodeExecutor:
             self._fail(instance, f"{node.action} 失败且无 on_error/default 兜底：{result.error}")
             return None
         return set(kinds)
+
+    # ── 写后回读（AF-746b / v1.28.6，出资人 2026-11-08 22:01 A+ 裁决）──────────
+    # 口径铁律（卡 §十.4.1）：**HA 回读 ≠ 设备真值**。`xiaomi_home.set_property_async` 写完即
+    # `_prop_value_map=value` ＋ `async_write_ha_state()`（自回显），与设备真实推送在 HA REST 上
+    # 完全同形；`last_updated` 也被自回显刷新 ⇒ 没有可作证据的新鲜度信号。
+    # ⇒ 只允许两档：`mismatch`（读到别的值，有牙）与 `unverified`（读到写入值，⛔ 永不 passed）。
+    def _readback_spec(self, node: Node) -> dict[str, Any] | None:
+        spec = (node.raw or {}).get("readback")
+        return spec if isinstance(spec, dict) else None
+
+    def _schedule_readback(self, instance: Instance, node: Node, spec: dict[str, Any]) -> None:
+        """do 成功后登记一次回读：⛔ 不阻塞、⛔ 不改动作结果与边选择。"""
+        try:
+            wait_s = parse_duration(str(spec.get("wait") or "3s"))
+        except Exception:  # noqa: BLE001 —— 配置写坏按 3s 兜底（⛔ 不因此失败）
+            wait_s = 3.0
+        instance.ctx.context["pending_readback"] = {
+            "node": node.id,
+            "attribute": str(spec.get("attribute") or "temperature"),
+            "equals": spec.get("equals"),
+            "due_at": self.clock.monotonic() + max(0.0, float(wait_s)),
+        }
+
+    def _readback_actual(self, node: Node, attribute: str) -> Any:
+        """回读**HA 侧**该属性的现读值（如实可能为 None；⛔ 不编值）。"""
+        entity_id = str((node.params or {}).get("entity_id") or "").strip()
+        if not entity_id:
+            target = (node.params or {}).get("target")
+            if isinstance(target, dict):
+                entity_id = str(target.get("entity_id") or "").strip()
+        if not entity_id or self.states is None:
+            return None
+        try:
+            snap = self.states.snapshot([entity_id])
+        except Exception:  # noqa: BLE001 —— 读不到就 None，⛔ 不许当"读到写入值"
+            return None
+        return (snap.attributes.get(entity_id) or {}).get(attribute)
+
+    @staticmethod
+    def _kv_text(value: Any) -> str:
+        """生命周期行是空格分隔的 `k=v`：值里的空格必须压掉，别把行长歪。"""
+        return "_".join(str(_speech_value_text(value)).split()) or "-"
+
+    def _maybe_check_readback(self, instance: Instance, *, force: bool = False) -> str | None:
+        pending = instance.ctx.context.get("pending_readback")
+        if not isinstance(pending, dict):
+            return None
+        if not force and self.clock.monotonic() < float(pending.get("due_at") or 0.0):
+            return None
+        node_id = str(pending.get("node") or "")
+        attribute = str(pending.get("attribute") or "temperature")
+        expected = pending.get("equals")
+        try:
+            node = instance.automation.node(node_id)
+        except KeyError:
+            instance.ctx.context.pop("pending_readback", None)
+            return None
+        actual = self._readback_actual(node, attribute)
+        mismatch = (
+            actual is not None and expected is not None
+            and str(_speech_value_text(actual)) != str(_speech_value_text(expected))
+        )
+        verdict = "mismatch" if mismatch else "unverified"
+        stats = self.readback_stats
+        stats["checks"] = int(stats.get("checks") or 0) + 1
+        if mismatch:
+            stats["mismatches"] = int(stats.get("mismatches") or 0) + 1
+        stats["last_verdict"] = verdict
+        stats["last_actual"] = actual
+        stats["last_expected"] = expected
+        stats["last_node"] = node_id
+        # 实例面事实（回执/实例快照都能读；`unverified` 就写在脸上，⛔ 不给下游当通过的理由）
+        instance.ctx.context["readback"] = {
+            "node": node_id, "verdict": verdict, "actual": actual,
+            "expected": expected, "source": "ha_state",
+        }
+        instance.ctx.context.pop("pending_readback", None)
+        self._lifecycle(instance, "readback", node_id,
+                        verdict=verdict, actual=self._kv_text(actual),
+                        expected=self._kv_text(expected), source="ha_state")
+        if mismatch:
+            self.audit.add(
+                AuditEvent(
+                    type=ACTION_FAILED,
+                    at=self.clock.now(),
+                    message=(
+                        f"写后回读不符：{attribute} 期望 {expected}、实读 {actual}"
+                        f"（HA 回读，⛔ 非设备真值保证）"
+                    ),
+                    automation_id=instance.automation.id,
+                    instance_id=instance.instance_id,
+                    node_id=node_id,
+                )
+            )
+        return verdict
+
+    def check_due_readbacks(self, *, force: bool = False) -> int:
+        """批量结账到点（或 `force=True`）的回读；返回结了几笔。"""
+        done = 0
+        for inst in self.instances.all():
+            if isinstance(inst.ctx.context.get("pending_readback"), dict):
+                if self._maybe_check_readback(inst, force=force) is not None:
+                    done += 1
+        return done
 
     def _if_eval_fail(self, instance: Instance, node: Node, exc: BaseException) -> Iterable[str] | None:
         """if 求值抛错：**不许**走 `default`/`no` 冒充"条件不成立"。

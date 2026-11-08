@@ -3125,6 +3125,13 @@ def live_run(
         _advance_canary_windows(runtime)
     except Exception as exc:  # noqa: BLE001 —— 推进失败不许把已发生的下发回滚掉
         logger.warning("LIVE_RUN_CANARY_ADVANCE_FAILED 观察窗推进异常（不影响已发生的下发）：%s", exc)
+    # AF-746b（v1.28.6，出资人 22:01 A+ 裁决）：写后回读**只结到点的**（非 force）。
+    # 单发是同步一次跑完、不等 3s 驻留 ⇒ 这里通常 `checks=0`，回执里如实是 0 而不是假绿的
+    # `unverified`。回读真正生效面在 watch/sim（有 ticker 或虚拟钟推进）。
+    try:
+        runtime.executor.check_due_readbacks()
+    except Exception as exc:  # noqa: BLE001 —— 回读结账失败不许把已发生的下发打崩
+        logger.warning("LIVE_RUN_READBACK_FAILED 回读结账异常（不影响已发生的下发）：%s", exc)
     # AF-745 追加（2026-11-08）：点火面读数取在**下发与观察窗之后**——它要反映"图最终跑出哪些
     # 实例"，⛔ 不是"events 列表长度"。同一枚事实进两处：审计流水（列表面据它分档）与回执。
     ignition = _ignition_of(events, runtime)
@@ -3186,6 +3193,10 @@ def live_run(
         # 这里把三条腿的事实计数原样带回：requested／published／failed／last_error／last_room。
         # ⛔ 不改变 `ok`／`dispatch_result` 语义（播报失败不等于下发失败），⛔ 不静默。
         "speech": dict(getattr(runtime.executor, "speak_stats", None) or {}),
+        # AF-746b（v1.28.6，出资人 22:01 A+ 裁决）：**写后回读**读数。两档语义写死在这里：
+        # `mismatch`＝读到别的值（有牙，已记 ACTION_FAILED）；`unverified`＝读到写入值，
+        # **⛔ 不是 passed**（HA 回显与设备推送同形，卡 §十.4.1）。单发不等驻留 ⇒ `checks` 常为 0。
+        "readback": dict(getattr(runtime.executor, "readback_stats", None) or {}),
     }
 
 

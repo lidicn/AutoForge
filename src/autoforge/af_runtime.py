@@ -495,6 +495,13 @@ class Runtime:
     def tick(self) -> list[Instance]:
         """时间推进后的统一处理：实例超时 / `for` 到期 / 定时触发 / 队列出队 / 记账清理。"""
         fired = self.scheduler.tick()
+        # AF-746b（v1.28.6）：写后回读到点结账。放在 tick 里而不是发送点，是刻意的——
+        # 回读必须**等过一会儿**才有意义（立刻读＝读自己的写回显，见卡 §十.4.1）。
+        # 记账失败⛔ 不许打断 tick（与 speak/事实记账同一条纪律）。
+        try:
+            self.executor.check_due_readbacks()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("READBACK_CHECK_FAILED 回读结账异常（不影响 tick）：%r", exc)
         self.instances.expire_stale()
         # 跨日清理原先**没有任何生产调用方**（`sweep()` 写好了却没人按）⇒ `fire_log.json` 按天只增不减。
         # `sweep()` 自带 3600s 单调节流，逐 tick 调用不会重复扫盘。
