@@ -170,6 +170,7 @@ def make_client(
     peer: str = PRESENCE_NAME,
     allow_anonymous: bool = False,
     qos: int = _mqtt.QOS,
+    client_id_suffix: str | None = None,
 ) -> Any:
     """按部署环境构造并**连接** client。缺配置/缺 paho 一律抛，不返回"半成品桥"。"""
     host, port, keepalive = preflight(peer=peer, allow_anonymous=allow_anonymous)
@@ -177,6 +178,14 @@ def make_client(
     # `homesdk-autoforge-1`，broker 按 client_id 踢旧连接 ⇒ 两边互踢重连、订阅永远不稳定。
     # 部署侧可经 MQTT_CLIENT_ID env 给 AF 一个独占 client_id；缺省仍用 default。
     client_id = os.environ.get("MQTT_CLIENT_ID") or _mqtt.default_client_id(peer)
+    # AF-748（2026-11-09 真机实证）：**同一个 AF 容器里有两路进程**——`forge serve` 与它拉起的
+    # `forge watch`——两侧都建桥，client_id 同取一个 `MQTT_CLIENT_ID` ⇒ broker 每 5 秒踢一次旧连接
+    # （`/mosquitto/log` 现读累计 28 万+ 次 `already connected, closing old connection`），发布撞在
+    # "刚被踢"的窗口就回 `rc=4`（`MQTT_ERR_NO_CONN`）⇒ `butler/inbox/speak` 根本出不去（TTS 无声）。
+    # 部署侧只给 MQTT_CLIENT_ID（容器级 shared env），进程级身份只能在这里补：后缀缺省不带，
+    # 带则拼在 env id 之后，保证**两路进程在 broker 眼里是两个客户端**。
+    if client_id_suffix:
+        client_id = f"{client_id}-{client_id_suffix}"
     try:
         client = _mqtt.get_client(
             client_id, peer=peer, allow_anonymous=allow_anonymous, qos=qos
@@ -562,9 +571,15 @@ class AfMqttBridge:
         subscribe_insights: bool = True,
         subscribe_linkage: bool = True,
         subscribe_ask_answers: bool = True,
+        presence: bool = True,
     ) -> None:
         self.client = client
         self.proposal_sink = proposal_sink
+        #: AF-748：`presence=False` ⇒ 这座桥**只发事件、不发 status/caps、不设 LWT**。
+        #: 给 `forge watch` 用（`serve` 才是身份 owner）：`advertise()` 是唯一设 will 的地方
+        #: （`homesdk.presence.advertise` 里 `client.will_set(...)` + retained status），两路都调
+        #: 就会同主题互发 `online`/`offline`，谁断谁把对方读成掉线。
+        self.presence = presence
         #: v1.28 R1 小爱腿入向的**落点根**（`<store>/answer_inbox/`，与 WebUI 腿同一目录 ⇒
         #: 消费侧仍是 `af_live.read_answer_inbox` 那一条，不新开第二条消费路）。
         #: None = 没接线 ⇒ 该主题拒收并留痕（契约 §7.2「禁止静默丢弃」），⛔ 不静默吞下。
@@ -607,6 +622,9 @@ class AfMqttBridge:
         """
         if caps is not None:
             self.caps = dict(caps)
+        if not self.presence:
+            # AF-748：本进程不是身份 owner ⇒ 不设 LWT、不发 retained status（两路都发会互踩）。
+            return
         _presence.advertise(self.client, PRESENCE_NAME, caps=dict(caps) if caps else None, offline=offline)
 
     def mark_degraded(self, code: str) -> None:
@@ -627,6 +645,10 @@ class AfMqttBridge:
             degraded=True,
             reasons=list(self.degraded),
         )
+        if not self.presence:
+            # AF-748：降级快照也是 `adm/autoforge/status`（retained）⇒ 非 owner 进程只留本地记账，
+            # ⛔ 不抢发：否则 serve 报 online、watch 报 degraded，对端读到的是最后一次写入者。
+            return {"published": False, "topic": STATUS_TOPIC, "reason": "presence_disabled"}
         try:
             _raise_if_refused(_mqtt.publish(self.client, STATUS_TOPIC, text, qos=1, retain=True), STATUS_TOPIC)
         except Exception as exc:  # noqa: BLE001 —— 降级播报失败不能把执行链拖崩，也不能反循环
@@ -1187,6 +1209,10 @@ def start_from_env(
     ask_answer_root: str | Path | None = None,
     clock: TimeSource | None = None,
     allow_anonymous: bool = False,
+    presence: bool = True,
+    client_id_suffix: str | None = None,
+    subscribe_insights: bool = True,
+    subscribe_linkage: bool = True,
 ) -> AfMqttBridge | None:
     """按环境变量拉起桥；未开启时返回 None（AF 行为与接入联动前逐字相同）。
 
@@ -1198,13 +1224,16 @@ def start_from_env(
     """
     if not env_enabled():
         return None
-    client = make_client(allow_anonymous=allow_anonymous)
+    client = make_client(allow_anonymous=allow_anonymous, client_id_suffix=client_id_suffix)
     bridge = AfMqttBridge(
         client,
         proposal_sink=proposal_sink,
         linkage_sink=linkage_sink,
         ask_answer_root=ask_answer_root,
         clock=clock,
+        presence=presence,
+        subscribe_insights=subscribe_insights,
+        subscribe_linkage=subscribe_linkage,
     )
     bridge.start(caps=caps_payload(tools=tools, version=version))
     return bridge
