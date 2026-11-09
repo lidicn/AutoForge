@@ -164,6 +164,22 @@ def classify_answer(text: str) -> str:
     return "yes" if _homesdk_classify(text) == _HOMESDK_YES else "no"
 
 
+def canary_drift_reason(rolled: Iterable[Any], auto_rollback: bool) -> str:
+    """观察期漂移后「有没有回滚」的三种口径（AF-747(iii)，2026-11-09 真机实证）。
+
+    旧实现把「没回滚」写成一句 `auto_rollback=false ⇒ 未回滚`，可那时有两个来源：
+    (a) 操作员显式关了自动回滚；(b) 自动回滚开着，但 `af_undo.restore_call` 无映射、
+    fail-closed 跳过（`CANARY_ROLLBACK_NO_MAPPING`）。同一个句子里塞两种原因，
+    读日志的人会去找一个根本没动过的旗子——现场 `d_on` 恰好是 (a)，两种原因同文，
+    谁也分不出实际发生过哪一条。三档各说一句话，⛔ 不再合并。
+    """
+    if list(rolled):
+        return "canary 观察期漂移，已自动回滚"
+    if not auto_rollback:
+        return "canary 观察期漂移，auto_rollback=false ⇒ 未回滚，留给人判断"
+    return "canary 观察期漂移，但无可映射的恢复动作（fail-closed 跳过，未回滚）"
+
+
 @dataclass
 class AskSession:
     """一个挂起中的 `ask` 会话。按 room 维度匹配，创建时间优先，一次应答仅生效一次。
@@ -483,11 +499,16 @@ class NodeExecutor:
                     elif wrapped.has_drift():
                         rolled = observe_guard.check_and_rollback(adapter, wrapped)
                         # 不回滚不等于没验出问题：漂移照旧记 failed + entity_drift（铁律 #5）
-                        reason = (
-                            "canary 观察期漂移，已自动回滚"
-                            if rolled
-                            else "canary 观察期漂移，auto_rollback=false ⇒ 未回滚，留给人判断"
-                        )
+                        # AF-747(iii)（2026-11-09 真机）：两种"没回滚"必须说两句话。旧实现把
+                        # 「restore_call 无映射、fail-closed 跳过」也写成 auto_rollback=false，
+                        # 读日志的人会去找一个根本没动过的旗子（现场 d_on 就是 auto_rollback=false，
+                        # 两种原因恰好同文，谁也分不出发生过哪一条）。
+                        reason = canary_drift_reason(rolled, observe_guard.auto_rollback)
+                        # AF-747(ii)：**走失败腿就得记失败数**。旧实现在这条腿上不计数，于是出现
+                        # 「按 on_error 结束、failed_actions 却是 0」的自相矛盾读数（2026-11-09
+                        # 04:27 现场：actions=1 / failed_actions=0 / 直落 e_noignite）——按
+                        # failed_actions 巡检的人会整类漏掉"观察期判失败"这种失败。
+                        instance.ctx.failed_actions += 1
                         # D8：漂移＝这次 do 验证失败 ⇒ 走失败腿，并把试演状态落成 rolled_back
                         canary_edge_kinds = {"on_error", "default"}
                         self._record_trial(instance, node, "rolled_back")

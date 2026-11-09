@@ -290,6 +290,7 @@ def _make_runtime(
     cfg=None,
     undo: bool = False,
     store_root: str = DEFAULT_STORE_ROOT,
+    bridge_role: str = "serve",
 ):
     if live or dry_live:
         # live：真时钟 + 真 HA 状态 + 真下发（dry_run=False）
@@ -321,7 +322,7 @@ def _make_runtime(
                 logging.getLogger(__name__).debug("[DRY-LIVE 意图] %s %s", action, params)
             adapter.on_dry_run = _on_dry
         runtime.adapters.register(adapter)
-        _start_linkage_bridge(clock=runtime.clock, store_root=store_root)   # 真机/ dry-live 才发事件；未开启即 no-op
+        _start_linkage_bridge(clock=runtime.clock, store_root=store_root, role=bridge_role)   # 真机/ dry-live 才发事件；未开启即 no-op
         return runtime, undo_deploy_id
 
     seed: dict[str, str] = {}
@@ -708,6 +709,7 @@ def watch(
         ha_url=ha_url, ha_token=token,
         persist_dir=persist_dir or None, cfg=cfg, undo=undo_enabled,
         store_root=persist_dir or DEFAULT_STORE_ROOT,
+        bridge_role="watch",
     )
     if runtime.persist is not None and runtime.restored:
         typer.echo(f"· 已从 {persist_dir} 恢复 {len(runtime.restored)} 个活跃实例")
@@ -1504,24 +1506,40 @@ def entities_state(
         typer.echo(f"⚠️ {result['note']}")
 
 
-def _start_linkage_bridge(clock=None, store_root=DEFAULT_STORE_ROOT):
+def _start_linkage_bridge(clock=None, store_root=DEFAULT_STORE_ROOT, role: str = "serve"):
     """ADM 联动第 1/2 步的进程级开关：`AUTOFORGE_MQTT=1` 才联网。
 
     未开启返回 None —— 那条路径下 AF 的行为与接桥前逐字相同（默认关，不是默认试连）。
     开启但 broker 配置不齐则抛 `BridgeUnavailable`：宁可拒绝启动，也不留一条
     "看着在跑、其实一句都没说"的假桥。
+
+    **AF-748（2026-11-09 真机实证）**：同一个 AF 容器里 `forge serve` 与它拉起的 `forge watch`
+    是**两个进程**，此前各自建桥且共用同一个 `MQTT_CLIENT_ID` ⇒ broker 每 5 秒按 client_id 踢掉
+    旧连接（现读累计 28 万+ 次），发布撞在"刚被踢"的窗口就 `rc=4`（`MQTT_ERR_NO_CONN`），
+    `butler/inbox/speak` 根本出不去（TTS 无声，AF-741 追了两轮的现场）。
+
+    处置（PM 裁定 B 案，改动面最小）：`role="watch"` 的那一路
+      * client_id 加 `-watch` 后缀 ⇒ broker 眼里是两个客户端，不互踢；
+      * `presence=False` ⇒ 不设 LWT、不发 retained `status`/`caps`（身份 owner 只留 serve 一个，
+        否则两路对同一主题各写一次 online/degraded，对端读到的是"最后一个写入者"）；
+      * 不订入向主题（`ma/insights`、联动、ask 应答都归 serve，watch 侧订了就会双写提案/双入队）。
     """
     from . import af_mqtt_bridge
     from .af_mcp import TOOLS
 
     if not af_mqtt_bridge.env_enabled():
         return None
+    watch_role = role == "watch"
     feed = af_mqtt_bridge.make_linkage_feed(store_root=store_root, clock=clock)
     bridge = af_mqtt_bridge.start_from_env(
         tools=[tool[0] for tool in TOOLS],
         version=af_mqtt_bridge.PRESENCE_CAPS_VERSION,
         proposal_sink=af_mqtt_bridge.make_durable_ask_sink(store_root=store_root, clock=clock),
         linkage_sink=feed,
+        presence=not watch_role,
+        client_id_suffix="watch" if watch_role else None,
+        subscribe_insights=not watch_role,
+        subscribe_linkage=not watch_role,
         # v1.28 R1（DCD 裁定 2026-11-04 阶段2 C2）：小爱腿入向 `af/ask/answer` 的落点。
         # 与 WebUI 腿同一目录（`<store>/answer_inbox/`）⇒ 消费侧仍是 ticker 那一条，
         # ⛔ 不新开第二条消费路。没给 store_root ⇒ 不订该主题（⛔ 不摆一条收不到的订阅）。
@@ -1529,6 +1547,15 @@ def _start_linkage_bridge(clock=None, store_root=DEFAULT_STORE_ROOT):
         clock=clock,
     )
     af_mqtt_bridge.attach(bridge)
+    if watch_role:
+        # AF-748：watch 只发事件，不碰身份面/入向面。这行回执就是"两路进程身份分离"的现场读数。
+        typer.echo(
+            f"· MQTT 事件桥已上线（role=watch，client_id 带 -watch 后缀）：只发 "
+            f"{af_mqtt_bridge.FIRED_TOPIC}|{af_mqtt_bridge.FAILED_TOPIC} 与 speak；"
+            f"⛔ 不发 adm/{af_mqtt_bridge.PRESENCE_NAME}/status（身份 owner 是 serve）、"
+            f"⛔ 不订入向主题（洞察/联动/ask 应答归 serve）"
+        )
+        return bridge
     typer.echo(
         f"· MQTT 联动桥已上线：向 adm/{af_mqtt_bridge.PRESENCE_NAME}/status 发布在线态（retained），"
         f"发 {af_mqtt_bridge.FIRED_TOPIC}|{af_mqtt_bridge.FAILED_TOPIC}，"
