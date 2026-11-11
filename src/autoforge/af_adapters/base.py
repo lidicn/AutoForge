@@ -54,6 +54,10 @@ L2_RISKY = "L2"
 L3_DANGEROUS = "L3"
 
 _L3_DOMAINS = frozenset({"shell_command", "command_line", "python_script", "hassio", "supervisor", "rest_command"})
+#: ⚠️ 机制差（v1.29.0 批 1 report §三.4／批 2 卡 §一.4-③）：这张表**没有** `garage_door`，
+#: 而 `classify_action('ha','garage_door.open')` 实测返回 **L2**——落的是本函数末尾那条
+#: 「未知 domain ⇒ 保守 L2」的缺省档，不是显式归类。后果：车库门不会掉到 L1，但也不在
+#: grant 的禁入四域里（同 cover 家族，需显式 action_risk=L2）。要不要显式列为禁入＝DCD 一句话。
 _L2_DOMAINS = frozenset({"lock", "cover", "climate", "alarm_control_panel", "valve", "water_heater", "number", "select"})
 _L1_DOMAINS = frozenset(
     {"light", "switch", "fan", "input_boolean", "humidifier", "media_player", "vacuum", "scene", "script", "siren", "tts"}

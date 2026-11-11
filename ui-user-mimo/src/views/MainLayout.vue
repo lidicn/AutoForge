@@ -16,6 +16,8 @@ const tabs = [
   { name: 'agents', label: 'Agent', icon: 'agent' },
   { name: 'automations', label: '自动化', icon: 'bolt' },
   { name: 'auth-codes', label: '授权码', icon: 'key' },
+  { name: 'grants', label: '执行授权', icon: 'shield' },
+  { name: 'orders', label: '任务单', icon: 'clock' },
 ]
 
 const { pause } = useIntervalFn(() => store.tick(), 1000)
@@ -142,7 +144,7 @@ async function onLogout () {
   border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom);
 }
 .tabbar-inner { max-width: 600px; margin: 0 auto; }
-.tabs { display: grid; grid-template-columns: repeat(3, 1fr); }
+.tabs { display: grid; grid-template-columns: repeat(5, 1fr); }
 .tab {
   position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px;
   padding: 9px 0 5px; color: var(--ink-3); transition: color 0.15s;

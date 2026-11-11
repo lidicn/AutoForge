@@ -228,6 +228,66 @@ class LiveRunBody(BaseModel):
     #: 审计 AF-401：真机下发的授权码闸在**服务层**（svc.live_run），REST 与 MCP 同闸。
     #: 此前闸只在 MCP dispatch 层 ⇒ REST 直连（开发 WebUI 走这条路）免码绕过。
     auth_code: str = ""
+    #: v1.29.0 执行授权（grant）通道：与 `auth_code` **互斥**（同传即拒，⛔ 不猜哪把算数）。
+    #: 长期码换来的授权在签发那一步就计过次了，日常执行只带 grant_id。
+    grant_id: str = ""
+    #: 越界确认票（`GRANT_CONFIRM_REQUIRED:` 回执里给的 `ticket`）。单次有效，用完即销。
+    grant_confirm: str = ""
+
+
+# ── v1.29.0 第一批：执行授权（grant，DCD 20261111 六问全甲）──
+class GrantIssueBody(BaseModel):
+    """签发请求。⛔ 不含 `issued_by`：签发者由服务端从令牌/授权码判定（agent 不能自报身份）。"""
+
+    agent: str
+    rooms: list[str] = []
+    device_scope: dict[str, Any] | None = None
+    #: 缺省 L1（灯/开关/风扇）：忘了写的人拿到更小权限，⛔ 不是更大（fail-closed 方向）。
+    action_risk: str = "L1"
+    ttl_days: float | None = None
+    auth_code: str = ""
+
+
+class GrantRevokeBody(BaseModel):
+    auth_code: str = ""
+    reason: str = ""
+
+
+class GrantRenewBody(BaseModel):
+    auth_code: str = ""
+    ttl_days: float | None = None
+
+
+# ── v1.29.0 第二批：【任务】TaskOrder（DCD 20261111 Q5/Q6）──
+class OrderStepBody(BaseModel):
+    adapter: str = "ha"
+    action: str
+    params: dict[str, Any] = {}
+    requires_confirm: bool = False
+    canary: dict[str, Any] | None = None
+
+
+class OrderOutputBody(BaseModel):
+    """输出通道。`bark` 是设计稿里的兜底通道，现读**未接线**（库侧无设施）——见契约 §output。"""
+
+    channels: list[str] = []
+    room: str = ""
+    text: str = ""
+    kind: str = "control"
+
+
+class OrderCreateBody(BaseModel):
+    steps: list[OrderStepBody]
+    agent: str = ""
+    output: OrderOutputBody | None = None
+    grant_id: str = ""
+    #: 绝对时间点（epoch 秒）与相对延时**二选一**；⛔ 没有 every/repeat（一次性语义）。
+    at: float | None = None
+    delay_s: float | None = None
+
+
+class OrderCancelBody(BaseModel):
+    reason: str = ""
 
 
 # ── F7 残留（WebUI 撤销按钮）：撤销 = 对真实设备再下发一次 ──
@@ -1156,14 +1216,22 @@ def build_app(
         keyword: str = Query(default=""),
         limit: int = Query(default=50, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
+        info: TokenInfo | None = Depends(_read),
     ) -> dict[str, Any]:
-        """全屋实体目录·过滤浏览（强制分页 + 透明截断回报）。读端点。"""
-        return svc.catalog_list(store, domain=domain, area=area, keyword=keyword, limit=limit, offset=offset)
+        """全屋实体目录·过滤浏览（强制分页 + 透明截断回报）。读端点。
+
+        v1.29.0 批 2：列表浏览也留一条同形痕（`QUERY_READ`，只记过滤条件与命中，⛔ 不记状态值）。
+        """
+        return svc.catalog_list(store, domain=domain, area=area, keyword=keyword, limit=limit,
+                                offset=offset, caller=info.subject if info else "")
 
     @app.get("/api/entities/{entity_id}/state", dependencies=[Depends(_read)])
-    def api_entity_state(entity_id: str) -> dict[str, Any]:
-        """单实体当前状态（实时优先，失败回退目录缓存并标注 source）。读端点。"""
-        return svc.catalog_state(store, entity_id)
+    def api_entity_state(entity_id: str, info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        """单实体当前状态（实时优先，失败回退目录缓存并标注 source）。读端点。
+
+        v1.29.0 Q4：读面免 grant，但要留痕——`caller` 递下去进 `QUERY_READ`（同形审计）。
+        """
+        return svc.catalog_state(store, entity_id, caller=info.subject if info else "")
 
     # ── Round 2-A：会话（ask 审批）────────────────────────────────────
     def _svc(fn, *args, **kwargs):
@@ -1258,6 +1326,130 @@ def build_app(
             limit=limit,
         )
 
+    # ── v1.29.0 第二批：【任务】TaskOrder ─────────────────────────────
+    #   到点执行、逐动作过 grant（越界步在入册时就拒）、终态即销、留痕进 deploy_audit。
+    @app.get("/api/orders", dependencies=[Depends(_read)])
+    def api_orders(info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        """活动池（pending/running）。owner 面全量；非 owner 只自己名下且必报 hidden_count。"""
+        return _svc(
+            svc.order_list, store,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+        )
+
+    @app.get("/api/orders/receipts", dependencies=[Depends(_read)])
+    def api_order_receipts(limit: int = 20,
+                           info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        """任务单留痕（终态即销之后的唯一查法）。源＝deploy_audit.jsonl 的 TASK_ORDER_*。"""
+        return svc.order_receipts(
+            store,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            limit=limit,
+        )
+
+    @app.post("/api/orders", dependencies=[Depends(_readonly_guard), Depends(_write)])
+    def api_order_create(body: OrderCreateBody,
+                         info: TokenInfo | None = Depends(_write)) -> dict[str, Any]:
+        """入册一张任务单。输出通道缺省 tts＋bark；查询型且无已接线通道 ⇒ 拒（哑任务）。"""
+        return _svc(
+            svc.order_create, store,
+            steps=[step.model_dump() for step in body.steps],
+            agent=body.agent,
+            output=(body.output.model_dump() if body.output is not None else None),
+            grant_id=body.grant_id,
+            at=body.at,
+            delay_s=body.delay_s,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+        )
+
+    @app.post("/api/orders/{order_id}/cancel",
+              dependencies=[Depends(_readonly_guard), Depends(_write)])
+    def api_order_cancel(order_id: str, body: OrderCancelBody | None = None,
+                         info: TokenInfo | None = Depends(_write)) -> dict[str, Any]:
+        """人工取消（pending/running 均可）。在途撤销＝其后未执行步不发起。"""
+        payload = body or OrderCancelBody()
+        return _svc(
+            svc.order_cancel, store,
+            order_id=order_id,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            reason=payload.reason,
+        )
+
+    # ── v1.29.0 第一批：执行授权（grant）──────────────────────────────
+    #   DCD 20261111 六问全甲：码管部署、grant 管执行（双轨授权）。
+    #   签发/续期是**授权动作**（消耗一次长期码），撤销/续期之外的两枚读面只读。
+    #   ⛔ 这里不做任何范围判定——判定真源只有 af_grant（本层只翻译成 HTTP）。
+    @app.get("/api/grants", dependencies=[Depends(_read)])
+    def api_grants(agent: str = Query(default=""),
+                   info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        """授权列表。owner 面全量⛔ 不报 hidden_count；非 owner 面只看自己名下且必报。"""
+        return _svc(
+            svc.grant_list, store,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            agent=agent,
+        )
+
+    @app.get("/api/grants/receipts", dependencies=[Depends(_read)])
+    def api_grant_receipts(limit: int = 20,
+                           info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        """授权留痕读面（签发/撤销/续期/带 grant 的执行/查询同形）。源＝deploy_audit.jsonl。"""
+        return svc.grant_receipts(
+            store,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            limit=limit,
+        )
+
+    @app.post("/api/grants", dependencies=[Depends(_readonly_guard), Depends(_write)])
+    def api_grant_issue(body: GrantIssueBody,
+                        info: TokenInfo | None = Depends(_write)) -> dict[str, Any]:
+        """签发执行授权。凭据通道在服务层：owner 令牌或**长期码**（短期码不能授执行权）。"""
+        return _svc(
+            svc.grant_issue, store,
+            agent=body.agent,
+            auth_code=body.auth_code,
+            rooms=body.rooms,
+            device_scope=body.device_scope,
+            action_risk=body.action_risk,
+            ttl_days=body.ttl_days,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+        )
+
+    @app.post("/api/grants/{grant_id}/revoke",
+              dependencies=[Depends(_readonly_guard), Depends(_write)])
+    def api_grant_revoke(grant_id: str, body: GrantRevokeBody | None = None,
+                         info: TokenInfo | None = Depends(_write)) -> dict[str, Any]:
+        """撤销（立即生效：此后任何新执行请求即拒；在途当前步允许自然完成 = Q3 甲）。"""
+        payload = body or GrantRevokeBody()
+        return _svc(
+            svc.grant_revoke, store,
+            grant_id=grant_id,
+            auth_code=payload.auth_code,
+            reason=payload.reason,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+        )
+
+    @app.post("/api/grants/{grant_id}/renew",
+              dependencies=[Depends(_readonly_guard), Depends(_write)])
+    def api_grant_renew(grant_id: str, body: GrantRenewBody | None = None,
+                        info: TokenInfo | None = Depends(_write)) -> dict[str, Any]:
+        """续期（长期码不过期 ≠ 授权不过期；续期是授权动作 ⇒ 计一次）。"""
+        payload = body or GrantRenewBody()
+        return _svc(
+            svc.grant_renew, store,
+            grant_id=grant_id,
+            auth_code=payload.auth_code,
+            ttl_days=payload.ttl_days,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+        )
+
     @app.post("/api/live/run", dependencies=[Depends(_readonly_guard), Depends(_live)])
     def api_live_run(body: LiveRunBody, info: TokenInfo | None = Depends(_live)) -> dict[str, Any]:
         # `clock` 刻意**不在** `LiveRunBody` 里：真机证据的时间轴由服务端决定，
@@ -1269,6 +1461,8 @@ def build_app(
             auth_code=body.auth_code,
             caller=info.subject if info else "",
             caller_is_owner=_caller_is_owner(info),
+            grant_id=body.grant_id,
+            grant_confirm=body.grant_confirm,
         )
 
     # ── F7 残留（WebUI 撤销按钮，决策 E ⑤）──

@@ -6,9 +6,9 @@
 
 | 现读坐标 | 值 |
 |---|---|
-| 发布树版本（`autoforge.__version__`，取自本次生成所用源码树） | `1.28.7` |
-| 生成时线上实例 OpenAPI 版本 | `1.28.7`（⛔ **不作发布版号**：发布那一刻线上还跑着上一版；部署后自动对齐） |
-| 路径数／操作数 | **89 路径／95 操作** |
+| 发布树版本（`autoforge.__version__`，取自本次生成所用源码树） | `1.28.5` |
+| 生成时线上实例 OpenAPI 版本 | `1.28.5`（⛔ **不作发布版号**：发布那一刻线上还跑着上一版；部署后自动对齐） |
+| 路径数／操作数 | **96 路径／104 操作** |
 | 认证方案 | `securitySchemes` = {"HTTPBearer": {"type": "http", "scheme": "bearer"}} |
 | 权限面列来源 | `af_api.py` 的 `Depends(_read/_write/_live/_admin/_readonly_guard)` 现读 |
 | `audit[].type` | **29 枚**（`af_audit.ALL_EVENT_TYPES` 现读逐枚相等） |
@@ -253,6 +253,15 @@ Base：`http://<host>:8787`（NAS 部署：`http://192.168.2.200:8787`）
 | 方法 | 路径 | 权限面 | 说明 |
 |---|---|---|---|
 | `GET` | `/api/diff` | read | —(端点无 docstring) |
+| `GET` | `/api/grants` | read | 授权列表。owner 面全量⛔ 不报 hidden_count；非 owner 面只看自己名下且必报。 |
+| `POST` | `/api/grants` | read/write(只读装配期)／write | 签发执行授权。凭据通道在服务层：owner 令牌或**长期码**（短期码不能授执行权）。 |
+| `GET` | `/api/grants/receipts` | read | 授权留痕读面（签发/撤销/续期/带 grant 的执行/查询同形）。源＝deploy_audit.jsonl。 |
+| `POST` | `/api/grants/{grant_id}/renew` | read/write(只读装配期)／write | 续期（长期码不过期 ≠ 授权不过期；续期是授权动作 ⇒ 计一次）。 |
+| `POST` | `/api/grants/{grant_id}/revoke` | read/write(只读装配期)／write | 撤销（立即生效：此后任何新执行请求即拒；在途当前步允许自然完成 = Q3 甲）。 |
+| `GET` | `/api/orders` | read | 活动池（pending/running）。owner 面全量；非 owner 只自己名下且必报 hidden_count。 |
+| `POST` | `/api/orders` | read/write(只读装配期)／write | 入册一张任务单。输出通道缺省 tts＋bark；查询型且无已接线通道 ⇒ 拒（哑任务）。 |
+| `GET` | `/api/orders/receipts` | read | 任务单留痕（终态即销之后的唯一查法）。源＝deploy_audit.jsonl 的 TASK_ORDER_*。 |
+| `POST` | `/api/orders/{order_id}/cancel` | read/write(只读装配期)／write | 人工取消（pending/running 均可）。在途撤销＝其后未执行步不发起。 |
 
 ## 三、关键枚举（全部现读真源）
 

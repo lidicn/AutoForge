@@ -151,10 +151,25 @@ def _trigger_text(trig: Trigger, _depth: int = 0) -> str:
     return text
 
 
+#: 表达式函数操作数的**人话**读法（v1.29.0 批 2 P3 池兑现）。⛔ 只做渲染，不参与判定。
+_FN_TEXT = {
+    "time_between": lambda a: f"时间在 {a[0]} 到 {a[1]} 之间",
+    "now": lambda a: "现在",
+}
+
+
 def _operand_text(operand: Mapping[str, Any]) -> str:
     if "const" in operand:
         value = operand["const"]
         return f"“{value}”" if isinstance(value, str) else str(value)
+    if "fn" in operand:
+        # P3 缺口：此前 fn 操作数落到 `var` 缺省，渲染成「? 为真」（判定正确、只是看不懂）。
+        name = str(operand.get("fn") or "")
+        args = [_operand_text(a) for a in (operand.get("args") or ()) if isinstance(a, Mapping)]
+        render = _FN_TEXT.get(name)
+        if render is not None and len(args) >= 2:
+            return render(args)
+        return f"{name}({', '.join(args)})" if args else name or "?"
     name = str(operand.get("var", "?"))
     for prefix in ("entity.", "vars.", "context."):
         if name.startswith(prefix):

@@ -241,11 +241,15 @@ def test_real_repo_primitive_counts_pinned():
     prims = cpm.scan_primitives(trees, REPO)
     inproc = [r for r in prims if r["prim"] in cpm.INPROC_PRIMS]
     cross = [r for r in prims if r["prim"] in cpm.CROSSPROC_PRIMS]
-    assert (len(inproc), len({r["path"] for r in inproc})) == (19, 12)
+    # v1.29.0 第一批：`af_grant` 的模块级写锁（`_GRANT_LOCK`）⇒ 进程内原语 19→20、
+    # 文件 12→13。它必须模块级：GrantStore 按请求新建，实例锁拦不住并发读-改-写。
+    # v1.29.0 第二批：`af_task_order` 的模块级写锁 ⇒ 进程内 20→21、文件 13→14。
+    assert (len(inproc), len({r["path"] for r in inproc})) == (21, 14)
     assert (len(cross), len({r["path"] for r in cross})) == (17, 7)
     assert sum(1 for r in cross if r["path"].endswith("af_service.py")) == 3
     doc = (REPO / DOC_REL).read_text(encoding="utf-8")
-    assert "进程内 19 站点／12 个文件 · 跨进程 17 站点／7 个文件" in doc
+    # v1.29.0 第一批：`af_grant` 的模块级写锁 ⇒ 进程内 20 站点／13 个文件。
+    assert "进程内 21 站点／14 个文件 · 跨进程 17 站点／7 个文件" in doc
 
 
 def test_real_repo_shared_names_tick_trio():

@@ -130,7 +130,7 @@ def test_exempt_marker_suppresses_and_is_counted(tmp_path):
 
 
 def test_real_registry_is_green_with_measured_numbers():
-    """真注册表的读数钉在绿行里：36 个工具 / 67 声明 / 67 消费 / 双向差额 0。
+    """真注册表的读数钉在绿行里：38 个工具 / 90 声明 / 90 消费 / 双向差额 0。
 
     ⚠️ 这枚 pin 曾在 v1.14.12 加 `af_guide`（+1 工具 / +1 参数）时漏更——当时的
     `-k` 选择罩不到本文件，CI 上红着。与 `check_diagnostic_code_catalog` 的 44→47
@@ -150,7 +150,9 @@ def test_real_registry_is_green_with_measured_numbers():
         rc = mod.main(["check_mcp_arg_schemas.py", str(REAL_REGISTRY)])
     out = buf.getvalue()
     assert rc == 0, out
-    assert "36 个工具" in out and "声明参数 68 个" in out and "handler 消费 68 个" in out, out
+    # v1.29.0 第一批：新增 `af_grant`（1 个工具，10 个参数 ⇒ 声明/消费各 +10）。
+    # v1.29.0 第二批：+`af_order`（1 个工具，10 个参数 ⇒ 80→90）。
+    assert "38 个工具" in out and "声明参数 90 个" in out and "handler 消费 90 个" in out, out
     assert REAL_REGISTRY.is_file()
 
 
