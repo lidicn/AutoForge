@@ -703,8 +703,10 @@ def test_real_repo_measurements_are_pinned():
     assert errs == [] and scan_errs == []
     # 批 2（D6）：TokenRegistry._issued（运行期签发令牌摘要索引）登记进 BOUNDED_CACHES
     # （cap=MAX_ISSUED / ttl=ISSUED_TTL_S / trim=_purge_expired_locked）⇒ bounded 5→6、扫到容器 133→134。
+    # 扫到 136 → 140（2026-11-12 v1.29.0 并集）：log_storm 的 `af_live._REJECT_WARNED`（+1）
+    # 与批 3/批 4 的场景对象容器（+3）同批合入——v1.29 合线 pin 按并集重钉，⛔ 取任何单支。
     assert len(bounded) == 6 and len(fixed) == 3
-    assert len(containers) == 139 and len(gate.BASELINE) == 113
+    assert len(containers) == 140 and len(gate.BASELINE) == 113
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"

@@ -6,8 +6,8 @@
 
 | 现读坐标 | 值 |
 |---|---|
-| 发布树版本（`autoforge.__version__`，取自本次生成所用源码树） | `1.28.5` |
-| 生成时线上实例 OpenAPI 版本 | `1.28.5`（⛔ **不作发布版号**：发布那一刻线上还跑着上一版；部署后自动对齐） |
+| 发布树版本（`autoforge.__version__`，取自本次生成所用源码树） | `1.29.0` |
+| 生成时线上实例 OpenAPI 版本 | `1.29.0`（⛔ **不作发布版号**：发布那一刻线上还跑着上一版；部署后自动对齐） |
 | 路径数／操作数 | **96 路径／104 操作** |
 | 认证方案 | `securitySchemes` = {"HTTPBearer": {"type": "http", "scheme": "bearer"}} |
 | 权限面列来源 | `af_api.py` 的 `Depends(_read/_write/_live/_admin/_readonly_guard)` 现读 |

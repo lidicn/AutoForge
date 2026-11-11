@@ -7,6 +7,8 @@ AF-PM 裁定 D5 三门之③：**单发只认短期码**，长期码只准用于
 D 编号带卡名（群规⑭）：
   D1 长期码 + 单发 ⇒ 403 且文案指明「单发只认短期码」
   D2 短期码 + 单发 ⇒ ⛔ 不被这条闸拦（错误里不带 D5③ 文案）
+  D3 短期码 + 单发**第二次** ⇒ 403（AF-753 收口：短期码一次性，validate 通过≠可复用）
+  D4 源码钉：live_run 的短期码通道必须真的 `acs.consume`（防后人删回去）
 """
 
 from __future__ import annotations
@@ -75,3 +77,29 @@ def test_d2_short_code_not_blocked_by_this_gate(env):
         _run(env, ac.code)
     except ServiceError as exc:
         assert "单发只认短期码" not in str(exc), f"短期码⛔ 不该被 D5③ 拦，实得：{exc}"
+
+
+def test_d3_short_code_is_one_shot(env):
+    """AF-753（v1.29 收口）：短期码是**一次性**凭据——同一枚码第二次单发必须被拒。
+
+    修前：`validate` 只校验不消费，同一枚短期码在 TTL 窗口内可反复单发（60s 只是把窗口
+    压短，不是闭环）。修后：闸内 `acs.consume` 把码烧掉，第二次落到「授权码无效」。
+    """
+    ac = env["acs"].create("short", ttl_minutes=30)
+    _run(env, ac.code)  # 第一次：放行并核销
+    with pytest.raises(ServiceError) as ei:
+        _run(env, ac.code)
+    assert "授权码无效" in str(ei.value), f"短期码复用必须拒，实得：{ei.value}"
+    assert ei.value.status == 403
+
+
+def test_d4_consume_site_pinned():
+    """源码钉（AF-753）：`live_run` 的短期码通道必须真的核销，⛔ 只 validate。
+
+    为什么钉源码：这条闸的语义就是"一次性"，删掉那一行不会有任何报错，只会在线上
+    悄悄退回"短期码可复用"——正是 AF-753 的现场。
+    """
+    import inspect
+
+    src = inspect.getsource(svc.live_run)
+    assert "acs.consume(auth_code)" in src, "live_run 的短期码通道未核销（AF-753 回退）"

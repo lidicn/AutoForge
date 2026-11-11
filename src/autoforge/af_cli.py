@@ -1217,6 +1217,60 @@ def spec_render(ir: Path = typer.Argument(..., help="IR JSON 文件（.json）")
     typer.echo(render_spec(graph), nl=False)
 
 
+scene_app = typer.Typer(
+    no_args_is_help=True,
+    help="v1.29 场景对象（SceneDef）：预设批量设备动作清单，一句话触发、每步独立过 grant",
+)
+app.add_typer(scene_app, name="scene")
+
+
+@scene_app.command("save")
+def scene_save(
+    ir: Path = typer.Argument(..., help="SceneDef IR JSON 文件（.json）"),
+    store_root: str = typer.Option(DEFAULT_STORE_ROOT, "--store-root",
+                                   help="store 根（定义落 .scenes/defs/）"),
+    caller: str = typer.Option("", "--caller",
+                               help="归属主体（⛔ 缺省＝本机 owner 面无主体；agent 不能自签）"),
+    replace: bool = typer.Option(False, "--replace",
+                                 help="改已存在的定义（⛔ 静默覆盖：触发词还指着老定义）"),
+):
+    """落盘一份场景定义（构造期 fail-closed：查重／空 steps／未声明键／L3 与禁入域拒绝）。"""
+    from . import af_service as svc
+
+    payload = json.loads(Path(ir).read_text(encoding="utf-8"))
+    record = svc.scene_def_save(GraphStore(store_root), payload, caller=caller, replace=replace)
+    typer.echo(json.dumps(record, ensure_ascii=False, indent=2))
+
+
+@scene_app.command("list")
+def scene_list(
+    store_root: str = typer.Option(DEFAULT_STORE_ROOT, "--store-root",
+                                   help="store 根（定义落 .scenes/defs/）"),
+):
+    """列场景定义（owner 面全量；非 owner 面看自己的并报 hidden_count）。"""
+    from . import af_service as svc
+
+    typer.echo(json.dumps(svc.scene_def_list(GraphStore(store_root)), ensure_ascii=False, indent=2))
+
+
+@scene_app.command("run")
+def scene_run(
+    phrase: str = typer.Argument(..., help="一句话触发词（主词或别名，精确匹配）"),
+    grant_id: str = typer.Option(..., "--grant-id",
+                                 help="执行授权 id（每步独立过 grant，⛔ 无授权空跑）"),
+    agent: str = typer.Option("", "--agent", help="执行主体（缺省＝本机 owner 面）"),
+    store_root: str = typer.Option(DEFAULT_STORE_ROOT, "--store-root",
+                                   help="store 根（定义落 .scenes/defs/）"),
+):
+    """按一句话触发执行场景，打印回执（run_id/code/steps）。"""
+    from . import af_service as svc
+
+    receipt = svc.scene_run(
+        GraphStore(store_root), phrase=phrase, agent=agent or "owner", grant_id=grant_id,
+    )
+    typer.echo(json.dumps(receipt, ensure_ascii=False, indent=2))
+
+
 metrics_app = typer.Typer(no_args_is_help=True, help="v0.5.0 运行指标聚合与回灌 MA（生态闭环）")
 app.add_typer(metrics_app, name="metrics")
 
@@ -1266,20 +1320,22 @@ def metrics_push(
     ma_url: str = typer.Option("", "--ma-url", help="MA 接收端点基址（如 http://192.168.2.200:8086），默认读 MA_METRICS_URL"),
     token: str = typer.Option(
         "", "--token",
-        help="butler 令牌（⚠️ 废弃：会进 argv/ps；改用环境变量 BUTLER_TOKEN）",
+        help="⛔ 已拒绝（AF-755）：令牌会进 argv；改用环境变量 BUTLER_TOKEN",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="只聚合不推送（验证用）"),
     buffer_dir: Path = typer.Option(DEFAULT_BUFFER_DIR, "--buffer-dir", help="离线缓冲目录"),
 ):
     """聚合运行指标并回灌 memory-agent（幂等 + 退避 + 离线缓冲）。"""
-    # AF-749：令牌**只走环境变量**。`--token` 仍接受（兼容老脚本），但显式使用时会
-    # 出现在 `ps` 的 argv 里——告警一次并建议改 env；⛔ 不打印任何令牌片段。
+    # AF-755（v1.29 收口修）：`--token` 从「告警」升为**拒绝**（exit 2）。
+    # 理由：告警只是提醒，老脚本照样把令牌塞进 argv、`ps` 一眼能读；⑤ 凭据红线
+    # 不接受 warn-only。告警文案本身也⛔ 不含任何令牌片段。
     if token:
         typer.echo(
-            "[警告] --token 会出现在进程 argv（ps 可见，AF-749）：请改用环境变量 "
-            "BUTLER_TOKEN（容器内经 docker exec --env-file 注入）",
+            "[错误] --token 已废弃：令牌会出现在进程 argv（ps 可见，AF-755／⑤ 凭据红线）——"
+            "请改用环境变量 BUTLER_TOKEN（容器内 docker exec --env-file 注入）",
             err=True,
         )
+        raise typer.Exit(code=2)
     snapshot = _metrics_snapshot(ir, events, seed)
     url = ma_url or os.getenv("MA_METRICS_URL", "")
     tok = token or os.getenv("BUTLER_TOKEN", "")

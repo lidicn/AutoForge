@@ -982,10 +982,53 @@ def _t_order(store: GraphStore, args: dict[str, Any],
     )
 
 
+def _t_scene(store: GraphStore, args: dict[str, Any],
+             current: dict[str, Any] | None = None) -> dict[str, Any]:
+    """【场景·v1.29】场景对象面：save/list/get/delete/run 一个工具五个动作。
+
+    一句话触发走 `run` 的 `phrase`（主词/别名**精确**匹配，匹配不上即 404——⛔ 模糊猜一个执行）。
+    ⛔ 本函数不做任何授权/范围判定：真源在 `svc.scene_*`（每步独立过 `af_grant`），
+    这里只解包参数（同 `_t_grant`／`_t_order` 纪律）。
+    """
+    action = str(args.get("action") or "").strip().lower()
+    caller = str((current or {}).get("subject") or "")
+    owner = _owner_face(current)
+    token_identity = current is not None
+    if action == "save":
+        scene_ir = args.get("scene")
+        if not isinstance(scene_ir, dict):
+            raise svc.ServiceError("af_scene save 需要 scene(object)：SceneDef IR 全文", 400)
+        return svc.scene_def_save(
+            store, scene_ir, caller=caller, caller_is_owner=owner,
+            token_identity=token_identity, replace=bool(args.get("replace")),
+        )
+    if action == "list":
+        return svc.scene_def_list(store, caller=caller, caller_is_owner=owner,
+                                  token_identity=token_identity)
+    if action == "get":
+        return {"scene": svc.scene_def_get(
+            store, str(args.get("scene_id") or ""), caller=caller, caller_is_owner=owner,
+            token_identity=token_identity)}
+    if action == "delete":
+        return svc.scene_def_delete(
+            store, str(args.get("scene_id") or ""), caller=caller, caller_is_owner=owner,
+            token_identity=token_identity)
+    if action == "run":
+        return svc.scene_run(
+            store, scene_id=str(args.get("scene_id") or ""), phrase=str(args.get("phrase") or ""),
+            agent=str(args.get("agent") or ""), caller=caller, caller_is_owner=owner,
+            token_identity=token_identity, grant_id=str(args.get("grant_id") or ""),
+        )
+    raise svc.ServiceError(
+        "af_scene 的 action 只能是 save/list/get/delete/run，"
+        f"收到 {action!r}（补参数，不是服务故障）", 400,
+    )
+
+
 _TOOLS_WITH_CONTEXT = frozenset({
     _t_delete_graph, _t_list_graphs, _t_get_graph,_t_whoami, _t_save, _t_import, _t_enable, _t_deploy,
     _t_by_tag, _t_conf, _t_diff, _t_export, _t_quarantine, _t_set_tags, _t_live, _t_grant,
-    _t_get_entity_state, _t_order, _t_list_entities})
+    _t_get_entity_state, _t_order, _t_list_entities, _t_scene})
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1508,6 +1551,39 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
             "required": ["action"],
         },
         _t_order,
+        "write",
+    ),
+    (
+        "af_scene",
+        "【场景·v1.29】场景对象（SceneDef）：「预设的批量设备动作清单」，一句话触发、每步独立过 grant。"
+        "参数：action(必填 save/list/get/delete/run)；"
+        "save：scene(object 必填＝SceneDef IR 全文 {kind:\"scene_def\",scene_id,name,aliases,version,"
+        "owner,condition,steps,created_via})＋replace(bool，改已存在的定义要显式 true，⛔ 静默覆盖)；"
+        "list：自己名下（owner 全量；非 owner 面附 hidden_count）；get：scene_id；"
+        "delete：scene_id（移入 .scenes/deleted/，⛔ 物理删）；"
+        "run：scene_id 或 phrase(一句话主词/别名精确匹配)＋grant_id(必填：每步过执行授权)"
+        "＋agent(缺省取当前主体)。匹配不上即 404 澄清，⛔ 模糊猜一个执行；"
+        "档位不落 IR（执行期现算），L3 与四类高危域配置期即拒。",
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string",
+                           "enum": ["save", "list", "get", "delete", "run"],
+                           "description": "要执行的动作"},
+                "scene": {"type": "object",
+                          "description": "SceneDef IR 全文（save 必填）"},
+                "scene_id": {"type": "string", "description": "目标场景 id"},
+                "phrase": {"type": "string",
+                           "description": "一句话触发词（主词或别名，精确匹配；run 用）"},
+                "replace": {"type": "boolean",
+                            "description": "改已存在的定义必须显式 true（⛔ 静默覆盖）"},
+                "grant_id": {"type": "string",
+                             "description": "执行授权 id（run 必填：每步独立过 grant）"},
+                "agent": {"type": "string", "description": "执行主体（缺省＝当前令牌主体）"},
+            },
+            "required": ["action"],
+        },
+        _t_scene,
         "write",
     ),
     (

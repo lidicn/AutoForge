@@ -4,6 +4,6 @@
 详见 docs/NAMING.md。
 """
 
-__version__ = "1.28.7"
+__version__ = "1.29.0"
 
 __all__ = ["__version__"]

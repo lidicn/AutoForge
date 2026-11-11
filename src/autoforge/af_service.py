@@ -49,6 +49,13 @@ from .af_ownership import (
 from .af_runtime import Runtime, build_runtime
 from .af_runtime_facts import recent_ask_answers
 from .af_scanner import DeviceGuardRegistry, Diagnostic, ScanResult, StaticScanner
+from .af_scene_kit import (
+    SCENE_MAX_DEFS,
+    SceneConditionNotMet,
+    SceneDef,
+    SceneDefError,
+    SceneRunner,
+)
 from .af_spec import SpecError, compile_spec, graph_to_raw, render_spec
 from .af_store import DEFAULT_STORE_ROOT, GraphStore, _bundle_checksum, diff_graphs
 from .af_state import UnknownEntity
@@ -3088,14 +3095,24 @@ def live_run(
         if auth_code and store is not None:
             from .af_auth import AuthCodeStore as _ACS
 
+            acs = _ACS(Path(store.root) / ".auth" / "auth_codes.json")
             try:
-                _recs = _ACS(Path(store.root) / ".auth" / "auth_codes.json").list(reveal=True)
+                _recs = acs.list(reveal=True)
             except Exception:  # noqa: BLE001 —— 查不出 kind 时 fail-closed，⛔ 不猜测放行
                 raise ServiceError("真机单发无法判定授权码类型：拒绝执行（fail-closed）", status=403)
             _kind = next((r.get("kind") for r in _recs if r.get("code") == auth_code), None)
             if _kind != "short":
                 raise ServiceError(
                     "真机单发只认短期码：长期码只准用于部署，⛔ 不用于手动单发（D5 三门之③）",
+                    status=403,
+                )
+            # AF-753（v1.29 收口修）：短期码是**一次性**凭据——上面的 `_auth_code_check`
+            # 只 validate 不消费，不在这里核销，同一枚短期码就能反复单发（TTL 60s 只是把
+            # 窗口压短，不是闭环）。与 grant 路径（`_grant_channel_tag` 的 `acs.consume`）
+            # 同形：消费失败即 fail-closed——宁可拒掉这次下发，也不放行一枚已失效的凭据。
+            if not acs.consume(auth_code):
+                raise ServiceError(
+                    "真机单发无法核销短期码（状态已变）：拒绝执行（fail-closed，AF-753）",
                     status=403,
                 )
 
@@ -5569,3 +5586,372 @@ def _start_watch_impl(ir: dict, store_root: str | None = None, dry_live: bool = 
         ),
         "pid": proc.pid,
     }
+
+
+# ── v1.29 场景对象（SceneDef）落盘面 ＋ 执行面 ──────────────────────────────
+# 卡名 AF-V129-G4-20261111；设计稿 docs/architecture/v129_scene_object_design.md §2/§3/§5。
+# 三分边界：⛔ 本段不碰 `af_scene.py`（automation 组启停）与 `af_task_order.py`（任务单状态机），
+# 只做「预设的批量设备动作清单」的落盘、一句话触发与按序执行。
+#
+# 落盘形状：一场景一文件 `.scenes/defs/<scene_id>.json`（内容 = `SceneDef.to_ir()` ＋ owner
+# ＋ created_at）。为什么不是 `.orders/active.json` 那种单文件列表：场景定义是**用户手写资产**，
+# 一文件一场景让「改错一个不影响别的」和 `git diff` 都可读。
+# 删除 = 移到 `.scenes/deleted/`（⛔ 不物理删：误删无从恢复；同名加纳秒戳，与 answer_inbox 同纪律）。
+
+SCENE_DEFS_DIR = (".scenes", "defs")
+SCENE_DEFS_DELETED_DIR = (".scenes", "deleted")
+
+
+def _scene_store_root(store: "GraphStore | None", *, what: str) -> Path:
+    root = getattr(store, "root", None)
+    if root is None:
+        raise ServiceError(f"场景{what}需要 store 根——本调用未携带 store", status=403)
+    return Path(root)
+
+
+def _scene_defs_dir(store: "GraphStore | None") -> Path:
+    return _scene_store_root(store, what="定义（落在 .scenes/defs/）").joinpath(*SCENE_DEFS_DIR)
+
+
+def _scene_deleted_dir(store: "GraphStore | None") -> Path:
+    return _scene_store_root(store, what="归档（落在 .scenes/deleted/）").joinpath(
+        *SCENE_DEFS_DELETED_DIR)
+
+
+def _scene_def_path(store: "GraphStore | None", scene_id: str) -> Path:
+    return _scene_defs_dir(store) / f"{scene_id}.json"
+
+
+def _scene_iso() -> str:
+    """本地时区 ISO 时间戳（与 `af_scene_kit._iso` 同形，⛔ 另造第二种格式）。"""
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(time.time()))
+
+
+def _scene_read_defs(store: "GraphStore | None") -> list[dict[str, Any]]:
+    """读全部场景定义（按 scene_id 排序）。
+
+    坏文件**跳过并 warn**：一枚被手改坏的定义不该把整个列表/触发面拖成 500——
+    但要留痕，否则「场景怎么没了」事后查不到。
+    """
+    directory = _scene_defs_dir(store)
+    if not directory.is_dir():
+        return []
+    out: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.warning("SCENE_DEF_UNREADABLE 场景定义无法解析，已跳过：%s（%s）", path.name, exc)
+            continue
+        if isinstance(payload, Mapping) and payload.get("scene_id"):
+            out.append(dict(payload))
+    return sorted(out, key=lambda p: str(p.get("scene_id") or ""))
+
+
+def _scene_owner_of(payload: Mapping[str, Any]) -> str:
+    return str(payload.get("owner") or "")
+
+
+def _scene_subject(*, caller: str, caller_is_owner: bool,
+                   token_identity: bool | None) -> Subject:
+    """身份单源（C-3）：⛔ 本段自造第二份归属规则，判定一律走 `decide`。"""
+    sub = Subject.from_caller(caller, owner_face=caller_is_owner, token_identity=token_identity)
+    if sub.token_state is TokenState.BROKEN:
+        raise ServiceError(broken_identity_error(), status=403)
+    return sub
+
+
+def _scene_assert_visible(payload: Mapping[str, Any], *, sub: Subject) -> None:
+    """读面归属判定（⑩ 两条腿）：非 owner 面读别人的场景 ⇒ 404 且与「不存在」逐字同形。
+
+    ⛔ 不回「无权查看」：那等于承认存在（同 `_assert_archive_visible` 纪律）。
+    """
+    scene_id = str(payload.get("scene_id") or "")
+    verdict = decide(lambda _n: _scene_owner_of(payload), scene_id, sub, write=False)
+    if verdict is DenyKind.NOT_FOUND:
+        raise ServiceError(visible_error(scene_id), status=404)
+
+
+def _scene_assert_mutator(payload: Mapping[str, Any], *, sub: Subject, action: str) -> None:
+    """写面归属判定：非 owner 面只能动自己名下的场景；无归属 ⇒ 仅 owner 面（fail-closed）。
+
+    ⛔ 拒绝文案不点归属者的名（AF-509：那是批量采集全库归属者的通道）。
+    """
+    scene_id = str(payload.get("scene_id") or "")
+    if decide(lambda _n: _scene_owner_of(payload), scene_id, sub, write=True) is DenyKind.FORBIDDEN:
+        if _scene_owner_of(payload):
+            raise ServiceError(mutator_error(scene_id, action), status=403)
+        raise ServiceError(
+            f"场景 {scene_id!r} 无归属，仅 owner 面可{action}（所有权隔离）", status=403)
+
+
+def _scene_find(store: "GraphStore | None", scene_id: str) -> dict[str, Any]:
+    """按 scene_id 取定义；不存在即 404（文案与「不属于你」同形）。"""
+    sid = str(scene_id or "").strip()
+    if not sid:
+        raise ServiceError("场景 scene_id 不能为空", status=400)
+    for payload in _scene_read_defs(store):
+        if str(payload.get("scene_id") or "") == sid:
+            return payload
+    raise ServiceError(visible_error(sid), status=404)
+
+
+def _scene_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """列表面条目：**不含 steps 全文**（列表要轻），步数单独给。"""
+    return {
+        "scene_id": str(payload.get("scene_id") or ""),
+        "name": str(payload.get("name") or ""),
+        "aliases": [str(a) for a in (payload.get("aliases") or [])],
+        "version": payload.get("version", 1),
+        "owner": _scene_owner_of(payload),
+        "condition": payload.get("condition"),
+        "step_count": len(payload.get("steps") or []),
+        "created_via": str(payload.get("created_via") or ""),
+        "created_at": str(payload.get("created_at") or ""),
+    }
+
+
+def scene_def_save(
+    store: "GraphStore | None",
+    scene_ir: Mapping[str, Any],
+    *,
+    caller: str = "",
+    caller_is_owner: bool = False,
+    token_identity: bool | None = None,
+    replace: bool = False,
+) -> dict[str, Any]:
+    """落盘一份场景定义（构造期校验 fail-closed：查重／空 steps／未知键／L3 与禁入域拒绝）。
+
+    `owner` 取**调用主体**（人那一侧身份，⛔ agent 不能自签）：场景是用户的资产，
+    归属决定非 owner 面看不看得见、改不改得动。
+    `replace=False` 时 scene_id 撞车即拒（409）：场景是**一句话触发**的入口，静默覆盖
+    等于把用户原来的「回家模式」换成另一个，触发词还指着它——必须是显式动作。
+    """
+    sub = _scene_subject(caller=caller, caller_is_owner=caller_is_owner,
+                         token_identity=token_identity)
+    try:
+        defn = SceneDef.from_ir(scene_ir, created_at=_scene_iso())
+    except SceneDefError as exc:
+        raise ServiceError(f"场景定义不合法：{exc}", status=400) from exc
+
+    owner = str(caller or "")
+    path = _scene_def_path(store, defn.scene_id)
+    existing: dict[str, Any] | None = None
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            loaded = None
+        existing = dict(loaded) if isinstance(loaded, Mapping) else None
+    if existing is not None and not replace:
+        raise ServiceError(
+            f"场景 {defn.scene_id!r} 已存在（scene_id 构造期查重）——改定义请显式 replace=true",
+            status=409,
+        )
+    if existing is not None:
+        _scene_assert_mutator(existing, sub=sub, action="改定义")
+    else:
+        total = len(_scene_read_defs(store))
+        if total >= SCENE_MAX_DEFS:
+            raise ServiceError(
+                f"场景定义数已达上限 {SCENE_MAX_DEFS} 条：⛔ 触发词会撞车（先删掉不用的）",
+                status=400,
+            )
+
+    payload = dict(defn.to_ir())
+    payload["owner"] = owner
+    payload["created_at"] = _scene_iso()
+    directory = _scene_defs_dir(store)
+    directory.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    _grant_audit(
+        store, "SCENE_DEF_SAVED",
+        scene_id=defn.scene_id, name=defn.name, steps=len(defn.steps), owner=owner,
+        replaced=existing is not None, subject=str(caller or ""),
+        caller_is_owner=bool(caller_is_owner),
+    )
+    return payload
+
+
+def scene_def_list(
+    store: "GraphStore | None", *, caller: str = "", caller_is_owner: bool = False,
+    token_identity: bool | None = None,
+) -> dict[str, Any]:
+    """列场景定义：owner 面全量；非 owner 面只看自己的，并报 `hidden_count`（⑩ 两腿）。"""
+    sub = _scene_subject(caller=caller, caller_is_owner=caller_is_owner,
+                         token_identity=token_identity)
+    visible: list[dict[str, Any]] = []
+    hidden = 0
+    for payload in _scene_read_defs(store):
+        scene_id = str(payload.get("scene_id") or "")
+        if decide(lambda _n: _scene_owner_of(payload), scene_id, sub,
+                  write=False) is DenyKind.NOT_FOUND:
+            hidden += 1
+            continue
+        visible.append(_scene_summary(payload))
+    result: dict[str, Any] = {"scenes": visible}
+    if not sub.is_owner_face:
+        # owner 面**不报** hidden_count：它没有藏起来的东西（⑩ 两条腿行为正相反）。
+        result["hidden_count"] = hidden
+    return result
+
+
+def scene_def_get(
+    store: "GraphStore | None", scene_id: str, *, caller: str = "",
+    caller_is_owner: bool = False, token_identity: bool | None = None,
+) -> dict[str, Any]:
+    """取一份场景定义全文（含 steps）。"""
+    sub = _scene_subject(caller=caller, caller_is_owner=caller_is_owner,
+                         token_identity=token_identity)
+    payload = _scene_find(store, scene_id)
+    _scene_assert_visible(payload, sub=sub)
+    return payload
+
+
+def scene_def_delete(
+    store: "GraphStore | None", scene_id: str, *, caller: str = "",
+    caller_is_owner: bool = False, token_identity: bool | None = None,
+) -> dict[str, Any]:
+    """删场景定义 = 移入 `.scenes/deleted/`（⛔ 不物理删：误删无从恢复）。"""
+    sub = _scene_subject(caller=caller, caller_is_owner=caller_is_owner,
+                         token_identity=token_identity)
+    payload = _scene_find(store, scene_id)
+    _scene_assert_mutator(payload, sub=sub, action="删定义")
+    src = _scene_def_path(store, str(payload["scene_id"]))
+    dest_dir = _scene_deleted_dir(store)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{payload['scene_id']}--{time.time_ns()}.json"
+    # 归档语义＝把**已经写完**的整份定义挪进 `.scenes/deleted/`：同文件系统重命名，
+    # 源文件早已落盘完整、目标名带纳秒戳唯一 ⇒ 没有「固定 tmp 名被第二个写者截断」那个窗口，
+    # 走 atomic_write_text 反而要多一次全量拷贝＋多一个半成品窗口。
+    os.replace(src, dest)  # fixed-tmp: exempt(归档重命名，源已完整、目标名纳秒戳唯一，无固定 tmp 截断窗口)
+    _grant_audit(
+        store, "SCENE_DEF_DELETED", scene_id=str(payload["scene_id"]),
+        name=str(payload.get("name") or ""), archived_to=str(dest),
+        subject=str(caller or ""), caller_is_owner=bool(caller_is_owner),
+    )
+    return {"scene_id": str(payload["scene_id"]), "archived_to": str(dest), "deleted": True}
+
+
+def scene_match(
+    store: "GraphStore | None", phrase: str, *, caller: str = "",
+    caller_is_owner: bool = False, token_identity: bool | None = None,
+) -> dict[str, Any] | None:
+    """一句话触发：按主词／别名**精确**匹配（⛔ 模糊猜：匹配不上即澄清）。"""
+    text = str(phrase or "").strip()
+    if not text:
+        raise ServiceError("场景触发词为空：一句话触发需要一个主词（如「回家模式」）", status=400)
+    sub = _scene_subject(caller=caller, caller_is_owner=caller_is_owner,
+                         token_identity=token_identity)
+    for payload in _scene_read_defs(store):
+        names = [str(payload.get("name") or "")]
+        names += [str(a) for a in (payload.get("aliases") or [])]
+        if text not in [n for n in names if n]:
+            continue
+        _scene_assert_visible(payload, sub=sub)
+        return payload
+    return None
+
+
+def _scene_live_executor(store: "GraphStore | None") -> Callable[[Any], bool]:
+    """默认执行器：真机下发一步（与 `live_run` 共用同一套 live 配置／令牌／传输层）。
+
+    ⛔ 不静默"假装成功"：live 未启用就 403——场景执行每一步都是真设备动作，
+    没有 dry 语义（dry 走 `executor=` 注入假实现）。
+    """
+    cfg = _live_config()
+    if not cfg["enabled"]:
+        raise ServiceError(
+            "场景执行未启用真机下发：服务端需设置 AUTOFORGE_LIVE_ENABLED=1（或注入 executor）",
+            status=403,
+        )
+    token = _ha_token(store.root if store is not None else None)
+    ha_url = str(cfg["ha_url"])
+    factory = LIVE_TRANSPORT_FACTORY
+    transport = (factory(ha_url, token) if factory is not None
+                 else HATransport(base_url=ha_url, token=token))
+    adapter = HAAdapter(transport=transport, dry_run=False)
+
+    def _dispatch(step: Any) -> bool:
+        params = dict(getattr(step, "params", {}) or {})
+        params.setdefault("entity_id", str(getattr(step, "target", "")))
+        result = adapter.call(str(getattr(step, "action", "")), params)
+        return bool(getattr(result, "success", False))
+
+    return _dispatch
+
+
+def scene_run(
+    store: "GraphStore | None", *, scene_id: str = "", phrase: str = "", agent: str = "",
+    caller: str = "", caller_is_owner: bool = False, token_identity: bool | None = None,
+    grant_id: str = "", confirm: Callable[[Any], bool] | None = None,
+    sleep: Callable[[float], None] | None = None,
+    precondition: Callable[[Mapping[str, Any]], bool] | None = None,
+    executor: Callable[[Any], Any] | None = None,
+) -> dict[str, Any]:
+    """执行一次场景：一句话触发／显式 scene_id → 逐步独立过 grant → 汇总回执。
+
+    判定规则（契约不变量，DCD 20261111 Q3 甲）：
+    - 每步**独立**过 `GrantStore.check`（⛔ 整场一次性放行）；
+    - `hard_denied` ⇒ 完成当前步、取消未执行步（已成步不回滚：设备动作不可逆）；
+    - `needs_confirm` ⇒ 出票 → 人工确认 → 验票放行（⛔ 不升级 grant）；
+    - `uses` 每次 run 计一次（`bump_use` 整盘重写，逐步计数＝账本抖动），在 kit 内。
+    """
+    sub = _scene_subject(caller=caller, caller_is_owner=caller_is_owner,
+                         token_identity=token_identity)
+    if scene_id:
+        payload: dict[str, Any] | None = _scene_find(store, scene_id)
+        _scene_assert_visible(payload, sub=sub)
+    else:
+        payload = scene_match(store, phrase, caller=caller,
+                              caller_is_owner=caller_is_owner, token_identity=token_identity)
+        if payload is None:
+            raise ServiceError(
+                f"没有匹配到场景：{str(phrase or '')!r}（匹配不上即澄清，⛔ 猜一个执行）", status=404)
+
+    agent_text = str(agent or caller or "").strip()
+    if not agent_text:
+        raise ServiceError(
+            "场景执行需要 agent（执行主体）：每步按该 agent 的执行授权放行", status=400)
+    if not str(grant_id or "").strip():
+        raise ServiceError(
+            "场景执行需要执行授权（grant_id）：每步独立过 grant，⛔ 无授权空跑（DCD 20261111 Q3 甲）",
+            status=403,
+        )
+
+    try:
+        defn = SceneDef.from_ir(payload, created_at=str(payload.get("created_at") or ""))
+    except SceneDefError as exc:
+        raise ServiceError(f"场景定义不合法：{exc}", status=400) from exc
+
+    gs = _grant_store(store)
+    try:
+        grant = gs.resolve(grant_id, agent=agent_text)
+    except GrantError as exc:
+        raise _grant_error(exc) from exc
+
+    runner = SceneRunner(
+        gs,
+        executor=executor if executor is not None else _scene_live_executor(store),
+        room_of=_grant_room_of(store),
+        confirm=confirm,
+        sleep=sleep,
+    )
+    try:
+        receipt = runner.run(defn, grant=grant, agent=agent_text, precondition=precondition)
+    except SceneConditionNotMet as exc:
+        raise ServiceError(
+            f"场景 {defn.scene_id!r} 前置条件未满足：本次不执行（⛔ 当它没有条件就开跑）",
+            status=409,
+        ) from exc
+    except SceneDefError as exc:
+        raise ServiceError(f"场景执行被拒：{exc}", status=400) from exc
+
+    _grant_audit(
+        store, "SCENE_RUN",
+        run_id=str(receipt.get("run_id") or ""), scene_id=defn.scene_id, agent=agent_text,
+        grant_id=str(grant.get("grant_id") or ""), code=str(receipt.get("code") or ""),
+        steps=len(receipt.get("steps") or []), subject=str(caller or agent_text),
+        caller_is_owner=bool(caller_is_owner),
+    )
+    return receipt

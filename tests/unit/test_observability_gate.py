@@ -165,7 +165,9 @@ def test_real_repo_site_readings_are_pinned(real):
     # `CATALOG_TOKEN_SOURCE_FALLBACK`（DEBUG，F1 令牌源回退）＋ af_live 的
     # `INBOX_REJECT_REPEAT`（DEBUG，F2 同 ask_id 重复拒绝降噪）／`INBOX_QUARANTINE_FAILED`
     # （EXCEPTION，F2 隔离失败留现场），全部具名码 ⇒ 无码存量不涨反降（§四 六行上限一字未动）。
-    assert len(real["sites"]) == 252
+    # 252 → 253（2026-11-12 v1.29.0 发版并集）：log_storm 的 F2 降噪腿（`INBOX_REJECT_STALE`
+    # 拆出的重复拒绝静默腿）多一枚带码站点；⛔ 无码存量与 §四 上限不动。
+    assert len(real["sites"]) == 253
     # v1.29.0 第一批：+`af_grant.py` 一个文件（5 个具名码站点）⇒ 文件 35→36。
     # v1.29.0 第二批：+`af_task_order.py` ⇒ 文件 36→37。
     assert len({s["path"] for s in real["sites"]}) == 37
@@ -175,7 +177,8 @@ def test_real_repo_site_readings_are_pinned(real):
     # 第二批 +7：warning 169→173、error 27→30。
     # 第三批 +2：debug 25→27（CATALOG_TOKEN_SOURCE_FALLBACK／INBOX_REJECT_REPEAT）、
     # exception 11→12（INBOX_QUARANTINE_FAILED）。
-    assert dict(lv) == {"debug": 27, "info": 10, "warning": 173, "error": 30, "exception": 12}
+    # 发版并集 +1：warning 173→174（log_storm F2 降噪腿并入的那枚带码站点）。
+    assert dict(lv) == {"debug": 27, "info": 10, "warning": 174, "error": 30, "exception": 12}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 

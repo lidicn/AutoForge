@@ -10,7 +10,8 @@
   （注释里留的历史说明不算——静态判据必须跳过注释，否则"解释自己"会被判成违规）。
 - **G2 宿主 argv 面**：没有 `-e "VAR=$值"` 形式的凭据注入；改用 `--env-file`。
 - **G3 临时文件卫生**：`mktemp` ＋ `chmod 600` ＋ `trap … rm -f` 三样齐（否则就是"把令牌换成另一种落盘"）。
-- **G4 CLI 口径**：`--token` 仍接受（兼容），但缺省读 `BUTLER_TOKEN`；显式使用时**告警**且不打印值。
+- **G4 CLI 口径**：`--token` **拒绝**（exit 2，AF-755 升拒绝：告警只是提醒，老脚本照样
+  把令牌塞进 argv），缺省读 `BUTLER_TOKEN`；拒绝文案⛔ 不回显令牌值。
 - **G5 射程声明（⑧）**：`scripts/`＋`docker/` 全量扫可执行行，确认没有第二处凭据字面进 argv；
   这是**负控**，射程＝脚本与部署面（不含 docs／报告，那里的示例是文档不是调用面）。
 """
@@ -95,13 +96,13 @@ def test_g4_cli_reads_env_and_warns_on_explicit_token(monkeypatch, tmp_path):
     assert seen["token"] == "ENV_TOKEN_SENTINEL", "缺省没有读 BUTLER_TOKEN"
     assert "argv" not in r1.output, f"没给 --token 却告警了：{r1.output}"
 
-    # ② 给了 --token ⇒ 告警（不打印值本身）
+    # ② 给了 --token ⇒ **拒绝**（AF-755 升拒绝；exit 2 才叫"拒绝"，warn-only 等于没修）
     r2 = runner.invoke(af_cli.app, ["metrics", "push", str(ir), "--dry-run",
                                     "--token", "ARGV_SENTINEL",
                                     "--buffer-dir", str(tmp_path)])
-    assert r2.exit_code == 0, r2.output
-    assert "argv" in r2.output and "BUTLER_TOKEN" in r2.output, r2.output
-    assert "ARGV_SENTINEL" not in r2.output.replace("--token", ""), "⛔ 告警不该回显令牌值"
+    assert r2.exit_code == 2, f"--token 必须拒绝（exit 2），实际 {r2.exit_code}：{r2.output}"
+    assert "BUTLER_TOKEN" in r2.output, "拒绝文案要给替代口径（否则调用方不知道怎么改）"
+    assert "ARGV_SENTINEL" not in r2.output.replace("--token", ""), "⛔ 拒绝文案不该回显令牌值"
 
 
 # ── G5：顺藤扫（负控＋覆盖声明，⑧）────────────────────────────────────
