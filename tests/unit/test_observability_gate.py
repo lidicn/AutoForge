@@ -161,7 +161,10 @@ def test_real_repo_site_readings_are_pinned(real):
     # 249（2026-11-11 v1.29.0 第二批 TaskOrder，+7）：af_task_order 的
     # TASK_ORDER_STORE_CORRUPT×3／_VERSION_MISMATCH ＋ af_service 的
     # TASK_ORDER_OUTPUT_DELIVERY_FAILED／_RUN_FAILED／_TICK_FAILED，全部具名码。
-    assert len(real["sites"]) == 249
+    # 249 → 250（2026-11-11 v1.29.0 批 4 场景对象接线，+1）：`af_service._scene_read_defs` 的
+    # `SCENE_DEF_UNREADABLE` 一枚 WARNING 站点——一枚被手改坏的定义不该拖垮整个列表/触发面，
+    # 但静默跳过会让「场景怎么没了」无从查起。⛔ 无码存量与 §四 上限不动（带码 ⇒ 不吃那一格）。
+    assert len(real["sites"]) == 250
     # v1.29.0 第一批：+`af_grant.py` 一个文件（5 个具名码站点）⇒ 文件 35→36。
     # v1.29.0 第二批：+`af_task_order.py` ⇒ 文件 36→37。
     assert len({s["path"] for s in real["sites"]}) == 37
@@ -169,7 +172,8 @@ def test_real_repo_site_readings_are_pinned(real):
     # GRANT_CONFIRM_REJECTED／GRANT_AUDIT_RECORD_FAILED）、error 24→27
     # （GRANT_STORE_CORRUPT 三条腿）。
     # 第二批 +7：warning 169→173、error 27→30。
-    assert dict(lv) == {"debug": 25, "info": 10, "warning": 173, "error": 30, "exception": 11}
+    # 第三批（v1.29.0 批 4）+1：warning 173→174（`SCENE_DEF_UNREADABLE`）。
+    assert dict(lv) == {"debug": 25, "info": 10, "warning": 174, "error": 30, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
