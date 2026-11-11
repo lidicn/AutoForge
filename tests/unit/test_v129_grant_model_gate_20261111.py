@@ -176,7 +176,13 @@ def test_d4_confirm_requires_matching_scope(env):
 
 
 # ── D5 / D6 / D7：禁入集 ───────────────────────────────────────────────
-@pytest.mark.parametrize("domain", sorted(GRANT_BANNED_DOMAINS))
+#: DCD 裁定 §三.1 **逐字点名**的四个禁入域——这里是**字面量**，⛔ 不从被测常量派生。
+#: 为什么（AF-Verify F1，2026-11-11）：原来写 `sorted(GRANT_BANNED_DOMAINS)` 是自引用——
+#: 把 `valve` 从实现里删掉，测试集跟着少一枚，**缩域变异零红**，判据对"少禁一个域"完全瞎。
+DCD_BANNED_DOMAINS = ("lock", "valve", "water_heater", "alarm_control_panel")
+
+
+@pytest.mark.parametrize("domain", DCD_BANNED_DOMAINS)
 def test_d5_banned_domains_hard_deny(env, domain):
     grant = _grant(env, action_risk="L2")
     check = _check(env, grant, [("ha", f"{domain}.turn_on", {})], [f"{domain}.dev"])
@@ -203,8 +209,12 @@ def test_d6_l3_hard_deny(env, action):
 
 
 def test_d7_banned_set_reuses_the_risk_table():
+    # 双向对撞：实现 ⊆ L2 表（复用而非另造）＋ DCD 四域 ⊆ 实现（一个都不许少）。
+    # 后一半是 F1 的正面判据：只写"是被测常量的子集"等于让被测常量自己当考官。
     assert GRANT_BANNED_DOMAINS <= _L2_DOMAINS, "禁入四元集必须落在上游 L2 表里（⛔ 另造一张）"
-    for domain in GRANT_BANNED_DOMAINS:
+    assert set(DCD_BANNED_DOMAINS) <= GRANT_BANNED_DOMAINS, \
+        f"实现少禁了域：缺 {sorted(set(DCD_BANNED_DOMAINS) - GRANT_BANNED_DOMAINS)}"
+    for domain in DCD_BANNED_DOMAINS:
         assert classify_action("ha", f"{domain}.turn_on") == L2_RISKY
 
 
