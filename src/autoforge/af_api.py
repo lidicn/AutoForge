@@ -258,6 +258,38 @@ class GrantRenewBody(BaseModel):
     ttl_days: float | None = None
 
 
+# ── v1.29.0 第二批：【任务】TaskOrder（DCD 20261111 Q5/Q6）──
+class OrderStepBody(BaseModel):
+    adapter: str = "ha"
+    action: str
+    params: dict[str, Any] = {}
+    requires_confirm: bool = False
+    canary: dict[str, Any] | None = None
+
+
+class OrderOutputBody(BaseModel):
+    """输出通道。`bark` 是设计稿里的兜底通道，现读**未接线**（库侧无设施）——见契约 §output。"""
+
+    channels: list[str] = []
+    room: str = ""
+    text: str = ""
+    kind: str = "control"
+
+
+class OrderCreateBody(BaseModel):
+    steps: list[OrderStepBody]
+    agent: str = ""
+    output: OrderOutputBody | None = None
+    grant_id: str = ""
+    #: 绝对时间点（epoch 秒）与相对延时**二选一**；⛔ 没有 every/repeat（一次性语义）。
+    at: float | None = None
+    delay_s: float | None = None
+
+
+class OrderCancelBody(BaseModel):
+    reason: str = ""
+
+
 # ── F7 残留（WebUI 撤销按钮）：撤销 = 对真实设备再下发一次 ──
 class UndoBody(BaseModel):
     confirm: bool = False
@@ -1184,9 +1216,14 @@ def build_app(
         keyword: str = Query(default=""),
         limit: int = Query(default=50, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
+        info: TokenInfo | None = Depends(_read),
     ) -> dict[str, Any]:
-        """全屋实体目录·过滤浏览（强制分页 + 透明截断回报）。读端点。"""
-        return svc.catalog_list(store, domain=domain, area=area, keyword=keyword, limit=limit, offset=offset)
+        """全屋实体目录·过滤浏览（强制分页 + 透明截断回报）。读端点。
+
+        v1.29.0 批 2：列表浏览也留一条同形痕（`QUERY_READ`，只记过滤条件与命中，⛔ 不记状态值）。
+        """
+        return svc.catalog_list(store, domain=domain, area=area, keyword=keyword, limit=limit,
+                                offset=offset, caller=info.subject if info else "")
 
     @app.get("/api/entities/{entity_id}/state", dependencies=[Depends(_read)])
     def api_entity_state(entity_id: str, info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
@@ -1287,6 +1324,58 @@ def build_app(
             caller=info.subject if info else "",
             caller_is_owner=_caller_is_owner(info),
             limit=limit,
+        )
+
+    # ── v1.29.0 第二批：【任务】TaskOrder ─────────────────────────────
+    #   到点执行、逐动作过 grant（越界步在入册时就拒）、终态即销、留痕进 deploy_audit。
+    @app.get("/api/orders", dependencies=[Depends(_read)])
+    def api_orders(info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        """活动池（pending/running）。owner 面全量；非 owner 只自己名下且必报 hidden_count。"""
+        return _svc(
+            svc.order_list, store,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+        )
+
+    @app.get("/api/orders/receipts", dependencies=[Depends(_read)])
+    def api_order_receipts(limit: int = 20,
+                           info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        """任务单留痕（终态即销之后的唯一查法）。源＝deploy_audit.jsonl 的 TASK_ORDER_*。"""
+        return svc.order_receipts(
+            store,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            limit=limit,
+        )
+
+    @app.post("/api/orders", dependencies=[Depends(_readonly_guard), Depends(_write)])
+    def api_order_create(body: OrderCreateBody,
+                         info: TokenInfo | None = Depends(_write)) -> dict[str, Any]:
+        """入册一张任务单。输出通道缺省 tts＋bark；查询型且无已接线通道 ⇒ 拒（哑任务）。"""
+        return _svc(
+            svc.order_create, store,
+            steps=[step.model_dump() for step in body.steps],
+            agent=body.agent,
+            output=(body.output.model_dump() if body.output is not None else None),
+            grant_id=body.grant_id,
+            at=body.at,
+            delay_s=body.delay_s,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+        )
+
+    @app.post("/api/orders/{order_id}/cancel",
+              dependencies=[Depends(_readonly_guard), Depends(_write)])
+    def api_order_cancel(order_id: str, body: OrderCancelBody | None = None,
+                         info: TokenInfo | None = Depends(_write)) -> dict[str, Any]:
+        """人工取消（pending/running 均可）。在途撤销＝其后未执行步不发起。"""
+        payload = body or OrderCancelBody()
+        return _svc(
+            svc.order_cancel, store,
+            order_id=order_id,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            reason=payload.reason,
         )
 
     # ── v1.29.0 第一批：执行授权（grant）──────────────────────────────

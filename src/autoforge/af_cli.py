@@ -1730,9 +1730,21 @@ def serve(
     from .af_alert import install_owner_alert
 
     install_owner_alert(bridge)
+    # v1.29.0 第二批：任务单引擎（【任务】到点执行）。**只在这里起**——serve 持单写者租约，
+    # 每一步的 `live_run` 才不会被自己那道 503 拦住；MCP/CLI 进程⛔ 起。
+    from .af_service import order_engine_start, order_engine_stop
+
+    _order_engine = order_engine_start(store_root)
+    typer.echo(f"· 任务单引擎：{_order_engine['tick_s']}s 轮询（{_order_engine['root']}）")
     try:
         uvicorn.run(app_, host=host, port=port, log_level="info")
     finally:
+        # 收引擎要排在停桥**之前**：正在跑的那一步走的是桥，先摘桥会把它变成 no_bridge。
+        _stop_res = order_engine_stop()
+        if not _stop_res.get("ok"):
+            import sys
+            print("[order-engine] 引擎线程在停机预算内没退干净（见 af_service.order_engine_stop）",
+                  file=sys.stderr, flush=True)
         if bridge is not None:
             bridge.stop()   # 显式 retained offline：LWT 只覆盖异常断连
         # 裁定 20261011 §3 Q7.1 的仓内兜底：子进程的**重启**归部署面（compose `restart:`），仓内不

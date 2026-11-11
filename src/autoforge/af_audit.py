@@ -112,6 +112,14 @@ GRANT_RENEWED = "GRANT_RENEWED"
 #: 查询面（Q4 甲：免 grant，但留痕）。只记"谁问了哪个实体"，⛔ 不记查询结果里的状态值。
 QUERY_READ = "QUERY_READ"
 
+# ── 【任务】TaskOrder（v1.29.0 第二批）────────────────────────────────
+#: 同一本 `deploy_audit.jsonl`（⛔ 第二套审计面）。**终态即销**之后，"刚才那单跑完没有"
+#: 只能从这里查——所以这四条是任务单唯一的持久留痕面。
+TASK_ORDER_CREATED = "TASK_ORDER_CREATED"
+TASK_ORDER_FINISHED = "TASK_ORDER_FINISHED"
+TASK_ORDER_CANCELLED = "TASK_ORDER_CANCELLED"
+TASK_ORDER_EXPIRED = "TASK_ORDER_EXPIRED"
+
 #: 部署仪式台账的文件名（裁定 20261011 §3 Q13 丙：**只对 `DEPLOY_AUDIT` 这一族落盘**）。
 #: 落点跟着本次部署的 store 根走（见 `deploy_audit_sink`），所以它与 `write_conflicts.jsonl`
 #: 是同一家族——同一个挂载目录、同一条 `.gitignore`，不是新开的一类要轮转／要清理的对象。

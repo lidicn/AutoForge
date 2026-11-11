@@ -158,13 +158,18 @@ def test_real_repo_site_readings_are_pinned(real):
     # 242（2026-11-11 v1.29.0 第一批 grant，+6）：af_grant 的 GRANT_STORE_CORRUPT×3／
     # GRANT_STORE_VERSION_MISMATCH／GRANT_CONFIRM_REJECTED ＋ af_service 的
     # GRANT_AUDIT_RECORD_FAILED，全部具名码。
-    assert len(real["sites"]) == 242
+    # 249（2026-11-11 v1.29.0 第二批 TaskOrder，+7）：af_task_order 的
+    # TASK_ORDER_STORE_CORRUPT×3／_VERSION_MISMATCH ＋ af_service 的
+    # TASK_ORDER_OUTPUT_DELIVERY_FAILED／_RUN_FAILED／_TICK_FAILED，全部具名码。
+    assert len(real["sites"]) == 249
     # v1.29.0 第一批：+`af_grant.py` 一个文件（5 个具名码站点）⇒ 文件 35→36。
-    assert len({s["path"] for s in real["sites"]}) == 36
+    # v1.29.0 第二批：+`af_task_order.py` ⇒ 文件 36→37。
+    assert len({s["path"] for s in real["sites"]}) == 37
     # v1.29.0 第一批 +6：warning 166→169（GRANT_STORE_VERSION_MISMATCH／
     # GRANT_CONFIRM_REJECTED／GRANT_AUDIT_RECORD_FAILED）、error 24→27
     # （GRANT_STORE_CORRUPT 三条腿）。
-    assert dict(lv) == {"debug": 25, "info": 10, "warning": 169, "error": 27, "exception": 11}
+    # 第二批 +7：warning 169→173、error 27→30。
+    assert dict(lv) == {"debug": 25, "info": 10, "warning": 173, "error": 30, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -237,6 +242,7 @@ def test_real_repo_named_code_readings_are_pinned(real):
         "OWNER_ALERT_PUBLISH_FAILED",
         "WATCH_SCRATCH_DELETE_FAILED",
         "GRANT_STORE_CORRUPT",
+        "TASK_ORDER_STORE_CORRUPT",
     }, f"重码名单漂了：{dup}"
     nc = Counter(s["level"] for s in real["sites"] if not s["code"])
     ac0 = _auto_counts()
@@ -304,12 +310,15 @@ def test_real_repo_every_named_code_is_registered(real):
 
 def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
     """信封侧有 trace_id、HTTP 请求侧没有——这个不对称是登记过的现状，不是漏读。"""
-    assert len(real["env"]) == 7
-    assert len({e["path"] for e in real["env"]}) == 3
+    # v1.29.0 第二批 +1：任务单 output 的 TTS 交付在 `af_service._deliver_order_output` 里
+    # 用 `trace_id="order:<id>"` 调 `publish_speak`（走同一条桥方法，⛔ 新造面）⇒ 7→8。
+    assert len(real["env"]) == 8
+    assert len({e["path"] for e in real["env"]}) == 4
     paths = {e["path"] for e in real["env"]}
     assert "src/autoforge/af_mqtt_bridge.py" in paths
     assert "src/autoforge/af_linkage_feed.py" in paths
     assert "src/autoforge/af_adapters/inbox.py" in paths
+    assert "src/autoforge/af_service.py" in paths
     assert real["req"] == [], f"HTTP 请求级 id 出现了：{real['req'][:3]}——§五 那行要跟着改状态"
 
 

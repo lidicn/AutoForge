@@ -599,7 +599,8 @@ def _t_remember_entity(store: GraphStore, args: dict[str, Any]) -> dict[str, Any
     return svc.catalog_set_alias(store, args["name"], args["entity_id"])
 
 
-def _t_list_entities(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
+def _t_list_entities(store: GraphStore, args: dict[str, Any],
+                     current: dict[str, Any] | None = None) -> dict[str, Any]:
     return svc.catalog_list(
         store,
         domain=args.get("domain", "") or "",
@@ -607,6 +608,8 @@ def _t_list_entities(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
         keyword=args.get("keyword", "") or "",
         limit=_positive_int(args.get("limit"), "limit", 50),
         offset=_non_negative_int(args.get("offset"), "offset", 0),
+        # v1.29.0 批 2：列表浏览也留痕（同形 QUERY_READ，只记过滤条件）
+        caller=str((current or {}).get("subject") or ""),
     )
 
 
@@ -940,10 +943,49 @@ def _t_grant(store: GraphStore, args: dict[str, Any],
     )
 
 
+def _t_order(store: GraphStore, args: dict[str, Any],
+             current: dict[str, Any] | None = None) -> dict[str, Any]:
+    """【任务】TaskOrder 面：create/list/cancel/receipts 一个工具四个动作。
+
+    ⛔ 这里不做任何授权/范围判定——真源在 `svc.order_*`（入册期逐动作过 grant，
+    执行期每步再过一次）。本函数只解包参数。
+    """
+    action = str(args.get("action") or "").strip().lower()
+    caller = str((current or {}).get("subject") or "")
+    owner = _owner_face(current)
+    if action == "create":
+        steps = args.get("steps")
+        if not isinstance(steps, list):
+            raise svc.ServiceError("af_order create 需要 steps(list)：每步 {adapter,action,params}", 400)
+        return svc.order_create(
+            store, steps=[dict(s) for s in steps if isinstance(s, dict)],
+            agent=str(args.get("agent") or ""),
+            output=args.get("output") if isinstance(args.get("output"), dict) else None,
+            grant_id=str(args.get("grant_id") or ""),
+            at=args.get("at"), delay_s=args.get("delay_s"),
+            caller=caller, caller_is_owner=owner,
+        )
+    if action == "list":
+        return svc.order_list(store, caller=caller, caller_is_owner=owner)
+    if action == "cancel":
+        return svc.order_cancel(
+            store, order_id=str(args.get("order_id") or ""),
+            caller=caller, caller_is_owner=owner,
+            reason=str(args.get("reason") or ""),
+        )
+    if action == "receipts":
+        return svc.order_receipts(store, caller=caller, caller_is_owner=owner,
+                                  limit=args.get("limit"))
+    raise svc.ServiceError(
+        "af_order 的 action 只能是 create/list/cancel/receipts，"
+        f"收到 {action!r}（补参数，不是服务故障）", 400,
+    )
+
+
 _TOOLS_WITH_CONTEXT = frozenset({
     _t_delete_graph, _t_list_graphs, _t_get_graph,_t_whoami, _t_save, _t_import, _t_enable, _t_deploy,
     _t_by_tag, _t_conf, _t_diff, _t_export, _t_quarantine, _t_set_tags, _t_live, _t_grant,
-    _t_get_entity_state})
+    _t_get_entity_state, _t_order, _t_list_entities})
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1435,6 +1477,37 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
             "required": ["action"],
         },
         _t_grant,
+        "write",
+    ),
+    (
+        "af_order",
+        "【任务·v1.29】一次性任务单（DCD 20261111 Q5 甲：TaskOrder 落 AF）：到点按序执行、完成即销、"
+        "留痕进审计。**一次性**语义——⛔ 没有 every/repeat/cron（要重复请写自动化，Q6 判例）。"
+        "参数：action(必填 create/list/cancel/receipts)；"
+        "create：steps(list 必填，每步 {adapter,action,params})＋grant_id(必填：每步过执行授权)"
+        "＋at(epoch 秒) 或 delay_s(相对延时) 二选一＋output({channels,[tts|bark|mimo],room,text,kind})"
+        "＋agent(缺省取当前主体)；list：活动池；cancel：order_id＋reason；receipts：终态留痕（含已销单）。"
+        "查询型任务 output 必须有一条已接线通道（bark 现读未接线）。",
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["create", "list", "cancel", "receipts"],
+                           "description": "要执行的动作"},
+                "steps": {"type": "array", "items": {"type": "object"},
+                          "description": "有序动作序列：每步 {adapter, action, params}"},
+                "grant_id": {"type": "string", "description": "执行授权 id（任务逐动作过它放行）"},
+                "at": {"type": "number", "description": "绝对时间点（epoch 秒）"},
+                "delay_s": {"type": "number", "description": "相对延时（秒）；与 at 二选一"},
+                "output": {"type": "object",
+                           "description": "{channels:[tts|bark|mimo], room, text, kind:control|query}"},
+                "agent": {"type": "string", "description": "执行主体（缺省＝当前令牌主体）"},
+                "order_id": {"type": "string", "description": "取消时的目标单号"},
+                "reason": {"type": "string", "description": "取消原因（进留痕）"},
+                "limit": {"type": "integer", "description": "receipts 条数（缺省 20，上限 100）"},
+            },
+            "required": ["action"],
+        },
+        _t_order,
         "write",
     ),
     (

@@ -295,7 +295,9 @@ class GrantStore:
         issued_by: str,
         rooms: Sequence[str] = (),
         device_scope: Mapping[str, Any] | None = None,
-        action_risk: str = L2_RISKY,
+        #: 缺省 **L1**（灯/开关/风扇）：与代理面三层缺省同语义——忘写的人拿到**更小**权限
+        #: （v1.29.0 批 2 F2 顺手项；此前库层缺省是 L2_RISKY，与 `grant_issue` 的 L1 存在层差）。
+        action_risk: str = L1_IDEMPOTENT,
         ttl_days: float | None = None,
         issued_via: str = "",
         now: float | None = None,

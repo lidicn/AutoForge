@@ -479,8 +479,9 @@ def test_real_ui_and_src_are_clean_and_counted():
     mounted = sum(1 for r in routes if r["how"] == "add_api_route")
     assert mounted == 5                              # af_conflict_runtime._ROUTES
     # v1.29.0 第一批：+5 枚 grant 端点（装饰器 95→100）。
-    assert len(routes) - mounted + len(excluded) == 100   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（现读 95；批 4 +POST /api/user/agent-token，批 5 +POST /api/user/pair-link +GET /pair ⇒ +3）
-    assert len(routes) == 103                         # v1.29.0 第一批 +5 grant 端点：98 条参与匹配的装饰器路由 + 5 挂载表
+    # v1.29.0 第二批：+4 枚任务单端点（装饰器 100→104）。
+    assert len(routes) - mounted + len(excluded) == 104   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（现读 95；批 4 +POST /api/user/agent-token，批 5 +POST /api/user/pair-link +GET /pair ⇒ +3）
+    assert len(routes) == 107                         # v1.29.0 第二批 +4 任务单端点：102 条参与匹配的装饰器路由 + 5 挂载表
     assert boundary == ["src/autoforge/af_runtime_plugins.py"]
     assert sum(1 for s in sites if s["exempt"]) == 0
 
@@ -669,7 +670,7 @@ def test_all_trees_of_this_repo_are_in_scope_and_green(capsys):
     assert "传输层包装 4 处" in out, out
     assert "SSE 建流 2 处" in out, out
     # v1.29.0 第一批：5 枚新端点 UI 尚未调用（AF-UI 并行批）⇒ 16→21。
-    assert "跨 3 棵树仍未被调用 21 条" in out, out
+    assert "跨 3 棵树仍未被调用 25 条" in out, out
 
 
 # ── 第四张调用脸：视图里直接 `fetch(`${base}/watch/start`)`（前缀是变量）──────
@@ -814,10 +815,10 @@ def test_reverse_reading_of_this_repo_is_a_named_list(capsys):
     assert mod.main(["check_ui_api_paths.py", "--list-uncalled"]) == 0
     out = capsys.readouterr().out
     lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("—")]
-    assert len(lines) == 21, out
+    assert len(lines) == 25, out
     assert "/api/watch/start" not in out and "/api/watch/stop" not in out   # 已被 fetch 那张脸认领
     assert "pair-request" not in out                                       # 已被 SSE 那张脸认领
-    assert "反向读数 21 条" in out, out
+    assert "反向读数 25 条" in out, out
     # 整个集合逐条钉住（不是只钉总数）：这 15 条的定性写在执行记录 §二之四十四，
     # 谁给某条补上前端调用点、或删掉某条路由，都必须同时动这张表和这段名单——
     # 只数数不记名的话，下一批又会把"门读不出"当成"接口没人用"。
@@ -835,6 +836,11 @@ def test_reverse_reading_of_this_repo_is_a_named_list(capsys):
         "GET /api/grants/receipts",                                         # 留痕读面：同上
         "POST /api/grants/{grant_id}/revoke",                               # 撤销：同上
         "POST /api/grants/{grant_id}/renew",                                # 续期：同上
+        # v1.29.0 第二批：任务单四条端点先落地，AI/UI 侧任务卡接上后从这里删名。
+        "GET /api/orders",                                                  # 任务活动池：UI 未接
+        "POST /api/orders",                                                 # 挂单：同上
+        "GET /api/orders/receipts",                                         # 任务留痕：同上
+        "POST /api/orders/{order_id}/cancel",                               # 取消：同上
         "POST /api/mcp/pair/redeem",                                        # 配对 bootstrap 两条：消费面是 agent 自己的 HTTP 客户端（裁定 20261006 §一=B），第一方 UI 天生不调它——读不出≠没人用
         "POST /api/mcp/pair/request",
         "GET /api/sessions",                                                # 会话管理面 6 条：只有 `POST .../answer` 被 ui 调

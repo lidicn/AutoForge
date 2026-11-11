@@ -358,7 +358,9 @@ def test_real_repo_is_green_and_pinned():
     # （write）与 GET /pair（anon）⇒ 95→97、ungated 14→15（新匿名面 GET /pair 已进 §三 登记）。
     # v1.29.0 第一批：+5 枚 grant 端点（GET /api/grants、GET /api/grants/receipts 走 read；
     # POST /api/grants 与 revoke／renew 两枚走 write+_readonly_guard）⇒ 98→103。
-    assert info["rows"] == 103
+    # v1.29.0 第二批：+4 枚任务单端点（GET/POST /api/orders、GET /api/orders/receipts、
+    # POST /api/orders/{order_id}/cancel）⇒ 103→107。
+    assert info["rows"] == 107
     assert info["ungated"] == 15
     assert info["register"] == 15
     assert info["found_installers"] == [
@@ -379,8 +381,9 @@ def test_real_repo_tier_counts_are_the_batch_reading():
     # （write）⇒ write 36→38；+GET /pair（anon）⇒ anon 10→11。db 批 5 把清单 --write 刷到
     # 97 却没同步本 pin（§1.9：台账 regen 与测试 pin 是两套），返工 5.1 对齐。
     # v1.29.0 第一批：grant 端点 +2 read（列表／留痕）、+3 write（签发／撤销／续期）。
+    # v1.29.0 第二批：+2 read（列表／留痕）、+2 write（创建／取消）。
     assert counts == {
-        "scope:write": 41, "scope:read": 36, "scope:live": 3, "scope:admin": 4,
+        "scope:write": 43, "scope:read": 38, "scope:live": 3, "scope:admin": 4,
         "anon": 11, "optional": 2, "bearer-in-handler": 2, "builtin": 4,
     }
 
@@ -402,10 +405,10 @@ def test_two_reports_counts_reconciled_in_inventory_doc():
     记录，不该跟着今天漂）⇒ 改锚 count 行的现读字面，历史对账行保持原样。
     """
     text = (ROOT / mod.DOC_REL).read_text(encoding="utf-8")
-    assert "scope:read=36" in text and "scope:write=41" in text and "scope:live=3" in text
+    assert "scope:read=38" in text and "scope:write=43" in text and "scope:live=3" in text
     assert "scope:admin=4" in text
     assert "anon=11" in text and "optional=2" in text and "bearer-in-handler=2" in text
-    assert "103 条路由对象" in text
+    assert "107 条路由对象" in text
 
 
 # --------------------------------------------------------------------------------------

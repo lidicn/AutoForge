@@ -59,6 +59,16 @@ from .af_pending import PendingLimitExceeded, PendingStore
 from .af_error_knowledge import ErrorKnowledge
 from .af_experience import ExperienceStore
 from .af_grant import GRANT_FILE_REL, GrantError, GrantStore, collect_actions
+from .af_task_order import (
+    OUTPUT_WIRED,
+    ORDER_FILE_REL,
+    TaskOrderError,
+    TaskOrderStore,
+    build_step_ir,
+    step_entity,
+    step_event,
+    step_summary,
+)
 from .af_telemetry import TelemetryStore, attach as attach_telemetry
 
 logger = logging.getLogger("autoforge.service")
@@ -103,6 +113,15 @@ __all__ = [
     "grant_revoke",
     "grant_renew",
     "grant_receipts",
+    # v1.29.0 第二批：【任务】TaskOrder —— 到点执行、逐动作过 grant、终态即销
+    "order_create",
+    "order_list",
+    "order_cancel",
+    "order_receipts",
+    "order_tick",
+    "order_engine_start",
+    "order_engine_stop",
+    "order_engine_health",
     "get_metrics",
     # F7 残留（WebUI 撤销按钮）：撤销的 HTTP 服务面
     "undo_available",
@@ -3643,6 +3662,492 @@ def record_query(store: "GraphStore | None", *, entity_id: str, caller: str = ""
 
 
 # ─────────────────────────────────────────────────────────────────────
+# v1.29.0 第二批：【任务】TaskOrder —— 到点执行、逐动作过 grant、终态即销
+#   依据：DCD 20261111 Q5 甲（TaskOrder 落 AF）／Q6（一次性 vs 重复）／§2.3 甲（撤销下半行）
+#   口径三条（卡 §三 红线）：
+#   ① ⛔ 变相常驻：账本里没有 every/repeat/cron（`af_task_order.FORBIDDEN_KEYS` 代码级拒收）；
+#   ② ⛔ 整单放行：每步都走 `live_run`（它内部带 grant 判定），撤销/过期在**每一步之前**重读；
+#   ③ ⛔ 触发面混淆：任务只到点执行＋人工取消，⛔ 不进 watch 装载池、⛔ 接定时/事件触发。
+# ─────────────────────────────────────────────────────────────────────
+
+#: 引擎轮询间隔（秒）。5s 足够覆盖"到点 ±几秒"，又不至于把 store 读成热点。
+ORDER_ENGINE_TICK_S = 5.0
+#: 一轮最多跑几张单（防止一次 tick 被积压单子拖死；剩下的下一轮接着来）。
+ORDER_ENGINE_MAX_PER_TICK = 5
+#: 引擎线程句柄（只有 serve 会起它；MCP/CLI 进程⛔ 起——那里没有单写者租约，live_run 必 503）。
+_ORDER_ENGINE: dict[str, Any] = {"thread": None, "stop": None, "root": "", "ticks": 0, "last_error": ""}
+
+
+def _order_store(store: "GraphStore | None") -> TaskOrderStore:
+    root = getattr(store, "root", None)
+    if root is None:
+        raise ServiceError("任务单需要 store 根（账本在 .orders/active.json）——本调用未携带 store",
+                           status=403)
+    return TaskOrderStore(Path(root).joinpath(*ORDER_FILE_REL))
+
+
+def _order_error(exc: TaskOrderError) -> ServiceError:
+    """把任务单面异常翻成服务层错误：**码名进 message 开头**（机器可读，同 `READONLY_DEGRADED:` 先例）。"""
+    code = str(getattr(exc, "code", "") or "")
+    text = f"{code}: {exc}" if code else str(exc)
+    return ServiceError(text, status=int(getattr(exc, "status", 400) or 400))
+
+
+def _order_assert_scope(order: Mapping[str, Any], *, caller: str, caller_is_owner: bool,
+                        action: str) -> None:
+    """任务单的**归属面**：owner 面可动全部；agent 只能动自己名下的单（同 grant 口径）。"""
+    agent = str(order.get("agent") or "")
+    if caller_is_owner:
+        return
+    if not caller:
+        # 无身份（CLI/内部）沿用既有渐进口径：放行，但只有本进程能造出这种调用
+        return
+    if agent != str(caller):
+        raise ServiceError(f"{action}：任务单不属于当前主体", status=403)
+
+
+def _order_precheck_steps(store: "GraphStore | None", *, grant_id: str, agent: str,
+                          steps: Sequence[Mapping[str, Any]],
+                          room_of: Any = None) -> dict[str, Any]:
+    """**创建期**把每一步都过一遍 grant（⛔ 整单放行）。
+
+    为什么创建期也要过：到点执行时没人可问——越界的步如果等到那一刻才发现，用户只会看到
+    "任务失败了"。所以越界/高危的步**在入册时就拒**，让 agent 当场改计划或补授权。
+    ⚠️ 偏差记录（第二批报告 §三）：卡面写"越界步走批 1 单次放行票"，但放行票 TTL 是
+    **300 秒**，而任务单可能在几小时后才到点 ⇒ 票必然过期，兑现不了。本批按 fail-closed
+    处理：越界步**拒绝创建**并回可读原因；「创建时确认、执行时放行」需要一套长期票设计，
+    属批 3+ 的拍板项（已在报告里报 PM）。
+    """
+    if store is None:
+        raise ServiceError("任务单需要 store 根才能校验执行授权", status=403)
+    gs = _grant_store(store)
+    try:
+        grant = gs.resolve(grant_id, agent=agent)
+    except GrantError as exc:
+        raise _grant_error(exc) from exc
+    if room_of is None:
+        room_of = _grant_room_of(store)
+    for index, step in enumerate(steps):
+        entity = step_entity(step)
+        check = gs.check(
+            grant,
+            agent=agent,
+            actions=[(str(step.get("adapter") or "ha"), str(step.get("action") or ""),
+                      dict(step.get("params") or {}))],
+            targets=[entity] if entity else [],
+            room_of=room_of,
+        )
+        if check.hard_denied:
+            detail = "；".join(f"{d['code']}={d['detail']}" for d in check.denied)
+            raise ServiceError(
+                f"任务单第 {index + 1} 步（{step_summary(step)}）越过执行授权：{detail}——"
+                "任务到点无人可问，越界步一律在入册时拒（⛔ 整单放行）",
+                status=403,
+            )
+        if check.needs_confirm:
+            detail = "；".join(d.get("detail") or d["code"] for d in check.denied)
+            raise ServiceError(
+                f"任务单第 {index + 1} 步（{step_summary(step)}）需要越界确认（{detail}）："
+                "定时任务到点无人可确认，请补授权范围或改动作（⛔ 用单次票挂单：票 TTL 300s，到点必过期）",
+                status=403,
+            )
+    return {"grant_id": grant["grant_id"], "action_risk": grant.get("action_risk"),
+            "expires_at": _grant_iso(grant.get("expires_at"))}
+
+
+def order_create(
+    store: GraphStore,
+    *,
+    steps: Sequence[Mapping[str, Any]],
+    agent: str = "",
+    output: Mapping[str, Any] | None = None,
+    grant_id: str = "",
+    at: float | None = None,
+    delay_s: float | None = None,
+    caller: str = "",
+    caller_is_owner: bool = False,
+) -> dict[str, Any]:
+    """入册一张任务单（挂单）。
+
+    `agent` 缺省取调用主体；owner 面可以显式指定（替谁挂单）。没有 agent 的主体（owner 令牌
+    直连且没给 agent）⇒ 拒：任务到点要按某个 agent 的 grant 执行，主体必须明确。
+    """
+    agent_text = str(agent or caller or "").strip()
+    if not agent_text:
+        raise ServiceError(
+            "创建任务单需要 agent（执行主体）：任务到点按该 agent 的执行授权逐动作放行", status=400)
+    precheck = _order_precheck_steps(store, grant_id=grant_id, agent=agent_text, steps=steps)
+    try:
+        record = _order_store(store).create(
+            agent=agent_text, steps=steps, output=output, grant_id=grant_id,
+            at=at, delay_s=delay_s, created_by=caller or agent_text,
+        )
+    except TaskOrderError as exc:
+        raise _order_error(exc) from exc
+    _grant_audit(
+        store, "TASK_ORDER_CREATED",
+        order_id=record["order_id"], agent=record["agent"],
+        due_at=_grant_iso(record["due_at"]), steps=[step_summary(s) for s in record["steps"]],
+        output=dict(record["output"]), grant_id=record["grant_id"],
+        subject=str(caller or agent_text), precheck=precheck,
+    )
+    return record
+
+
+def order_list(
+    store: GraphStore, *, caller: str = "", caller_is_owner: bool = False,
+    token_identity: bool | None = None,
+) -> dict[str, Any]:
+    """活动池（pending/running）。归属形状照 list 面纪律（owner 全量、非 owner 只看自己）。"""
+    sub = Subject.from_caller(caller, owner_face=caller_is_owner, token_identity=token_identity)
+    if sub.token_state is TokenState.BROKEN:
+        raise ServiceError(broken_identity_error(), status=403)
+    try:
+        records = _order_store(store).list()
+    except TaskOrderError as exc:
+        raise _order_error(exc) from exc
+    by_id = {str(r.get("order_id") or ""): str(r.get("agent") or "") for r in records}
+    visible, hidden = scope_names(lambda oid: by_id.get(oid, ""), list(by_id), sub)
+    keep = set(visible)
+    items = [r for r in records if str(r.get("order_id") or "") in keep]
+    out: dict[str, Any] = {"ok": len(visible) + hidden == len(records), "items": items,
+                           "count": len(items)}
+    if caller and not caller_is_owner:
+        out["hidden_count"] = hidden
+        out["scope"] = f"owner:{caller}"
+    return out
+
+
+def order_cancel(
+    store: GraphStore, *, order_id: str, caller: str = "", caller_is_owner: bool = False,
+    reason: str = "",
+) -> dict[str, Any]:
+    """人工取消（pending／running 均可）。终态即销，历史进 `TASK_ORDER_CANCELLED` 留痕。"""
+    ostore = _order_store(store)
+    current = ostore.get(order_id)
+    if current is None:
+        raise ServiceError(f"没有这张任务单：{order_id}（已执行完的单子会即销，历史查 order_receipts）",
+                           status=404)
+    _order_assert_scope(current, caller=caller, caller_is_owner=caller_is_owner, action="取消任务单")
+    try:
+        record = ostore.cancel(order_id, by=caller, reason=reason)
+    except TaskOrderError as exc:
+        raise _order_error(exc) from exc
+    _grant_audit(
+        store, "TASK_ORDER_CANCELLED", order_id=record["order_id"], agent=record["agent"],
+        reason=str(reason or ""), due_at=_grant_iso(record["due_at"]),
+        steps_done=len((record.get("receipt") or {}).get("steps") or []),
+        subject=str(caller or ""), by=str(caller or ""),
+    )
+    return record
+
+
+def _deliver_order_output(store: "GraphStore | None", order: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """按 `output.channels` 逐通道交付，**每通道如实记状态**（⛔ 没发就说没发）。
+
+    现读映射（仓内既有设施，⛔ 不发明新外部集成）：
+    - `tts` → `AfMqttBridge.publish_speak`（与自动化播报同一条桥方法；无桥 ⇒ `no_bridge`）
+    - `mimo` → **读面**：`/api/orders` 可查即为达成（不假装是推送）
+    - `bark` → **未接线**：仓内 grep 0 命中，落占位＋`unwired`；它是设计稿里的**兜底**通道，
+      所以 TTS 失败时这条链当前是断的——回执里显式带 `fallback_unavailable`
+    """
+    block = order.get("output") if isinstance(order.get("output"), Mapping) else {}
+    channels = list(block.get("channels") or [])
+    text = str(block.get("text") or "").strip() or _order_default_text(order)
+    room = str(block.get("room") or "")
+    out: list[dict[str, Any]] = []
+    tts_failed = False
+    for channel in channels:
+        wired = OUTPUT_WIRED.get(channel, "unwired")
+        if channel == "tts":
+            entry = {"channel": "tts", "wired": wired, "room": room, "text": text}
+            try:
+                from . import af_mqtt_bridge
+
+                bridge = af_mqtt_bridge.current_bridge()
+                if bridge is None:
+                    entry.update({"status": "failed", "error": "no_bridge"})
+                    tts_failed = True
+                else:
+                    res = bridge.publish_speak(
+                        trace_id=f"order:{order.get('order_id')}",
+                        text=text, room=room, source="autoforge",
+                    )
+                    ok = bool((res or {}).get("published", True)) if isinstance(res, dict) else True
+                    entry.update({
+                        "status": "sent" if ok else "failed",
+                        "trace_id": str((res or {}).get("trace_id") or "") if isinstance(res, dict) else "",
+                        # 播报**发出**不等于被听见（勿扰/播放吞话）——这是"未验证"的诚实标注
+                        "verified": False,
+                    })
+                    if not ok:
+                        entry["error"] = str((res or {}).get("code") or "not_published")
+                        tts_failed = True
+            except Exception as exc:  # noqa: BLE001 —— 播报旁路失败⛔ 冒到执行链
+                entry.update({"status": "failed", "error": f"raised:{type(exc).__name__}"})
+                tts_failed = True
+            out.append(entry)
+        elif channel == "mimo":
+            out.append({"channel": "mimo", "wired": wired, "status": "readable",
+                        "endpoint": f"/api/orders/{order.get('order_id')}"})
+        else:
+            out.append({"channel": channel, "wired": wired, "status": "unwired",
+                        "note": "仓内无该通道设施（bark 未接线）：已如实记录，⛔ 不算投递成功"})
+    if tts_failed and "bark" in channels:
+        out.append({"channel": "bark", "wired": OUTPUT_WIRED["bark"], "status": "fallback_unavailable",
+                    "note": "TTS 失败时的兜底通道当前未接线（拍板项，见第二批报告 §三）"})
+    return out
+
+
+def _order_default_text(order: Mapping[str, Any]) -> str:
+    """没有 `output.text` 时的一句话播报（⛔ 术语堆，用户听的是结果）。"""
+    steps = order.get("steps") or []
+    return f"你订的{len(steps)}步任务已经按顺序做完了"
+
+
+def _order_step_receipt(index: int, step: Mapping[str, Any], result: Mapping[str, Any] | None,
+                        *, error: str = "") -> dict[str, Any]:
+    base = {"index": index + 1, "action": str(step.get("action") or ""),
+            "entity": step_entity(step), "at": _grant_iso(time.time())}
+    if error:
+        base.update({"ok": False, "error": error})
+        return base
+    data = result or {}
+    base.update({
+        # ok 取自 `live_run` 的真实裁决（它自己由实例终态派生），⛔ 不在这里写常量 True
+        "ok": bool(data.get("ok")),
+        "authorized_by": str(data.get("authorized_by") or ""),
+        "verdict": str(data.get("dispatch_result") or ""),
+        "writes": list(data.get("writes") or []),
+        "grant": data.get("grant") if isinstance(data.get("grant"), Mapping) else None,
+    })
+    return base
+
+
+def _run_claimed_order(store: "GraphStore | None", ostore: TaskOrderStore,
+                       claim: Any, *, now: float | None = None) -> dict[str, Any]:
+    """跑一张已认领的单：逐步过 grant → 逐动作执行 → 交付 output → 结单。
+
+    撤销语义（Q3 下半行，本批闭合矩阵第 6 行）：**每一步之前**重读 grant；一旦发现被撤销，
+    当前已完成的步保留、**其后所有未执行步不发起**，状态翻 `cancelled`。
+    """
+    order = claim.order
+    oid = str(order.get("order_id") or "")
+    steps = list(order.get("steps") or [])
+    start = int(claim.resumed_from or 0)
+    gs = _grant_store(store)
+    try:
+        gs.resolve(str(order.get("grant_id") or ""), agent=str(order.get("agent") or ""))
+    except GrantError as exc:
+        record = ostore.finish(oid, status="cancelled",
+                               extra={"reason": f"grant 不可用：{exc.code}", "steps_done": start})
+        _grant_audit(store, "TASK_ORDER_CANCELLED", order_id=oid, agent=order.get("agent"),
+                     reason=f"grant_unusable:{exc.code}", steps_done=start, due_at=_grant_iso(order.get("due_at")))
+        return {"order_id": oid, "status": "cancelled", "record": record}
+
+    status = "running"
+    failure: dict[str, Any] = {}
+    for index in range(start, len(steps)):
+        step = steps[index]
+        fresh = gs.get(str(order.get("grant_id") or ""))
+        if fresh is None or bool((fresh.get("revoke") or {}).get("revoked")):
+            record = ostore.finish(
+                oid, status="cancelled",
+                extra={"reason": "grant_revoked_mid_flight", "cancelled_from_step": index + 1,
+                       "steps_done": index},
+            )
+            _grant_audit(store, "TASK_ORDER_CANCELLED", order_id=oid, agent=order.get("agent"),
+                         reason="grant_revoked_mid_flight", cancelled_from_step=index + 1,
+                         steps_done=index, due_at=_grant_iso(order.get("due_at")))
+            return {"order_id": oid, "status": "cancelled", "record": record}
+        entity = step_entity(step)
+        try:
+            result = live_run(
+                build_step_ir(step, order_id=oid, index=index),
+                [entity] if entity else [f"task_order.{oid}"],
+                [step_event(step, order_id=oid)],
+                confirm=True,
+                store=store,
+                grant_id=str(order.get("grant_id") or ""),
+                caller=str(order.get("agent") or ""),
+            )
+        except ServiceError as exc:
+            failure = {"index": index + 1, "error": str(exc), "status": int(getattr(exc, "status", 400) or 400)}
+            ostore.record_step(oid, _order_step_receipt(index, step, None, error=str(exc)))
+            status = "failed"
+            break
+        ostore.record_step(oid, _order_step_receipt(index, step, result))
+
+    if status == "running":
+        # 全部步成功 ⇒ 交付 output（交付失败**不改**任务状态：动作已经做完了）
+        try:
+            deliveries = _deliver_order_output(store, order)
+            for entry in deliveries:
+                ostore.record_output(oid, entry)
+        except Exception as exc:  # noqa: BLE001 —— 播报旁路失败⛔ 把已完成的动作记成失败
+            logger.warning("TASK_ORDER_OUTPUT_DELIVERY_FAILED order=%s err=%s", oid, exc)
+        status = "done"
+
+    record = ostore.finish(oid, status=status,
+                           extra={"reason": failure.get("error", ""), "failed_step": failure.get("index", 0)})
+    _grant_audit(
+        store, "TASK_ORDER_FINISHED", order_id=oid, agent=order.get("agent"),
+        status=status, due_at=_grant_iso(order.get("due_at")),
+        steps_total=len(steps), steps_done=len((record.get("receipt") or {}).get("steps") or []),
+        failed_step=failure.get("index", 0), error=failure.get("error", ""),
+        subject=str(order.get("agent") or ""),
+    )
+    return {"order_id": oid, "status": status, "record": record}
+
+
+def order_tick(store: "GraphStore | None", *, now: float | None = None,
+               limit: int = ORDER_ENGINE_MAX_PER_TICK) -> dict[str, Any]:
+    """引擎单跑：认领到点单 → 逐张执行。返回本轮读数（serve 引擎线程与 `forge order tick` 同源）。"""
+    if store is None:
+        raise ServiceError("任务单引擎需要 store", status=400)
+    ostore = _order_store(store)
+    try:
+        claims = ostore.claim_due(now=now)
+    except TaskOrderError as exc:
+        raise _order_error(exc) from exc
+    expired = [c.order_id for c in claims if str(c.order.get("status")) == "expired"]
+    runnable = [c for c in claims if str(c.order.get("status")) != "expired"][: max(int(limit), 1)]
+    results: list[dict[str, Any]] = []
+    for claim in runnable:
+        try:
+            results.append(_run_claimed_order(store, ostore, claim, now=now))
+        except Exception as exc:  # noqa: BLE001 —— 单张单子的意外不许把引擎线程打死
+            logger.warning("TASK_ORDER_RUN_FAILED order=%s err=%s", claim.order_id, exc)
+            results.append({"order_id": claim.order_id, "status": "error", "error": str(exc)})
+    if expired:
+        for oid in expired:
+            _grant_audit(store, "TASK_ORDER_EXPIRED", order_id=oid, reason="missed_due_window")
+    return {
+        # ok 派生自不变式：本轮认领的单子没有一张落到 error 分支
+        "ok": all(str(r.get("status") or "") != "error" for r in results),
+        "claimed": len(claims),
+        "expired": len(expired),
+        "ran": len(results),
+        "results": results,
+    }
+
+
+def order_receipts(
+    store: "GraphStore | None", *, caller: str = "", caller_is_owner: bool = False,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """任务单留痕读面（终态即销之后的唯一查法）：源＝`<store>/deploy_audit.jsonl`。"""
+    root = getattr(store, "root", None)
+    if root is None:
+        return {"ok": False, "count": 0, "items": [], "read_error": "no_store"}
+    try:
+        n = LIVE_RECEIPTS_LIMIT if limit is None else int(limit)
+    except (TypeError, ValueError):
+        n = LIVE_RECEIPTS_LIMIT
+    n = min(n if n > 0 else LIVE_RECEIPTS_LIMIT, LIVE_RECEIPTS_MAX)
+
+    from .af_audit import (DEPLOY_AUDIT_FILE, TASK_ORDER_CANCELLED, TASK_ORDER_CREATED,
+                           TASK_ORDER_EXPIRED, TASK_ORDER_FINISHED)
+
+    path = Path(root) / DEPLOY_AUDIT_FILE
+    text: str | None = None
+    if path.is_file():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return {"ok": False, "count": 0, "items": [],
+                    "read_error": f"ledger_unreadable:{type(exc).__name__}"}
+    wanted = {TASK_ORDER_CREATED, TASK_ORDER_FINISHED, TASK_ORDER_CANCELLED, TASK_ORDER_EXPIRED}
+    events: list[dict[str, Any]] = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and str(row.get("type") or "") in wanted:
+            events.append(row)
+    total = len(events)
+    items: list[dict[str, Any]] = []
+    for row in reversed(events):
+        data = row.get("data") if isinstance(row.get("data"), Mapping) else {}
+        subject = str(data.get("subject") or data.get("agent") or "")
+        if caller and not caller_is_owner and subject != caller and str(data.get("agent") or "") != caller:
+            continue
+        items.append({
+            "type": str(row.get("type") or ""),
+            "at": str(row.get("at") or ""),
+            "order_id": str(data.get("order_id") or ""),
+            "agent": str(data.get("agent") or ""),
+            "status": str(data.get("status") or ""),
+            "reason": str(data.get("reason") or ""),
+            "steps": data.get("steps") or [],
+        })
+        if len(items) >= n:
+            break
+    out: dict[str, Any] = {"ok": total >= len(items), "count": len(items), "items": items}
+    if caller and not caller_is_owner:
+        out["hidden_count"] = max(0, total - len(items))
+        out["scope"] = f"owner:{caller}"
+    return out
+
+
+def _order_engine_loop(store_root: str, stop: Any, tick_s: float) -> None:
+    """serve 内的任务单引擎循环（daemon）。异常只留痕，⛔ 不把线程打死。"""
+    store = GraphStore(store_root)
+    while not stop.wait(tick_s):
+        try:
+            order_tick(store)
+            _ORDER_ENGINE["ticks"] = int(_ORDER_ENGINE.get("ticks") or 0) + 1
+            _ORDER_ENGINE["last_error"] = ""
+        except Exception as exc:  # noqa: BLE001 —— 引擎线程活着比"干净地死掉"重要
+            _ORDER_ENGINE["last_error"] = f"{type(exc).__name__}: {exc}"
+            logger.warning("TASK_ORDER_TICK_FAILED tick 异常（引擎继续跑）：%s", exc)
+
+
+def order_engine_start(store_root: str, *, tick_s: float | None = None) -> dict[str, Any]:
+    """在 serve 里起任务单引擎（幂等）。⛔ 只在持单写者租约的进程里起——MCP/CLI 起＝每步 503。"""
+    if _ORDER_ENGINE.get("thread") is not None:
+        return order_engine_health()
+    stop = threading.Event()
+    thread = threading.Thread(
+        target=_order_engine_loop, args=(str(store_root), stop, float(tick_s or ORDER_ENGINE_TICK_S)),
+        daemon=True, name="task-order-engine",
+    )
+    _ORDER_ENGINE.update({"thread": thread, "stop": stop, "root": str(store_root), "ticks": 0,
+                          "last_error": ""})
+    thread.start()
+    return order_engine_health()
+
+
+def order_engine_stop(*, timeout: float = 5.0) -> dict[str, Any]:
+    """停引擎（serve 退出前调）。返回停机读数，⛔ 吞掉"没停干净"这一事实。"""
+    stop = _ORDER_ENGINE.get("stop")
+    thread = _ORDER_ENGINE.get("thread")
+    if stop is None or thread is None:
+        return {"ok": not (stop or thread), "running": False}
+    stop.set()
+    thread.join(timeout)
+    alive = bool(getattr(thread, "is_alive", lambda: False)())
+    _ORDER_ENGINE.update({"thread": None, "stop": None})
+    return {"ok": not alive, "running": alive, "root": _ORDER_ENGINE.get("root") or ""}
+
+
+def order_engine_health() -> dict[str, Any]:
+    """引擎读数（health 面用；⛔ 不写"健康"这种没判据的字）。"""
+    thread = _ORDER_ENGINE.get("thread")
+    return {
+        "running": bool(thread is not None and getattr(thread, "is_alive", lambda: False)()),
+        "root": _ORDER_ENGINE.get("root") or "",
+        "ticks": int(_ORDER_ENGINE.get("ticks") or 0),
+        "last_error": str(_ORDER_ENGINE.get("last_error") or ""),
+        "tick_s": ORDER_ENGINE_TICK_S,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
 # F7 残留（WebUI 撤销按钮）：撤销的 HTTP 服务面。
 #   撤销 = 对真实设备**再下发一次**，所以服务端闸门口径与 `live_run` 完全对齐：
 #   ① `AUTOFORGE_LIVE_ENABLED=1`；② 令牌只从服务端 `HA_LONG_LIVED_TOKEN`（旧 AUTOFORGE_HA_TOKEN）取，绝不从请求体收。
@@ -4123,8 +4628,13 @@ def catalog_list(
     keyword: str = "",
     limit: int = 50,
     offset: int = 0,
+    caller: str = "",
 ) -> dict[str, Any]:
     """全屋实体目录·过滤浏览（强制分页 + 透明截断回报）。"""
+    # v1.29.0 批 2（批 1 裁定②顺延）：列表浏览也是"谁看过家里"的一部分 ⇒ 同形留痕。
+    # 只记过滤条件与命中数，⛔ 不记任何实体状态值。
+    record_query(store, entity_id=f"list:{domain or '*'}:{area or '*'}:{keyword or '*'}",
+                 caller=caller)
     return _catalog(store).list_entities(domain=domain, area=area, keyword=keyword, limit=limit, offset=offset)
 
 
