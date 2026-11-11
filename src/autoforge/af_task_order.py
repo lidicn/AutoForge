@@ -197,10 +197,15 @@ def output_block(output: Mapping[str, Any] | None, *, kind: str = "control") -> 
         #: 每通道的现读接线状态：`wired`／`unwired`／`read`（⛔ 无设施不许自称已发）
         "wired": {c: OUTPUT_WIRED.get(c, "unwired") for c in deduped},
     }
-    if kind_text == "query" and not any(block["wired"][c] != "unwired" for c in deduped):
+    # ⚠️ 口径（PM 2026-11-11 14:4x 钉死）：**查询型只认「已接线」= `wired` 态**。
+    # `mimo` 是 `read` 态（用户在 UI 里能查到）——它不算"投递"，只挂 mimo 的查询型任务
+    # 跑完没有任何人被告知，那正是红线③的哑任务形状 ⇒ 拒建。
+    # 上一版写成 `!= "unwired"`（read 也算），比这条口径**松**，属实现与裁定不一致，已收窄。
+    if kind_text == "query" and not any(block["wired"][c] == "wired" for c in deduped):
         raise TaskOrderError(
-            "查询型任务必须有一条**已接线**的输出通道（当前 tts/read 可用、bark 未接线）——"
-            "否则任务跑完结果没人看得见（哑任务，红线③）",
+            "查询型任务必须有一条**已接线（wired）**的输出通道——当前只有 `tts` 是 wired；"
+            "`mimo` 只是读面（read）、`bark` 未接线，都不算投递 ⇒ 任务跑完结果没人看得见"
+            "（哑任务，红线③）",
             ORDER_NEEDS_OUTPUT, 400,
         )
     return block

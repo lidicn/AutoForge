@@ -201,6 +201,21 @@ def test_t8_query_order_needs_a_wired_channel(env):
     assert "TASK_ORDER_NEEDS_OUTPUT" in str(ei.value), str(ei.value)
 
 
+def test_t8b_query_needs_WIRED_not_merely_read(env):
+    """PM 2026-11-11 14:4x 钉的口径：查询型只认 `wired` 态——`mimo`(`read`) 不算投递。
+
+    上一版实现写成 `!= "unwired"`（read 也放行），比裁定**松**；本判据把这条收紧钉死。
+    """
+    with pytest.raises(ServiceError) as ei:
+        _create(env, output={"channels": ["mimo"], "kind": "query"})
+    assert "TASK_ORDER_NEEDS_OUTPUT" in str(ei.value), str(ei.value)
+    # 反例腿：tts(wired) 在列 ⇒ 放行（判据有牙，不是恒拒）
+    rec = _create(env, output={"channels": ["mimo", "tts"], "kind": "query"})
+    assert rec["output"]["wired"]["tts"] == "wired"
+    # 控制型只挂 mimo 仍可建（read 对 control 够用）
+    assert _create(env, output={"channels": ["mimo"]})["output"]["channels"] == ["mimo"]
+
+
 # ── T9：变相常驻 ───────────────────────────────────────────────────────
 @pytest.mark.parametrize("key", ["every", "repeat", "cron", "trigger"])
 def test_t9_repeat_fields_are_rejected(env, key):
