@@ -135,10 +135,10 @@ def test_mcp_live_run_without_undo_advertises_nothing(tmp_path, gate):
 def test_rest_undo_shape_matches_mcp_verbatim(tmp_path, gate):
     """对照腿：REST 面带 undo 与不带 undo 的形状 = MCP 面（逐字同形，卡 §三 同源）。"""
     client = TestClient(build_app(store_root=str(tmp_path)))
-    args = _base_args(tmp_path)
-
-    with_u = client.post("/api/live/run", json={**args, "undo": True}).json()
-    without_u = client.post("/api/live/run", json=args).json()
+    # AF-753：短期码一次性核销 ⇒ 两条腿各签一枚新码（同一枚复用第二次必 403，
+    # 那是凭据复用不是本腿要量的形状；「复用必拒」由 test_af_auth 的核销套件钉）。
+    with_u = client.post("/api/live/run", json={**_base_args(tmp_path), "undo": True}).json()
+    without_u = client.post("/api/live/run", json=_base_args(tmp_path)).json()
 
     # REST 与 MCP 的同源断言：两枚键的形状逐字一致（枚举域相同）
     assert with_u["undo_enabled"] is True and bool(with_u["undo_deploy_id"])

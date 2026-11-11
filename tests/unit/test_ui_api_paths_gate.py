@@ -673,9 +673,9 @@ def test_all_trees_of_this_repo_are_in_scope_and_green(capsys):
     assert "SSE 建流 2 处" in out, out
     # v1.29 前两批新增 9 枚端点、UI 批接上 6 枚 ⇒ 反向读数 16→25→19。
     # ⚠️ 但 `_claimed` 对静态路径**只比路径形状、不比方法**：有了 `GET /api/grants`，
-    # 同路径的 `POST /api/grants`（签发）也被带出名单；`/api/orders` 同理 ⇒ 实读 **17**。
-    # 这是本门的已知口径（同路径多方法无区分力），已报 PM 入池；⛔ 别按 17 这个数去删接口。
-    assert "跨 3 棵树仍未被调用 17 条" in out, out
+    # 同路径的 `POST /api/grants`（签发）也被带出名单；`/api/orders` 同理 ⇒ 实读 **19**。
+    # 这是本门的已知口径（同路径多方法无区分力），已报 PM 入池；⛔ 别按 19 这个数去删接口。
+    assert "跨 3 棵树仍未被调用 19 条" in out, out
 
 
 # ── 第四张调用脸：视图里直接 `fetch(`${base}/watch/start`)`（前缀是变量）──────
@@ -823,11 +823,11 @@ def test_reverse_reading_of_this_repo_is_a_named_list(capsys):
     assert mod.main(["check_ui_api_paths.py", "--list-uncalled"]) == 0
     out = capsys.readouterr().out
     lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("—")]
-    assert len(lines) == 17, out
+    assert len(lines) == 19, out
     assert "/api/watch/start" not in out and "/api/watch/stop" not in out   # 已被 fetch 那张脸认领
     assert "pair-request" not in out                                       # 已被 SSE 那张脸认领
-    assert "反向读数 17 条" in out, out
-    # 整个集合逐条钉住（不是只钉总数）：这 15 条的定性写在执行记录 §二之四十四，
+    assert "反向读数 19 条" in out, out
+    # 整个集合逐条钉住（不是只钉总数）：这 19 条的定性写在执行记录 §二之四十四，
     # 谁给某条补上前端调用点、或删掉某条路由，都必须同时动这张表和这段名单——
     # 只数数不记名的话，下一批又会把"门读不出"当成"接口没人用"。
     assert {ln.split()[0] + " " + ln.split()[1] for ln in lines} == {
@@ -840,6 +840,7 @@ def test_reverse_reading_of_this_repo_is_a_named_list(capsys):
         "GET /api/experience/export",                                       # 经验导出：消费走 CLI `forge experience export`（同函数，不经 HTTP）
         # v1.29.0 第一批：grant 五条端点——UI 批（GrantsView）接上列表／撤销／留痕三条；
         # 签发不在本批范围（MCP 面＋在场授权），续期只做撤销不做续期，故只剩这一条。
+        "POST /api/grants",                                                 # 签发：UI 未接（MCP 面＋在场授权走这条）——同路径不同方法，门读不出区分
         "POST /api/grants/{grant_id}/renew",                                # 续期：UI 未接（本批只做撤销）
         "POST /api/mcp/pair/redeem",                                        # 配对 bootstrap 两条：消费面是 agent 自己的 HTTP 客户端（裁定 20261006 §一=B），第一方 UI 天生不调它——读不出≠没人用
         "POST /api/mcp/pair/request",
@@ -850,6 +851,7 @@ def test_reverse_reading_of_this_repo_is_a_named_list(capsys):
         "POST /api/sessions/{session_id}/cancel",
         "POST /api/sessions/{session_id}/tick",
         "GET /pair",                                                       # 批 5：匿名配对链接落地页（agent/浏览器直接访问，UI 不调）
+        "POST /api/orders",                                                # 订单面：消费方是 MCP/CLI（同路径不同方法，门读不出区分）
     }, out
 
 

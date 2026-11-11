@@ -198,7 +198,11 @@ def test_live_run_records_pre_snapshot_and_undo_restores_it(tmp_path, noauth, mo
     assert body["final_states"]["binary_sensor.hall"] is None
     assert body["final_states"]["light.study"] == "on"
 
-    u = client.post(f"/api/undo/{deploy_id}", json={"confirm": True, "auth_code": _code})
+    # AF-753：短期码一次性核销——live/run 已把上面那枚消费掉，撤销必须另签一枚，
+    # ⛔ 不能拿同一枚再走一次（那是凭据复用，不是本腿要量的语义；复核语义由拒收套件钉）。
+    _rec2 = AuthCodeStore(_P(tmp_path) / ".auth" / "auth_codes.json").create("short", ttl_minutes=30)
+    _code2 = getattr(_rec2, "code", None) or _rec2["code"]
+    u = client.post(f"/api/undo/{deploy_id}", json={"confirm": True, "auth_code": _code2})
     assert u.status_code == 200, u.json()
     # DCD 2026-10-30 Q4：过闸凭据标签要出现在回执与审计流水（deploy_audit.jsonl）
     assert u.json().get("authorized_by"), "撤销回执要带 authorized_by（过闸无痕=查不到哪把放行）"
