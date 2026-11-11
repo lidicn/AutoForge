@@ -665,12 +665,17 @@ def test_all_trees_of_this_repo_are_in_scope_and_green(capsys):
     # DB-09：GovernanceView 加签发开发者令牌卡，client.ts issueAgentToken → POST /user/agent-token ⇒ ui 60 → 61。
     # v1.27（D10 触发沿徽标）：AutomationDetailView 新增 /api/automations/{name} 读取（运行期卡）⇒ ui 61 → 62。
     # v1.28（R5 Phase 2）：client.ts liveReceipts 一枚 GET /live/run/receipts ⇒ ui 62 → 63。
-    for name in ("ui 63", "ui-user 19", "ui-user-mimo 23"):
+    # v1.29（UI 批 GrantsView/OrdersView）：mimo 新增 6 枚调用点（grants 读／撤销／留痕，
+    # orders 读／留痕／取消）⇒ mimo 23 → 29。
+    for name in ("ui 63", "ui-user 19", "ui-user-mimo 29"):
         assert name in out, out
     assert "传输层包装 4 处" in out, out
     assert "SSE 建流 2 处" in out, out
-    # v1.29.0 第一批：5 枚新端点 UI 尚未调用（AF-UI 并行批）⇒ 16→21。
-    assert "跨 3 棵树仍未被调用 25 条" in out, out
+    # v1.29 前两批新增 9 枚端点、UI 批接上 6 枚 ⇒ 反向读数 16→25→19。
+    # ⚠️ 但 `_claimed` 对静态路径**只比路径形状、不比方法**：有了 `GET /api/grants`，
+    # 同路径的 `POST /api/grants`（签发）也被带出名单；`/api/orders` 同理 ⇒ 实读 **17**。
+    # 这是本门的已知口径（同路径多方法无区分力），已报 PM 入池；⛔ 别按 17 这个数去删接口。
+    assert "跨 3 棵树仍未被调用 17 条" in out, out
 
 
 # ── 第四张调用脸：视图里直接 `fetch(`${base}/watch/start`)`（前缀是变量）──────
@@ -808,17 +813,20 @@ def test_helper_names_have_one_source():
 def test_reverse_reading_of_this_repo_is_a_named_list(capsys):
     """`--list-uncalled` 逐条打到盘上：一个总数定不了"还剩谁在用"这件事，只能逐条定性。
 
-    16 这个数是棘轮（v1.28 R3 新增 `GET /api/live/run/receipts` 后为 17，R5 Phase 2 接上后回到 16）——
-    删一条活接口、或给某条补上前端调用点，都要在这里留名。
+    16 这个数是棘轮（v1.28 R3 新增 `GET /api/live/run/receipts` 后为 17，R5 Phase 2 接上后回到 16；
+    v1.29 前两批新增 9 枚端点后 25，UI 批接上 6 枚后实读 **17**）——删一条活接口、
+    或给某条补上前端调用点，都要在这里留名。
+    ⚠️ 17≠19 的原因：`_claimed` 只比路径形状不比方法 ⇒ `GET /api/grants` 顺带把
+    `POST /api/grants`（签发）带出名单，`/api/orders` 同理。本门已知口径，已报 PM。
     """
     mod = _module()
     assert mod.main(["check_ui_api_paths.py", "--list-uncalled"]) == 0
     out = capsys.readouterr().out
     lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("—")]
-    assert len(lines) == 25, out
+    assert len(lines) == 17, out
     assert "/api/watch/start" not in out and "/api/watch/stop" not in out   # 已被 fetch 那张脸认领
     assert "pair-request" not in out                                       # 已被 SSE 那张脸认领
-    assert "反向读数 25 条" in out, out
+    assert "反向读数 17 条" in out, out
     # 整个集合逐条钉住（不是只钉总数）：这 15 条的定性写在执行记录 §二之四十四，
     # 谁给某条补上前端调用点、或删掉某条路由，都必须同时动这张表和这段名单——
     # 只数数不记名的话，下一批又会把"门读不出"当成"接口没人用"。
@@ -830,17 +838,9 @@ def test_reverse_reading_of_this_repo_is_a_named_list(capsys):
         "DELETE /api/conflicts/locks/{entity_id}",
         "POST /api/conflicts/{automation_id}/reset",
         "GET /api/experience/export",                                       # 经验导出：消费走 CLI `forge experience export`（同函数，不经 HTTP）
-        # v1.29.0 第一批：grant 五条端点先落地，AF-UI 授权管理页（并行批）接上后从这里删名。
-        "GET /api/grants",                                                  # 授权列表：UI 授权管理页未接
-        "POST /api/grants",                                                 # 签发：同上
-        "GET /api/grants/receipts",                                         # 留痕读面：同上
-        "POST /api/grants/{grant_id}/revoke",                               # 撤销：同上
-        "POST /api/grants/{grant_id}/renew",                                # 续期：同上
-        # v1.29.0 第二批：任务单四条端点先落地，AI/UI 侧任务卡接上后从这里删名。
-        "GET /api/orders",                                                  # 任务活动池：UI 未接
-        "POST /api/orders",                                                 # 挂单：同上
-        "GET /api/orders/receipts",                                         # 任务留痕：同上
-        "POST /api/orders/{order_id}/cancel",                               # 取消：同上
+        # v1.29.0 第一批：grant 五条端点——UI 批（GrantsView）接上列表／撤销／留痕三条；
+        # 签发不在本批范围（MCP 面＋在场授权），续期只做撤销不做续期，故只剩这一条。
+        "POST /api/grants/{grant_id}/renew",                                # 续期：UI 未接（本批只做撤销）
         "POST /api/mcp/pair/redeem",                                        # 配对 bootstrap 两条：消费面是 agent 自己的 HTTP 客户端（裁定 20261006 §一=B），第一方 UI 天生不调它——读不出≠没人用
         "POST /api/mcp/pair/request",
         "GET /api/sessions",                                                # 会话管理面 6 条：只有 `POST .../answer` 被 ui 调

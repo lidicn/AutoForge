@@ -4,7 +4,7 @@
  * §1 只给了数据结构，没给 HTTP 契约，因此这里先定义「客户端接口」ApiClient：
  * 真实后端就绪后另写一个实现替换 mockApi 即可，视图 / store / 单测契约不变。
  */
-import type { Agent, AuthCode, Automation, PairLink, PairRequest, PendingItem, PendingReceipt, User } from '../types/api.ts'
+import type { Agent, AuthCode, Automation, Grant, GrantListResponse, GrantReceipt, GrantReceiptsResponse, Order, OrderListResponse, OrderReceipt, OrderReceiptsResponse, PairLink, PairRequest, PendingItem, PendingReceipt, User } from '../types/api.ts'
 import { PAIR_CODE_LENGTH, PAIR_TTL_MS, isPairCode, randomDigits } from '../logic/pairing.ts'
 import { SHORT_CODE_LENGTH, shortRemainMs, validateShortMinutes } from '../logic/authcodes.ts'
 
@@ -40,6 +40,14 @@ export interface ApiClient {
   createLongCode (): Promise<AuthCode>
   createShortCode (minutes: number): Promise<AuthCode>
   revokeAuthCode (code: string): Promise<void>
+  // v1.29 执行授权（grant）：列表/撤销/留痕——判定真源在后端，前端只渲染
+  listGrants (): Promise<GrantListResponse>
+  revokeGrant (grantId: string, reason: string): Promise<void>
+  listGrantReceipts (limit?: number): Promise<GrantReceiptsResponse>
+  // v1.29 任务单（TaskOrder）：活动池/逐单留痕/取消
+  listOrders (): Promise<OrderListResponse>
+  listOrderReceipts (limit?: number): Promise<OrderReceiptsResponse>
+  cancelOrder (orderId: string, reason: string): Promise<void>
 }
 
 // ---------------- mock 运行时（时钟 / 延迟 / 注入失败） ----------------
@@ -49,6 +57,10 @@ interface Db {
   pendings: PendingItem[]
   authCodes: AuthCode[]
   pairRequests: PairRequest[]
+  grants: Grant[]
+  grantReceipts: GrantReceipt[]
+  orders: Order[]
+  orderReceipts: OrderReceipt[]
 }
 
 let clockOffset = 0
@@ -180,7 +192,72 @@ function seed (): Db {
     { code: '482913', type: 'short', created_at: agoMin(3), expires_at: aheadMin(9), consumed: false, use_count: 0 },
   ]
 
-  return { agents, automations, pendings, authCodes, pairRequests: [] }
+  // v1.29 执行授权 fixtures：三态各一枚（活／已撤销／已过期），⛔ 不含任何码值
+  const grants: Grant[] = [
+    {
+      grant_id: 'g-1a2b3c4d5e6f', agent: 'agt_living', rooms: ['study'],
+      device_scope: { include: ['light.study_main', 'climate.study_ac'] },
+      action_risk: 'low', expires_at: Math.floor(now() / 1000) + 6 * 86400 + 3600,
+      revoke: { revoked: false, reason: '', at: '' },
+      issued_at: agoMin(60 * 24 * 3), issued_by: 'owner', issued_via: 'mimo', ttl_days: 7, uses: 2,
+    },
+    {
+      grant_id: 'g-9f8e7d6c5b4a', agent: 'agt_lab', rooms: ['all'],
+      device_scope: { include: [] },
+      action_risk: 'read', expires_at: Math.floor(now() / 1000) + 20 * 86400,
+      revoke: { revoked: true, reason: '演示撤销', at: agoMin(90) },
+      issued_at: agoMin(60 * 24 * 12), issued_by: 'owner', issued_via: 'mimo', ttl_days: 30, uses: 5,
+    },
+    {
+      grant_id: 'g-5c4b3a2918f7', agent: 'agt_living', rooms: ['zhu_wo_shi'],
+      device_scope: { include: ['light.living_main'] },
+      action_risk: 'l2', expires_at: Math.floor(now() / 1000) - 5 * 3600,
+      revoke: { revoked: false, reason: '', at: '' },
+      issued_at: agoMin(60 * 24 * 9), issued_by: 'owner', issued_via: 'auth_code', ttl_days: 7, uses: 12,
+    },
+  ]
+
+  const grantReceipts: GrantReceipt[] = [
+    { type: 'GRANT_ISSUED', at: agoMin(60 * 24 * 3), grant: { grant_id: 'g-1a2b3c4d5e6f' }, agent: 'agt_living', summary: '签发执行授权（7 天）', what: [], risk: 'low' },
+    { type: 'LIVE_RUN_EXECUTED', at: agoMin(42), grant: { grant_id: 'g-1a2b3c4d5e6f' }, agent: 'agt_living', summary: '书房空调 → 制冷 26℃', what: ['climate.study_ac'], risk: 'low' },
+    { type: 'GRANT_REVOKED', at: agoMin(90), grant: { grant_id: 'g-9f8e7d6c5b4a' }, agent: 'agt_lab', summary: '撤销执行授权：演示撤销', what: [], risk: 'read' },
+  ]
+
+  // v1.29 任务单 fixtures：待执行 + 执行中（活动池里只会有这两态；终态即销）
+  const orders: Order[] = [
+    {
+      order_id: 'o-a1b2c3d4e5f6', agent: 'agt_living', created_at: agoMin(5), created_by: 'agt_living',
+      due_at: Math.floor(now() / 1000) + 25 * 60, due_kind: 'delay',
+      steps: [
+        { adapter: 'ha', action: 'light.turn_on', params: { entity_id: 'light.living_main' } },
+        { adapter: 'ha', action: 'climate.set_temperature', params: { entity_id: 'climate.study_ac' } },
+      ],
+      output: { channels: ['tts', 'mimo'], room: 'zhu_wo_shi', text: '你订的两步任务做完了', kind: 'control' },
+      grant_id: 'g-1a2b3c4d5e6f', status: 'pending',
+      receipt: { steps: [], output: [] }, started_at: '', finished_at: '', cancel: {},
+    },
+    {
+      order_id: 'o-9f8e7d6c5b4a', agent: 'agt_living', created_at: agoMin(12), created_by: 'agt_living',
+      due_at: Math.floor(now() / 1000) - 60, due_kind: 'at',
+      steps: [
+        { adapter: 'ha', action: 'switch.turn_off', params: { entity_id: 'switch.study_lamp' } },
+      ],
+      output: { channels: ['tts'], room: 'shu_fang', text: '台灯关好了', kind: 'control' },
+      grant_id: 'g-1a2b3c4d5e6f', status: 'running',
+      receipt: { steps: [], output: [] }, started_at: agoMin(1), finished_at: '', cancel: {},
+    },
+  ]
+
+  const orderReceipts: OrderReceipt[] = [
+    { type: 'TASK_ORDER_CREATED', at: agoMin(12), order_id: 'o-9f8e7d6c5b4a', agent: 'agt_living', status: 'pending', reason: '', steps: [] },
+    { type: 'TASK_ORDER_FINISHED', at: agoMin(150), order_id: 'o-7c6b5a493827', agent: 'agt_living', status: 'done', reason: '', steps: [{ action: 'light.turn_on', status: 'done' }] },
+    { type: 'TASK_ORDER_CANCELLED', at: agoMin(300), order_id: 'o-3e2d1c0b9a87', agent: 'agt_lab', status: 'cancelled', reason: '人不在家，改主意了', steps: [] },
+  ]
+
+  return {
+    agents, automations, pendings, authCodes, pairRequests: [],
+    grants, grantReceipts, orders, orderReceipts,
+  }
 }
 
 let db: Db = seed()
@@ -377,6 +454,59 @@ export const mockApi: ApiClient = {
       const before = db.authCodes.length
       db.authCodes = db.authCodes.filter(c => c.code !== code)
       if (db.authCodes.length === before) throw apiError('NOT_FOUND', '授权码不存在')
+    })
+  },
+
+  // ---------------- v1.29 执行授权 / 任务单（mock：只做形状与终态语义，⛔ 不模拟 grant 判定） ----------------
+
+  listGrants () {
+    return call('listGrants', () => {
+      const items = [...db.grants].sort((a, b) => String(b.issued_at).localeCompare(String(a.issued_at)))
+      return { ok: true, items, count: items.length }
+    })
+  },
+
+  revokeGrant (grantId, reason) {
+    return call('revokeGrant', () => {
+      const g = db.grants.find(x => x.grant_id === grantId)
+      if (!g) throw apiError('NOT_FOUND', '执行授权不存在')
+      if (g.revoke.revoked) throw apiError('INVALID_STATE', '该授权已撤销')
+      g.revoke = { revoked: true, reason: (reason || '').trim(), at: iso(now()) }
+      db.grantReceipts.unshift({
+        type: 'GRANT_REVOKED', at: g.revoke.at, grant: { grant_id: g.grant_id },
+        agent: g.agent, summary: '撤销执行授权' + (reason ? `：${reason}` : ''), what: [], risk: g.action_risk,
+      })
+    })
+  },
+
+  listGrantReceipts (limit = 20) {
+    return call('listGrantReceipts', () => {
+      const items = [...db.grantReceipts].slice(0, Math.max(1, limit))
+      return { ok: true, count: items.length, items }
+    })
+  },
+
+  listOrders () {
+    return call('listOrders', () => ({ ok: true, items: [...db.orders], count: db.orders.length }))
+  },
+
+  listOrderReceipts (limit = 20) {
+    return call('listOrderReceipts', () => {
+      const items = [...db.orderReceipts].slice(0, Math.max(1, limit))
+      return { ok: true, count: items.length, items }
+    })
+  },
+
+  cancelOrder (orderId, reason) {
+    return call('cancelOrder', () => {
+      const idx = db.orders.findIndex(o => o.order_id === orderId)
+      if (idx < 0) throw apiError('NOT_FOUND', '任务单不存在或已终态')
+      const o = db.orders[idx]
+      db.orders.splice(idx, 1)       // 终态即销：活动池里不再有它，只剩留痕
+      db.orderReceipts.unshift({
+        type: 'TASK_ORDER_CANCELLED', at: iso(now()), order_id: o.order_id, agent: o.agent,
+        status: 'cancelled', reason: (reason || '').trim(), steps: [],
+      })
     })
   },
 

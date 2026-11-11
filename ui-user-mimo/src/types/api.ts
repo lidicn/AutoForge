@@ -115,3 +115,131 @@ export interface PendingReceipt {
   l2_summary?: L2Action[]
 }
 
+// ===== v1.29 执行授权（grant）：DCD 20261111 六问全甲，码管部署 / grant 管执行双轨 =====
+// 形状取自后端 `af_grant.issue()` 落盘记录（v1.29.0 第一批）＋ `af_service.grant_list()`。
+export interface GrantDeviceScope {
+  /** 设备白名单；`exclude` 只在后端给了才出现 */
+  include: string[]
+  exclude?: string[]
+}
+
+export interface GrantRevokeInfo {
+  revoked: boolean
+  reason: string
+  /** 撤销时刻（ISO）；未撤销为空串 */
+  at: string
+}
+
+export interface Grant {
+  grant_id: string
+  agent: string
+  /** 区域列表；`all`＝全屋（后端语义，前端只渲染不在前端判范围） */
+  rooms: string[]
+  device_scope: GrantDeviceScope
+  /** 后端 `action_risk`（read/low/L2…，原样展示，⛔ 前端不重排风险表） */
+  action_risk: string
+  /** epoch **秒**（后端原样）；换算天/时刻在 logic 层做 */
+  expires_at: number
+  revoke: GrantRevokeInfo
+  issued_at: string
+  issued_by: string
+  issued_via: string
+  ttl_days: number
+  uses: number
+}
+
+/** `/api/grants/receipts` 单条（源＝deploy_audit.jsonl 的 GRANT 族流水：签发/撤销/续期/带 grant 的执行） */
+export interface GrantReceipt {
+  type: string
+  at: string
+  grant: { grant_id?: string; [k: string]: unknown }
+  agent: string
+  summary: string
+  what: string[]
+  risk: string
+}
+
+// 列表/留痕响应保留 `hidden_count`／`scope`／`read_error`：非 owner 面必报隐藏条数（群规⑩），
+// 读失败与空表必须分得开（v1.26 教训：读不到≠没有）。
+export interface GrantListResponse {
+  ok: boolean
+  items: Grant[]
+  count: number
+  hidden_count?: number
+  scope?: string
+}
+
+export interface GrantReceiptsResponse {
+  ok: boolean
+  count: number
+  items: GrantReceipt[]
+  hidden_count?: number
+  scope?: string
+  read_error?: string
+}
+
+// ===== v1.29 任务单（TaskOrder）：一次性语义，⛔ 无 repeat/every/cron =====
+export type OrderStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled' | 'expired'
+
+export interface OrderStep {
+  adapter?: string
+  /** `<domain>.<service>`，如 `light.turn_on` */
+  action: string
+  params?: Record<string, unknown>
+  requires_confirm?: boolean
+  canary?: Record<string, unknown>
+}
+
+export interface OrderOutput {
+  channels?: string[]
+  room?: string
+  text?: string
+  kind?: string
+}
+
+export interface Order {
+  order_id: string
+  agent: string
+  created_at: string
+  created_by: string
+  /** epoch **秒**（后端原样） */
+  due_at: number
+  due_kind: 'at' | 'delay' | string
+  steps: OrderStep[]
+  output: OrderOutput
+  grant_id: string
+  status: OrderStatus | string
+  receipt: { steps?: unknown[]; output?: unknown[] }
+  started_at: string
+  finished_at: string
+  cancel: { at?: string; by?: string; reason?: string }
+}
+
+/** `/api/orders/receipts` 单条（源＝deploy_audit.jsonl 的 TASK_ORDER_*，终态即销后唯一查法） */
+export interface OrderReceipt {
+  type: string
+  at: string
+  order_id: string
+  agent: string
+  status: string
+  reason: string
+  steps: unknown[]
+}
+
+export interface OrderListResponse {
+  ok: boolean
+  items: Order[]
+  count: number
+  hidden_count?: number
+  scope?: string
+}
+
+export interface OrderReceiptsResponse {
+  ok: boolean
+  count: number
+  items: OrderReceipt[]
+  hidden_count?: number
+  scope?: string
+  read_error?: string
+}
+

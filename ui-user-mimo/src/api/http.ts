@@ -6,7 +6,8 @@
  * Token 由本层持有（localStorage），随请求带 Authorization；SSE 因 EventSource
  * 不能带自定义头，改用 ?token= 回退（后端已支持）。
  */
-import type { Agent, AuthCode, Automation, PairLink, PairRequest, PendingItem, PendingReceipt, User } from '../types/api.ts'
+import type { Agent, AuthCode, Automation, GrantListResponse, GrantReceiptsResponse, OrderListResponse, OrderReceiptsResponse, PairLink, PairRequest, PendingItem, PendingReceipt, User } from '../types/api.ts'
+import { RECEIPTS_PAGE_LIMIT } from '../logic/grants.ts'
 import { toPendingItem } from '../logic/pending.ts'
 import { apiError, type ApiClient, type ApiErrorCode } from './mock.ts'
 import { API_BASE } from './env.ts'
@@ -312,6 +313,41 @@ export const httpApi: ApiClient = {
 
   async revokeAuthCode (code) {
     await req(`/api/user/auth-code/${encodeURIComponent(code)}`, { method: 'DELETE' })
+  },
+
+  // ---------------- v1.29 执行授权（grant）：判定真源在后端，这里只翻译成 HTTP ----------------
+  // `GET /api/grants` 返回整体形状（含 `hidden_count`／`scope`）——非 owner 面必报隐藏条数，
+  // 所以⛔ 不在这里 `.items` 砍成数组，否则页面拿不到「另有 N 条不在你名下」。
+  async listGrants () {
+    return await req<GrantListResponse>('/api/grants')
+  },
+
+  async revokeGrant (grantId, reason) {
+    // 撤销立即生效（DCD §2.3）；二次确认在视图层做，这里只发请求。
+    await req(`/api/grants/${encodeURIComponent(grantId)}/revoke`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason || '' }),
+    })
+  },
+
+  async listGrantReceipts (limit = RECEIPTS_PAGE_LIMIT) {
+    return await req<GrantReceiptsResponse>(`/api/grants/receipts?limit=${encodeURIComponent(String(limit))}`)
+  },
+
+  // ---------------- v1.29 任务单（TaskOrder）----------------
+  async listOrders () {
+    return await req<OrderListResponse>('/api/orders')
+  },
+
+  async listOrderReceipts (limit = RECEIPTS_PAGE_LIMIT) {
+    return await req<OrderReceiptsResponse>(`/api/orders/receipts?limit=${encodeURIComponent(String(limit))}`)
+  },
+
+  async cancelOrder (orderId, reason) {
+    await req(`/api/orders/${encodeURIComponent(orderId)}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason || '' }),
+    })
   },
 
 }
