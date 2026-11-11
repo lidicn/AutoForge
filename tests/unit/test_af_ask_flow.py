@@ -185,7 +185,10 @@ def test_read_inbox_rejects_bad_signature(tmp_path, monkeypatch):
     read_answer_inbox(rt)
 
     assert ask_id in rt.executor.pending_asks
-    assert len(list(inbox.glob("*.json"))) == 1  # 证据文件保留
+    # 2026-11-11 F2：拒绝态应答一次性隔离（移出扫描目录、现场保留在 .rejected/）——
+    # 旧口径「留在原地」会让同一文件每 tick 重放，把 watch.log 撑爆且永不收敛。
+    assert not list(inbox.glob("*.json")), "拒绝态应答必须移出扫描目录"
+    assert (inbox / ".rejected" / "1.json").is_file(), "证据文件保留在 .rejected/"
 
 
 def test_read_inbox_rejects_stale_ts_replay(tmp_path, monkeypatch):
@@ -209,11 +212,12 @@ def test_read_inbox_rejects_stale_ts_replay(tmp_path, monkeypatch):
     read_answer_inbox(rt)
 
     assert ask_id in rt.executor.pending_asks  # 重放未注入
-    assert len(list(inbox.glob("*.json"))) == 1  # 证据保留
+    assert not list(inbox.glob("*.json")), "拒绝态应答必须移出扫描目录（F2 收敛判据）"
+    assert (inbox / ".rejected" / "1.json").is_file(), "证据文件保留在 .rejected/"
 
 
 def test_read_inbox_keeps_evidence_when_answer_rejected(tmp_path, monkeypatch):
-    """不合规应答经 inbox 注入同样被拒 → 文件保留、ask 仍挂起（可重答）。"""
+    """不合规应答经 inbox 注入同样被拒 → 现场隔离到 .rejected/、ask 仍挂起（可重答）。"""
     key = "k"
     monkeypatch.setenv("AUTOFORGE_INBOX_KEY", key)
     rt = _runtime()
@@ -233,7 +237,8 @@ def test_read_inbox_keeps_evidence_when_answer_rejected(tmp_path, monkeypatch):
     read_answer_inbox(rt)
 
     assert ask_id in rt.executor.pending_asks
-    assert len(list(inbox.glob("*.json"))) == 1
+    assert not list(inbox.glob("*.json")), "拒绝态应答必须移出扫描目录（F2 收敛判据）"
+    assert (inbox / ".rejected" / "1.json").is_file(), "证据文件保留在 .rejected/"
 
 
 # ── 会话：控件元数据 + 结构化应答 + 422 ──

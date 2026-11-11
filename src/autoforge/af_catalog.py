@@ -233,6 +233,25 @@ def _pick_attrs(attrs: Mapping[str, Any] | None) -> dict[str, Any]:
     return out
 
 
+def _resolve_ha_token(root: Path) -> str:
+    """R4-1 统一令牌入口（读路径）：`Config.get_ha_token()`——credentials.json > secret 文件 > env。
+
+    ⛔ 本模块**不得自取 env**：2026-11-11 线上日志风暴 F1 的现场是容器里
+    `AUTOFORGE_HA_TOKEN`（env）与 `/data/credentials.json` 的 `ha_token` **不是同一枚**——
+    文件那枚 `GET /api/` 200，env 那枚被 HA 判 401 并弹「Login attempt failed」通知。
+    写路径（`af_service._ha_token`）走 Config，读路径（本模块）却只读 env ⇒ 同一服务器两把
+    钥匙，读工具"健康"、写工具 401（契约 R4-1 明确禁止的形状）。
+    `Config` 构造/读取失败（无 store 根、secret 文件权限坏）才退回 env 旧口径，行为不比以前差。
+    """
+    try:
+        from .af_config import get_config
+
+        return str(get_config(root).get_ha_token())
+    except Exception:  # 凭据面读不出来 ⇒ 退回 env 旧口径，但必须留痕（⛔ 静默吞）
+        logger.debug("CATALOG_TOKEN_SOURCE_FALLBACK", exc_info=True)
+        return os.getenv("HA_LONG_LIVED_TOKEN") or os.getenv("AUTOFORGE_HA_TOKEN") or ""
+
+
 class DeviceCatalog:
     """设备目录：HA 全量状态的本地快照 + 自然语言解析 + 过滤浏览。
 
@@ -255,9 +274,9 @@ class DeviceCatalog:
         self._fetch_all = fetch_all
         self._fetch_one = fetch_one
         self.ha_url = ha_url or os.getenv("AUTOFORGE_HA_URL", DEFAULT_HA_URL)
-        self.ha_token = ha_token if ha_token is not None else (
-            os.getenv("HA_LONG_LIVED_TOKEN") or os.getenv("AUTOFORGE_HA_TOKEN") or ""
-        )
+        # R4-1（2026-11-11 F1 回归修复）：令牌解析统一走 `_resolve_ha_token`——显式注入优先，
+        # 否则 credentials.json 优先、env 回退；⛔ 不再在这里自取 env。
+        self.ha_token = ha_token if ha_token is not None else _resolve_ha_token(self.root)
         #: 传输层套接超时（秒）：HA 不可达时必须**有界失败**，不能把调用方挂死。
         #: 可用 `AUTOFORGE_HA_TIMEOUT` 覆盖（测试里设很小值即可秒失败）。
         # C-8 修复：改用 env_number 安全解析，配错值时回落默认 10 并告警，而非启动即 ValueError。

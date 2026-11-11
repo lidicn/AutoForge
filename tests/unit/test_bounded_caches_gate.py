@@ -692,8 +692,11 @@ def test_real_repo_measurements_are_pinned():
     assert errs == [] and scan_errs == []
     # 批 2（D6）：TokenRegistry._issued（运行期签发令牌摘要索引）登记进 BOUNDED_CACHES
     # （cap=MAX_ISSUED / ttl=ISSUED_TTL_S / trim=_purge_expired_locked）⇒ bounded 5→6、扫到容器 133→134。
+    # 扫到 136 → 137（2026-11-12 v1.29.0 第三批 线上日志风暴 F2）：`af_live._REJECT_WARNED`
+    # （拒绝态应答的 ask_id 去重表）——FIFO 封顶 256 条、超出淘汰最早者，声明行带就地豁免标记
+    # （⛔ 不进注册表：只降噪，没有 TTL 腿，丢了也只是多一条 WARNING）；基线 113 与固定键 3 不动。
     assert len(bounded) == 6 and len(fixed) == 3
-    assert len(containers) == 136 and len(gate.BASELINE) == 113
+    assert len(containers) == 137 and len(gate.BASELINE) == 113
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"
