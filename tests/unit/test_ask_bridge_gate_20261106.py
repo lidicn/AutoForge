@@ -300,7 +300,9 @@ def test_d5_bad_verdict_in_file_is_refused(tmp_path, monkeypatch):
     f.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
     read_answer_inbox(rt, inbox_dir=str(root / "answer_inbox"))
     assert ask_id in rt.executor.pending_asks, "非法投票不得消费 ask"
-    assert f.exists(), "证据文件保留"
+    # 2026-11-11 F2：拒绝态应答一次性隔离（旧口径「留在原地」＝每 tick 重放、日志风暴）
+    assert not f.exists(), "拒绝态应答必须移出扫描目录"
+    assert (root / "answer_inbox" / ".rejected" / f.name).is_file(), "证据文件保留在 .rejected/"
 
 
 # ── D6 超时腿：默认 60s 兜底（DCD C6）＋ 到点收尾 ─────────────────────────

@@ -610,6 +610,48 @@ def start_ticker(
     return t
 
 
+#: 拒绝态应答的 ask_id 去重表：同一 ask_id 只记一条 WARNING，之后降 DEBUG。
+#: 有界：最多 `_REJECT_WARNED_MAX` 条、超出按 FIFO 淘汰最早一条——淘汰的代价只是同一 ask_id
+#: 再刷一条 WARNING；⛔ 不能让它无限增长（常驻 watch 进程活一整天）。
+_REJECT_WARNED: dict[str, None] = {}  # bounded-cache: exempt(拒绝态应答的 ask_id 去重表：FIFO 封顶 `_REJECT_WARNED_MAX` 条、超出即淘汰最早者；上界＝去重窗口内的 ask_id 数，⛔ 不是跨请求缓存，没有 TTL 腿——本表只降噪，丢了也只是多一条 WARNING)
+_REJECT_WARNED_MAX = 256
+
+
+def _quarantine_rejected(f: Path, logger: Any, code: str, ask_id: Any) -> bool:
+    """拒绝态应答一次性隔离：移出 `answer_inbox/` 到 `.rejected/`（保留现场不删）。
+
+    2026-11-11 线上日志风暴 F2：拒绝后文件留在原地 ⇒ 下一 tick 原样再来一遍，
+    `INBOX_REJECT_STALE` 刷到 26840 条 / 6MB 且**永不收敛**。隔离后同一文件只被读一次。
+
+    返回 True 表示这次该记 WARNING（同一 ask_id 首次）；重复的拒绝降 DEBUG。
+    """
+    key = str(ask_id or f.name)
+    first = key not in _REJECT_WARNED
+    if first:
+        _REJECT_WARNED[key] = None
+        while len(_REJECT_WARNED) > _REJECT_WARNED_MAX:
+            _REJECT_WARNED.pop(next(iter(_REJECT_WARNED)))
+    else:
+        # 同一 ask_id 的重放：降 DEBUG（卡 §F2「后续降 DEBUG 或计数汇总」）——
+        # 现场早已保留在 .rejected/，再刷 WARNING 只会把 watch.log 撑爆。
+        logger.debug("INBOX_REJECT_REPEAT %s 已在 .rejected/（同 ask_id 重复拒绝降噪）: %s", code, f.name)
+    try:
+        target_dir = f.parent / ".rejected"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / f.name
+        if target.exists():  # 同名（同 ask_id 重放）⇒ 加纳秒戳区分，⛔ 不覆盖既有现场
+            target = target_dir / f"{f.stem}.{time.time_ns()}{f.suffix}"
+        # 这一站是**纯同盘 rename 挪走已存在的应答文件**：内容一个字节都不写、没有固定名 tmp、
+        # 也就没有「第二个写者交错内容被装上」的截断面。而起因恰恰是**保留现场**——改走
+        # `af_atomic.atomic_write_text` 会把现场重写成新内容/新 inode，证据链反而失效。
+        f.replace(target)  # fixed-tmp: exempt(同盘 rename 挪走已存在的应答文件：内容零字节写入、无固定名 tmp 可交错；改用 atomic_write_text 会重写现场字节，与「保留证据」相悖)
+    except Exception:
+        # 隔离失败 ⇒ 文件留在扫描目录（下一 tick 再试），但必须留痕：⛔ 静默吞会让风暴看起来"已收口"
+        logger.exception("INBOX_QUARANTINE_FAILED %s 隔离失败（文件留在扫描目录，下一 tick 重试）: %s",
+                         code, f.name)
+    return first
+
+
 def read_answer_inbox(runtime: Any, inbox_dir: Optional[str] = None) -> None:
     """R-20：读 answer_inbox 并把应答注入 runtime。密钥校验（与 af_api 写侧共享 AUTOFORGE_INBOX_KEY）。
 
@@ -647,7 +689,8 @@ def read_answer_inbox(runtime: Any, inbox_dir: Optional[str] = None) -> None:
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 if not isinstance(data, dict):
-                    logger.warning("inbox reject: 非对象 JSON，未动作（保留证据文件）: %s", f.name)
+                    if _quarantine_rejected(f, logger, "INBOX_REJECT_SHAPE", None):
+                        logger.warning("inbox reject: 非对象 JSON，已隔离到 .rejected/: %s", f.name)
                     continue
                 ask_id = data.get("ask_id") or None
                 text = data.get("text", "")
@@ -660,11 +703,12 @@ def read_answer_inbox(runtime: Any, inbox_dir: Optional[str] = None) -> None:
                 if isinstance(answer, Mapping) and answer.get("verdict") is not None:
                     verdict = str(answer.get("verdict")).strip().lower()
                     if verdict not in _ask_bridge.VERDICTS:
-                        logger.warning(
-                            "INBOX_REJECT_BAD_VERDICT inbox reject: answer.verdict=%r 不是 yes/no，"
-                            "未动作（保留证据文件）: %s ask_id=%r",
-                            answer.get("verdict"), f.name, ask_id,
-                        )
+                        if _quarantine_rejected(f, logger, "INBOX_REJECT_BAD_VERDICT", ask_id):
+                            logger.warning(
+                                "INBOX_REJECT_BAD_VERDICT inbox reject: answer.verdict=%r 不是 yes/no，"
+                                "已隔离到 .rejected/: %s ask_id=%r",
+                                answer.get("verdict"), f.name, ask_id,
+                            )
                         continue
                 # v1.28 R1：来源标（xiaomi/webui）。文件回注腿无独立来源语义 ⇒ 缺失按 webui。
                 answered_via = _ask_bridge.normalize_answered_via(data.get("via"))
@@ -672,22 +716,27 @@ def read_answer_inbox(runtime: Any, inbox_dir: Optional[str] = None) -> None:
                 sig = str(data.get("sig", "") or "")
                 ts = data.get("ts")
                 if not key or not isinstance(ts, (int, float)):
-                    logger.warning(
-                        "INBOX_REJECT_NO_TS inbox reject: 缺密钥或无 ts 时间戳（裸签名已作废，旧格式不接受），未动作: %s ask_id=%r",
-                        f.name, ask_id,
-                    )
+                    if _quarantine_rejected(f, logger, "INBOX_REJECT_NO_TS", ask_id):
+                        logger.warning(
+                            "INBOX_REJECT_NO_TS inbox reject: 缺密钥或无 ts 时间戳（裸签名已作废，旧格式不接受），"
+                            "已隔离到 .rejected/: %s ask_id=%r",
+                            f.name, ask_id,
+                        )
                     continue
                 if abs(time.time() - float(ts)) > INBOX_MAX_AGE_S:
-                    logger.warning(
-                        "INBOX_REJECT_STALE inbox reject: 应答超过新鲜窗口 %.0fs（重放/旧文件），未动作: %s ask_id=%r ts=%r",
-                        INBOX_MAX_AGE_S, f.name, ask_id, ts,
-                    )
+                    if _quarantine_rejected(f, logger, "INBOX_REJECT_STALE", ask_id):
+                        logger.warning(
+                            "INBOX_REJECT_STALE inbox reject: 应答超过新鲜窗口 %.0fs（重放/旧文件），"
+                            "已隔离到 .rejected/: %s ask_id=%r ts=%r",
+                            INBOX_MAX_AGE_S, f.name, ask_id, ts,
+                        )
                     continue
                 if not hmac.compare_digest(sig, _expect_sig(ask_id, text, room, answer_json, ts)):
-                    logger.warning(
-                        "INBOX_REJECT_BAD_SIGNATURE inbox reject: 签名缺失或不符，未动作（保留证据文件）: %s ask_id=%r",
-                        f.name, ask_id,
-                    )
+                    if _quarantine_rejected(f, logger, "INBOX_REJECT_BAD_SIGNATURE", ask_id):
+                        logger.warning(
+                            "INBOX_REJECT_BAD_SIGNATURE inbox reject: 签名缺失或不符，已隔离到 .rejected/: %s ask_id=%r",
+                            f.name, ask_id,
+                        )
                     continue
                 if verdict is not None:
                     # 小爱腿：DB 已分类（C5）⇒ 直通 verdict，⛔ 不二次分类
@@ -711,7 +760,12 @@ def read_answer_inbox(runtime: Any, inbox_dir: Optional[str] = None) -> None:
                         ask_id, room, answered_via, result.instance_id,
                     )
                 else:
-                    logger.warning("ANSWER_NOT_CONSUMED answer not consumed (保留证据文件): ask_id=%s room=%s", ask_id, room)
+                    # 签名/新鲜度都过、executor 却没收（确定性拒绝）⇒ 隔离，⛔ 不留在扫描目录每 tick 重放
+                    if _quarantine_rejected(f, logger, "ANSWER_NOT_CONSUMED", ask_id):
+                        logger.warning(
+                            "ANSWER_NOT_CONSUMED answer not consumed，已隔离到 .rejected/: ask_id=%s room=%s",
+                            ask_id, room,
+                        )
             except Exception:
                 logger.exception("answer processing failed (保留证据文件): %s", f.name)
                 # 不删除文件，保留审批证据链

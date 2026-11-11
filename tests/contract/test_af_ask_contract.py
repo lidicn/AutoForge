@@ -308,7 +308,13 @@ def test_tampered_answer_is_not_consumed(tmp_path, monkeypatch):
             raise AssertionError("篡改过的答案不该被注入")
 
     read_answer_inbox(SimpleNamespace(store=SimpleNamespace(root=str(tmp_path)), executor=_Executor()))
-    assert len(list((tmp_path / "answer_inbox").glob("*.json"))) == 1
+    # F2（2026-11-11 线上日志风暴）：拒绝态应答一次性隔离到 `answer_inbox/.rejected/`——
+    # 原目录 ⛔ 不再留文件（否则每 tick 重放，20 个陈旧 json 刷出 26840 条 WARNING／6MB 且不收敛）；
+    # 证据文件仍在 `.rejected/` 里，内容就是被篡改的那份（保留现场、不删除）。
+    assert list((tmp_path / "answer_inbox").glob("*.json")) == [], "拒绝态应答应已移出扫描目录"
+    quarantined = list((tmp_path / "answer_inbox" / ".rejected").glob("*.json"))
+    assert len(quarantined) == 1, "证据文件必须留在 .rejected/ 里"
+    assert json.loads(quarantined[0].read_text(encoding="utf-8"))["text"] == "关"
 
 
 def test_answer_structured_v2_persists(tmp_path, monkeypatch):
