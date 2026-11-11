@@ -18,6 +18,25 @@ fi
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
+
+# 陈 pyc 陷阱（2026-11-11 PM 卡，发版前实跑红）：`git checkout` 会保留源文件
+# mtime+size，而 CPython 判「.pyc 还有效」只看这两样 ⇒ 陈旧字节码被当有效，跑出来的
+# 是**旧断言**。AF-Verify 追的 `test_tampered_answer_is_not_consumed` 假红就是这个形状：
+# traceback 报旧行号（308 的 `== 1`），盘上真身是新断言（311-314 的 `.rejected`），
+# 清掉 11 个 `__pycache__` 后两条面都绿。⛔ 这不是「偶发」——同一棵树 checkout 过就会复现。
+#
+# 修法**两条都要**：
+#   ① 字节码缓存整个导到仓外临时目录（源码树里永不落 `.pyc`）——这一条单独就够让
+#      本脚本的判定正确：设了前缀之后 CPython 改从 `<prefix>/<路径>.pyc` 找字节码，
+#      工作树里的 `__pycache__` **根本不再被查询**（Python 3.13.2 实测，判据钉在
+#      `tests/unit/test_stale_pyc_gate_20261111.py`）；
+#   ② 仍然清掉工作树里**已经躺在盘上**的陈 pyc——因为任何人绕过本脚本裸跑
+#      `python -m pytest` 时，它们会照旧撒谎。①是判定面，②是卫生面，别只做一半。
+if [ -z "${PYTHONPYCACHEPREFIX:-}" ]; then
+  export PYTHONPYCACHEPREFIX="$(mktemp -d 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/af-gates-pycache-$$")"
+fi
+find "$REPO" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+
 # 冒烟解释器：本地跑就用自己的 venv；要在容器里跑，改成
 #   docker exec <容器> sh -c 'cd /app && homesdk-gates . --config .gates.toml'
 PYTHON="${GATES_PYTHON:-python3}"

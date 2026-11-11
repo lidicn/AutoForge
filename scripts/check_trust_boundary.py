@@ -480,9 +480,40 @@ def anchor_ok(root: Path) -> str | None:
     return None
 
 
+class MixedEolError(RuntimeError):
+    """被写文件行尾混合（CRLF 与裸 LF 并存）——fail-closed，拒绝写。
+
+    与 `scripts/sync_ledger_anchors.MixedEolError` 同一口径（2026-10-31 卡：
+    混合行尾＝非法输入，regen 直接拒；⛔ 不自动归一到任何一侧——自动归一本身就是
+    本卡病灶，把整文件翻成另一种行尾＝假 diff）。
+    """
+
+
+def _eol_style(raw: bytes) -> str:
+    """现状行尾判定：纯 CRLF ⇒ "crlf"、纯 LF（含无换行）⇒ "lf"、两者并存 ⇒ "mixed"。
+
+    历史（2026-11-11 PM 卡，发版前红）：旧 `write_doc` 是
+    `open(doc_p, "w", encoding="utf-8", newline="\\n")`——**无条件按 LF 写盘**，
+    于是每跑一次 `--write` 就把这份 CRLF 台账整份翻成 LF（v1.29 批 1 `15f7d2c`
+    的 `docs/信任边界清单.md` 就这么造出 196 行假 diff），正是 `gates.sh` 台账
+    行尾门禁点名的形状。改为写前读现状字节、按同一风格落盘；写前不存在（首次
+    生成）按生成器的 LF 落盘并在回执里写明。
+    """
+    crlf = raw.count(b"\r\n")
+    if crlf == 0:
+        return "lf"
+    return "crlf" if crlf == raw.count(b"\n") else "mixed"
+
+
 def write_doc(root: Path) -> int:
     doc_p = root / DOC_REL
-    doc = doc_p.read_text(encoding="utf-8", errors="replace")
+    raw = doc_p.read_bytes()
+    style = _eol_style(raw)
+    if style == "mixed":
+        raise MixedEolError(
+            f"`{DOC_REL}` 行尾混合（CRLF 与裸 LF 并存），拒绝写（fail-closed）："
+            "先人工归一行尾再跑 --write，⛔ 不自动归一（自动归一＝整文件假 diff）")
+    doc = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
     if AUTO_BEGIN not in doc or AUTO_END not in doc:
         print(f"✗ `{DOC_REL}` 缺自动段标记，拒绝改写")
         return 2
@@ -494,9 +525,12 @@ def write_doc(root: Path) -> int:
     head, _, rest = doc.partition(AUTO_BEGIN)
     _, _, tail = rest.partition(AUTO_END)
     new = f"{head}{AUTO_BEGIN}\n{body}\n{AUTO_END}{tail}"
-    with open(doc_p, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(new)
-    print(f"✓ 已重新生成 `{DOC_REL}` 自动段（{len(rows)} 条；手工登记段未动）")
+    # 行尾（2026-11-11 PM 卡）：按**被写文件现状**行尾落盘。⛔ 无条件转 LF/CRLF
+    # ——那正是整文件假 diff 的复发机制。
+    if style == "crlf":
+        new = new.replace("\n", "\r\n")
+    doc_p.write_bytes(new.encode("utf-8"))
+    print(f"✓ 已重新生成 `{DOC_REL}` 自动段（{len(rows)} 条；手工登记段未动；行尾＝{style.upper()}）")
     return 0
 
 
