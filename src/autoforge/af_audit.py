@@ -100,6 +100,18 @@ TOKEN_ISSUED_REJECTED = "token_issued_rejected"
 #: ⛔ 不含任何令牌/授权码真值。
 APPROVE_PENDING_APPLIED = "approve_pending_applied"
 
+# ── 执行授权（grant，v1.29 第一批）────────────────────────────────────
+#: DCD 20261111 §三.2／Q4 裁定：执行留痕与查询留痕**同形**（who/what/when/which agent），
+#: 且⛔ 不得另建第二套审计面。所以这四条与 `LIVE_RUN_EXECUTED`／`UNDO_DEPLOYED` 落**同一条**
+#: `deploy_audit.jsonl`（`record_deploy`），只是 `type` 不同。
+#: 注意：⛔ 这里刻意**不新增**「执行成功」这一类码——执行事实由既有的 `LIVE_RUN_EXECUTED`
+#: 携带（它的 `authorized_by` 就是 `grant:<id>`），再造一枚 `GRANT_EXECUTED` 就是第二套账。
+GRANT_ISSUED = "GRANT_ISSUED"
+GRANT_REVOKED = "GRANT_REVOKED"
+GRANT_RENEWED = "GRANT_RENEWED"
+#: 查询面（Q4 甲：免 grant，但留痕）。只记"谁问了哪个实体"，⛔ 不记查询结果里的状态值。
+QUERY_READ = "QUERY_READ"
+
 #: 部署仪式台账的文件名（裁定 20261011 §3 Q13 丙：**只对 `DEPLOY_AUDIT` 这一族落盘**）。
 #: 落点跟着本次部署的 store 根走（见 `deploy_audit_sink`），所以它与 `write_conflicts.jsonl`
 #: 是同一家族——同一个挂载目录、同一条 `.gitignore`，不是新开的一类要轮转／要清理的对象。

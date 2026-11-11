@@ -58,6 +58,7 @@ from .af_vhass import FakeHAAdapter, seed_from_graph
 from .af_pending import PendingLimitExceeded, PendingStore
 from .af_error_knowledge import ErrorKnowledge
 from .af_experience import ExperienceStore
+from .af_grant import GRANT_FILE_REL, GrantError, GrantStore, collect_actions
 from .af_telemetry import TelemetryStore, attach as attach_telemetry
 
 logger = logging.getLogger("autoforge.service")
@@ -96,6 +97,12 @@ __all__ = [
     # Round 2-B：真机下发
     "live_status",
     "live_run",
+    # v1.29.0 第一批：执行授权（grant）面——签发/列表/撤销/续期/留痕读面
+    "grant_issue",
+    "grant_list",
+    "grant_revoke",
+    "grant_renew",
+    "grant_receipts",
     "get_metrics",
     # F7 残留（WebUI 撤销按钮）：撤销的 HTTP 服务面
     "undo_available",
@@ -2993,6 +3000,8 @@ def live_run(
     auth_code: str = "",
     caller: str = "",
     caller_is_owner: bool = False,
+    grant_id: str = "",
+    grant_confirm: str = "",
 ) -> dict[str, Any]:
     """受闸门的真机下发：三重闸全通过才执行。
 
@@ -3029,28 +3038,47 @@ def live_run(
     # 放在构造传输层之前——拒收的那条路径必须**根本不碰设备**。
     _single_writer_check(store)
 
-    # ★ 授权码闸（AF-401/408 下移服务层）：位置刻意在租约**之后**——只读降级的
-    # `READONLY_DEGRADED:` 前缀必须先于缺凭据被看见（DB 按前缀判读）；events 形状
-    # 检查在本函数更早。放行凭据写进回执（AF-403：过闸无痕=事后查不到哪把放行）。
-    code_tag = _auth_code_check(store, auth_code, action="真机下发（live_run）")
-
-    # D5 三门之③（2026-11-05，AF-PM 裁定）：**单发只认短期码**——长期码只准用于部署。
-    # 理由：长期码可复用、只计 use_count，用它开「手动真机单发」等于把一条可反复使用的旁路
-    # 长期挂在手上；短期码一次性的语义与「临时手动开一下」正好对齐。
-    # ⚠️ 边界（Chief 口径）：本条只管**单发通道**，⛔ 不碰 watch 常驻执行与部署主路。
-    if auth_code and store is not None:
-        from .af_auth import AuthCodeStore as _ACS
-
-        try:
-            _recs = _ACS(Path(store.root) / ".auth" / "auth_codes.json").list(reveal=True)
-        except Exception:  # noqa: BLE001 —— 查不出 kind 时 fail-closed，⛔ 不猜测放行
-            raise ServiceError("真机单发无法判定授权码类型：拒绝执行（fail-closed）", status=403)
-        _kind = next((r.get("kind") for r in _recs if r.get("code") == auth_code), None)
-        if _kind != "short":
+    # ★ 授权闸（v1.29.0 起**两条互斥通道**：授权码 / 执行授权 grant）
+    #   位置纪律不变（AF-401/408 下移服务层）：排在租约**之后**——只读降级的
+    #   `READONLY_DEGRADED:` 前缀必须先于缺凭据被看见（DB 按前缀判读）；events 形状
+    #   检查在本函数更早。放行凭据写进回执（AF-403：过闸无痕=事后查不到哪把放行）。
+    #
+    #   为什么 grant 是一条**与码并列**的通道，而不是又一道码：DCD 20261111 Q1 的
+    #   双轨授权——码管**部署**、grant 管**执行**。用户给出长期码并"授予即时执行"是
+    #   授权动作（计一次 use_count），此后日常执行不再找码（Q1 三件套③）。
+    #   `auth_code` 与 `grant_id` 同时在场时一律拒：事后追查要的正是"这次谁放行的"，
+    #   两把凭据并存那句话就说不清了（fail-closed）。
+    grant_record: dict[str, Any] | None = None
+    if grant_id:
+        if auth_code:
             raise ServiceError(
-                "真机单发只认短期码：长期码只准用于部署，⛔ 不用于手动单发（D5 三门之③）",
+                "真机下发一次只能带一种授权：grant_id 与 auth_code 不可同传（fail-closed）",
                 status=403,
             )
+        grant_record = _grant_resolve(store, grant_id, caller)
+        code_tag = f"grant:{grant_record['grant_id']}"
+    else:
+        code_tag = _auth_code_check(store, auth_code, action="真机下发（live_run）")
+
+        # D5 三门之③（2026-11-05，AF-PM 裁定）：**单发只认短期码**——长期码只准用于部署。
+        # 理由：长期码可复用、只计 use_count，用它开「手动真机单发」等于把一条可反复使用的旁路
+        # 长期挂在手上；短期码一次性的语义与「临时手动开一下」正好对齐。
+        # ⚠️ 边界（Chief 口径）：本条只管**单发通道**，⛔ 不碰 watch 常驻执行与部署主路。
+        # ⚠️ v1.29 补充：本条与 grant **不冲突**——grant 正是"长期码换来的执行授权"，
+        # 长期码本身仍然一次也不进 live_run（它在签 grant 那一步就计过次了）。
+        if auth_code and store is not None:
+            from .af_auth import AuthCodeStore as _ACS
+
+            try:
+                _recs = _ACS(Path(store.root) / ".auth" / "auth_codes.json").list(reveal=True)
+            except Exception:  # noqa: BLE001 —— 查不出 kind 时 fail-closed，⛔ 不猜测放行
+                raise ServiceError("真机单发无法判定授权码类型：拒绝执行（fail-closed）", status=403)
+            _kind = next((r.get("kind") for r in _recs if r.get("code") == auth_code), None)
+            if _kind != "short":
+                raise ServiceError(
+                    "真机单发只认短期码：长期码只准用于部署，⛔ 不用于手动单发（D5 三门之③）",
+                    status=403,
+                )
 
     graph = _load_ir(ir)
 
@@ -3074,6 +3102,17 @@ def live_run(
     outside = sorted(targets - allow)
     if outside:
         raise ServiceError(f"写目标不在白名单内：{outside}", status=400)
+
+    # ★ v1.29.0：grant 通道的**范围／档位**判定。判定真源只有 `af_grant.GrantStore.check`，
+    #   本层只负责喂它三样东西（动作清单／写目标／实体→区域的取值回调）并翻译成 ServiceError。
+    #   位置刻意在**白名单之后**：形状错（写目标越出 live_allow）比策略拒更早该被看见，
+    #   与授权码闸"排在形状检查之后"的同一条顺序纪律。
+    grant_receipt: dict[str, Any] | None = None
+    if grant_record is not None:
+        grant_receipt = _grant_authorize_execution(
+            store, grant_record, caller, graph, targets, grant_confirm=grant_confirm,
+        )
+        code_tag = f"grant:{grant_record['grant_id']}"
 
     # store.root 是凭据所在（credentials.json 与归档同根）；live_run 签名里没有
     # store_root 形参——上一版我写成 `_ha_token(store_root)` 会 NameError 被 except
@@ -3141,18 +3180,23 @@ def live_run(
     try:
         from datetime import datetime as _dt, timezone as _tz
         from .af_audit import AuditEvent as _AE, record_deploy as _rd
+        _data = {"authorized_by": code_tag, "writes": sorted(targets),
+                 "verdict": _dispatch_verdict(runtime),
+                 "actions": len(sorted(targets)),
+                 # AF-745 追加：点火档进流水，列表面才分得开「没点火」与「跑了没动作」
+                 "ignition": str(ignition["reason"] or "ignited"),
+                 "graph": [_auto_name(a) for a in graph],
+                 "subject": str(caller or "")}
+        if grant_receipt is not None:
+            # v1.29.0 Q4（执行留痕与查询留痕同形）：which grant 就记在这一条既有事件里，
+            # ⛔ 不再写一枚 GRANT_EXECUTED——两条流水会立刻各自漂成两套口径。
+            _data["grant"] = grant_receipt
         _rd(
             _AE("LIVE_RUN_EXECUTED", at=_dt.now(_tz.utc),
                 message=f"live_run executed ({len(events or [])} events)",
                 # v1.28 R3（PM 核准）：回执读面要「图名」与归属主体 ⇒ 事件里补两枚键；
                 # `subject` 缺它就是非 owner 过滤与 hidden_count 都无从算起（卡 §四点名）。
-                data={"authorized_by": code_tag, "writes": sorted(targets),
-                      "verdict": _dispatch_verdict(runtime),
-                      "actions": len(sorted(targets)),
-                      # AF-745 追加：点火档进流水，列表面才分得开「没点火」与「跑了没动作」
-                      "ignition": str(ignition["reason"] or "ignited"),
-                      "graph": [_auto_name(a) for a in graph],
-                      "subject": str(caller or "")}),
+                data=_data),
             store,
         )
     except Exception as exc:
@@ -3162,6 +3206,9 @@ def live_run(
         "mode": "live",
         "live": True,
         "authorized_by": code_tag,
+        # v1.29.0：grant 通道的回执块（which grant／档位／是否走了单次放行）。
+        # 码通道**不出现这枚键**——回执形状要能一眼分出"这次是码放行还是授权放行"。
+        **({"grant": grant_receipt} if grant_receipt is not None else {}),
         "ha_url": ha_url,
         "allowlist": sorted(allow),
         "writes": sorted(targets),
@@ -3198,6 +3245,401 @@ def live_run(
         # **⛔ 不是 passed**（HA 回显与设备推送同形，卡 §十.4.1）。单发不等驻留 ⇒ `checks` 常为 0。
         "readback": dict(getattr(runtime.executor, "readback_stats", None) or {}),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# v1.29.0 第一批：执行授权（grant）服务面——通道、留痕、读面
+#   判定真源只有 `af_grant.GrantStore`（check/issue_confirm/consume_confirm）；
+#   本层只做三件事：**跨通道凭据校验**、把拒绝翻译成 ServiceError、把事实写进既有台账。
+# ─────────────────────────────────────────────────────────────────────
+
+def _grant_store(store: "GraphStore | None") -> GrantStore:
+    """授权账本句柄。位置与 `af_auth` 的码账本同目录（`.auth/`）——凭据与授权一处，不开第二处根。"""
+    root = getattr(store, "root", None)
+    if root is None:
+        raise ServiceError(
+            "执行授权需要 store 根（账本在 .auth/grants.json）——本调用未携带 store，无法判定授权",
+            status=403,
+        )
+    return GrantStore(Path(root).joinpath(*GRANT_FILE_REL))
+
+
+def _grant_room_of(store: "GraphStore | None"):
+    """实体 → 区域名的取值回调（**值源**：设备目录快照，离线可读，⛔ 不打网络）。
+
+    形状与 `af_ownership.decide(owner_of=…)` 同族：判定在 `af_grant`、取值在这里注入，
+    ⛔ 两边各存一份归属/区域解析。`DeviceCatalog.area_of` 只读 `.catalog/catalog.json`。
+    """
+    catalog = DeviceCatalog(Path(str(getattr(store, "root", DEFAULT_STORE_ROOT))))
+    cache: dict[str, str] = {}
+
+    def room_of(entity_id: str) -> str:
+        key = str(entity_id or "")
+        if key not in cache:
+            cache[key] = catalog.area_of(key)
+        return cache[key]
+
+    return room_of
+
+
+def _grant_error(exc: GrantError) -> ServiceError:
+    """把授权面异常翻成服务层错误（status 原样保留：403 要凭据／400 请求形状／500 盘坏了）。"""
+    return ServiceError(str(exc), status=int(getattr(exc, "status", 400) or 400))
+
+
+def _grant_resolve(store: "GraphStore | None", grant_id: str, caller: str) -> dict[str, Any]:
+    try:
+        return _grant_store(store).resolve(grant_id, agent=caller)
+    except GrantError as exc:
+        raise _grant_error(exc) from exc
+
+
+def _grant_channel_tag(
+    store: "GraphStore | None",
+    auth_code: str,
+    *,
+    caller: str,
+    caller_is_owner: bool,
+    action: str,
+    consume: bool,
+) -> str:
+    """签发/撤销/续期 grant 的**凭据通道**：owner 面直通，其余**只认长期码**。
+
+    依据 DCD 20261111 §4.1 双轨授权：执行授权的授予只认长期码（短期码是一次性部署凭据）。
+    `consume=True` 时按 Q1 三件套③计一次 `use_count`（授权动作计次、日常执行不再耗码）；
+    撤销/续期这类**缩小或维持**权限的动作 `consume=False`——撤销还要耗一次额度就没人敢撤销了。
+    """
+    if not auth_code:
+        if caller_is_owner:
+            return f"owner_token:{caller or 'owner'}"
+        raise ServiceError(
+            f"{action} 需要长期授权码（或 owner 令牌）：执行授权⛔ 不接受短期码——"
+            f"短期码是一次性的部署凭据，不能授予执行权限（DCD 20261111 Q1 双轨授权）",
+            status=403,
+        )
+    # 四因合一的校验与失败计数走既有那一枚（⛔ 另写一套凭据判定）。
+    tag = _auth_code_check(store, auth_code, action=action)
+    from .af_auth import AuthCodeStore as _ACS
+
+    if store is None:  # pragma: no cover —— _auth_code_check 已先拒，留作形状自证
+        raise ServiceError(f"{action} 需要授权码，但本调用未携带 store", status=403)
+    acs = _ACS(Path(store.root) / ".auth" / "auth_codes.json")
+    try:
+        recs = acs.list(reveal=True)
+    except Exception:  # noqa: BLE001 —— 判不出类型就 fail-closed，⛔ 不猜
+        raise ServiceError(f"{action} 无法判定授权码类型：拒绝执行（fail-closed）", status=403)
+    kind = next((r.get("kind") for r in recs if r.get("code") == auth_code), None)
+    if kind != "long":
+        raise ServiceError(
+            f"{action} 只认长期码：短期码不能授予执行权限（DCD 20261111 Q1 双轨授权）",
+            status=403,
+        )
+    if consume and not acs.consume(auth_code):
+        raise ServiceError(f"{action} 无法计次（授权码状态已变）：拒绝执行（fail-closed）", status=403)
+    return tag
+
+
+def _grant_confirm_question(check: Any) -> str:
+    """越界确认的**一句人话**（agent 直接念给用户听的那种，⛔ 术语堆）。"""
+    names = "、".join(check.out_of_scope) if check.out_of_scope else "这个动作"
+    return f"{names} 不在当前执行授权范围内。要这次放行一次吗？（⛔ 不会扩大授权范围）"
+
+
+def _grant_authorize_execution(
+    store: "GraphStore | None",
+    grant: Mapping[str, Any],
+    caller: str,
+    graph: Any,
+    targets: Iterable[str],
+    *,
+    grant_confirm: str = "",
+) -> dict[str, Any]:
+    """执行前的 grant 判定：硬拒 → 越界（出票/验票）→ 计数并返回回执块。
+
+    ⛔ 越界不放行、也⛔ 升级 grant：这里唯一的出路是"用户确认 → 单次放行票"，
+    票用完即销、`grant` 本体一个字段都不改（Q2 甲；判例①"确认即升级"被否死的原因）。
+    """
+    gs = _grant_store(store)
+    try:
+        check = gs.check(
+            grant,
+            agent=caller,
+            actions=collect_actions(list(graph)),
+            targets=sorted({str(t) for t in targets}),
+            room_of=_grant_room_of(store),
+        )
+    except GrantError as exc:
+        raise _grant_error(exc) from exc
+    if check.hard_denied:
+        detail = "；".join(f"{d['code']}={d['detail']}" for d in check.denied)
+        raise ServiceError(f"执行授权拒绝（{check.code}）：{detail}", status=403)
+    confirmed = False
+    if check.needs_confirm:
+        if not grant_confirm:
+            try:
+                ticket = gs.issue_confirm(check)
+            except GrantError as exc:
+                raise _grant_error(exc) from exc
+            payload = {
+                "code": "GRANT_CONFIRM_REQUIRED",
+                "grant_id": check.grant_id,
+                "risk": check.risk,
+                "out_of_scope": list(check.out_of_scope),
+                "ticket": ticket["ticket"],
+                "expires_at": ticket["expires_at"],
+                "question": _grant_confirm_question(check),
+                "how": "用户确认后，用同一份请求加 grant_confirm=<ticket> 重发一次；"
+                       "票单次有效，⛔ 不会因此扩大 grant 范围",
+            }
+            # 固定前缀 + JSON：DB/agent 两侧都能机器读（同 `READONLY_DEGRADED:` 的既有先例），
+            # ⛔ 不新造一个 HTTP 状态码语义（428 在 MCP 面会落成 PAYLOAD_INVALID，读成"改参数"）。
+            raise ServiceError(
+                "GRANT_CONFIRM_REQUIRED: " + json.dumps(payload, ensure_ascii=False),
+                status=403,
+            )
+        try:
+            ok_ticket = gs.consume_confirm(
+                grant_confirm, agent=caller, targets=list(check.out_of_scope),
+                grant_id=check.grant_id,
+            )
+        except GrantError as exc:
+            raise _grant_error(exc) from exc
+        if not ok_ticket:
+            raise ServiceError(
+                "越界放行票无效（不存在／已用过／已过期／与本次请求不匹配）：请重新确认一次",
+                status=403,
+            )
+        confirmed = True
+    try:
+        uses = gs.bump_use(str(grant.get("grant_id") or ""))
+    except GrantError as exc:
+        raise _grant_error(exc) from exc
+    return {
+        "grant_id": str(grant.get("grant_id") or ""),
+        "agent": str(grant.get("agent") or ""),
+        "risk": check.risk,
+        "granted_risk": str(grant.get("action_risk") or ""),
+        "confirmed": confirmed,
+        "out_of_scope": list(check.out_of_scope),
+        "uses": uses,
+        "expires_at": _grant_iso(grant.get("expires_at")),
+    }
+
+
+def _grant_iso(value: Any) -> str:
+    """epoch 秒 → ISO（回执只给人读，⛔ 不参与判定）。坏值返回空串，不抛。"""
+    try:
+        stamp = float(value)
+    except (TypeError, ValueError):
+        return ""
+    return datetime.fromtimestamp(stamp, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _grant_audit(store: "GraphStore | None", event_type: str, **data: Any) -> None:
+    """授权事实写进**既有**部署台账（⛔ 第二套审计面）。记账失败不回滚已发生的授权动作。"""
+    try:
+        from .af_audit import AuditEvent as _AE, record_deploy as _rd
+
+        _rd(_AE(event_type, at=datetime.now(timezone.utc), message=event_type.lower(), data=dict(data)), store)
+    except Exception as exc:  # noqa: BLE001 —— 记账失败不许把授权动作打崩（口径同 _persist_deploy）
+        logger.warning("GRANT_AUDIT_RECORD_FAILED type=%s 授权已生效但记账失败：%s", event_type, exc)
+
+
+def grant_issue(
+    store: GraphStore,
+    *,
+    agent: str,
+    auth_code: str = "",
+    rooms: Sequence[str] | None = None,
+    device_scope: Mapping[str, Any] | None = None,
+    action_risk: str = "L1",
+    ttl_days: float | None = None,
+    caller: str = "",
+    caller_is_owner: bool = False,
+) -> dict[str, Any]:
+    """签发一张执行授权（MVP 六字段）。
+
+    默认 `action_risk=L1`：**缺省只放行 L0/L1**（通知／灯／开关／风扇）。理由与 DCD §三.1
+    同向——"范围授权 ≠ 动作全权"：中危（cover 窗帘／climate 空调）必须显式写 `action_risk=L2`，
+    忘了写的人拿到的是更小的权限，⛔ 不是更大的（fail-closed 的默认值方向）。
+    """
+    tag = _grant_channel_tag(
+        store, auth_code, caller=caller, caller_is_owner=caller_is_owner,
+        action="签发执行授权（grant）", consume=True,
+    )
+    try:
+        record = _grant_store(store).create(
+            agent=agent,
+            issued_by=caller or tag,
+            rooms=rooms or (),
+            device_scope=device_scope,
+            action_risk=action_risk,
+            ttl_days=ttl_days,
+            issued_via=tag,
+        )
+    except GrantError as exc:
+        raise _grant_error(exc) from exc
+    _grant_audit(
+        store, "GRANT_ISSUED",
+        grant_id=record["grant_id"], agent=record["agent"],
+        rooms=list(record["rooms"]), device_scope=dict(record["device_scope"]),
+        action_risk=record["action_risk"], expires_at=_grant_iso(record["expires_at"]),
+        authorized_by=tag, subject=str(caller or ""), issued_by=record["issued_by"],
+    )
+    return record
+
+
+def grant_list(
+    store: GraphStore, *, caller: str = "", caller_is_owner: bool = False,
+    token_identity: bool | None = None, agent: str = "",
+) -> dict[str, Any]:
+    """授权列表（读面）。归属形状按 list 面纪律：owner 面全量⛔ 不报 hidden_count、
+    非 owner 面只看自己名下且**必报** `hidden_count`（⑩ 两条腿同族）。
+
+    `agent` 只作**收窄**用（owner 查某个 agent），⛔ 不是"替别人看"的开关：非 owner 面
+    传别人的 `agent` 仍然只能看到自己的（范围判定在 `scope_names`，不在这行）。
+    """
+    sub = Subject.from_caller(caller, owner_face=caller_is_owner, token_identity=token_identity)
+    if sub.token_state is TokenState.BROKEN:
+        raise ServiceError(broken_identity_error(), status=403)
+    try:
+        records = _grant_store(store).list()
+    except GrantError as exc:
+        raise _grant_error(exc) from exc
+    by_id = {str(r.get("grant_id") or ""): str(r.get("agent") or "") for r in records}
+    visible, hidden = scope_names(lambda gid: by_id.get(gid, ""), list(by_id), sub)
+    keep = set(visible)
+    items = [r for r in records if str(r.get("grant_id") or "") in keep]
+    if str(agent or "").strip():
+        items = [r for r in items if str(r.get("agent") or "") == str(agent).strip()]
+    out: dict[str, Any] = {"ok": len(visible) + hidden == len(records), "items": items, "count": len(items)}
+    if caller and not caller_is_owner:
+        out["hidden_count"] = hidden
+        out["scope"] = f"owner:{caller}"
+    return out
+
+
+def grant_revoke(
+    store: GraphStore, *, grant_id: str, auth_code: str = "", reason: str = "",
+    caller: str = "", caller_is_owner: bool = False,
+) -> dict[str, Any]:
+    """撤销（Q3 上半：立即生效，此后任何新执行请求即拒）。`consume=False`——撤销不耗额度。"""
+    tag = _grant_channel_tag(
+        store, auth_code, caller=caller, caller_is_owner=caller_is_owner,
+        action="撤销执行授权（grant）", consume=False,
+    )
+    try:
+        record = _grant_store(store).revoke(grant_id, reason=reason, by=caller or tag)
+    except GrantError as exc:
+        raise _grant_error(exc) from exc
+    _grant_audit(
+        store, "GRANT_REVOKED", grant_id=record["grant_id"], agent=record["agent"],
+        reason=str(reason or ""), authorized_by=tag, subject=str(caller or ""),
+        revoked_at=str((record.get("revoke") or {}).get("at") or ""),
+    )
+    return record
+
+
+def grant_renew(
+    store: GraphStore, *, grant_id: str, auth_code: str = "", ttl_days: float | None = None,
+    caller: str = "", caller_is_owner: bool = False,
+) -> dict[str, Any]:
+    """续期（Q1：长期码不过期 ≠ 授权不过期）。续期是授权动作 ⇒ 计一次。"""
+    tag = _grant_channel_tag(
+        store, auth_code, caller=caller, caller_is_owner=caller_is_owner,
+        action="续期执行授权（grant）", consume=True,
+    )
+    try:
+        record = _grant_store(store).renew(grant_id, ttl_days=ttl_days, by=caller or tag)
+    except GrantError as exc:
+        raise _grant_error(exc) from exc
+    _grant_audit(
+        store, "GRANT_RENEWED", grant_id=record["grant_id"], agent=record["agent"],
+        expires_at=_grant_iso(record["expires_at"]), authorized_by=tag, subject=str(caller or ""),
+    )
+    return record
+
+
+def grant_receipts(
+    store: "GraphStore | None", *, caller: str = "", caller_is_owner: bool = False,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """执行授权的**留痕读面**（mimo/UI 用）：签发／撤销／续期／带 grant 的执行／查询。
+
+    源＝`<store>/deploy_audit.jsonl`（既有那一份，⛔ 不新建持久化面）。归属过滤与
+    `live_run_receipts` 同形：`data.subject` 为空的老流水按"无身份"处理，owner 面看全量。
+    """
+    root = getattr(store, "root", None)
+    if root is None:
+        return {"ok": False, "count": 0, "items": [], "read_error": "no_store"}
+    # 条数上限复用 `live_run_receipts` 的同一对常量（本函数定义在它们之前 ⇒ 运行期取）。
+    try:
+        n = LIVE_RECEIPTS_LIMIT if limit is None else int(limit)
+    except (TypeError, ValueError):
+        n = LIVE_RECEIPTS_LIMIT
+    n = min(n if n > 0 else LIVE_RECEIPTS_LIMIT, LIVE_RECEIPTS_MAX)
+
+    from .af_audit import DEPLOY_AUDIT_FILE, GRANT_ISSUED, GRANT_RENEWED, GRANT_REVOKED, QUERY_READ
+
+    path = Path(root) / DEPLOY_AUDIT_FILE
+    text: str | None = None
+    if path.is_file():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return {"ok": False, "count": 0, "items": [],
+                    "read_error": f"ledger_unreadable:{type(exc).__name__}"}
+    wanted = {GRANT_ISSUED, GRANT_RENEWED, GRANT_REVOKED, QUERY_READ}
+    events: list[dict[str, Any]] = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue  # 坏行跳过：append-only 流水，单行损坏不该让整份读数变空
+        if not isinstance(row, dict):
+            continue
+        kind = str(row.get("type") or "")
+        data = row.get("data") if isinstance(row.get("data"), Mapping) else {}
+        if kind in wanted or (kind == "LIVE_RUN_EXECUTED" and isinstance(data.get("grant"), Mapping)):
+            events.append(row)
+    total = len(events)
+    items: list[dict[str, Any]] = []
+    for row in reversed(events):  # 落盘是时间序 ⇒ 倒序即"新→旧"
+        data = row.get("data") if isinstance(row.get("data"), Mapping) else {}
+        subject = str(data.get("subject") or "")
+        if caller and not caller_is_owner and subject != caller:
+            continue
+        items.append({
+            "type": str(row.get("type") or ""),
+            "at": str(row.get("at") or row.get("timestamp") or ""),
+            "grant": dict(data.get("grant")) if isinstance(data.get("grant"), Mapping)
+            else {"grant_id": str(data.get("grant_id") or "")},
+            "agent": str(data.get("agent") or data.get("subject") or ""),
+            "summary": str(data.get("message") or row.get("message") or ""),
+            "what": sorted(data.get("writes") or []) if data.get("writes") else [],
+            "risk": str(data.get("action_risk") or data.get("risk") or ""),
+        })
+        if len(items) >= n:
+            break
+    out: dict[str, Any] = {"ok": total >= len(items), "count": len(items), "items": items}
+    if caller and not caller_is_owner:
+        out["hidden_count"] = max(0, total - len(items))
+        out["scope"] = f"owner:{caller}"
+    return out
+
+
+def record_query(store: "GraphStore | None", *, entity_id: str, caller: str = "") -> None:
+    """查询留痕（Q4 甲：读面免 grant，但**免授权 ≠ 免审计**）。
+
+    只记"谁在什么时候问了哪个实体"，⛔ 不记返回的状态值（那会把家庭状态写进台账）。
+    """
+    if store is None:
+        return
+    _grant_audit(store, "QUERY_READ", entity_id=str(entity_id or ""), subject=str(caller or ""),
+                 agent=str(caller or ""))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -3686,9 +4128,16 @@ def catalog_list(
     return _catalog(store).list_entities(domain=domain, area=area, keyword=keyword, limit=limit, offset=offset)
 
 
-def catalog_state(store: GraphStore, entity_id: str) -> dict[str, Any]:
-    """单实体状态（实时优先，失败回退目录缓存并标注）。"""
-    return _catalog(store).get_state(entity_id)
+def catalog_state(store: GraphStore, entity_id: str, caller: str = "") -> dict[str, Any]:
+    """单实体状态（实时优先，失败回退目录缓存并标注）。
+
+    v1.29.0 Q4 甲：查询面**免执行授权**（配对 agent 默认可查），但「免授权 ≠ 免审计」——
+    每次查询落一条同形痕（who/what/when/which agent）。只记"谁问了哪个实体"，
+    ⛔ 不记返回的状态值：台账要能回答"谁看过家里"，不该顺手把家里状态抄一份进去。
+    """
+    state = _catalog(store).get_state(entity_id)
+    record_query(store, entity_id=entity_id, caller=caller)
+    return state
 
 
 def catalog_snapshot(store: GraphStore) -> dict[str, Any]:

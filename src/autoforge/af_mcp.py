@@ -569,6 +569,9 @@ def _t_live(store: GraphStore, args: dict[str, Any], current: dict[str, Any] | N
         # v1.28 R3：MCP 面同样把调用者主体递给服务层 ⇒ 回执归属过滤两面同口径
         caller=str((current or {}).get("subject") or ""),
         caller_is_owner=_owner_face(current),
+        # v1.29.0：执行授权通道。与 auth_code **互斥**（服务层同传即拒）。
+        grant_id=str(args.get("grant_id") or ""),
+        grant_confirm=str(args.get("grant_confirm") or ""),
     )
 
 
@@ -607,8 +610,11 @@ def _t_list_entities(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _t_get_entity_state(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    return svc.catalog_state(store, args["entity_id"])
+def _t_get_entity_state(store: GraphStore, args: dict[str, Any],
+                        current: dict[str, Any] | None = None) -> dict[str, Any]:
+    # v1.29.0 Q4：读面免 grant，但要留痕 ⇒ 把调用主体递进服务层（同形 QUERY_READ）。
+    return svc.catalog_state(store, args["entity_id"],
+                             caller=str((current or {}).get("subject") or ""))
 
 
 def _t_draft(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
@@ -886,9 +892,58 @@ def _t_deploy_status(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 #: ＋ 部署请求的 requested_by 归属（v1.13.3 af_deploy）
 #: AF-504 归属读面收口（2026-10-30）：by_tag/conf/diff/export/quarantine 五枚入列
 #: AF-701 服务层界线钉（2026-10-31）：af_set_tags 入列（透传 subject + token_identity）
+def _t_grant(store: GraphStore, args: dict[str, Any],
+             current: dict[str, Any] | None = None) -> dict[str, Any]:
+    """执行授权（grant）面的唯一 MCP 入口：一个工具 + `action` 分派。
+
+    为什么不拆成五个工具：签发/撤销/续期/列表/留痕是同一份契约的五个动作，
+    拆成五个工具等于把"参数语义"抄五份（本仓 `check_tool_names` 抓过的正是第二份名单那一族）。
+    范围与档位判定一概不在这里——真源只有 `af_grant`，本函数只做参数解包。
+    """
+    action = str(args.get("action") or "").strip().lower()
+    caller = str((current or {}).get("subject") or "")
+    owner = _owner_face(current)
+    if action == "issue":
+        return svc.grant_issue(
+            store, agent=str(args.get("agent") or ""),
+            auth_code=str(args.get("auth_code") or ""),
+            rooms=[str(x) for x in (args.get("rooms") or [])],
+            device_scope=args.get("device_scope"),
+            action_risk=str(args.get("action_risk") or "L1"),
+            ttl_days=args.get("ttl_days"),
+            caller=caller, caller_is_owner=owner,
+        )
+    if action == "list":
+        return svc.grant_list(store, caller=caller, caller_is_owner=owner,
+                              agent=str(args.get("agent") or ""))
+    if action == "revoke":
+        return svc.grant_revoke(
+            store, grant_id=str(args.get("grant_id") or ""),
+            auth_code=str(args.get("auth_code") or ""),
+            reason=str(args.get("reason") or ""),
+            caller=caller, caller_is_owner=owner,
+        )
+    if action == "renew":
+        return svc.grant_renew(
+            store, grant_id=str(args.get("grant_id") or ""),
+            auth_code=str(args.get("auth_code") or ""),
+            ttl_days=args.get("ttl_days"),
+            caller=caller, caller_is_owner=owner,
+        )
+    if action == "receipts":
+        return svc.grant_receipts(store, caller=caller, caller_is_owner=owner,
+                                  limit=args.get("limit"))
+    raise svc.ServiceError(
+        "af_grant 的 action 只能是 issue/list/revoke/renew/receipts，"
+        f"收到 {action!r}（补参数，不是服务故障）",
+        status=400,
+    )
+
+
 _TOOLS_WITH_CONTEXT = frozenset({
     _t_delete_graph, _t_list_graphs, _t_get_graph,_t_whoami, _t_save, _t_import, _t_enable, _t_deploy,
-    _t_by_tag, _t_conf, _t_diff, _t_export, _t_quarantine, _t_set_tags, _t_live})
+    _t_by_tag, _t_conf, _t_diff, _t_export, _t_quarantine, _t_set_tags, _t_live, _t_grant,
+    _t_get_entity_state})
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1325,7 +1380,9 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
         "【live】真机下发（四重闸：服务端开关+令牌、confirm、白名单、**授权码**）。参数：ir(dict 必填)，"
         "live_allow(list[str] 必填：可写白名单)，events(list 可选)，confirm(bool 必填，必须显式 true)，"
         "undo(bool 可选：记录动作前快照并返回 undo_deploy_id，供事后 /api/undo 撤销——与 REST /api/live/run 同源；"
-        "缺省 false 不记录不谎报)，auth_code(str 缺码即拒)。需 live 权限。",
+        "缺省 false 不记录不谎报)，auth_code(str 缺码即拒)，"
+        "grant_id(str 可选：执行授权通道，与 auth_code **互斥**——长期码换来的授权在签发时已计次，"
+        "日常执行只带 grant_id)，grant_confirm(str 可选：越界时回执给的 ticket，单次放行)。需 live 权限。",
         {
             "type": "object",
             "properties": {
@@ -1336,11 +1393,49 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
                 "undo": {"type": "boolean", "description": "true 记录动作前快照并返回 undo_deploy_id（与 REST 同源）"},
                 "auth_code": {"type": "string", "pattern": "^[0-9]{6,8}$",
                               "description": "授权码（缺码即拒）：真机下发与 af_save 部署同级（裁定 R4-3）"},
+                "grant_id": {"type": "string", "pattern": "^g-[0-9a-f]{12}$",
+                             "description": "执行授权 id（与 auth_code 互斥；before 用 af_grant action=issue 签发）"},
+                "grant_confirm": {"type": "string",
+                                  "description": "越界放行票 ticket（来自 GRANT_CONFIRM_REQUIRED 回执，单次有效）"},
             },
             "required": ["ir", "live_allow", "confirm"],
         },
         _t_live,
         "live",
+    ),
+    (
+        "af_grant",
+        "【执行授权·v1.29】对话操控面的授权地基（DCD 20261111 六问全甲）：码管部署、grant 管执行。"
+        "参数：action(必填，issue/list/revoke/renew/receipts)。"
+        "issue：agent(str 必填)＋rooms(list，区域名或 \"all\")＋device_scope(object {include,exclude})＋"
+        "action_risk(str，L0/L1/L2，缺省 L1；L3 与 lock/valve/water_heater/alarm_control_panel 一律拒签)＋"
+        "ttl_days(number 缺省 90)＋auth_code(str，**只认长期码**；owner 令牌可免)；"
+        "list：看自己名下（owner 全量）；revoke：grant_id＋auth_code（撤销立即生效）；"
+        "renew：grant_id＋ttl_days；receipts：签发/撤销/执行/查询的同形留痕。"
+        "越界不放行也不扩权：执行时回执给 ticket，用户确认后带 grant_confirm 重发一次。",
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["issue", "list", "revoke", "renew", "receipts"],
+                           "description": "要执行的动作"},
+                "agent": {"type": "string", "description": "被授权 agent（issue 必填；list 可选作收窄）"},
+                "rooms": {"type": "array", "items": {"type": "string"},
+                          "description": "可执行区域名（\"all\"＝全屋）；实体经设备归属校验"},
+                "device_scope": {"type": "object",
+                                 "description": "设备白名单＋排除清单：{include: [...], exclude: [...]}"},
+                "action_risk": {"type": "string", "enum": ["L0", "L1", "L2"],
+                                "description": "动作档上限（缺省 L1）；L3 与四类高危域一律禁入"},
+                "ttl_days": {"type": "number", "description": "有效期天数（缺省 90，上限 730）"},
+                "grant_id": {"type": "string", "description": "目标 grant（revoke/renew 必填）"},
+                "reason": {"type": "string", "description": "撤销原因（可选，进留痕）"},
+                "limit": {"type": "integer", "description": "receipts 条数（缺省 20，上限 100）"},
+                "auth_code": {"type": "string", "pattern": "^[0-9]{6,8}$",
+                              "description": "长期授权码（短期码不能授执行权；owner 令牌可免）"},
+            },
+            "required": ["action"],
+        },
+        _t_grant,
+        "write",
     ),
     (
         "af_whoami",

@@ -155,9 +155,16 @@ def test_real_repo_site_readings_are_pinned(real):
     # 234 → 236（2026-11-08 AF-746b 写后回读，v1.28.6）：`READBACK_CHECK_FAILED`（af_runtime.tick）
     # ＋`LIVE_RUN_READBACK_FAILED`（live_run 收尾）两枚 WARNING 站点——回读结账自己出错必须可查，
     # 否则「回执 checks 恒 0」会被误读成「回读被禁用」。⛔ 无码存量与 §四 上限不动。
-    assert len(real["sites"]) == 236
-    assert len({s["path"] for s in real["sites"]}) == 35
-    assert dict(lv) == {"debug": 25, "info": 10, "warning": 166, "error": 24, "exception": 11}
+    # 242（2026-11-11 v1.29.0 第一批 grant，+6）：af_grant 的 GRANT_STORE_CORRUPT×3／
+    # GRANT_STORE_VERSION_MISMATCH／GRANT_CONFIRM_REJECTED ＋ af_service 的
+    # GRANT_AUDIT_RECORD_FAILED，全部具名码。
+    assert len(real["sites"]) == 242
+    # v1.29.0 第一批：+`af_grant.py` 一个文件（5 个具名码站点）⇒ 文件 35→36。
+    assert len({s["path"] for s in real["sites"]}) == 36
+    # v1.29.0 第一批 +6：warning 166→169（GRANT_STORE_VERSION_MISMATCH／
+    # GRANT_CONFIRM_REJECTED／GRANT_AUDIT_RECORD_FAILED）、error 24→27
+    # （GRANT_STORE_CORRUPT 三条腿）。
+    assert dict(lv) == {"debug": 25, "info": 10, "warning": 169, "error": 27, "exception": 11}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -223,10 +230,13 @@ def test_real_repo_named_code_readings_are_pinned(real):
     #    两条腿——同一句承诺（那个一次性目录没删掉，磁盘卫生没做成），执行记录 §二之一百二十六。
     # 免得下一个人把这几条例外读成"码可以随便复用"。
     dup = {code for code, n in Counter(s["code"] for s in coded).items() if n > 1}
+    # ④ `GRANT_STORE_CORRUPT` 出自「读不出／不是 JSON／形状不对」三条腿——同一句承诺
+    #    （这份授权账本读不出来，本次授权面一律拒），v1.29.0 第一批。
     assert dup == {
         "DEPLOY_AUDIT_PERSIST_FAILED",
         "OWNER_ALERT_PUBLISH_FAILED",
         "WATCH_SCRATCH_DELETE_FAILED",
+        "GRANT_STORE_CORRUPT",
     }, f"重码名单漂了：{dup}"
     nc = Counter(s["level"] for s in real["sites"] if not s["code"])
     ac0 = _auto_counts()
