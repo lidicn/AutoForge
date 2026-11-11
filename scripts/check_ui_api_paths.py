@@ -672,8 +672,18 @@ def _tail_claim(ui_path: str, route_path: str) -> bool:
     return all(x == y or x == "*" for x, y in zip(a, b[-len(a):]))
 
 
-def _claimed(upath: str, route_path: str) -> bool:
-    """一个 UI 路径算不算这条路由的**消费者**（反向读数用这条，紧）。"""
+def _claimed(upath: str, route_path: str, route_method: str = "",
+             site_method: str = "") -> bool:
+    """一个 UI 路径算不算这条路由的**消费者**（反向读数用这条，紧）。
+
+    ⚠️ 方法维度（2026-11-11 门牙二连，AF-Verify 票 `3EC2FBEE` 抓出的第三例「考官没被考过」）：
+    此前只比**路径形状**，于是「UI 里有一条 `GET /api/grants`」会把同路径的
+    `POST /api/grants`（签发）一并认领 ⇒ 它从反向名单里消失（反向读数虚减 2）。
+    现在按**路径＋方法二元组**认领：两边方法都给了且不等 ⇒ 不算认领。
+    ⛔ 这只是判定器收紧，**反向名单不是删除清单**——名单里的每一条都仍可能有人用。
+    """
+    if site_method and route_method and site_method != route_method:
+        return False
     if upath.startswith(MARK):
         return _tail_claim(upath, route_path)
     return tuple(_shape(_full(upath))) == tuple(_shape(route_path))
@@ -684,7 +694,8 @@ def _unused_routes(sites: list[dict], routes: list[dict]) -> list[dict]:
     `fetch(`${base}/watch/start`)` 这种"门看不见整条路径、但真有人调"的面不再躺成未调用。"""
     out = []
     for r in routes:
-        if not any(_claimed(p, r["path"]) for s in sites for p in s["paths"]):
+        if not any(_claimed(p, r["path"], r.get("method", ""), s.get("method", ""))
+                   for s in sites for p in s["paths"]):
             out.append(r)
     return out
 

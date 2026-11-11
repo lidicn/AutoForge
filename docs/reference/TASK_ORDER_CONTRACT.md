@@ -58,7 +58,7 @@
 | 通道 | 状态 | 机制 |
 |---|---|---|
 | `tts` | **wired** | `AfMqttBridge.publish_speak`（与自动化播报同一条桥方法） |
-| `mimo` | **read** | 读面：`GET /api/orders/{id}`／`/api/orders/receipts` 可查即达成（⛔ 假装推送） |
+| `mimo` | **read** | 读面：**活动池 `GET /api/orders` ＋ 留痕 `GET /api/orders/receipts` 聚合**（按 `order_id` 分组）可查即达成（⛔ 假装推送）。**按单直读端点当前不存在**——`GET /api/orders/{id}` 是批 3+ 候选（2026-11-11 AF-UI 批发现、PM 裁定①：聚合读数已覆盖 UI 与审计需要，现在不加＝不造没人用的面） |
 | `bark` | **unwired** | 仓内无 bark 设施（全仓 grep 0 命中）。它是设计稿里的**兜底**通道 ⇒ TTS 失败时回执带 `fallback_unavailable` |
 
 > ⚠️ 拍板项：`bark` 要从"占位"变"接线"，需要外部推送设施（bark 服务端地址/token）——归出资人/PM 定，
@@ -104,7 +104,7 @@ pending ──claim（到点）──▶ running ──全部步成功──▶ 
 | 面 | 形态 |
 |---|---|
 | MCP | `af_order`（`action`：`create｜list｜cancel｜receipts`），scope `write` |
-| REST | `POST /api/orders`／`GET /api/orders`／`POST /api/orders/{order_id}/cancel`／`GET /api/orders/receipts` |
+| REST | `POST /api/orders`／`GET /api/orders`／`POST /api/orders/{order_id}/cancel`／`GET /api/orders/receipts`（**按单直读 `GET /api/orders/{id}` 不存在**，批 3+ 候选） |
 | 引擎 | `serve` 进程内的任务单引擎（5s 轮询）。⛔ 不进 watch 装载池、⛔ 在 MCP/CLI 进程里起（那里没有单写者租约） |
 
 ## 七、TVPilot 对接注意（给对接席）

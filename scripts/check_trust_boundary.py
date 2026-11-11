@@ -482,7 +482,17 @@ def anchor_ok(root: Path) -> str | None:
 
 def write_doc(root: Path) -> int:
     doc_p = root / DOC_REL
-    doc = doc_p.read_text(encoding="utf-8", errors="replace")
+    # 行尾保形（2026-11-11 门牙小批）：本函数此前硬写 `newline="\n"`，把在册 **CRLF** 的
+    # `docs/信任边界清单.md` 整文件翻成 LF（批 1 的 --write 干的），而五腿行尾门只考
+    # regen() 行为、不看现役文件 ⇒ 账实不符沉默了一整批。现在按现状行尾写回，混合拒写。
+    raw = doc_p.read_bytes()
+    doc = raw.decode("utf-8", errors="replace")
+    crlf_n = raw.count(b"\r\n")
+    lf_n = raw.count(b"\n")
+    if crlf_n and lf_n - crlf_n:
+        print(f"✗ `{DOC_REL}` 行尾混合（crlf={crlf_n}／lf_only={lf_n - crlf_n}）：拒绝写")
+        return 2
+    eol = "\r\n" if crlf_n else "\n"
     if AUTO_BEGIN not in doc or AUTO_END not in doc:
         print(f"✗ `{DOC_REL}` 缺自动段标记，拒绝改写")
         return 2
@@ -494,9 +504,10 @@ def write_doc(root: Path) -> int:
     head, _, rest = doc.partition(AUTO_BEGIN)
     _, _, tail = rest.partition(AUTO_END)
     new = f"{head}{AUTO_BEGIN}\n{body}\n{AUTO_END}{tail}"
-    with open(doc_p, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(new)
-    print(f"✓ 已重新生成 `{DOC_REL}` 自动段（{len(rows)} 条；手工登记段未动）")
+    # 保形写回：先在 \n 语义上拼好，再一次性按原行尾落地（⛔ 逐行 open() 写，那样会混）
+    doc_p.write_bytes(new.replace("\n", eol).encode("utf-8"))
+    print(f"✓ 已重新生成 `{DOC_REL}` 自动段（{len(rows)} 条；手工登记段未动；行尾＝"
+          f"{'CRLF' if eol == chr(13) + chr(10) else 'LF'}）")
     return 0
 
 

@@ -684,6 +684,17 @@ def test_real_repo_measurements_are_pinned():
     覆盖写不新增键），声明行带就地豁免标记（⛔ 不进注册表：两枚都不给 TTL——冷却到点前抹掉会让
     自动化立刻重派、等于把冷却关了；`_last_met` 的落盘持久化由 `met_io` 管，内存版只是 serve
     未接线时的单测退回）。封顶与语义腿见 `tests/unit/test_dispatch_cooldown_gate_20261106.py`。
+
+    扫到 136 → 139（v1.29 批 3 场景对象，2026-11-11）：新增 `af_scene_kit.py` 三个容器，逐条按
+    各自形状处置，**没有一条是靠挪数字抹平的**：
+    - `SceneRegistry._defs`（场景定义注册表）：写入口 `add()` 既查重（scene_id 唯一）又按
+      `SCENE_MAX_DEFS` 封顶、超限即拒 ⇒ 就地豁免（没有 TTL 腿——人配的场景定义不该自己过期
+      消失；淘汰一条等于口令消失）。封顶腿是
+      `tests/test_scene_kit.py::test_scene_registry_rejects_beyond_cap`。
+    - `SceneAskSession._steps`／`._aliases`（配置期 ask 暂存器）：随 `commit()` 产出定义或
+      `cancel()` 清空即失引，上界＝`ASK_MAX_STEPS`／`ASK_MAX_ALIASES`、超出即拒 ⇒ 就地豁免
+      （⛔ 不是跨请求缓存，没有 TTL 腿）。封顶腿是
+      `tests/test_scene_kit.py::test_ask_session_rejects_beyond_step_cap`。
     """
     gate = _gate()
     src = ROOT / "src" / "autoforge"
@@ -693,7 +704,7 @@ def test_real_repo_measurements_are_pinned():
     # 批 2（D6）：TokenRegistry._issued（运行期签发令牌摘要索引）登记进 BOUNDED_CACHES
     # （cap=MAX_ISSUED / ttl=ISSUED_TTL_S / trim=_purge_expired_locked）⇒ bounded 5→6、扫到容器 133→134。
     assert len(bounded) == 6 and len(fixed) == 3
-    assert len(containers) == 136 and len(gate.BASELINE) == 113
+    assert len(containers) == 139 and len(gate.BASELINE) == 113
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"

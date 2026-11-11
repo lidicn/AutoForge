@@ -6,7 +6,7 @@ docs/可观测性清单.md 与 docs/进程模型清单.md 都是 LF、两个 --w
 LF ⇒ 跑一次 regen 就整文件翻成 CRLF＝整文件假 diff（953 行假 diff 三次复发），还会把
 「移动锚点的提交必须自带重生成清单」的真实锚点位移淹在行尾噪声里。
 
-本门在临时夹具里真跑 regen()/realign()，五条腿都是行为判据（不靠注释自证）：
+本门在临时夹具里真跑 regen()/realign()，六条腿都是行为判据（不靠注释自证）：
   A 现状 LF 的台账，regen 后仍是 LF（旧实现必红：它会把这一腿写成 CRLF）；
   B 现状 CRLF 的台账，regen 后仍是 CRLF（按现状风格还原，堵「一刀切全 LF」的反向过修）；
   C 写前不存在的台账（首次生成），按生成器的 LF 落盘；
@@ -15,6 +15,12 @@ LF ⇒ 跑一次 regen 就整文件翻成 CRLF＝整文件假 diff（953 行假 
   E 混合行尾（CRLF 与裸 LF 并存）＝非法输入：regen/realign 直接拒（fail-closed，
     报「该文件行尾混合、拒绝写」），文件字节一个都不动——⛔ 不自动归一到任何一侧
     （复核补尺：AF-Verify 三 fixture ＋ Chief 定口径，自动归一＝本卡病灶）。
+  F 注册面检出（2026-11-11 门牙小批，AF-Verify `3F376136` F2 的洞）：A–E 五腿只考
+    "regen 会不会翻行尾"，**没有一条腿看现役源文件本身**——`af_mcp.py` 整文件
+    LF→CRLF 翻转已经进了 blob、登记册那一格没改，五腿照样全绿。本腿遍历
+    `docs/仓库卫生清单.md` §五 行尾登记册的**全体在册文件**，取 HEAD blob 原字节
+    逐文件比对「在册行尾」与「实际 CR/LF 分布」：在册纯 LF 却出现 CR（或反之）⇒ 红。
+    ⚠️ 只查单文件＝漏下一例换个文件；所以本腿吃整张表，表里加一行就自动纳管。
 
 退出码：0 过 / 1 判据红 / 2 射程塌（被测脚本不在、夹具建不出来、真值加载不了）。
 """
@@ -155,12 +161,85 @@ def leg_e_mixed_rejected(tmp: Path) -> None:
     assert doc.read_bytes() == before, "realign 拒写后文件字节被改了"
 
 
+# ── 腿 F：注册面检出（在册行尾 ⇔ HEAD blob 实际行尾）────────────────────
+#: 登记册路径（**唯一权威表**：本仓不存在"全部 LF/全部 CRLF"的通则）。
+REGISTRY_DOC = "docs/仓库卫生清单.md"
+#: 登记册里认的行尾档位 → (要求 CR 数, 要求裸 LF 数) 的判据形状。
+#: 纯 LF ⇒ CR 必须 0 且至少一枚裸 LF；纯 CRLF ⇒ 裸 LF 必须 0 且至少一枚 CR。
+_REGISTRY_ROW = None  # 延迟在 check_registry 里编译（re 只为这一处引入，⛔ 不用正则替代字符串解析）
+
+
+def read_registry(doc_text: str) -> list[tuple[str, str]]:
+    """从登记册 §五 的表里读出 `(文件路径, 在册行尾)`；读不出任何一行 ⇒ RuntimeError（射程塌）。"""
+    import re as _re
+
+    section = doc_text.split("## 五、", 1)
+    if len(section) != 2:
+        raise RuntimeError("登记册里找不到 §五（行尾表）——本腿无从判定")
+    body = section[1].split("<!-- AUTO-BEGIN", 1)[0]
+    rows: list[tuple[str, str]] = []
+    pattern = _re.compile(r"^\|\s*`([^`]+)`(?:（[^）]*）)?\s*\|\s*\*\*(LF|CRLF)\*\*\s*\|", _re.M)
+    for match in pattern.finditer(body):
+        rows.append((match.group(1).strip(), match.group(2)))
+    if not rows:
+        raise RuntimeError("登记册 §五 的表一行都没解析出来——本腿无从判定（⛔ 空表当干净）")
+    return rows
+
+
+def check_registry(root: Path, rows: list[tuple[str, str]], read_blob) -> list[str]:
+    """逐文件比对；返回违规清单（空＝账实相符）。`read_blob(path) -> bytes` 可注入（判据面用夹具）。"""
+    violations: list[str] = []
+    for rel, registered in rows:
+        try:
+            raw = read_blob(rel)
+        except Exception as exc:  # noqa: BLE001 —— 读不出＝射程塌，⛔ 不许当"符合"
+            raise RuntimeError(f"读不出 {rel} 的 HEAD blob：{exc!r}") from exc
+        crlf = raw.count(b"\r\n")
+        lone_lf = raw.count(b"\n") - crlf
+        if registered == "LF":
+            if crlf != 0 or lone_lf == 0:
+                violations.append(
+                    f"{rel}：在册 **LF**，HEAD blob 却是 crlf={crlf}／lf_only={lone_lf}"
+                    f"（整文件行尾翻转＝假 diff 复发形状）")
+        else:  # CRLF
+            if lone_lf != 0 or crlf == 0:
+                violations.append(
+                    f"{rel}：在册 **CRLF**，HEAD blob 却是 crlf={crlf}／lf_only={lone_lf}")
+    return violations
+
+
+def _git_head_blob(root: Path, rel: str) -> bytes:
+    """`git cat-file blob HEAD:<rel>` 的原字节（⛔ 走文本层，那会把 CRLF 读成 LF）。"""
+    import subprocess
+
+    proc = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "blob", f"HEAD:{rel}"],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip() or f"exit={proc.returncode}")
+    return proc.stdout
+
+
+def leg_f_registry_matches_head(_tmp: Path) -> None:
+    """在册行尾表 ⇔ HEAD blob 实际行尾（本批的核心那一条腿）。"""
+    doc = ROOT / REGISTRY_DOC
+    try:
+        doc_text = doc.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"读不出登记册 {REGISTRY_DOC}：{exc!r}") from exc
+    rows = read_registry(doc_text)
+    violations = check_registry(ROOT, rows, lambda rel: _git_head_blob(ROOT, rel))
+    assert not violations, "；".join(violations) + "——在册行尾表与 HEAD blob 账实不符"
+
+
 LEGS = [
     ("A 现状 LF 仍 LF", leg_a_lf_stays_lf),
     ("B 现状 CRLF 仍 CRLF", leg_b_crlf_stays_crlf),
     ("C 首次生成按 LF", leg_c_first_generation_lf),
     ("D 锚点位移只动一行（LF+CRLF）", leg_d_anchor_shift_touches_one_line),
     ("E 混合行尾拒写（fail-closed）", leg_e_mixed_rejected),
+    ("F 注册面检出（在册行尾 ⇔ HEAD blob）", leg_f_registry_matches_head),
 ]
 
 
@@ -185,7 +264,7 @@ def main(argv: list[str]) -> int:
               "⛔ 不许在门禁夹具上放水。")
         return 1
     print(f"[ledger-eol] 结论：干净（{len(LEGS)} 条腿全绿：LF 仍 LF／CRLF 仍 CRLF／"
-          "首次生成 LF／锚点位移只动一行／混合行尾拒写）。")
+          "首次生成 LF／锚点位移只动一行／混合行尾拒写／在册行尾表 ⇔ HEAD blob）。")
     return 0
 
 

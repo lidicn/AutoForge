@@ -1264,11 +1264,22 @@ def metrics_push(
     events: Path = typer.Option(None, "--events", help="事件回放 JSON"),
     seed: Path = typer.Option(None, "--seed", help="初始实体状态 JSON"),
     ma_url: str = typer.Option("", "--ma-url", help="MA 接收端点基址（如 http://192.168.2.200:8086），默认读 MA_METRICS_URL"),
-    token: str = typer.Option("", "--token", help="butler 令牌，默认读 BUTLER_TOKEN"),
+    token: str = typer.Option(
+        "", "--token",
+        help="butler 令牌（⚠️ 废弃：会进 argv/ps；改用环境变量 BUTLER_TOKEN）",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="只聚合不推送（验证用）"),
     buffer_dir: Path = typer.Option(DEFAULT_BUFFER_DIR, "--buffer-dir", help="离线缓冲目录"),
 ):
     """聚合运行指标并回灌 memory-agent（幂等 + 退避 + 离线缓冲）。"""
+    # AF-749：令牌**只走环境变量**。`--token` 仍接受（兼容老脚本），但显式使用时会
+    # 出现在 `ps` 的 argv 里——告警一次并建议改 env；⛔ 不打印任何令牌片段。
+    if token:
+        typer.echo(
+            "[警告] --token 会出现在进程 argv（ps 可见，AF-749）：请改用环境变量 "
+            "BUTLER_TOKEN（容器内经 docker exec --env-file 注入）",
+            err=True,
+        )
     snapshot = _metrics_snapshot(ir, events, seed)
     url = ma_url or os.getenv("MA_METRICS_URL", "")
     tok = token or os.getenv("BUTLER_TOKEN", "")
