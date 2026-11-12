@@ -23,6 +23,7 @@ import math
 from datetime import datetime
 
 from ..af_state import UnknownEntity
+from ..af_time import load_tz
 from typing import Any, Callable, Mapping
 
 __all__ = [
@@ -198,11 +199,18 @@ def _fn_time_between(args: list[Any]) -> bool:
 
     P2-2 修复：HA 推送的 ISO 多为 UTC（带 Z / +00:00），而用户写的 hh:mm 是本地语义。
     原先直接取 `moment.hour`（UTC 小时）→ 固定 +8h 偏差。这里把带时区的时间戳归一到
-    系统本地时区再比较（与 TimeSource.local_now() 一致）；naive 时间戳按原样处理。
+    **家庭时区**再比较；naive 时间戳按原样处理。
+
+    AF-757（2026-11-12）：归一目标从「无参 `astimezone()`＝系统时区」改成
+    `load_tz()`（`af_time` 的权威家庭墙钟，读 `HOMESDK_TZ`／`TZ`／`AF_TZ`／
+    `TZ_OFFSET_HOURS`，fallback `Asia/Shanghai`）。容器里 `TZ` 为空 ⇒ 系统时区是
+    `Etc/UTC`，规格写的 21:00–23:45 曾实际生效在本地 05:00–07:45（错位 16 小时）：
+    同一份部署里有两个家庭墙钟正是 `af_time` 注释警告过的分裂。⛔ 不许改回无参
+    `astimezone()`（换机器／换镜像就再漂 8 小时，部署面 `TZ=` 只算卫生不算修复）。
     """
     moment = _as_iso(args[0], "time_between")
     if moment.tzinfo is not None:
-        moment = moment.astimezone()  # 无参 astimezone：归一到系统本地时区
+        moment = moment.astimezone(load_tz())  # AF-757：家庭墙钟，不认容器 TZ
     start = _parse_hhmm(args[1], "time_between")
     end = _parse_hhmm(args[2], "time_between")
     minutes = moment.hour * 60 + moment.minute

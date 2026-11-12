@@ -112,7 +112,8 @@ def test_time_functions_explicit_timestamps():
 def test_time_between_normal_and_cross_midnight_windows():
     r = _resolve_factory({})
     # 使用 naive ISO（无时区后缀）表示"本地墙钟时间"，避免 astimezone() 转换受运行机时区影响。
-    # P2-2 修复后，带时区的 ISO 会先归一到本地再比较——那时区行为由生产场景覆盖。
+    # 带时区这条腿由 `test_time_between_aware_*` 覆盖（AF-757：此前只靠生产场景覆盖 ⇒
+    # 容器 UTC 下错了 16 小时仍 CI 全绿）。
     def at(hhmm: str) -> dict:
         return {"const": f"2026-09-15T{hhmm}:00"}
 
@@ -123,6 +124,105 @@ def test_time_between_normal_and_cross_midnight_windows():
     assert evaluate({"op": "truthy", "value": _call("time_between", at("23:30"), {"const": "22:00"}, {"const": "07:00"})}, r)
     assert evaluate({"op": "truthy", "value": _call("time_between", at("06:00"), {"const": "22:00"}, {"const": "07:00"})}, r)
     assert not evaluate({"op": "truthy", "value": _call("time_between", at("12:00"), {"const": "22:00"}, {"const": "07:00"})}, r)
+
+
+#: 家庭时区的全部环境键（读取顺序见 `af_time.TZ_ENV_KEYS`：`HOMESDK_` 前缀优先）。
+#: 逐枚清空再写 `AF_TZ`，否则跑测试的机器上只要有一个 `TZ` 就把断言判成另一个墙钟。
+_TZ_ENV_KEYS = (
+    "HOMESDK_TZ", "TZ", "HOMESDK_AF_TZ", "AF_TZ",
+    "HOMESDK_TZ_OFFSET_HOURS", "TZ_OFFSET_HOURS",
+)
+
+
+def _house_tz(monkeypatch, name: str) -> None:
+    for key in _TZ_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("AF_TZ", name)
+
+
+def _between(iso: str, start: str, end: str) -> bool:
+    r = _resolve_factory({})
+    return bool(evaluate(
+        {"op": "truthy", "value": _call(
+            "time_between", {"const": iso}, {"const": start}, {"const": end})}, r))
+
+
+def test_time_between_aware_iso_uses_house_tz(monkeypatch):
+    """T1／T2：带时区的 ISO 按**家庭时区**归一，不认容器时区（AF-757）。
+
+    缺陷现场（2026-11-12 主卧）：容器 `TZ` 为空 ⇒ 系统时区 `Etc/UTC`，无参
+    `astimezone()` 把规格 21:00–23:45 挪到本地 05:00–07:45（错位 16 小时）——
+    晚上怎么走动都不问、凌晨 5 点才问。
+    """
+    _house_tz(monkeypatch, "Asia/Shanghai")
+
+    # T1：本地 21:25 在窗口内；本地 05:30 不在（左闭右开，边界逐枚核）
+    assert _between("2026-11-12T21:25:00+08:00", "21:00", "23:45") is True
+    assert _between("2026-11-12T05:30:00+08:00", "21:00", "23:45") is False
+    assert _between("2026-11-12T21:00:00+08:00", "21:00", "23:45") is True
+    assert _between("2026-11-12T23:45:00+08:00", "21:00", "23:45") is False
+
+    # T2：同一瞬间的不同写法必须同结果（`Z` / `+00:00` / `+08:00`）
+    assert _between("2026-11-12T13:25:00+00:00", "21:00", "23:45") is True
+    assert _between("2026-11-12T13:25:00Z", "21:00", "23:45") is True
+    assert _between("2026-11-11T21:30:00+00:00", "21:00", "23:45") is False  # ＝本地次日 05:30
+
+
+def test_time_between_aware_cross_midnight(monkeypatch):
+    """T4：跨午夜窗口 `[22:00, 07:00)` 在带时区形态下不回归。"""
+    _house_tz(monkeypatch, "Asia/Shanghai")
+
+    assert _between("2026-11-12T23:30:00+08:00", "22:00", "07:00") is True
+    assert _between("2026-11-12T06:00:00+08:00", "22:00", "07:00") is True
+    assert _between("2026-11-12T22:00:00+08:00", "22:00", "07:00") is True
+    assert _between("2026-11-12T07:00:00+08:00", "22:00", "07:00") is False  # 右开
+    assert _between("2026-11-12T12:00:00+08:00", "22:00", "07:00") is False
+
+
+def test_time_between_ignores_container_tz(monkeypatch):
+    """T3 负控：容器 `TZ=`（**空串**，缺陷现场形态）下仍按家庭墙钟 `Asia/Shanghai` 判。
+
+    `TZ=` 空串＝「没配」而不是「配了个 UTC 时区」：`af_time._first_tz_value()` 跳过后
+    落到 `Asia/Shanghai` fallback。旧代码走无参 `astimezone()`＝**系统时区**（容器里
+    就是 `Etc/UTC`），与这里读到的家庭墙钟是两套，故整条链错 16 小时。
+    """
+    for key in _TZ_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("TZ", "")  # 容器现读形态：`TZ=` 空串
+
+    assert _between("2026-11-12T21:25:00+08:00", "21:00", "23:45") is True
+    assert _between("2026-11-12T05:30:00+08:00", "21:00", "23:45") is False
+
+
+def test_time_between_calls_load_tz_not_system_tz(monkeypatch):
+    """T3 结构腿：归一目的一律取 `load_tz()`，⛔ 不许退回无参 `astimezone()`。
+
+    把 `load_tz` 换成一个**本机系统时区不可能等于**的哨兵时区（`UTC-05:00`）：
+    只要实现里还留着无参 `astimezone()`，这条断言就必然红——它不是数据腿的重复。
+    """
+    from datetime import timedelta, timezone as _timezone
+
+    from autoforge.af_ir import expr as expr_mod
+
+    monkeypatch.setattr(expr_mod, "load_tz", lambda: _timezone(timedelta(hours=-5)))
+
+    # 2026-11-12T21:25+08:00 ＝ UTC 13:25 ＝ 哨兵时区 08:25 ⇒ 不在 [21:00, 23:45)
+    assert _between("2026-11-12T21:25:00+08:00", "21:00", "23:45") is False
+    # 同一瞬间的 UTC 写法结果一致（时刻等价腿在哨兵时区下同样成立）
+    assert _between("2026-11-12T13:25:00+00:00", "21:00", "23:45") is False
+    # 哨兵时区 08:25+5h... 换一个真落在窗口内的瞬间：UTC-05:00 的 21:30
+    assert _between("2026-11-13T02:30:00+00:00", "21:00", "23:45") is True
+
+
+def test_time_between_follows_af_tz(monkeypatch):
+    """T3 配置腿：`AF_TZ=UTC` 时窗口按 UTC 判（⛔ 别写死 +8）。"""
+    _house_tz(monkeypatch, "UTC")
+
+    # 本地 21:25 ＝ UTC 13:25 ⇒ 落在 [21:00, 23:45) 之外
+    assert _between("2026-11-12T21:25:00+08:00", "21:00", "23:45") is False
+    assert _between("2026-11-12T13:25:00+00:00", "21:00", "23:45") is False
+    # UTC 21:25 才是窗口内
+    assert _between("2026-11-12T21:25:00+00:00", "21:00", "23:45") is True
 
 
 # ── 白名单与参数校验 ─────────────────────────────────────────────────
