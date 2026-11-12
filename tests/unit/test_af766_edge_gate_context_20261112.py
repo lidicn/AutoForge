@@ -194,3 +194,54 @@ def test_x7_source_pin_context_not_empty():
         "_auto_currently_met 必须给 context 传 trigger_time（AF-766 根因：空字典恒不派发）"
     assert "make_resolver(snap, {}, {})" not in src, \
         "⛔ 不许再传空 context（KeyError 被 fail-closed 吞成恒 False）"
+    # 收口钉（AF-Core 复核 B2）：⛔ 不许再手写 `context` 字典——只补一枚键的写法
+    # 会让 `context.trigger_entity_id` 等四枚依旧缺键，同一个坑原地复现。
+    assert "make_eval_context(" in src, \
+        "⛔ 边沿闸必须走 make_eval_context 唯一入口（手写字典 ⇒ 六枚键必然漂移）"
+
+
+# ── X8/X9 契约缺口（AF-Core 复核 B2，2026-11-12 收口）──────────────
+# AF-766 第一版只补了 `trigger_time` 一枚键，与 `af_instance.spawn` 的六键不同形。
+# `context.trigger_entity_id` / `trigger_kind` / `trigger_subject` / `instance_id`
+# 是设备健康与在场自动化的**标准写法**，缺键 ⇒ `make_resolver` 抛「未知系统变量」
+# ⇒ 被边沿闸的 `except Exception` 吞成 False ⇒ 与 AF-766 根因**同一个坑**。
+# 这两枚钉住「一份固定词汇表只有一个构造入口」，防下一次只补一枚又漂移。
+
+def test_x8_eval_context_has_all_six_keys():
+    """边沿闸构造的 context 必须与实例侧**同形**（六枚键一枚不缺）。"""
+    from autoforge.af_instance import make_eval_context
+
+    ctx = make_eval_context("2026-11-12T22:00:00+08:00")
+    assert set(ctx) == {
+        "instance_id", "trigger_time", "trigger",
+        "trigger_entity_id", "trigger_subject", "trigger_kind",
+    }, f"context 键集合与实例侧不同形：{sorted(ctx)}"
+    # 缺省值必须与实例侧「无事件」时逐字同形，⛔ 不是另造一套空值
+    assert ctx["trigger_entity_id"] == ""
+    assert ctx["trigger_subject"] == ""
+    assert ctx["trigger_kind"] == ""
+    assert ctx["instance_id"] == ""
+    assert ctx["trigger"] is None
+
+
+def test_x9_edge_gate_context_reference_does_not_raise():
+    """`context.trigger_*` 三类引用在边沿闸 context 上必须**求得出值**，⛔ 不许抛 KeyError。
+
+    牙（群规⑧）：正例（等值成立 ⇒ True）与反例（不等 ⇒ False）**同时**成立，
+    才排除「恒真/恒假」；只断言 `不抛异常` 抓不到 `evaluate` 悄悄返回 False 的退化。
+    """
+    from autoforge.af_instance import make_eval_context
+    from autoforge.af_ir import evaluate
+    from autoforge.af_state import make_resolver
+
+    ctx = make_eval_context("2026-11-12T22:00:00+08:00")
+    for var, empty in (
+        ("context.trigger_entity_id", ""),
+        ("context.trigger_kind", ""),
+        ("context.trigger_subject", ""),
+        ("context.instance_id", ""),
+    ):
+        eq_empty = {"op": "eq", "left": {"var": var}, "right": {"const": empty}}
+        ne_other = {"op": "eq", "left": {"var": var}, "right": {"const": "binary_sensor.x"}}
+        assert evaluate(eq_empty, make_resolver({}, {}, ctx)) is True, f"{var} 求值应成立（缺键）"
+        assert evaluate(ne_other, make_resolver({}, {}, ctx)) is False, f"{var} 求值应为假（假绿）"

@@ -37,6 +37,7 @@ __all__ = [
     "InstanceManager",
     "DEFAULT_TTL_SECONDS",
     "TRIGGER_FLAT_KEYS",
+    "make_eval_context",
 ]
 
 CREATED = "created"
@@ -275,16 +276,7 @@ class InstanceManager:
         )
         instance = Instance(ctx=ctx, automation=automation, created_monotonic=self.clock.monotonic())
         ctx.state = CREATED
-        ctx.context = {
-            "instance_id": instance_id,
-            # v1.7.1：`context.trigger_time` 取**时间源**而非墙钟。
-            # 表达式里 `time_hour(context.trigger_time)` 这类时间窗判断依赖它：
-            # 用墙钟会让「晚上 20:00-22:00」在仿真/回放里不可复现（同一 IR 换个时刻跑结论就变），
-            # 与项目红线「表达式不读墙钟、时间必须可测」相悖。虚拟时间源下现在完全确定。
-            "trigger_time": self.clock.now().isoformat(),
-            "trigger": _trigger_repr(trigger_event),
-            **_trigger_flat_keys(trigger_event),
-        }
+        ctx.context = make_eval_context(self.clock.now().isoformat(), trigger_event, instance_id)
         # 初始化声明过的实例变量
         for name, decl in automation.vars.items():
             ctx.vars[name] = _initial_value(decl)
@@ -571,6 +563,38 @@ def _trigger_flat_keys(event: Any) -> dict[str, str]:
         "trigger_entity_id": entity_id,
         "trigger_subject": entity_id or str(payload.get("subject") or ""),
         "trigger_kind": str(payload.get("kind") or ""),
+    }
+
+
+def make_eval_context(
+    now_iso: str, event: Any = None, instance_id: str = ""
+) -> dict[str, Any]:
+    """构造表达式求值用的 `context`（AF-766 收口）。
+
+    表达式里的 `context.*` 是**一份固定词汇表**，`make_resolver` 对缺失键抛
+    「未知系统变量」——所以任何一处手工拼 `context` 字典，只要漏一枚键，写那枚键的
+    自动化就会在求值期抛错；而调度器边沿闸的 `except Exception: return False`
+    （fail-closed，本身正确）会把它吞成「条件恒不成立」⇒ **恒定不派发**。
+
+    AF-766 第一版只补了 `trigger_time` 一枚，其余五枚照旧缺席——`context.trigger_entity_id`
+    这类（设备健康自动化的标准写法）仍会走到同一个坑里。故把构造收成**唯一入口**：
+    实例出生（`spawn`）与调度器边沿闸（`Scheduler._auto_currently_met`）都调它，
+    两处**不可能再漂移**。
+
+    v1.7.1：`context.trigger_time` 取**时间源**而非墙钟。表达式里
+    `time_hour(context.trigger_time)` 这类时间窗判断依赖它：用墙钟会让「晚上 20:00-22:00」
+    在仿真/回放里不可复现（同一 IR 换个时刻跑结论就变），与项目红线
+    「表达式不读墙钟、时间必须可测」相悖。虚拟时间源下现在完全确定。
+
+    边沿闸语义是「**当前**全条件是否成立」，那里没有触发事件也没有实例，
+    故 `event=None`、`instance_id=""`——三枚平键落空串、`trigger` 落 `None`，
+    与实例侧缺省时**逐字同形**（⛔ 不是另造一套空值）。
+    """
+    return {
+        "instance_id": instance_id,
+        "trigger_time": now_iso,
+        "trigger": _trigger_repr(event),
+        **_trigger_flat_keys(event),
     }
 
 
