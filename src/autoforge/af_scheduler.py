@@ -95,6 +95,11 @@ class Scheduler:
     #: `record_met(auto_id, met: bool)`。由 `af_runtime` 注成 RuntimeFacts 的闭包（落盘持久化）；
     #: 未注入 ⇒ 调度器退回内存 `_last_met`（可单测、重启即空——持久化只在 serve 装配时给）。
     met_io: Any | None = None
+    #: AF-PM 裁定 2026-11-13「停用是安全阀，必须即时生效」：启停旁车读口
+    #: （`af_watch_toggle.EnabledOverrideGate`）。未注入 ⇒ 零副作用，退回旧行为
+    #: （只认内存里 `auto.enabled`）——那正是现场「停用后 19 分钟仍在触发」的形状，
+    #: 单测/一次性回放可留空，**serve/watch 装配必须给**（`af_runtime.build_runtime`）。
+    disable_gate: Any | None = None
 
     def __post_init__(self) -> None:
         self._pending: dict[tuple[str, str, str], _PendingFor] = {}
@@ -118,6 +123,12 @@ class Scheduler:
     def handle_event(self, event: BusEvent) -> list[Instance]:
         """分发一个状态变更事件，返回本次触发的实例。"""
         fired: list[Instance] = []
+        # 停用即时生效（AF-PM 裁定 2026-11-13）：**派发前**先把启停旁车热翻进内存图。
+        # 成本≈一次 stat（旁车没变时），换来「停用后的下一次事件就不再派发」——
+        # ⛔ 别挪去 tick：事件驱动的派发根本不经过 tick，挪过去就是「等下一次巡检」。
+        # 也⛔ 别改成「停用即重启 watch」：那会打断在跑实例、重装部署 IR。
+        if self.disable_gate is not None:
+            self.disable_gate.apply(self.graph)
         for auto in self.graph:
             if not auto.enabled:
                 continue  # v0.6.0 启停：禁用的自动化不注册触发、不派发实例

@@ -44,6 +44,7 @@ from .af_scheduler import Quota, Scheduler
 from .af_fire_recorder import FireRecorder, JsonFireStore
 from .af_state import InMemoryStateProvider, StateProvider
 from .af_time import SystemTimeSource, TimeSource, VirtualTimeSource
+from .af_watch_toggle import EnabledOverrideGate
 
 __all__ = ["Runtime", "build_runtime"]
 
@@ -92,6 +93,11 @@ class Runtime:
             clock=self.clock,
             audit=self.audit,
             quota=self.quota,
+            # AF-PM 裁定 2026-11-13「停用是安全阀，必须即时生效」：watch 进程在**派发前**
+            # 读一次启停旁车，把停用位热翻进内存图。未给 store_root ⇒ 不接线（旧行为）。
+            # ⛔ 这一格就是「store 说停用」到「watch 内存」的唯一通路，删了停用就退回
+            # 「等下一次重启」（现场 19 分钟仍在触发）。
+            disable_gate=(EnabledOverrideGate(self.store_root) if self.store_root else None),
         )
         # ── 运行期事实落盘（PM 卡 2026-11-04）：触发计数 ＋ canary 试演状态 ──
         # 只在给了 store_root 时接线；未给 = 零副作用（旧行为不变）。

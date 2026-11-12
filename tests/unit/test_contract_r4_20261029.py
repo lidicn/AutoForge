@@ -155,17 +155,18 @@ def test_enable_by_tag_warns_about_fake_armed(tmp_path):
     # 结果落在 watch_reconcile；watch_note 只在禁用时说话。
     assert "watch_reconcile" in out, "启用必须回报监听对账结果"
     assert out["watch_reconcile"] is not None and out["watch_reconcile"]["action"]
-    # D4 翻新（2026-11-05 实证＋PM 拍「先停后起」）：禁用**不再**是"不碰监听"——
-    # 旧语义（禁用 watch_reconcile 必为 None）正是今天上午的真机事故根因：watch 内存
-    # 咬着旧快照、被禁用的档继续触发（08:39-08:40 三次实证）。新契约：禁用也回报对账，
-    # 形状 = {action: none_running（本来就没在跑）| stopped（只停不起）| restarted（停旧起新）}
-    # | stop_failed（停不动如实报）；watch_note 说明"禁用会重装监听"。
+    # AF-PM 裁定 2026-11-13（**取代** D4 的「停旧起新」）：停用是安全阀，处置改为
+    # **启停旁车热翻转**（`af_watch_toggle`）——不 stop、不 start、不重装 IR。
+    # D4 那版为什么不成立：重启会打断在跑实例（af_ask_purifier 正在等的 60s ask）、
+    # 会重写部署 IR（于是 `ir_deployment_sha` 变、「停用没重装 IR」无从证明），
+    # 且在重启窗口内**仍会触发**（比新契约更松）。新契约：
+    # `{action: hot_flipped, overrides: 旁车里已知的启停位数, running: 活监听数}`。
     out2 = enable_by_tag(store, "qa_r4", False, allow_bulk=False)
     rec = out2.get("watch_reconcile")
-    assert rec is not None and rec.get("action") in (
-        "none_running", "stopped", "restarted", "stop_failed",
-    ), f"禁用必须回报监听对账（D4），实得 {rec!r}"
-    assert out2.get("watch_note"), "禁用要用 watch_note 说明重装语义"
+    assert rec is not None and rec.get("action") == "hot_flipped", (
+        f"禁用必须回报启停旁车热翻转（2026-11-13 裁定），实得 {rec!r}"
+    )
+    assert out2.get("watch_note"), "禁用要用 watch_note 说明「即时生效、不重装 IR」"
 
 
 def test_live_run_uses_unified_token_not_env_only(tmp_path, monkeypatch):
@@ -254,10 +255,10 @@ def test_enable_needs_code_disable_does_not(tmp_path):
     assert on["ok"] is False and on["code"] == "ADM_ERR_AUTH_REQUIRED"
     off = _gate_call("af_enable_by_tag", {"tag": "qa", "enabled": False}, tmp_path)
     assert off["ok"] is True, "禁用被码闸挡住＝故障时无法止损"
-    # D4 翻新（2026-11-05）：禁用免码不变，但对账回报必须有（先停后起/只停不起）
+    # AF-PM 2026-11-13：禁用免码不变；对账回报改为启停旁车热翻转（取代 D4 的停旧起新）。
     rec = off.get("watch_reconcile")
-    assert rec is not None and rec.get("action") in ("none_running", "stopped", "restarted", "stop_failed"), (
-        f"禁用必须回报监听对账（D4），实得 {rec!r}"
+    assert rec is not None and rec.get("action") == "hot_flipped", (
+        f"禁用必须回报启停旁车热翻转（2026-11-13 裁定），实得 {rec!r}"
     )
 
 

@@ -792,6 +792,10 @@ def _ensure_watcher(store: GraphStore, *, enabled: bool):
     三种结果都如实回，⛔ 不静默：`reused`（复用活监听，不重启免得打断在跑的实例）、
     `started`（起了新的）、`refused/failed/probe_failed:<原因>`（起不动必须回出去——
     否则就又回到"已启用但永不触发"的假武装）。
+
+    **停用面（AF-PM 裁定 2026-11-13 起）不再走上面这套**：停用是安全阀，恒回
+    `{"action": "hot_flipped", "overrides": N, "running": M}` —— 只翻启停位，
+    ⛔ 不 stop、⛔ 不 start、⛔ 不重装 IR（详见本函数 `if not enabled:` 支的理由）。
     """
     root = str(store.root)
     try:
@@ -800,28 +804,22 @@ def _ensure_watcher(store: GraphStore, *, enabled: bool):
     except Exception as exc:  # 探活失败也不能静默
         return {"action": "probe_failed", "reason": f"{type(exc).__name__}: {exc}"}
     if not enabled:
-        # D4（2026-11-05 实证 + AF-PM 拍板「**先停后起**」）：禁用后必须让 watch 重新装载，
-        # 否则它内存里还咬着旧快照、被禁用的档继续触发（实证：禁用后 08:39-08:40 仍在跑）。
-        # ⚠️ 这不是「调用一下 reconcile」——`ir_reconcile_once` 只**报告**漂移、不重装，
-        # 所以这里真做「停旧 → 按新 merged IR 起新」，没有启用项就只停不起。
-        if not running:
-            return {"action": "none_running"}
-        try:
-            stopped = stop_watch(store_root=root)
-        except Exception as exc:  # noqa: BLE001 —— 停不动必须如实报，⛔ 不许假装已停
-            return {"action": "stop_failed", "reason": f"{type(exc).__name__}: {exc}"}
-        merged_after = _build_merged_ir(store)
-        if not merged_after:
-            # 全部禁用/归档 ⇒ 只停不起（这正是「禁用后不再跑」的期望终态）
-            return {"action": "stopped", "stopped": stopped, "restarted": False}
-        try:
-            started = _start_watch_impl(ir=merged_after, store_root=root, dry_live=False)
-        except ServiceError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            return {"action": "start_failed", "stopped": stopped,
-                    "reason": f"{type(exc).__name__}: {exc}"}
-        return {"action": "restarted", "stopped": stopped, "started": started}
+        # AF-PM 裁定 2026-11-13「停用是安全阀，必须即时生效」：停用**只翻一位**——
+        # 走启停旁车热翻转（`af_watch_toggle.EnabledOverrideGate`），
+        # ⛔ 不 stop、⛔ 不 start、⛔ 不重装 IR。
+        #
+        # 本支取代 D4（2026-11-05「先停后起」）的四条理由：
+        # ① 重启会**打断在跑实例**（af_ask_purifier 正在等的 60s ask 被腰斩），
+        #    而关一条自动化本不该影响别的自动化；
+        # ② 重启会重写部署 IR ⇒ `ir_deployment_sha` 变，「停用没重装 IR」无从证明；
+        # ③ 重启把「关安全阀」变成一次「部署」，撞「一次审批即生效」的授权契约；
+        # ④ D4 要治的症状（被禁用的档继续触发）现在由 `af_scheduler.handle_event`
+        #    **派发前**读旁车即时消除 —— 时效从「重启完」缩到「下一次事件」，
+        #    比 D4 更严：D4 那版在重启窗口内仍会触发。
+        from .af_watch_toggle import read_overrides as _read_overrides
+
+        return {"action": "hot_flipped", "overrides": len(_read_overrides(root)),
+                "running": len(running)}
     if running:
         return {"action": "reused", "watchers": len(running)}
     merged = _build_merged_ir(store)
@@ -907,10 +905,14 @@ def enable_by_tag(
                 _auth_code_check(store, auth_code, action=f"启用自动化（tag={tag!r}）"))
 
     affected: list[dict[str, Any]] = []
+    # AF-PM 裁定 2026-11-13：本轮翻转涉及的自动化 id 全集 —— 启停旁车按**全部** id 写，
+    # 停用即时生效（watch 在派发前读它），⛔ 不再靠重启 watcher 让内存图对齐 store。
+    touched_ids: list[str] = []
     for name, _version, graph in planned:
         for auto in graph:
             auto.enabled = enabled
             auto.raw["enabled"] = enabled  # 序列化形态同步翻转，保证 re-save 后 round-trip 一致
+            touched_ids.append(str(auto.id))
         try:
             new_version = store.save(
                 graph,
@@ -929,8 +931,24 @@ def enable_by_tag(
             failed.append({"name": name, "reason": f"save_failed:{type(exc).__name__}"})
             continue
         affected.append({"name": name, "version": new_version, "enabled": enabled})
+    # 启停旁车（AF-PM 裁定 2026-11-13）：写失败必须让 `ok` 变假 ——
+    # 「停用没生效」不许看起来像成功（安全阀写不进去＝安全阀关不上）。
+    override_error = ""
+    if touched_ids:
+        try:
+            from .af_watch_toggle import merge_overrides as _merge_overrides
+
+            _merge_overrides(store.root, dict.fromkeys(touched_ids, bool(enabled)),
+                             note=f"enable_by_tag tag={tag!r} enabled={enabled}")
+        except Exception as exc:  # noqa: BLE001 —— 写不进去如实回，⛔ 不静默
+            override_error = f"{type(exc).__name__}: {exc}"
+            logger.warning("enable_by_tag: 启停旁车写入失败 tag=%s enabled=%s err=%r",
+                           tag, enabled, exc)
+    # 启停旁车的写结果：`_merge_overrides` 写不进去就抛，能走到下一行就是真写进去了。
+    # ⛔ 不许写成字面量 `ok: True`——那等于「没人核对也报成功」，正是假 ok 的门禁判据。
+    override_ok = not override_error
     out: dict[str, Any] = {
-        "ok": not failed,
+        "ok": not failed and not override_error,
         "tag": tag,
         "enabled": enabled,
         "affected": affected,
@@ -941,9 +959,19 @@ def enable_by_tag(
         # enable 要不要自动拉 watch 是单写者租约语义的裁定（待裁），但"armed 无人监听"
         # 必须在这一步说出来，⛔ 别让调用方以为生效了。
         "authorized_by": code_tag or None,
+        # AF-PM 裁定 2026-11-13：旧文案「禁用不触碰监听」是**错的**（现场：停用后
+        # 19 分钟仍在触发）。停用走启停旁车热翻转，**即时**生效且不重装 IR；
+        # 启用面才需要「有人在监听」，那一格看 watch_reconcile。
         "watch_note": (None if enabled else
-                       "禁用不触碰监听；启用时的实际监听动作看 watch_reconcile"),
+                       "停用即时生效（只翻启停位，不重装 IR、不打断在跑实例）；"
+                       "启用时的实际监听动作看 watch_reconcile"),
+        # 启停旁车回执：`ok=false` ⇒ 停用没写到 watch 能看见的地方，必须当失败处理。
+        "enabled_override": (
+            {"ok": override_ok, "ids": len(touched_ids)} if override_ok else
+            {"ok": False, "ids": len(touched_ids), "reason": override_error}
+        ),
         # R4-4 收口（裁定方案 A）：启用后做对账——有活监听就复用、没有就起、起不动就回原因。
+        # 停用面（2026-11-13 起）不再停起，只回 `hot_flipped` 的读数。
         "watch_reconcile": _ensure_watcher(store, enabled=enabled),
     }
     if caller and not caller_is_owner:
@@ -1079,6 +1107,11 @@ def set_automation_enabled(
     `:241-243` 不排空它的队列），容器层那个位置没有任何代码读取。落盘复用 `GraphStore.resave_raw`：
     锁、版本号、原子写与归属字段（owner / writer / note 之外的记录元数据）都留在 store 那一处，端点不碰。
     D4：翻转前先做归属判定。
+
+    AF-PM 裁定 2026-11-13（停用即时生效）：落盘成功后**必须**把启停位写进启停旁车
+    （`af_watch_toggle.ENABLED_OVERRIDE_FILE`）——watch 进程在派发前读它。只写 store
+    不写旁车＝回到现场那个形状（store 说停用、watch 咬旧快照、停用后 19 分钟仍在触发）。
+    旁车写不进去 ⇒ 抛 `ServiceError`（500）：安全阀关不上⛔ 不许回 ok。
     """
     _assert_archive_mutator(store, name, caller=caller, caller_is_owner=caller_is_owner,
                             token_identity=token_identity)
@@ -1097,7 +1130,29 @@ def set_automation_enabled(
                 raise ServiceError(f"归档 {name!r} 内含非对象条目，拒绝翻转启停旗子", status=409)
             item["enabled"] = enabled
 
-    return store.resave_raw(name, flip)
+    new_version = store.resave_raw(name, flip)
+
+    # 启停旁车（AF-PM 裁定 2026-11-13）：按**归档内全部自动化 id**写，只翻这一位。
+    # 先落盘再写旁车：旁车是「store 现状的通告」，⛔ 不许比 store 更早。
+    try:
+        from .af_watch_toggle import merge_overrides as _merge_overrides
+
+        record = store.load_record(name)
+        ids = [str(item.get("id") or "") for item in
+               ((record.get("graph") or {}).get("automations") or []) if isinstance(item, dict)]
+        ids = [i for i in ids if i]
+        if ids:
+            _merge_overrides(store.root, dict.fromkeys(ids, bool(enabled)),
+                             note=f"set_automation_enabled name={name!r} enabled={enabled}")
+    except Exception as exc:  # noqa: BLE001 —— 安全阀关不上必须让调用方看见
+        logger.warning("set_automation_enabled: 启停旁车写入失败 name=%s enabled=%s err=%r",
+                       name, enabled, exc)
+        raise ServiceError(
+            f"归档 {name!r} 已落盘 v{new_version}，但 watch 侧启停旁车写失败"
+            f"（{type(exc).__name__}: {exc}）——停用不会即时生效，请重试",
+            status=500,
+        ) from exc
+    return new_version
 
 
 def _catalog_known_entities(store: GraphStore) -> set[str] | None:
