@@ -23,6 +23,7 @@ IR 与判定器⛔ 双真源；配置期只做「能不能入清单」的准入�
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -48,6 +49,28 @@ SKIP_AFTER_HARD_DENY = "cancelled_after_hard_deny"
 SKIP_CONFIRM_DENIED = "confirm_denied"
 #: 执行器报错且 `on_error=abort` 时，后续未执行步的标记。
 SKIP_AFTER_ERROR = "aborted_after_error"
+
+# ── AF-756（2026-11-12）：回执必须带失败原因（`error` 字段）─────────────────
+#: 回执 `error` 的截断长度（与 `af_adapters/ha.py` 的错误正文同长 200）。
+ERROR_TEXT_MAX = 200
+#: 脱敏占位文案（⛔ 不带原值、也不带长度/前缀等可反推信息）。
+REDACTED_TOKEN = "<令牌已隐去>"
+REDACTED_PATH = "<路径已隐去>"
+#: 令牌形状（与 `scripts/check_secrets.py` 的两族同口径）：`af_`＋40 位 hex、`Bearer`＋高熵串。
+#: 回执会进 MCP 会话与知识库历史，令牌进了历史聚合就被反复回显、事后洗不掉。
+_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"af_[0-9a-f]{40}"),
+    re.compile(r"Bearer[ \t]+\S+"),
+)
+#: 凭据键值对（`token=…`／`password: …` 等）：值整段隐去，键名保留（仍能看出泄漏面）。
+_CREDENTIAL_RE = re.compile(
+    r"(?i)\b(token|password|passwd|secret|api[_-]?key|authorization)\b(\s*[=:]\s*)\S+"
+)
+#: 绝对路径（与 `af_mcp._PATH_RE` 同形；⛔ 不反向 import——`af_mcp` 是 L2，本模块是 L1）。
+_PATH_RE = re.compile(
+    r"[A-Za-z]:[\\/]{1,2}(?:[\w.\-@+ ]+[\\/]){1,}[\w.\-@+ ]*"
+    r"|(?<![\w.\-])(?:[\\/][\w.\-@+ ]{1,}){2,}"
+)
 
 #: 场景定义**只认**这些键（未声明即拒，与 `af_grant._normalize_scope` 同纪律）。
 _DEF_KEYS = frozenset(
@@ -442,7 +465,11 @@ class SceneRunner:
         agent: str,
         precondition: Callable[[Mapping[str, Any]], bool] | None = None,
     ) -> dict[str, Any]:
-        """执行一次场景，返回回执（逐步条目复用 `GrantCheck` 的单码视图）。"""
+        """执行一次场景，返回回执（逐步条目复用 `GrantCheck` 的单码视图）。
+
+        每步条目带 `error`：成功恒 `None`；失败是**脱敏＋截断**后的原因文本
+        （AF-756：回执说"失败了"却不说"为什么"＝不可诊断）。`code` 仍只表达授权放行。
+        """
         if scene.condition is not None:
             if precondition is None:
                 # fail-closed：带条件却没有求值器 ⇒ 不许"当它没有条件"就执行。
@@ -474,6 +501,7 @@ class SceneRunner:
                 "grant_id": check.grant_id,
                 "code": check.code,
                 "done": False,
+                "error": None,
             }
             if check.hard_denied:
                 # 完成当前步（不下发）、取消未执行步、⛔ 不回滚已成步（D3）。
@@ -500,10 +528,12 @@ class SceneRunner:
             # 过检（或验票放行）⇒ 下发
             dispatched_any = True
             try:
-                ok = bool(self.executor(step))
-            except Exception:  # noqa: BLE001 —— 执行器是注入的，任何异常都按"这一步失败"记
-                ok = False
+                ok, error = _executor_outcome(self.executor(step))
+            except Exception as exc:  # noqa: BLE001 —— 执行器是注入的，任何异常都按"这一步失败"记
+                # AF-756：异常也要留下**类型名＋原文**——只说"失败了"等于没留痕。
+                ok, error = False, _redact_error_text(f"{type(exc).__name__}: {exc}")
             entry["done"] = ok
+            entry["error"] = error
             if not ok:
                 entry["skipped_reason"] = SKIP_AFTER_ERROR
                 if step.on_error == "abort":
@@ -538,8 +568,40 @@ class SceneRunner:
             "grant_id": "",
             "code": code,
             "done": False,
+            "error": None,
             "skipped_reason": reason,
         }
+
+
+def _executor_outcome(value: Any) -> tuple[bool, str | None]:
+    """把执行器回值归一成 `(ok, error)`（AF-756）。
+
+    三种形状都认：`CallResult`（真机执行器，`af_adapters.base`）、`(ok, error)` 元组、
+    `bool`（旧注入面／测试桩）。⛔ 成功步恒回 `(True, None)`——失败文本只有失败时才有，
+    不把"重试过但最后成了"写成错误。脱敏与截断统一在 `_redact_error_text` 做。
+    """
+    if isinstance(value, tuple) and len(value) == 2:
+        ok, error = value
+        return bool(ok), (None if ok else _redact_error_text(error))
+    success = getattr(value, "success", None)
+    if isinstance(success, bool):
+        return success, (None if success else _redact_error_text(getattr(value, "error", None)))
+    return bool(value), None
+
+
+def _redact_error_text(text: Any) -> str | None:
+    """回执 `error` 脱敏＋截断：⛔ 令牌/绝对路径不外发，长文切到 `ERROR_TEXT_MAX`。
+
+    先脱敏再截断：反过来会切出**半截令牌**（前缀仍可反推），也会切坏脱敏占位文案。
+    """
+    raw = str(text if text is not None else "").strip()
+    if not raw:
+        return None
+    for pattern in _TOKEN_PATTERNS:
+        raw = pattern.sub(REDACTED_TOKEN, raw)
+    raw = _CREDENTIAL_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED_TOKEN}", raw)
+    raw = _PATH_RE.sub(REDACTED_PATH, raw)
+    return raw[:ERROR_TEXT_MAX]
 
 
 def _overall_code(entries: Iterable[Mapping[str, Any]]) -> str:
@@ -562,6 +624,7 @@ __all__ = [
     "ASK_MAX_ALIASES",
     "ASK_MAX_STEPS",
     "CREATED_VIA_CHOICES",
+    "ERROR_TEXT_MAX",
     "ON_ERROR_CHOICES",
     "SCENE_DEF_KIND",
     "SCENE_MAX_DEFS",

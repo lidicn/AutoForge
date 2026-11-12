@@ -48,8 +48,8 @@ Transport = Callable[[str, Mapping[str, Any]], CallResult]
 #: `RuntimeError: 执行错误, 未知错误, code=-706010002, …, target-temperature`。
 #: 这类拒绝是**瞬态**的：设备压根没接受写入（状态没变），退避后重发是等价重试，
 #: ⛔ 不改变 IR 语义、⛔ 不改边选择；稳态下同一 IR 会成功（当晚对照样本即如此）。
-#: ⛔ 只认下面这组瞬时标记：鉴权失败、参数非法、实体不存在等**一次都不重试**。
-TRANSIENT_DEVICE_ERROR_MARKERS: tuple[str, ...] = ("-706010002",)
+#: ⛔ 只认下面这组瞬时标记：鉴权失败、参数非法、实体不存在等**一次都不重试**（AF-756 追加「执行超时」——xiaomi_home 组件抛的设备侧超时／HA 500，与网络套接超时不是同一类；⛔ 本行保持单行，`docs/可观测性清单.md` 三枚锚点钉在下面各站行号上）。
+TRANSIENT_DEVICE_ERROR_MARKERS: tuple[str, ...] = ("-706010002", "执行超时")
 #: 最多重试次数（不含第一次调用）与退避基数（秒，指数退避：3s、6s）。
 TRANSIENT_RETRY_MAX = 2
 TRANSIENT_RETRY_BASE_DELAY_S = 3.0

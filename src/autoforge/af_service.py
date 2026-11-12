@@ -5853,11 +5853,12 @@ def scene_match(
     return None
 
 
-def _scene_live_executor(store: "GraphStore | None") -> Callable[[Any], bool]:
+def _scene_live_executor(store: "GraphStore | None") -> Callable[[Any], Any]:
     """默认执行器：真机下发一步（与 `live_run` 共用同一套 live 配置／令牌／传输层）。
 
     ⛔ 不静默"假装成功"：live 未启用就 403——场景执行每一步都是真设备动作，
     没有 dry 语义（dry 走 `executor=` 注入假实现）。
+    回传 `CallResult`（⛔ 不 `bool()` 截断：`error` 文本要进回执，AF-756）。
     """
     cfg = _live_config()
     if not cfg["enabled"]:
@@ -5872,11 +5873,12 @@ def _scene_live_executor(store: "GraphStore | None") -> Callable[[Any], bool]:
                  else HATransport(base_url=ha_url, token=token))
     adapter = HAAdapter(transport=transport, dry_run=False)
 
-    def _dispatch(step: Any) -> bool:
+    def _dispatch(step: Any) -> Any:
         params = dict(getattr(step, "params", {}) or {})
         params.setdefault("entity_id", str(getattr(step, "target", "")))
-        result = adapter.call(str(getattr(step, "action", "")), params)
-        return bool(getattr(result, "success", False))
+        # AF-756：这里曾 `bool(...)` 一刀，把 `CallResult.error`（设备拒收／超时原文）
+        # 截成 `False` ⇒ 回执只剩"失败了"、没有"为什么"。原样交回，由 runner 落 `error`。
+        return adapter.call(str(getattr(step, "action", "")), params)
 
     return _dispatch
 
