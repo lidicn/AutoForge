@@ -550,11 +550,21 @@ class Scheduler:
             for node in auto.entry_nodes()
         )
         if has_group_entry:
+            # AF-766（2026-11-12）：`context` 必须传**当前时间**，⛔ 不能是空字典。
+            # 现场：主卧两条主动询问（`af_ask_purifier`/`af_ask_humidifier`）的 `if` 首项是
+            # `time_between(context.trigger_time, "21:00", "23:45")`。`make_resolver` 查不到
+            # `context.trigger_time` 时抛 `KeyError`，被下面这行的 `except Exception` 吞成
+            # `False`（fail-closed）⇒ `_dispatch_allowed` 判 `edge_held` ⇒ **恒定不派发**
+            # （生产现场 `trigger_days` 33 次、`last_dispatched_at` 恒 None）。
+            # 口径与 `af_instance.py` 的 `ctx.context` 逐字一致：`self.clock.now().isoformat()`
+            # ——⛔ 不另造时间源（`time_between` 会把带时区的时间戳归一到家庭时区再取小时）。
+            # 语义是「**当前**全条件是否成立」，所以取 now 而非某个历史事件时刻。
+            context = {"trigger_time": self.clock.now().isoformat()}
             for node in auto.nodes.values():
                 if node.kind == "if" and node.expr:
                     try:
                         snap = self.states.snapshot(sorted(auto.reads()))
-                        return bool(evaluate(node.expr, make_resolver(snap, {}, {})))
+                        return bool(evaluate(node.expr, make_resolver(snap, {}, context)))
                     except Exception:  # noqa: BLE001 —— 求值失败保守判"不满足"（fail-closed）
                         return False
         return None if not has_group_and else True
