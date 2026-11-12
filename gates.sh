@@ -4,7 +4,7 @@
 # 适用：AutoForge、doubao-butler（没有 GitHub remote，CI 无从挂起）。
 # 有 remote 的两家请用 templates/ci/gates.yml。
 #
-# 退出码就是结论：0 过 / 1 有未获批违规 / 2 环境或配置不对。
+# 退出码就是结论：0 过 / 1 有未获批违规 / 2 环境或配置不对 / 3 同树已有门禁在跑（并发互斥）。
 # 验收单里贴这条命令的**完整输出**，不接受「跑过了」。
 
 # R-WO-GATE-002：本脚本用了 bashism（${PIPESTATUS[0]}、pipefail）。非 bash（dash/sh）
@@ -18,6 +18,79 @@ fi
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
+
+# ── 本树 src 前置拼进 PYTHONPATH（AF-768，2026-11-13）──────────────────────────
+# 缺陷现场（AF-Core 2026-11-12 复核 AF-766 时踩到）：只设 `GATES_PYTHON` 而不设
+# `PYTHONPATH` 时，本脚本里那些**子 pytest** 进程（有界缓存门等）按 site-packages
+# 解析 `autoforge` —— 而开发机上装的是**别处的主检出**或压根没装可编辑安装，
+# 于是子进程导入陈旧代码、塌成 `exit=2` 假红，与本树的真实读数无关。
+#
+# 纪律（两条都要）：
+#   ① 门禁**自带**解析口径，⛔ 不要求调用方记得先 `export PYTHONPATH`——
+#      "忘了就假红"不是门禁，是陷阱；
+#   ② **前置拼接**，⛔ 不覆盖调用方已有的值：`PYTHONPATH` 同时承载调用方自己挂的
+#      路径，整段覆盖会把它静默打断（本树优先，但别人的路径还在）。
+#      `${VAR:+:$VAR}` 保证 VAR 为空时不留下前导空段——POSIX 里空段等于
+#      "当前目录"，会把 CWD 下的同名模块拉进来（比覆盖更隐蔽）。
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+
+# ── 同树并发互斥（AF-768）────────────────────────────────────────────────────
+# 同一 worktree 上同时跑两个 `gates.sh` 会互相干扰：本脚本开头会 `find … -name
+# __pycache__ -exec rm -rf`，还会共享 `PYTHONPYCACHEPREFIX` 临时前缀——两个跑批
+# 交错清缓存/抢 .pyc 目标，读数**不可信**（AF-Core 2026-11-12 两次不一致读数即此）。
+#
+# 撞锁时的三不许：
+#   ⛔ 不许静默等待——一次门禁十几分钟，静默等待在调用方看来就是"卡住"；
+#   ⛔ 不许静默放过——那等于并发互斥根本没装；
+#   ⛔ 不许自动接管陈锁——`kill -0` 在 Git Bash/Windows 上对 Windows PID 不可靠，
+#      自动接管会在"其实还活着"时放进第二个跑批。陈锁（上次被 kill）由人删，
+#      提示里写清路径。
+# 退出码 3 = 并发互斥（0 过 / 1 设计红 / 2 环境或配置不对 / 3 已在跑）。
+_GATES_LOCK_KEY="$(printf '%s' "$REPO" | cksum | awk '{print $1}')"
+_GATES_LOCK="${TMPDIR:-/tmp}/af-gates-lock-${_GATES_LOCK_KEY}.d"
+if ! mkdir "$_GATES_LOCK" 2>/dev/null; then
+  # ── 撞锁：把「谁占的」原样打出来（AF-768 ④，2026-11-13）─────────────────
+  # 只记 `$$` 是不够的：`$$` 是**门禁自己的** pid，而调用方看到的进程是它的父
+  # shell 和更上面的会话——2026-11-13 那晚撞锁时打出 `pid=2105`，可 2105 早
+  # 就死了，真正在跑的是它的子进程 30928/20252。**认不出人的 pid 等于没报。**
+  # 所以 holder 记三行：**调用方 pid（$PPID）＋ 起跑时刻 ＋ 树路径**，撞锁时
+  # 逐行原样打出——「谁占的锁」一眼能看见。
+  echo "gates.sh: 另一个门禁正在本树跑（锁=$_GATES_LOCK）。" >&2
+  if [ -f "$_GATES_LOCK/holder" ]; then
+    echo "  持锁现场（started=起跑时刻 / tree=树路径 / winpid=Windows pid，用它查进程）：" >&2
+    sed 's/^/    /' "$_GATES_LOCK/holder" >&2
+    if grep -q '^ppid=1$' "$_GATES_LOCK/holder" 2>/dev/null; then
+      echo "    ⚠️ ppid=1 表示父进程不可映射（Git Bash 从 Windows 进程起跑时恒如此），" >&2
+      echo "       查人请用 winpid，别用 ppid。" >&2
+    fi
+  elif [ -f "$_GATES_LOCK/pid" ]; then
+    # 兼容旧形状：只写 `pid` 的锁（含 AF-768 之前留下的陈锁）
+    echo "  持锁现场（旧形状，只有门禁自身 pid）：" >&2
+    echo "    pid=$(cat "$_GATES_LOCK/pid" 2>/dev/null || echo 未知)" >&2
+  else
+    echo "  持锁现场：锁目录在但没有 holder/pid（多半上次被 kill 在写之前）" >&2
+  fi
+  echo "  同一 worktree 上并发跑两个 gates.sh 会互相清 __pycache__、抢 .pyc 临时前缀，" >&2
+  echo "  读数不可信 ⇒ 本脚本拒绝起跑（exit 3），不静默等待也不静默放过。" >&2
+  echo "  等它跑完再跑。若确认没有在跑（上次被 kill 留下的陈锁），先删掉：" >&2
+  echo "    rm -rf \"$_GATES_LOCK\"" >&2
+  exit 3
+fi
+{
+  # ① 调用方 pid。⚠️ Git for Windows 的 bash 从 **Windows 进程**起跑时，`$PPID`
+  #    是 MSYS 内部 pid，映射不到 Windows 侧 ⇒ 实测恒为 `1`。所以这一行**只能
+  #    当"有没有父进程"看，别指望拿它去查进程**（2026-11-13 实测：PPID=1）。
+  printf 'ppid=%s\n' "$PPID"
+  printf 'started=%s\n' "$(date '+%Y-%m-%d %H:%M:%S %z')"
+  printf 'tree=%s\n' "$REPO"
+  # ④ 真正能查人的一行：MSYS 的 `$$` 与 Windows pid 不是一回事（2026-11-13 撞锁
+  #    时打出 `pid=2105`，而在跑的是 30928/20252），`/proc/$$/winpid` 才给了
+  #    能用 `Get-CimInstance Win32_Process -Filter "ProcessId=…"` 查到命令行的那枚。
+  printf 'winpid=%s\n' "$(cat "/proc/$$/winpid" 2>/dev/null || echo 未知)"
+} > "$_GATES_LOCK/holder"
+# `pid` 同时保留：老版本 gates.sh / 外部脚本按 `pid` 文件读，别把兼容面掐断。
+printf '%s\n' "$$" > "$_GATES_LOCK/pid"
+trap 'rm -rf "$_GATES_LOCK" 2>/dev/null || true' EXIT
 
 # 陈 pyc 陷阱（2026-11-11 PM 卡，发版前实跑红）：`git checkout` 会保留源文件
 # mtime+size，而 CPython 判「.pyc 还有效」只看这两样 ⇒ 陈旧字节码被当有效，跑出来的
