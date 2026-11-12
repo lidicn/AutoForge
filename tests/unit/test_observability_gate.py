@@ -167,10 +167,16 @@ def test_real_repo_site_readings_are_pinned(real):
     # （EXCEPTION，F2 隔离失败留现场），全部具名码 ⇒ 无码存量不涨反降（§四 六行上限一字未动）。
     # 252 → 253（2026-11-12 v1.29.0 发版并集）：log_storm 的 F2 降噪腿（`INBOX_REJECT_STALE`
     # 拆出的重复拒绝静默腿）多一枚带码站点；⛔ 无码存量与 §四 上限不动。
-    assert len(real["sites"]) == 253
+    # 253 → 259（2026-11-13 v1.30.1 启停旁车批，+6）：`af_watch_toggle.py` 新文件 4 站
+    # （READ_FAILED stat／parse、APPLY_FAILED、APPLIED）＋ `af_service.enable_by_tag`／
+    # `set_automation_enabled` 两站启停旁车写失败。后两站原本**无码**（warning 无码 72→74，
+    # 把 §四 上限顶红），本批补具名码 `WATCH_ENABLED_OVERRIDE_WRITE_FAILED` 两站共用
+    # ⇒ 无码 warning 回到 72、具名码 135→136。⛔ 不是抬上限。
+    assert len(real["sites"]) == 259
     # v1.29.0 第一批：+`af_grant.py` 一个文件（5 个具名码站点）⇒ 文件 35→36。
     # v1.29.0 第二批：+`af_task_order.py` ⇒ 文件 36→37。
-    assert len({s["path"] for s in real["sites"]}) == 37
+    # v1.30.1（2026-11-13）：+`af_watch_toggle.py` ⇒ 文件 37→38。
+    assert len({s["path"] for s in real["sites"]}) == 38
     # v1.29.0 第一批 +6：warning 166→169（GRANT_STORE_VERSION_MISMATCH／
     # GRANT_CONFIRM_REJECTED／GRANT_AUDIT_RECORD_FAILED）、error 24→27
     # （GRANT_STORE_CORRUPT 三条腿）。
@@ -178,7 +184,10 @@ def test_real_repo_site_readings_are_pinned(real):
     # 第三批 +2：debug 25→27（CATALOG_TOKEN_SOURCE_FALLBACK／INBOX_REJECT_REPEAT）、
     # exception 11→12（INBOX_QUARANTINE_FAILED）。
     # 发版并集 +1：warning 173→174（log_storm F2 降噪腿并入的那枚带码站点）。
-    assert dict(lv) == {"debug": 27, "info": 10, "warning": 174, "error": 30, "exception": 12}
+    # v1.30.1 启停旁车批 +5 warning（af_watch_toggle 4 站 ＋ af_service 写失败补码后
+    # 仍记 warning，补码只改「有没有码」不改级别）、+1 info（WATCH_ENABLED_OVERRIDE_APPLIED）
+    # ⇒ warning 174→179、info 10→11，六档合计 259。
+    assert dict(lv) == {"debug": 27, "info": 11, "warning": 179, "error": 30, "exception": 12}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -246,12 +255,18 @@ def test_real_repo_named_code_readings_are_pinned(real):
     dup = {code for code, n in Counter(s["code"] for s in coded).items() if n > 1}
     # ④ `GRANT_STORE_CORRUPT` 出自「读不出／不是 JSON／形状不对」三条腿——同一句承诺
     #    （这份授权账本读不出来，本次授权面一律拒），v1.29.0 第一批。
+    # ⑤ `WATCH_ENABLED_OVERRIDE_READ_FAILED` 出自 `stat`／`parse` 两条腿——同一句承诺
+    #    （旁车读不出，本次沿用上一份已知 override，停用位可能不是最新值），v1.30.1。
+    # ⑥ `WATCH_ENABLED_OVERRIDE_WRITE_FAILED` 出自 `enable_by_tag`／`set_automation_enabled`
+    #    两条腿——同一句承诺（本层把启停旁车写进盘失败 ⇒ 安全阀关不上、停用不即时生效），v1.30.1。
     assert dup == {
         "DEPLOY_AUDIT_PERSIST_FAILED",
         "OWNER_ALERT_PUBLISH_FAILED",
         "WATCH_SCRATCH_DELETE_FAILED",
         "GRANT_STORE_CORRUPT",
         "TASK_ORDER_STORE_CORRUPT",
+        "WATCH_ENABLED_OVERRIDE_READ_FAILED",
+        "WATCH_ENABLED_OVERRIDE_WRITE_FAILED",
     }, f"重码名单漂了：{dup}"
     nc = Counter(s["level"] for s in real["sites"] if not s["code"])
     ac0 = _auto_counts()

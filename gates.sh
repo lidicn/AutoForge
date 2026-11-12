@@ -86,7 +86,12 @@ fi
   # ④ 真正能查人的一行：MSYS 的 `$$` 与 Windows pid 不是一回事（2026-11-13 撞锁
   #    时打出 `pid=2105`，而在跑的是 30928/20252），`/proc/$$/winpid` 才给了
   #    能用 `Get-CimInstance Win32_Process -Filter "ProcessId=…"` 查到命令行的那枚。
-  printf 'winpid=%s\n' "$(cat "/proc/$$/winpid" 2>/dev/null || echo 未知)"
+  #    ⚠️ `/proc/<pid>/winpid` **只存在于 MSYS（Git Bash on Windows）**：Linux 的
+  #    `/proc/<pid>/` 里没有这个文件（CI 是 `ubuntu-latest`），旧写法 `|| echo 未知`
+  #    在 CI 上恒 `winpid=未知` ⇒ 判据恒红。Linux 上「查人用的那个 pid」就是 `$$`
+  #    本身（`ps -o cmd= -p $$` 直接可用），所以回退成 `$$` 语义成立，且两平台都
+  #    给得出一个可查的 pid。
+  printf 'winpid=%s\n' "$(cat "/proc/$$/winpid" 2>/dev/null || echo "$$")"
 } > "$_GATES_LOCK/holder"
 # `pid` 同时保留：老版本 gates.sh / 外部脚本按 `pid` 文件读，别把兼容面掐断。
 printf '%s\n' "$$" > "$_GATES_LOCK/pid"

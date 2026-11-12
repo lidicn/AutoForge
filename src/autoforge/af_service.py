@@ -942,7 +942,11 @@ def enable_by_tag(
                              note=f"enable_by_tag tag={tag!r} enabled={enabled}")
         except Exception as exc:  # noqa: BLE001 —— 写不进去如实回，⛔ 不静默
             override_error = f"{type(exc).__name__}: {exc}"
-            logger.warning("enable_by_tag: 启停旁车写入失败 tag=%s enabled=%s err=%r",
+            # 具名码（AF-PM 2026-11-13 裁定）：与 `set_automation_enabled` 同一个**承诺**
+            # ——「本层把启停旁车写进盘失败 ⇒ 安全阀关不上、停用不即时生效」。两站共用
+            # 一枚码，与 `WATCH_ENABLED_OVERRIDE_READ_FAILED` 的 stat／parse 两站同构。
+            logger.warning("WATCH_ENABLED_OVERRIDE_WRITE_FAILED enable_by_tag: 启停旁车写入失败 "
+                           "tag=%s enabled=%s err=%r",
                            tag, enabled, exc)
     # 启停旁车的写结果：`_merge_overrides` 写不进去就抛，能走到下一行就是真写进去了。
     # ⛔ 不许写成字面量 `ok: True`——那等于「没人核对也报成功」，正是假 ok 的门禁判据。
@@ -1145,7 +1149,10 @@ def set_automation_enabled(
             _merge_overrides(store.root, dict.fromkeys(ids, bool(enabled)),
                              note=f"set_automation_enabled name={name!r} enabled={enabled}")
     except Exception as exc:  # noqa: BLE001 —— 安全阀关不上必须让调用方看见
-        logger.warning("set_automation_enabled: 启停旁车写入失败 name=%s enabled=%s err=%r",
+        # 具名码（AF-PM 2026-11-13 裁定）：与 `enable_by_tag` 同一句承诺，两站共用
+        # `WATCH_ENABLED_OVERRIDE_WRITE_FAILED`——同一件事两个入口，码不许各写一个。
+        logger.warning("WATCH_ENABLED_OVERRIDE_WRITE_FAILED set_automation_enabled: "
+                       "启停旁车写入失败 name=%s enabled=%s err=%r",
                        name, enabled, exc)
         raise ServiceError(
             f"归档 {name!r} 已落盘 v{new_version}，但 watch 侧启停旁车写失败"
