@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 from .af_audit import INSTANCE_DEBOUNCED, INSTANCE_EDGE_HELD, INSTANCE_COOLDOWNED, INSTANCE_REJECTED, QUOTA_EXCEEDED, AuditEvent, AuditLog
 from .af_bus import EVENT_ENTITY_PREFIX, BusEvent
 from .af_executor import EMIT_TIMER_KIND, NodeExecutor
-from .af_instance import Instance, InstanceManager
+from .af_instance import Instance, InstanceManager, make_eval_context
 from .af_ir import Automation, Graph, Node, Trigger, check_trigger_depth, evaluate
 from .af_state import StateProvider, make_resolver
 from .af_time import TimeSource, SystemTimeSource, parse_duration
@@ -559,7 +559,10 @@ class Scheduler:
             # 口径与 `af_instance.py` 的 `ctx.context` 逐字一致：`self.clock.now().isoformat()`
             # ——⛔ 不另造时间源（`time_between` 会把带时区的时间戳归一到家庭时区再取小时）。
             # 语义是「**当前**全条件是否成立」，所以取 now 而非某个历史事件时刻。
-            context = {"trigger_time": self.clock.now().isoformat()}
+            # 构造走 `make_eval_context` 唯一入口（AF-766 收口）：六枚键一枚不缺。
+            # ⛔ 不许再手写字典——只补 `trigger_time` 时 `context.trigger_entity_id`
+            # （设备健康自动化的标准写法）仍抛 `KeyError`，同一个坑原地复现。
+            context = make_eval_context(self.clock.now().isoformat())
             for node in auto.nodes.values():
                 if node.kind == "if" and node.expr:
                     try:
