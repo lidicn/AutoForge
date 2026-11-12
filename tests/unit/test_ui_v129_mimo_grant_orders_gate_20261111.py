@@ -25,9 +25,13 @@ def _read(rel: str) -> str:
 def test_routes_and_nav_entries_exist():
     router = _read("router.ts")
     assert "GrantsView.vue" in router and "OrdersView.vue" in router
+    # v1.29 第三批：场景页（SceneDef）——进不去的页面＝没做
+    assert "ScenesView.vue" in router, "场景页没挂路由"
     layout = _read("views/MainLayout.vue")
     assert "grants" in layout and "orders" in layout
-    assert "repeat(5, 1fr)" in layout, "5 个 tab 必须改成 5 列，否则挤压/溢出"
+    assert "'scenes'" in layout, "场景页没有 nav 入口"
+    # v1.29 第三批：5→6 个 tab。⛔ 少一列会挤压/溢出（手机 375px 六格必量）
+    assert "repeat(6, 1fr)" in layout, "6 个 tab 必须改成 6 列，否则挤压/溢出"
 
 
 def test_revoke_and_cancel_require_confirmation():
@@ -42,7 +46,8 @@ def test_revoke_and_cancel_require_confirmation():
 def test_read_failure_is_not_rendered_as_empty():
     grants = _read("views/GrantsView.vue")
     orders = _read("views/OrdersView.vue")
-    for src, name in ((grants, "GrantsView"), (orders, "OrdersView")):
+    scenes = _read("views/ScenesView.vue")      # v1.29 第三批：场景页同纪律
+    for src, name in ((grants, "GrantsView"), (orders, "OrdersView"), (scenes, "ScenesView")):
         assert "读取失败" in src, f"{name} 没有读失败文案"
         assert "保留上次成功读数" in src, f"{name} 读失败时没保留上次读数（会被读成空列表）"
         assert "这不等于「没有" in src or "这不等于「没有" in src, f"{name} 缺「读失败≠没有」边界句"
@@ -50,9 +55,20 @@ def test_read_failure_is_not_rendered_as_empty():
 
 def test_hidden_count_is_surfaced_on_both_pages():
     """群规⑩：非 owner 面必报 hidden_count；页面不给提示＝用户以为看全了。"""
-    for rel in ("views/GrantsView.vue", "views/OrdersView.vue"):
+    for rel in ("views/GrantsView.vue", "views/OrdersView.vue", "views/ScenesView.vue"):
         src = _read(rel)
         assert "hidden_count" in src and "条不在你名下" in src, rel
+
+
+def test_scene_api_layer_has_the_five_calls():
+    """v1.29 第三批：场景五枚调用点（列／存／取／删／跑）必须在 API 层，且写面 stringify。"""
+    http = _read("api/http.ts")
+    for call in ("listScenes", "saveScene", "getScene", "deleteScene", "runScene"):
+        assert call in http, f"http.ts 缺 {call}"
+    assert "'/api/scenes'" in http
+    assert "/api/scenes/${encodeURIComponent(sceneId)}/run" in http, "run 路径必须带编码后的 scene_id"
+    assert "JSON.stringify({ scene, replace })" in http, "存定义 body 必须 stringify"
+    assert "JSON.stringify({ phrase, agent, grant_id: grantId })" in http, "run body 必须 stringify 且键名 grant_id"
 
 
 def test_no_credential_input_or_echo():

@@ -480,8 +480,10 @@ def test_real_ui_and_src_are_clean_and_counted():
     assert mounted == 5                              # af_conflict_runtime._ROUTES
     # v1.29.0 第一批：+5 枚 grant 端点（装饰器 95→100）。
     # v1.29.0 第二批：+4 枚任务单端点（装饰器 100→104）。
-    assert len(routes) - mounted + len(excluded) == 104   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（现读 95；批 4 +POST /api/user/agent-token，批 5 +POST /api/user/pair-link +GET /pair ⇒ +3）
-    assert len(routes) == 107                         # v1.29.0 第二批 +4 任务单端点：102 条参与匹配的装饰器路由 + 5 挂载表
+    # v1.29.0 第三批：+5 枚场景端点（装饰器 104→109）：`/api/scenes` 列／存、
+    # `/api/scenes/{scene_id}` 取／删、`/api/scenes/{scene_id}/run` 执行。
+    assert len(routes) - mounted + len(excluded) == 109   # == grep -Ec "@app\.(get|post|put|patch|delete)" src/autoforge/af_api.py（现读 95；批 4 +POST /api/user/agent-token，批 5 +POST /api/user/pair-link +GET /pair ⇒ +3）
+    assert len(routes) == 112                         # v1.29.0 第三批 +5 场景端点：107 条参与匹配的装饰器路由 + 5 挂载表
     assert boundary == ["src/autoforge/af_runtime_plugins.py"]
     assert sum(1 for s in sites if s["exempt"]) == 0
 
@@ -667,7 +669,11 @@ def test_all_trees_of_this_repo_are_in_scope_and_green(capsys):
     # v1.28（R5 Phase 2）：client.ts liveReceipts 一枚 GET /live/run/receipts ⇒ ui 62 → 63。
     # v1.29（UI 批 GrantsView/OrdersView）：mimo 新增 6 枚调用点（grants 读／撤销／留痕，
     # orders 读／留痕／取消）⇒ mimo 23 → 29。
-    for name in ("ui 63", "ui-user 19", "ui-user-mimo 29"):
+    # v1.29（场景面第三批）：mimo 新增 5 枚调用点（`/api/scenes` 列／存、`/api/scenes/{id}`
+    # 取／删、`/api/scenes/{id}/run` 执行）⇒ mimo 29 → 34。⚠️ 这 5 枚是**服务端先缺、
+    # 本批补齐**：UI 先写了调用点，`af_api` 没有对应路由时本门第一段（路由存在性）直接红，
+    # 补上路由后才会落到这条计数 pin 上——两段是同一个覆盖洞的两半，改一侧必须同批改另一侧。
+    for name in ("ui 63", "ui-user 19", "ui-user-mimo 34"):
         assert name in out, out
     assert "传输层包装 4 处" in out, out
     assert "SSE 建流 2 处" in out, out

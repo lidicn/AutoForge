@@ -6,7 +6,7 @@
  * Token 由本层持有（localStorage），随请求带 Authorization；SSE 因 EventSource
  * 不能带自定义头，改用 ?token= 回退（后端已支持）。
  */
-import type { Agent, AuthCode, Automation, GrantListResponse, GrantReceiptsResponse, OrderListResponse, OrderReceiptsResponse, PairLink, PairRequest, PendingItem, PendingReceipt, User } from '../types/api.ts'
+import type { Agent, AuthCode, Automation, GrantListResponse, GrantReceiptsResponse, OrderListResponse, OrderReceiptsResponse, PairLink, PairRequest, PendingItem, PendingReceipt, SceneDef, SceneListResponse, SceneRunResult, User } from '../types/api.ts'
 import { RECEIPTS_PAGE_LIMIT } from '../logic/grants.ts'
 import { toPendingItem } from '../logic/pending.ts'
 import { apiError, type ApiClient, type ApiErrorCode } from './mock.ts'
@@ -347,6 +347,38 @@ export const httpApi: ApiClient = {
     await req(`/api/orders/${encodeURIComponent(orderId)}/cancel`, {
       method: 'POST',
       body: JSON.stringify({ reason: reason || '' }),
+    })
+  },
+
+  // ---------------- v1.29 场景对象（SceneDef）----------------
+  // 契约形状照后端 `af_service.scene_def_*` / `scene_run`（REST 面由 AF-Core 并行补齐）。
+  async listScenes () {
+    return await req<SceneListResponse>('/api/scenes')
+  },
+
+  async saveScene (scene, replace = false) {
+    // body 必须 stringify（见文件头 createPairLink 的教训）：fetch 会把对象 body 变 "[object Object]"。
+    return await req<SceneDef>('/api/scenes', {
+      method: 'POST',
+      body: JSON.stringify({ scene, replace }),
+    })
+  },
+
+  async getScene (sceneId) {
+    return await req<SceneDef>(`/api/scenes/${encodeURIComponent(sceneId)}`)
+  },
+
+  async deleteScene (sceneId) {
+    return await req<{ scene_id: string; archived_to: string; deleted: boolean }>(
+      `/api/scenes/${encodeURIComponent(sceneId)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  async runScene (sceneId, { phrase = '', agent = '', grantId = '' } = {}) {
+    return await req<SceneRunResult>(`/api/scenes/${encodeURIComponent(sceneId)}/run`, {
+      method: 'POST',
+      body: JSON.stringify({ phrase, agent, grant_id: grantId }),
     })
   },
 

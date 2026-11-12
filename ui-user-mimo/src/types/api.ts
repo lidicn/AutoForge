@@ -243,3 +243,71 @@ export interface OrderReceiptsResponse {
   read_error?: string
 }
 
+// ===== v1.29 场景对象（SceneDef）：一句话触发的批量设备动作清单，跑完即止 =====
+// 形状取自后端 `af_scene_kit.SceneDef/SceneStep.to_ir()`（⛔ 不是 af_scene 的自动化组）。
+// 每步的档位（L0/L1/L2/L3）不落 IR，执行期现算；配置期只拒 L3／禁入域，前端不重排。
+export interface SceneStep {
+  step_no?: number
+  /** 后端构造期必填且唯一；前端新建时按序号生成（step_1/step_2…） */
+  step_id?: string
+  adapter: string
+  /** `<domain>.<service>`，如 `light.turn_on` */
+  action: string
+  target: string
+  params: Record<string, unknown>
+  on_error?: string
+  delay_ms_after?: number
+}
+
+/** 前置条件（后端只认 entity_id + equals/above/below 之一）；null＝无条件。 */
+export interface SceneCondition {
+  entity_id: string
+  attribute?: string
+  equals?: unknown
+  above?: number
+  below?: number
+}
+
+export interface SceneDef {
+  scene_id: string
+  name: string
+  aliases: string[]
+  version: number
+  owner: string
+  condition: SceneCondition | null
+  steps: SceneStep[]
+  created_via?: string
+  created_at?: string
+}
+
+/** 列表面条目：**不含 steps 全文**（列表要轻），步数单独给 `step_count`。 */
+export interface SceneSummary {
+  scene_id: string
+  name: string
+  aliases: string[]
+  version: number
+  owner: string
+  condition: SceneCondition | null
+  step_count: number
+  created_via?: string
+  created_at?: string
+}
+
+/** `/api/scenes` 列表（非 owner 面才带 `hidden_count`，与 grants/orders 同纪律）。 */
+export interface SceneListResponse {
+  scenes: SceneSummary[]
+  hidden_count?: number
+}
+
+/** `/api/scenes/{id}/run` 回执：逐步过 grant 后的汇总（形状透传，前端只读展示）。 */
+export interface SceneRunResult {
+  run_id?: string
+  code?: string
+  scene_id?: string
+  grant_id?: string
+  agent?: string
+  steps?: Array<Record<string, unknown>>
+  ok?: boolean
+  [k: string]: unknown
+}
+

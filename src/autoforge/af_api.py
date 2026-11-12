@@ -290,6 +290,26 @@ class OrderCancelBody(BaseModel):
     reason: str = ""
 
 
+# ── v1.29.0 第三批：【场景】SceneDef（一句话触发）──
+class SceneSaveBody(BaseModel):
+    """场景定义落盘请求。`scene` 是 SceneDef IR 全文——构造期校验（查重／空 steps／
+    未知键／L3 与禁入域）在服务层 fail-closed，本层只透传。"""
+
+    scene: dict[str, Any]
+    #: `False`（缺省）时 scene_id 撞车即 409：场景是**一句话触发**的入口，静默覆盖等于
+    #: 把用户原来的「回家模式」换成另一个、触发词还指着它——必须是显式动作。
+    replace: bool = False
+
+
+class SceneRunBody(BaseModel):
+    """场景执行请求。`scene_id` 走路径参数；`phrase` 是「一句话触发」的另一条腿
+    （主词／别名**精确**匹配，匹配不上即 404——⛔ 模糊猜一个执行）。"""
+
+    phrase: str = ""
+    agent: str = ""
+    grant_id: str = ""
+
+
 # ── F7 残留（WebUI 撤销按钮）：撤销 = 对真实设备再下发一次 ──
 class UndoBody(BaseModel):
     confirm: bool = False
@@ -1376,6 +1396,72 @@ def build_app(
             caller=info.subject if info else "",
             caller_is_owner=_caller_is_owner(info),
             reason=payload.reason,
+        )
+
+    # ── v1.29.0 第三批：【场景】SceneDef ──────────────────────────────
+    #   一句话触发的入口：定义是人配的有限清单（§四 上限 256 条），执行每步独立过 grant。
+    #   ⛔ 本层只做 HTTP 翻译——归属／范围／授权判定真源只有 `svc.scene_*`（与 MCP 同闸）。
+    @app.get("/api/scenes", dependencies=[Depends(_read)])
+    def api_scenes(info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        """场景定义列表。owner 面全量⛔ 不报 `hidden_count`；非 owner 面只看自己名下且**必报**。"""
+        return _svc(
+            svc.scene_def_list, store,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=info is not None,
+        )
+
+    @app.post("/api/scenes", dependencies=[Depends(_readonly_guard), Depends(_write)])
+    def api_scene_save(body: SceneSaveBody,
+                       info: TokenInfo | None = Depends(_write)) -> dict[str, Any]:
+        """落一份场景定义。`replace=false` 撞 scene_id ⇒ 409（⛔ 静默覆盖触发词）。"""
+        return _svc(
+            svc.scene_def_save, store, body.scene,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=info is not None,
+            replace=body.replace,
+        )
+
+    @app.get("/api/scenes/{scene_id}", dependencies=[Depends(_read)])
+    def api_scene_get(scene_id: str,
+                      info: TokenInfo | None = Depends(_read)) -> dict[str, Any]:
+        """单对象读面（含 steps 全文）。非 owner ⇒ 404 且与「不存在」**逐字同形**
+        （⛔ 不点归属者名：那是批量采集全库归属者的通道）。"""
+        return _svc(
+            svc.scene_def_get, store, scene_id,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=info is not None,
+        )
+
+    @app.delete("/api/scenes/{scene_id}",
+                dependencies=[Depends(_readonly_guard), Depends(_write)])
+    def api_scene_delete(scene_id: str,
+                         info: TokenInfo | None = Depends(_write)) -> dict[str, Any]:
+        """删定义 = 移入 `.scenes/deleted/`（⛔ 不物理删：误删无从恢复）。"""
+        return _svc(
+            svc.scene_def_delete, store, scene_id,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=info is not None,
+        )
+
+    @app.post("/api/scenes/{scene_id}/run",
+              dependencies=[Depends(_readonly_guard), Depends(_write)])
+    def api_scene_run(scene_id: str, body: SceneRunBody | None = None,
+                      info: TokenInfo | None = Depends(_write)) -> dict[str, Any]:
+        """执行一次场景（每步独立过 grant）。⛔ 无 grant／live 未启用一律 4xx，⛔ 200 假绿。"""
+        payload = body or SceneRunBody()
+        return _svc(
+            svc.scene_run, store,
+            scene_id=scene_id,
+            phrase=payload.phrase,
+            agent=payload.agent,
+            caller=info.subject if info else "",
+            caller_is_owner=_caller_is_owner(info),
+            token_identity=info is not None,
+            grant_id=payload.grant_id,
         )
 
     # ── v1.29.0 第一批：执行授权（grant）──────────────────────────────

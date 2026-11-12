@@ -17,6 +17,7 @@ export const router = createRouter({
         { path: 'auth-codes', name: 'auth-codes', component: () => import('./views/AuthCodesView.vue') },
         { path: 'grants', name: 'grants', component: () => import('./views/GrantsView.vue') },
         { path: 'orders', name: 'orders', component: () => import('./views/OrdersView.vue') },
+        { path: 'scenes', name: 'scenes', component: () => import('./views/ScenesView.vue') },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/agents' },

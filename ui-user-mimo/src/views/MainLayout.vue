@@ -15,6 +15,7 @@ const online = useOnline()
 const tabs = [
   { name: 'agents', label: 'Agent', icon: 'agent' },
   { name: 'automations', label: '自动化', icon: 'bolt' },
+  { name: 'scenes', label: '场景', icon: 'flame' },
   { name: 'auth-codes', label: '授权码', icon: 'key' },
   { name: 'grants', label: '执行授权', icon: 'shield' },
   { name: 'orders', label: '任务单', icon: 'clock' },
@@ -107,9 +108,9 @@ async function onLogout () {
 </template>
 
 <style scoped>
-.layout { min-height: 100dvh; }
+.layout { min-height: 100dvh; display: flex; flex-direction: column; }
 .topbar {
-  position: fixed; inset: 0 0 auto 0; z-index: 20;
+  position: sticky; top: 0; z-index: 20;
   background: var(--topbar-bg); backdrop-filter: blur(12px);
 }
 .topbar-inner {
@@ -135,16 +136,17 @@ async function onLogout () {
   --n-color: var(--halo-bg) !important;
 }
 .content {
-  max-width: 600px; margin: 0 auto;
-  padding: calc(56px + 16px) var(--pad) calc(84px + env(safe-area-inset-bottom) + 16px);
+  flex: 1 1 auto; width: 100%; max-width: 600px; margin: 0 auto;
+  padding: 16px var(--pad) calc(16px + env(safe-area-inset-bottom));
+  overflow-x: auto;
 }
 .tabbar {
-  position: fixed; inset: auto 0 0 0; z-index: 20;
+  position: sticky; bottom: 0; z-index: 20;
   background: var(--tabbar-bg); backdrop-filter: blur(12px);
   border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom);
 }
-.tabbar-inner { max-width: 600px; margin: 0 auto; }
-.tabs { display: grid; grid-template-columns: repeat(5, 1fr); }
+.tabbar-inner { max-width: 600px; margin: 0 auto; overflow-x: auto; }
+.tabs { display: grid; grid-template-columns: repeat(6, 1fr); }
 .tab {
   position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px;
   padding: 9px 0 5px; color: var(--ink-3); transition: color 0.15s;

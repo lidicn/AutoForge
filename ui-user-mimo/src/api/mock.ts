@@ -4,7 +4,7 @@
  * §1 只给了数据结构，没给 HTTP 契约，因此这里先定义「客户端接口」ApiClient：
  * 真实后端就绪后另写一个实现替换 mockApi 即可，视图 / store / 单测契约不变。
  */
-import type { Agent, AuthCode, Automation, Grant, GrantListResponse, GrantReceipt, GrantReceiptsResponse, Order, OrderListResponse, OrderReceipt, OrderReceiptsResponse, PairLink, PairRequest, PendingItem, PendingReceipt, User } from '../types/api.ts'
+import type { Agent, AuthCode, Automation, Grant, GrantListResponse, GrantReceipt, GrantReceiptsResponse, Order, OrderListResponse, OrderReceipt, OrderReceiptsResponse, PairLink, PairRequest, PendingItem, PendingReceipt, SceneDef, SceneListResponse, SceneRunResult, SceneSummary, User } from '../types/api.ts'
 import { PAIR_CODE_LENGTH, PAIR_TTL_MS, isPairCode, randomDigits } from '../logic/pairing.ts'
 import { SHORT_CODE_LENGTH, shortRemainMs, validateShortMinutes } from '../logic/authcodes.ts'
 
@@ -48,6 +48,12 @@ export interface ApiClient {
   listOrders (): Promise<OrderListResponse>
   listOrderReceipts (limit?: number): Promise<OrderReceiptsResponse>
   cancelOrder (orderId: string, reason: string): Promise<void>
+  // v1.29 场景对象（SceneDef）：列表/新建/取全文/删除（归档）/运行（逐步过 grant）
+  listScenes (): Promise<SceneListResponse>
+  saveScene (scene: Record<string, unknown>, replace?: boolean): Promise<SceneDef>
+  getScene (sceneId: string): Promise<SceneDef>
+  deleteScene (sceneId: string): Promise<{ scene_id: string; archived_to: string; deleted: boolean }>
+  runScene (sceneId: string, opts?: { phrase?: string; agent?: string; grantId?: string }): Promise<SceneRunResult>
 }
 
 // ---------------- mock 运行时（时钟 / 延迟 / 注入失败） ----------------
@@ -61,6 +67,7 @@ interface Db {
   grantReceipts: GrantReceipt[]
   orders: Order[]
   orderReceipts: OrderReceipt[]
+  scenes: SceneDef[]
 }
 
 let clockOffset = 0
@@ -254,9 +261,41 @@ function seed (): Db {
     { type: 'TASK_ORDER_CANCELLED', at: agoMin(300), order_id: 'o-3e2d1c0b9a87', agent: 'agt_lab', status: 'cancelled', reason: '人不在家，改主意了', steps: [] },
   ]
 
+  // v1.29 场景对象 fixtures：两条（一条无条件、一条带条件），steps 用后端 IR 字段（含 step_id）
+  const scenes: SceneDef[] = [
+    {
+      scene_id: 'hui_jia_mo_shi',
+      name: '回家模式',
+      aliases: ['回家', '我回来了'],
+      version: 1,
+      owner: 'owner',
+      condition: null,
+      created_via: 'api',
+      created_at: agoMin(60 * 24 * 3),
+      steps: [
+        { step_id: 'step_1', adapter: 'ha', action: 'light.turn_on', target: 'light.living_main', params: {}, on_error: 'abort', delay_ms_after: 0 },
+        { step_id: 'step_2', adapter: 'ha', action: 'climate.set_temperature', target: 'climate.living_ac', params: { temperature: 26 }, on_error: 'abort', delay_ms_after: 500 },
+      ],
+    },
+    {
+      scene_id: 'shui_jiao_mo_shi',
+      name: '睡觉模式',
+      aliases: ['睡觉', '晚安'],
+      version: 1,
+      owner: 'owner',
+      condition: { entity_id: 'sensor.living_illuminance', below: 5 },
+      created_via: 'api',
+      created_at: agoMin(60 * 24 * 8),
+      steps: [
+        { step_id: 'step_1', adapter: 'ha', action: 'light.turn_off', target: 'light.living_main', params: {}, on_error: 'continue', delay_ms_after: 0 },
+        { step_id: 'step_2', adapter: 'ha', action: 'switch.turn_off', target: 'switch.living_strip', params: {}, on_error: 'abort', delay_ms_after: 0 },
+      ],
+    },
+  ]
+
   return {
     agents, automations, pendings, authCodes, pairRequests: [],
-    grants, grantReceipts, orders, orderReceipts,
+    grants, grantReceipts, orders, orderReceipts, scenes,
   }
 }
 
@@ -507,6 +546,110 @@ export const mockApi: ApiClient = {
         type: 'TASK_ORDER_CANCELLED', at: iso(now()), order_id: o.order_id, agent: o.agent,
         status: 'cancelled', reason: (reason || '').trim(), steps: [],
       })
+    })
+  },
+
+  // ---------------- v1.29 场景对象（mock：形状与终态语义，⛔ 不模拟 grant 逐级判定） ----------------
+
+  listScenes () {
+    return call('listScenes', () => {
+      const scenes: SceneSummary[] = [...db.scenes]
+        .sort((a, b) => String(a.scene_id).localeCompare(String(b.scene_id)))
+        .map((s) => ({
+          scene_id: s.scene_id,
+          name: s.name,
+          aliases: [...s.aliases],
+          version: s.version,
+          owner: s.owner,
+          condition: s.condition,
+          step_count: (s.steps || []).length,
+          created_via: s.created_via,
+          created_at: s.created_at,
+        }))
+      return { scenes }
+    })
+  },
+
+  saveScene (scene, replace = false) {
+    return call('saveScene', () => {
+      const src = scene as {
+        scene_id?: unknown; name?: unknown; aliases?: unknown; condition?: unknown; steps?: unknown
+      }
+      const sid = String(src?.scene_id || '').trim()
+      const name = String(src?.name || '').trim()
+      if (!/^[a-z][a-z0-9_]*$/.test(sid)) throw apiError('BAD_REQUEST', 'scene_id 需以小写字母开头，仅含小写字母、数字、下划线')
+      if (!name) throw apiError('BAD_REQUEST', '场景名称不能为空')
+      const rawSteps = Array.isArray(src?.steps) ? src.steps : []
+      if (!rawSteps.length) throw apiError('BAD_REQUEST', '场景至少要有一个步骤')
+      const existing = db.scenes.find((s) => s.scene_id === sid)
+      if (existing && !replace) throw apiError('INVALID_STATE', `场景 ${sid} 已存在（改定义请显式 replace）`)
+      const steps = rawSteps.map((st: any, i: number) => ({
+        step_id: String(st?.step_id || `step_${i + 1}`),
+        adapter: String(st?.adapter || 'ha'),
+        action: String(st?.action || ''),
+        target: String(st?.target || ''),
+        params: st?.params && typeof st.params === 'object' && !Array.isArray(st.params) ? { ...st.params } : {},
+        on_error: String(st?.on_error || 'abort'),
+        delay_ms_after: Number.isFinite(Number(st?.delay_ms_after)) ? Math.max(0, Math.trunc(Number(st.delay_ms_after))) : 0,
+      }))
+      const cond = src?.condition && typeof src.condition === 'object' && !Array.isArray(src.condition)
+        ? { ...(src.condition as Record<string, unknown>) }
+        : null
+      const def: SceneDef = {
+        scene_id: sid,
+        name,
+        aliases: (Array.isArray(src?.aliases) ? src.aliases : []).map((a: any) => String(a).trim()).filter(Boolean),
+        version: existing ? existing.version + 1 : 1,
+        owner: existing?.owner || 'owner',
+        condition: cond,
+        steps,
+        created_via: 'api',
+        created_at: existing?.created_at || iso(now()),
+      }
+      db.scenes = existing ? db.scenes.map((s) => (s.scene_id === sid ? def : s)) : [...db.scenes, def]
+      return def
+    })
+  },
+
+  getScene (sceneId) {
+    return call('getScene', () => {
+      const s = db.scenes.find((x) => x.scene_id === sceneId)
+      if (!s) throw apiError('NOT_FOUND', '场景不存在或已被删除')
+      return { ...s, aliases: [...s.aliases], steps: s.steps.map((st) => ({ ...st, params: { ...st.params } })) }
+    })
+  },
+
+  deleteScene (sceneId) {
+    return call('deleteScene', () => {
+      const idx = db.scenes.findIndex((x) => x.scene_id === sceneId)
+      if (idx < 0) throw apiError('NOT_FOUND', '场景不存在或已被删除')
+      db.scenes.splice(idx, 1)     // 归档语义：真后端移入 .scenes/deleted/，⛔ 不物理删
+      return { scene_id: sceneId, archived_to: `.scenes/deleted/${sceneId}--${now()}.json`, deleted: true }
+    })
+  },
+
+  runScene (sceneId, opts = {}) {
+    return call('runScene', () => {
+      const s = db.scenes.find((x) => x.scene_id === sceneId)
+      if (!s) throw apiError('NOT_FOUND', '场景不存在或已被删除')
+      const agent = String(opts.agent || '').trim()
+      const grantId = String(opts.grantId || '').trim()
+      if (!agent) throw apiError('BAD_REQUEST', '场景执行需要 agent（执行主体）')
+      if (!grantId) throw apiError('INVALID_STATE', '场景执行需要执行授权（grant_id）')
+      const g = db.grants.find((x) => x.grant_id === grantId)
+      if (!g) throw apiError('NOT_FOUND', '执行授权不存在')
+      if (g.revoke.revoked) throw apiError('INVALID_STATE', '该执行授权已撤销')
+      g.uses += 1
+      const steps = s.steps.map((st) => ({ step_id: st.step_id, action: st.action, status: 'done' }))
+      return {
+        ok: true,
+        run_id: 'run-' + Math.random().toString(36).slice(2, 10),
+        code: 'OK',
+        scene_id: sceneId,
+        grant_id: grantId,
+        agent,
+        steps,
+      }
     })
   },
 

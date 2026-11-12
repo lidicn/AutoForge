@@ -8,7 +8,7 @@
 |---|---|
 | 发布树版本（`autoforge.__version__`，取自本次生成所用源码树） | `1.29.0` |
 | 生成时线上实例 OpenAPI 版本 | `1.29.0`（⛔ **不作发布版号**：发布那一刻线上还跑着上一版；部署后自动对齐） |
-| 路径数／操作数 | **96 路径／104 操作** |
+| 路径数／操作数 | **99 路径／109 操作** |
 | 认证方案 | `securitySchemes` = {"HTTPBearer": {"type": "http", "scheme": "bearer"}} |
 | 权限面列来源 | `af_api.py` 的 `Depends(_read/_write/_live/_admin/_readonly_guard)` 现读 |
 | `audit[].type` | **29 枚**（`af_audit.ALL_EVENT_TYPES` 现读逐枚相等） |
@@ -262,6 +262,11 @@ Base：`http://<host>:8787`（NAS 部署：`http://192.168.2.200:8787`）
 | `POST` | `/api/orders` | read/write(只读装配期)／write | 入册一张任务单。输出通道缺省 tts＋bark；查询型且无已接线通道 ⇒ 拒（哑任务）。 |
 | `GET` | `/api/orders/receipts` | read | 任务单留痕（终态即销之后的唯一查法）。源＝deploy_audit.jsonl 的 TASK_ORDER_*。 |
 | `POST` | `/api/orders/{order_id}/cancel` | read/write(只读装配期)／write | 人工取消（pending/running 均可）。在途撤销＝其后未执行步不发起。 |
+| `GET` | `/api/scenes` | read | 场景定义列表。owner 面全量⛔ 不报 `hidden_count`；非 owner 面只看自己名下且**必报**。 |
+| `POST` | `/api/scenes` | read/write(只读装配期)／write | 落一份场景定义。`replace=false` 撞 scene_id ⇒ 409（⛔ 静默覆盖触发词）。 |
+| `DELETE` | `/api/scenes/{scene_id}` | read/write(只读装配期)／write | 删定义 = 移入 `.scenes/deleted/`（⛔ 不物理删：误删无从恢复）。 |
+| `GET` | `/api/scenes/{scene_id}` | read | 单对象读面（含 steps 全文）。非 owner ⇒ 404 且与「不存在」**逐字同形** |
+| `POST` | `/api/scenes/{scene_id}/run` | read/write(只读装配期)／write | 执行一次场景（每步独立过 grant）。⛔ 无 grant／live 未启用一律 4xx，⛔ 200 假绿。 |
 
 ## 三、关键枚举（全部现读真源）
 
