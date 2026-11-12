@@ -85,17 +85,43 @@ def override_path(store_root: str | Path) -> Path:
     return Path(store_root) / ENABLED_OVERRIDE_FILE
 
 
-def read_overrides(store_root: str | Path) -> dict[str, bool]:
-    """读整份 override 表；缺文件/坏 JSON/形状不认识 ⇒ 空表（读侧 fail-soft）。"""
+def read_overrides(store_root: str | Path, *, strict: bool = False) -> dict[str, bool]:
+    """读整份 override 表。
+
+    默认 **fail-soft**（缺文件／坏 JSON／形状不认识 ⇒ 空表）：**写侧**要的就是这个
+    ——`merge_overrides` / `clear_overrides` 做读-改-写时读到坏文件应当当空表，
+    由它自己 `os.replace` 把旁车修好。
+
+    `strict=True` 只给 **watch 读侧**（`EnabledOverrideGate._refresh`）用：文件
+    **存在但读不出**必须抛出，让调用方**保留上一份已知 override**。
+    ⛔ 别在 fail-soft 里返回空表了事——那会把「旁车损坏」变成「没有停用位」，
+    等于**把已停用的自动化重新武装**（安全阀朝失效方向倒，2026-11-13 那 19 分钟
+    事故的形状）。缺文件仍然返回空表：没有旁车就是没有 override，这是真值不是失败。
+    """
     path = override_path(store_root)
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        if strict:
+            raise
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        # json.JSONDecodeError ⊂ ValueError
+        if strict:
+            raise
         return {}
     if not isinstance(data, dict):
+        if strict:
+            raise ValueError(f"启停旁车顶层不是对象：{type(data).__name__}")
         return {}
     table = data.get("enabled")
     if not isinstance(table, dict):
+        if strict:
+            raise ValueError(f"启停旁车的 enabled 面不是对象：{type(table).__name__}")
         return {}
     out: dict[str, bool] = {}
     for key, value in table.items():
@@ -188,6 +214,7 @@ class EnabledOverrideGate:
             st = self._path.stat()
         except FileNotFoundError:
             self._stamp, self._map = None, {}
+            self._last_error = ""
             return
         except OSError as exc:  # noqa: BLE001 —— 读不出就让上一份继续生效
             self._last_error = f"{type(exc).__name__}: {exc}"
@@ -196,7 +223,22 @@ class EnabledOverrideGate:
         stamp = (int(st.st_mtime_ns), int(st.st_size), int(getattr(st, "st_ino", 0) or 0))
         if stamp == self._stamp:
             return
-        table = read_overrides(self._path.parent)
+        # ⛔ 这里必须用 strict 版：fail-soft 的 `read_overrides` 在坏 JSON 时给空表，
+        # 赋给 `_map` 就等于「没有停用位」——`apply()` 的 `if not self._map: return 0`
+        # 会让内存图里那一位回到 IR 的 `True`，**已停用的自动化重新武装**。
+        # 安全阀只能朝「关着」失效：读不出就保留上一份已知 override。
+        try:
+            table = read_overrides(self._path.parent, strict=True)
+        except (OSError, ValueError) as exc:
+            # 记下 stamp：坏文件没被替换之前别每次事件重读重告警；
+            # 一旦有人修好（`os.replace` 换 ino／改大小），stamp 变，下一次自然重读。
+            self._stamp = stamp
+            self._last_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "WATCH_ENABLED_OVERRIDE_READ_FAILED parse %s err=%r（保留上一份 %d 位 override）",
+                self._path, exc, len(self._map),
+            )
+            return
         self._stamp = stamp
         self._map = table
         self._last_error = ""
