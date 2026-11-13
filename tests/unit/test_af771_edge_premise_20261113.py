@@ -345,6 +345,143 @@ def test_n5b_multi_source_or_any_active(tmp_path):
     assert _facts(tmp_path).get("last_met") is False, "or 入口全部 source 前提不成立 ⇒ 必须断 False"
 
 
+# ── N6/N7 回归钉：带 `from` 的 or 入口 ⛔ 不许被「永不派发」打死 ─────────
+#: 线上 `af_db_ask_test` v4 的真实实体（2026-11-13 21:4x 经 `/api/graphs` 只读拉取）
+DB_OCC = "binary_sensor.xiaomi_cn_blt_3_1hsett9ug4k01_03_occupancy_status_p_2_1078"
+DB_PC = "switch.lemesh_cn_1088333045_sw0a04_on_p_2_1"
+DB_LUX = "sensor.0x00158d0001a2520d_illuminance"
+DB_LAMP = "light.yeelink_cn_555003624_lamp22_s_2"
+DB_ID = "af_db_ask_test"
+
+#: 与线上 v4 **逐字同形**：入口 `group or` 两个 source **都带 `to=on` 且 `from=off`**，
+#: 条件层在 `if`（电脑开 ∧ 光照<50 ∧ 人在 ∧ 挂灯关），`cooldown=120`。
+AUTO_DB: dict[str, Any] = {
+    "ir_version": "0.2.1", "id": DB_ID, "name": "AF771 af_db_ask_test v4 同形",
+    "version": 4, "mode": "single",
+    "cooldown": 120,
+    "nodes": [
+        {"id": "t1", "kind": "on", "name": "触发（电脑开 或 人在）",
+         "trigger": {"type": "group", "op": "or", "sources": [
+             {"type": "state", "entity_id": DB_OCC, "to": "on", "from": "off"},
+             {"type": "state", "entity_id": DB_PC, "to": "on", "from": "off"},
+         ]}},
+        {"id": "i_start", "kind": "if", "name": "三条件全满足（电脑开∧光度低∧人在）",
+         "expr": {"op": "and", "args": [
+             {"op": "is_on", "value": {"var": f"entity.{DB_PC}"}},
+             {"op": "lt", "left": {"var": f"entity.{DB_LUX}", "type": "numeric"},
+              "right": {"const": 50}},
+             {"op": "is_on", "value": {"var": f"entity.{DB_OCC}"}},
+             {"op": "is_off", "value": {"var": f"entity.{DB_LAMP}"}},
+         ]}},
+        {"id": "q1", "kind": "ask", "name": "询问显示器挂灯",
+         "prompt": "书房光线较暗，要打开显示器挂灯吗？", "session": "room",
+         "room": "shu_fang", "timeout": "60s"},
+        {"id": "d1", "kind": "do", "name": "开挂灯", "adapter": "ha",
+         "action": "light.turn_on", "params": {"entity_id": DB_LAMP}, "room": "shu_fang"},
+        {"id": "p1", "kind": "pass", "name": "结束",
+         "emit": {"event": "af_db_ask_yes", "data": {"room": "shu_fang"}}},
+    ],
+    "edges": [
+        {"from": "t1", "to": "i_start", "kind": "then"},
+        {"from": "i_start", "to": "q1", "kind": "then"},
+        {"from": "i_start", "to": "p1", "kind": "no"},
+        {"from": "q1", "to": "d1", "kind": "yes"},
+        {"from": "d1", "to": "p1", "kind": "then"},
+        {"from": "q1", "to": "p1", "kind": "no"},
+        {"from": "q1", "to": "p1", "kind": "on_timeout"},
+    ],
+}
+
+
+def _runtime_db(*, at: datetime, store_root=None, states=None):
+    rt = build_runtime(
+        Graph([load_automation(AUTO_DB)]),
+        clock=VirtualTimeSource(start=at),
+        store_root=store_root,
+    )
+    rt.adapters.register(_Adapter())
+    for k, v in (states or {}).items():
+        rt.states.set_state(k, v)
+    return rt
+
+
+def _db_conditions_hold() -> dict[str, str]:
+    return {DB_OCC: "on", DB_PC: "on", DB_LUX: "30", DB_LAMP: "off"}
+
+
+def test_n6_or_entry_with_from_still_dispatches(tmp_path):
+    """判据 N6（AF-PM 2026-11-13 打回的 P0 回归钉）：**带 `from` 的 or 入口 ⛔ 不许被打死**。
+
+    现场：`af_db_ask_test` v4 —— enabled=True、mode=single、在跑、`pending_asks.json` 里
+    有成功应答记录。入口两个 source 都是 `to=on from=off`。
+
+    缺陷形状（本卡第一版）：`_premise_met` 对 `from_` 返回 `False`（把「快照证明不了前一态」
+    当成「已证明前提不成立」）⇒ `parts=[False, False]` ⇒ `any` = False ⇒ premise 恒 False
+    ⇒ `_auto_currently_met` 恒 False ⇒ `not met` ⇒ **永远 `edge_held`**。
+
+    ⇒ 判定口径：`from` 与 event/time/sun 同档，**不参与**前提（`None`），退回「只看 if」的
+    旧行为。修前（老代码）绿、修后必须仍绿。
+    """
+    rt = _runtime_db(at=_ts(10, 0), store_root=str(tmp_path), states=_db_conditions_hold())
+    fired = rt.scheduler.handle_event(_db_enter(rt))
+    assert len(fired) == 1, (
+        "带 from 的 or 入口⛔ 不许被判「前提不成立」：否则这条在跑的自动化永不派发（P0 回归）"
+    )
+    assert "instance_edge_held" not in _types(rt), "⛔ 不该是边沿闸抑制"
+    f = _facts_db(tmp_path)
+    assert f.get("last_met") is True
+    assert f.get("last_dispatched_at"), "必须真写派发时刻"
+
+
+def test_n7_from_shape_dispatches_once_then_held(tmp_path):
+    """判据 N7：带 `from` 的 or 入口 ⇒ 条件成立＋真触发派发 **1** 条；同值重复 **0** 条。
+
+    N6 只证明「能派发」，N7 再压住「⛔ 别把闸整个关掉」——两腿合起来才是完整语义：
+    该派的照派、该抑的照抑（防 AF-750 族反复念叨）。
+    """
+    rt = _runtime_db(at=_ts(10, 0), store_root=str(tmp_path), states=_db_conditions_hold())
+
+    fired = rt.scheduler.handle_event(_db_enter(rt))
+    assert len(fired) == 1, "条件成立＋真触发 ⇒ 派发 1 条"
+    first = _facts_db(tmp_path).get("last_dispatched_at")
+    assert first
+    rt.advance(60)  # ask 超时 1 分钟，收尾（single 模式挡住后续同值上报）
+    assert len(rt.instances.active_of(DB_ID)) == 0, "前置：ask 超时收尾"
+
+    before = len(rt.instances.all())
+    again = rt.scheduler.handle_event(_db_enter(rt))
+    assert len(again) == 0, "同值重复上报 ⇒ 0 条（电平维持）"
+    assert len(rt.instances.all()) == before
+    assert _facts_db(tmp_path).get("last_dispatched_at") == first
+
+    # 离开书房（人在掉了，且 if 里也有人在一项）⇒ 断；再进屋 ⇒ 重新派发
+    rt.scheduler.handle_event(_db_leave(rt))
+    assert _facts_db(tmp_path).get("last_met") is False, "人在掉了 ⇒ if 不成立 ⇒ 必须断 False"
+    # ⚠️ 真实 IR 是 `cooldown: 120`：必须先把冷却跨过去，否则这一腿测到的是冷却兜底
+    # （`cooldown`）而不是边沿闸——那会把「断沿没生效」伪装成绿。
+    rt.advance(180)
+    third = rt.scheduler.handle_event(_db_enter(rt))
+    assert len(third) == 1, "再进屋（断过之后、跨过 cooldown）⇒ 必须再派发 1 条"
+
+
+def _facts_db(tmp_path) -> dict[str, Any]:
+    return RuntimeFacts(str(tmp_path), DB_ID).read()
+
+
+def _db_enter(rt):
+    """人在 off→on 进屋：先落状态再投事件（HA 的真实顺序）。
+
+    `from=off` 只能靠事件的 `old_state` 匹配（`_satisfied` 读 `event.payload["old_state"]`）。
+    """
+    rt.states.set_state(DB_OCC, "on")
+    return BusEvent.of(DB_OCC, "on", old_state="off")
+
+
+def _db_leave(rt):
+    rt.states.set_state(DB_OCC, "off")
+    return BusEvent.of(DB_OCC, "off", old_state="on")
+
+
 # ── N5c 源码钉：前提必须参与 if 求值 ──────────────────────────────────
 def test_n5c_source_pin_premise_is_wired(tmp_path):
     """源码钉（防回退）：`has_group_entry` 段必须**先用前提**再求 if。
@@ -366,3 +503,16 @@ def test_n5c_source_pin_premise_is_wired(tmp_path):
     helper = inspect.getsource(af_scheduler.Scheduler._premise_met)
     assert "check_trigger_depth" in helper, "递归必须有深度预算（F6 口径）"
     assert "return None" in helper, "必须保留「不参与」第三态（⛔ 不许把求不出的项塌成 False）"
+
+    # AF-PM 2026-11-13 P0 回归钉：`from_` 分支必须是「不参与」，⛔ 不是「不成立」。
+    # 用切片钉住这一段，避免"文件里别处有 return None"把断言蒙绿。
+    seg = helper.split("if trig.from_ is not None:", 1)
+    assert len(seg) == 2, "`from_` 分支必须存在（否则快照求不了旧态会被静默当成成立）"
+    branch = seg[1].split("if trig.to is None:", 1)[0]
+    assert "return None" in branch, (
+        "`from_` ⇒ 不参与前提。⛔ 返 False 会把 `af_db_ask_test` v4（两个 source 都 to+from）"
+        "判成前提恒不成立 ⇒ 永不派发（AF-PM 2026-11-13 打回的 P0）"
+    )
+    assert "return False" not in branch, (
+        "`from_` 分支⛔ 不许出现 return False——「无法证明」≠「已证明不成立」"
+    )

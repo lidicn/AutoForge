@@ -684,9 +684,16 @@ class Scheduler:
         在这里，**求不出的项一律"不参与"，⛔ 不当成"不成立"**：
 
         - `state` 带 `to` ⇒ 快照比对（本例 `occupancy == "on"`）；
-        - `state` 带 `from` ⇒ 保守 `False`（快照没有旧态，⛔ 不猜；与 `_group_currently_met`
-          完全一致）——注意副作用：`group or` 入口里若**全是** `from` 型 source，
-          结果恒 False ⇒ 该自动化会被本闸永久压制，与 `group and` 入口的既有口径同病；
+        - `state` 带 `from` ⇒ **`None`（不参与）**。快照只有"现在是什么"，没有"前一态是
+          什么"——⛔「无法证明」不等于「已证明不成立」，把这两者混成 `False` 会把整条自动化
+          钉死。现场教训（AF-PM 2026-11-13 21:4x 打回的 P0）：`af_db_ask_test` v4 入口是
+          `group or [occupancy to=on from=off, 电脑开关 to=on from=off]`，两个 source 都带
+          `from` ⇒ 若这里返 `False`，两个都 False ⇒ `any` 得 False ⇒ premise=False ⇒
+          `_auto_currently_met` 恒 False ⇒ `not met` 判 `edge_held` ⇒ **这条在跑、历史上
+          成功应答过的自动化被静默打成"永不派发"**（修好主卧双图、打死书房测试图，同一类
+          症状换了个受害者）。⇒ 求不出的项一律不参与，⛔ 不许拿它拦人。
+          注意 `from` 与 `to` 同时存在时也整个不参与（⛔ 不"只看 to"：那会改变
+          `af_db_ask_test` 的断沿口径——见回执里 4 条现役 IR 的对照读数）；
         - `state` **不带 `to`/`from`**（"实体变化"型触发）⇒ `None`（无前提可言，
           ⛔ 不为它去查快照：这类 source 本来就只按事件边沿触发）；
         - `event`／`time`／`sun` ⇒ `None`（同现行为，不参与）；
@@ -698,8 +705,12 @@ class Scheduler:
         trig = _normalize(trig)
         if trig.type == "state":
             if trig.from_ is not None:
-                # 快照没有"前一态"⇒ 无法证明前提成立，保守 False（⛔ 不猜）
-                return False
+                # AF-PM 2026-11-13 21:4x 打回 P0：这里⛔ 不能返 False。
+                # 「快照证明不了前一态」≠「已证明前提不成立」。`af_db_ask_test` v4 入口两个
+                # source 全是 `to=on from=off`，若返 False ⇒ premise 恒 False ⇒ 那条在跑、
+                # 成功应答过的自动化被静默打死（永不派发）。⇒ 与 event/time/sun 同档：
+                # 不参与前提，退回「只看 if」的旧行为。
+                return None
             if trig.to is None:
                 # "实体变化"型触发：没有可比对的目标态 ⇒ 不参与前提
                 return None
