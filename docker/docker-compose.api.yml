@@ -45,6 +45,10 @@ services:
     #   - autoforge_tokens
     #   - autoforge_revoked_tokens
     environment:
+      # 家庭墙钟：容器缺 TZ 时 time.tzname=('UTC','UTC')，无参 datetime.astimezone() 归 UTC，
+      # 规格里的 hh:mm 会整体错位 8 小时（AF-757：21:00-23:45 实际生效在本地 05:00-07:45）。
+      # ⛔ 这是部署卫生，不能替代代码修复——af_ir/expr.py 必须显式 astimezone(load_tz())，否则换机器/换镜像又漂。
+      - TZ=${TZ:-Asia/Shanghai}
       - AUTOFORGE_LIVE_ENABLED=${AUTOFORGE_LIVE_ENABLED:-0}
       - AUTOFORGE_HA_URL=${AUTOFORGE_HA_URL:-}
       - AUTOFORGE_SESSION_TTL_S=${AUTOFORGE_SESSION_TTL_S:-3600}
