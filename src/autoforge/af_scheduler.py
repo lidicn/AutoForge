@@ -719,6 +719,18 @@ class Scheduler:
             try:
                 snap = self.states.snapshot([trig.entity_id])
             except Exception:  # noqa: BLE001 —— 求值失败保守"不成立"（fail-closed）
+                # AF-771 返工（AF-PM 2026-11-13 裁定「采纳」）：**只有**这条异常分支落痕。
+                # 为什么要留：前提求值失败会被 fail-closed 判成"前提不成立" ⇒ 整条自动化
+                # 静默不派发（现场症状与 AF-771 修复的缺陷**同形**：不进不出、没有任何读数）。
+                # 正常路径不落痕——`None`（不参与）与 `False`（确凿不成立）都是**正常结论**，
+                # 每次都记会把日志刷满，也就看不出真正的异常。
+                # 介入=需人介入：`UnknownEntity` 说明实体被改名/删除（因果链对不上），
+                # 别的异常说明状态源本身坏了；两种都得有人来看，⛔ 不许静默降级成"条件不满足"。
+                logger.warning(
+                    "SCHED_PREMISE_EVAL_FAILED 入口前提求值失败（按前提不成立处理⇒不派发）"
+                    " entity=%s to=%s",
+                    trig.entity_id, trig.to, exc_info=True,
+                )
                 return False
             return snap.get(trig.entity_id) == trig.to
         if trig.type != "group":
