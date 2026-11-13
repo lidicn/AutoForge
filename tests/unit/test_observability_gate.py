@@ -60,6 +60,35 @@ def _load_gate(path: Path):
 
 gate = _load_gate(GATE_PATH)
 
+#: 台账读数的**人手认过的字面**（AF-PM 2026-11-14 门禁增强批第③笔，方案 B）。
+#:
+#: 为什么是一张表而不是散在断言里：`scripts/check_pin_ledger_consistency.py` 会**按 AST 读这张表**，
+#: 与清单自动段逐项对撞 ⇒ 漏改在**本地 gates** 就红，不必等 CI 全量 pytest。表是纯字面量 dict
+#: （⛔ 别写成从 `_auto_counts()` 派生：那样它就和 A 腿同源，"有人认过这个数"这层价值会消失——
+#: 裁定原话：「派生等于第二次『全绿但没人认过』」）。
+#:
+#: 改这里就是一句承诺：**我确认清单里的新读数是对的**。改索引：
+#: `sites`／`files`／`levels` 对 2.1 计数行，`codes`／`coded`／`uncoded` 对 2.2 计数行，
+#: `dup` 对 2.2 表里出现两次以上的码（逐枚白名单，理由在下面那条断言上方）。
+PINS: dict[str, object] = {
+    "sites": 263,
+    "files": 38,
+    "levels": {"debug": 27, "info": 11, "warning": 183, "error": 30, "exception": 12, "critical": 0},
+    "codes": 138,
+    "coded": 149,
+    "dup": {
+        "DEPLOY_AUDIT_PERSIST_FAILED",
+        "OWNER_ALERT_PUBLISH_FAILED",
+        "WATCH_SCRATCH_DELETE_FAILED",
+        "GRANT_STORE_CORRUPT",
+        "TASK_ORDER_STORE_CORRUPT",
+        "WATCH_ENABLED_OVERRIDE_READ_FAILED",
+        "WATCH_ENABLED_OVERRIDE_WRITE_FAILED",
+        "SCHED_PREMISE_EVAL_FAILED",
+    },
+    "uncoded": {"debug": 14, "info": 7, "warning": 72, "error": 10, "exception": 11, "critical": 0},
+}
+
 # --------------------------------------------------------------------------------------
 # 真仓：读数本身
 # --------------------------------------------------------------------------------------
@@ -178,12 +207,14 @@ def test_real_repo_site_readings_are_pinned(real):
     # ③④ `SCHED_PREMISE_EVAL_FAILED` 的**两段新腿**（`_auto_currently_met` 的 group-and 段与
     #    if 段 except，此前裸吞；主站在 `_premise_met`，AF-771 返工批已登记）⇒ 既 +2 站又 +1 重码。
     # ⛔ 无码存量一字未动（四站全带码），§四 六行上限同样不动。
-    # 与 CI run 43493931997 的教训同源：**台账 regen＋§三手工段＋本 pin 是三套**，gates 只查清单那套。
-    assert len(real["sites"]) == 263
+    # 与 CI run 43493931997 的教训同源：**台账 regen＋§三手工段＋本 pin 是三套**。这笔之后
+    # 第三套不再是「只有 CI 全量能抓」——`scripts/check_pin_ledger_consistency.py` 在本地
+    # gates 里把上面那张 `PINS` 与清单自动段逐项对撞，漏改先红在本地。
+    assert len(real["sites"]) == PINS["sites"]
     # v1.29.0 第一批：+`af_grant.py` 一个文件（5 个具名码站点）⇒ 文件 35→36。
     # v1.29.0 第二批：+`af_task_order.py` ⇒ 文件 36→37。
     # v1.30.1（2026-11-13）：+`af_watch_toggle.py` ⇒ 文件 37→38。
-    assert len({s["path"] for s in real["sites"]}) == 38
+    assert len({s["path"] for s in real["sites"]}) == PINS["files"]
     # v1.29.0 第一批 +6：warning 166→169（GRANT_STORE_VERSION_MISMATCH／
     # GRANT_CONFIRM_REJECTED／GRANT_AUDIT_RECORD_FAILED）、error 24→27
     # （GRANT_STORE_CORRUPT 三条腿）。
@@ -196,8 +227,9 @@ def test_real_repo_site_readings_are_pinned(real):
     # ⇒ warning 174→179、info 10→11，六档合计 259。
     # v1.30.7 P3 卫生批 +4 warning（SCHED_TIME_AT_INVALID／PAIR_LINK_FAILURE_COUNT_READ_FAILED／
     # SCHED_PREMISE_EVAL_FAILED 两段新腿）⇒ warning 179→183，六档合计 263。
-    assert dict(lv) == {"debug": 27, "info": 11, "warning": 183, "error": 30, "exception": 12}
-    assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
+    _pinned_levels = PINS["levels"]
+    assert dict(lv) == {k: v for k, v in _pinned_levels.items() if k != "critical"}
+    assert lv["critical"] == _pinned_levels["critical"], "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
 
@@ -247,11 +279,12 @@ def test_real_repo_named_code_readings_are_pinned(real):
     # （af_service.approve_pending 记账失败告警，+1 站 +1 码）。
     # 95→96 站／92→93 枚（2026-10-31 AF-710 留痕半）：`PAIR_SSE_EVENT_FAILED`
     # （af_api._pair_event_gen 吞异常补留痕，+1 站 +1 码）。
-    assert len(coded) == _auto_counts()["coded"], (
-        f"具名码站点现读 {len(coded)} ≠ 自动段 {_auto_counts()['coded']}"
+    assert len(coded) == PINS["coded"], (
+        f"具名码站点现读 {len(coded)} ≠ `PINS['coded']` {PINS['coded']}"
+        "（漏改先看本地 gates 的「台账读数 pin 对账门」，它会点名该改哪个键）"
     )
-    assert len({s["code"] for s in coded}) == _auto_counts()["codes"], (
-        f"具名码枚数现读 {len({s['code'] for s in coded})} ≠ 自动段 {_auto_counts()['codes']}"
+    assert len({s["code"] for s in coded}) == PINS["codes"], (
+        f"具名码枚数现读 {len({s['code'] for s in coded})} ≠ `PINS['codes']` {PINS['codes']}"
     )
     # 41 站／38 枚＝仓内三例"一码两站"，各自的原因不同，所以钉成白名单而不是放宽：
     # ① `DEPLOY_AUDIT_PERSIST_FAILED` 同时出自「这一条没写进盘」与「盘上那份读不回来，裁剪跳过」
@@ -275,21 +308,13 @@ def test_real_repo_named_code_readings_are_pinned(real):
     #      c. `_auto_currently_met` 的 if 段 `except`（AF-784，此前裸吞）。
     #    三条都是「求值失败 ⇒ met=False ⇒ 判 edge_held ⇒ 静默不派发」，症状与「条件真的不成立」
     #    同形，所以必须共用一枚码——⛔ 不许拆成三枚（那是同一个失败轴）。
-    assert dup == {
-        "DEPLOY_AUDIT_PERSIST_FAILED",
-        "OWNER_ALERT_PUBLISH_FAILED",
-        "WATCH_SCRATCH_DELETE_FAILED",
-        "GRANT_STORE_CORRUPT",
-        "TASK_ORDER_STORE_CORRUPT",
-        "WATCH_ENABLED_OVERRIDE_READ_FAILED",
-        "WATCH_ENABLED_OVERRIDE_WRITE_FAILED",
-        "SCHED_PREMISE_EVAL_FAILED",
-    }, f"重码名单漂了：{dup}"
+    assert dup == PINS["dup"], f"重码名单漂了：{dup}"
     nc = Counter(s["level"] for s in real["sites"] if not s["code"])
-    ac0 = _auto_counts()
-    assert sum(nc.values()) == ac0["nocode_total"], f"无码站点现读 {sum(nc.values())} ≠ 自动段 {ac0['nocode_total']}"
-    for _lv, _n in nc.items():
-        assert _n == ac0["nocode_by_level"].get(_lv.upper()), (_lv, _n, ac0["nocode_by_level"])
+    for _lv in gate.LEVELS:
+        assert nc[_lv] == PINS["uncoded"][_lv], (
+            f"无码 {_lv.upper()} 现读 {nc[_lv]} ≠ `PINS['uncoded']` {PINS['uncoded'][_lv]}"
+            "（无码存量是 §四 上限的锚，动它必须连 §四 六行一起谈）"
+        )
 
 
 Q83_CODES = ("DEVICE_GUARD_CATALOG_INJECT_FAILED", "DEVICE_ACL_LOAD_FAILED")
