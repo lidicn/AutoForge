@@ -310,19 +310,52 @@ def _t_get_graph(store: GraphStore, args: dict[str, Any],
 
     ⛔ 不能回"无权查看"——那等于告诉对方"这条存在、只是你的"，把列表上看不到的
     信息又从错误消息漏回去了。
+
+    AF-777（2026-11-14，§1.216 裁定）：归属判定**只留服务层一处**。修前这里内联了
+    一份 `caller and not _owner_face(current)` + `_existing_owner(...) != caller` 的分支，
+    与 `svc._assert_archive_visible`（同一句文案 `visible_error`、同一份 `decide` 判定表）
+    是**两套实现**；两套就有分叉的那天——比如残缺身份（持令牌缺 subject）在这里被
+    `caller` 空串提前放行，服务层却是 BROKEN 403。现在本函数只做三件事：
+    ① 调服务层唯一入口拿判定；② 把它的两种拒（403 残缺身份／404 同形文案）翻成 MCP
+    载荷；③ 把 `svc.get_graph` 的 `FileNotFoundError` 也翻成**同一份** 404 文案
+    （修前它冒到 dispatcher 的 `FileNotFoundError` 分支，说的是"没找到该归档/版本：<路径>"，
+    与"他人的"那句**不同形** ⇒ 拿两种回执一比就知道归档存不存在）。
     """
     name = args["name"]
     caller = str((current or {}).get("subject") or "")
-    if caller and not _owner_face(current):
-        if svc._existing_owner(store, name) != caller:
-            return {
-                "ok": False,
-                "code": ADM_ERR_PAYLOAD_INVALID,
-                "error": {"code": "ARCHIVE_NOT_FOUND",
-                          "message": f"没找到归档 {name!r}（或它不属于你）",
-                          "fix": {"next_action": "af_list_graphs 看你能看到的归档"}},
-            }
-    return svc.get_graph(store, name, args.get("version"))
+    try:
+        svc._assert_archive_visible(
+            store, name,
+            caller=caller,
+            caller_is_owner=_owner_face(current),
+            token_identity=(current is not None),
+        )
+        return svc.get_graph(store, name, args.get("version"))
+    except svc.ServiceError as exc:
+        # ⚠️ 必须捕 `svc.ServiceError`（af_mcp 自己也有同名类，捕错就冒到 catch-all）
+        if exc.status == 403:
+            return {"ok": False, "code": ADM_ERR_AUTH_REQUIRED,
+                    "error": {"code": "FORBIDDEN", "message": str(exc)}}
+        return _archive_not_found_payload(name)
+    except FileNotFoundError:
+        # 归属通过但归档/版本真不存在 ⇒ 与"他人的"**同一份**载荷（逐字同形，oracle 闭）
+        return _archive_not_found_payload(name)
+
+
+def _archive_not_found_payload(name: str) -> dict[str, Any]:
+    """读面 404 载荷**单源**：文案走 `visible_error`，与 HTTP 面同一条。
+
+    ⛔ 不许在这里手写第二份文案：AF-777 的整条纪律就是"文案与判定都只有一处"。
+    """
+    from .af_ownership import visible_error
+
+    return {
+        "ok": False,
+        "code": ADM_ERR_PAYLOAD_INVALID,
+        "error": {"code": "ARCHIVE_NOT_FOUND",
+                  "message": visible_error(name),
+                  "fix": {"next_action": "af_list_graphs 看你能看到的归档"}},
+    }
 
 
 def _t_delete_graph(store: GraphStore, args: dict[str, Any],
