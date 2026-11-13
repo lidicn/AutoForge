@@ -393,6 +393,22 @@ def _strip_indent(line: str) -> str:
     return line.lstrip()
 
 
+def _duration_text(value: Any, *, default: str = "0s") -> str:
+    """渲染用的时长文案；**字面量不合法时原样显示**，⛔ 不把渲染器炸掉（AF-786）。
+
+    为什么不能让这里抛：渲染是**叙述面**，不是校验面。修前 `wait "abc"`／`for "-10m"` 会让
+    整次 `render_automation` 抛 `ValueError`，而 `StaticScanner._check_nl_coverage` 正是在
+    扫描中调它 ⇒ 整份 IR **一条诊断都拿不到**，只剩一句 traceback——偏偏那才是最该被诊断的
+    那份 IR。校验归 `af_scanner._check_durations`（`DURATION_INVALID`），这里只负责把值
+    照原样叙述出来，让人一眼看见「这份图里写了个非法时长」。
+    """
+    raw = value if value not in (None, "") else default
+    try:
+        return format_duration(parse_duration(raw))
+    except (TypeError, ValueError):
+        return f"非法时长 {raw!r}"
+
+
 def _emit_text(emit: Any) -> str:
     """v0.3.0 发布侧：`emit` 的自然语言。
 
@@ -403,7 +419,7 @@ def _emit_text(emit: Any) -> str:
     payload = f"（附带 {'、'.join(sorted(data))}）" if data else ""
     delay = getattr(emit, "delay", None)
     if delay:
-        return f"延迟 {format_duration(parse_duration(delay))}后发出事件「{emit.event}」{payload}"
+        return f"延迟 {_duration_text(delay)}后发出事件「{emit.event}」{payload}"
     return f"发出事件「{emit.event}」{payload}"
 
 
@@ -426,7 +442,7 @@ def _node_text_base(auto: Automation, node: Node) -> str:
     if node.kind == "on":
         text = f"当 {_trigger_text(node.trigger) if node.trigger else '（无触发源）'}"
         if node.for_:
-            text += f"，并且这个状态**持续保持 {format_duration(parse_duration(node.for_))}**"
+            text += f"，并且这个状态**持续保持 {_duration_text(node.for_)}**"
         return text + "："
     if node.kind == "if":
         return f"检查 {_expr_text(node.expr)}"
@@ -439,11 +455,11 @@ def _node_text_base(auto: Automation, node: Node) -> str:
         if node.room:
             bits.append(f"在 {node.room} 应答")
         if node.timeout:
-            bits.append(f"超时 {format_duration(parse_duration(node.timeout))}")
+            bits.append(f"超时 {_duration_text(node.timeout)}")
         suffix = f"（{('，'.join(bits))}）" if bits else ""
         return f"询问：“{node.prompt}”{suffix}"
     if node.kind == "wait":
-        return f"等待 {format_duration(parse_duration(node.duration or '0s'))}"
+        return f"等待 {_duration_text(node.duration)}"
     if node.kind == "set":
         source = f"变量 {node.from_}" if node.from_ else f"“{node.value}”"
         return f"记下 {node.var} = {source}"

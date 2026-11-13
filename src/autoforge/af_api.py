@@ -2278,6 +2278,12 @@ def build_app(
                 loaded = json.loads(p.read_text(encoding="utf-8"))
                 if isinstance(loaded, dict):
                     data = {str(k): int(v) for k, v in loaded.items()}
+                else:
+                    # AF-786 顺带（§1.226 minor）：顶层是**合法 JSON 但不是对象**（`[1,2,3]`／`42`／
+                    # `null`）时，修前 `isinstance` 不成立就静默落到 `data={}`，下一行原子写把全表
+                    # 覆盖——与「读不出」同一个后果（历史计数清零），却一行留痕都没有。
+                    # 这里翻成同一族的读失败，交给下面的逐键抢救＋具名 warning 走，⛔ 不再多一条伤害面。
+                    raise ValueError(f"顶层不是对象（{type(loaded).__name__}）")
             except (OSError, ValueError) as exc:
                 # AF-779（2026-11-14，§1.216 裁定）：读失败⛔ 不许**静默** `data={}` 后整文件覆盖。
                 # 修前的形状是：盘上计数文件坏一格 ⇒ 读不出来 ⇒ 从空表重来 ⇒ 下一行

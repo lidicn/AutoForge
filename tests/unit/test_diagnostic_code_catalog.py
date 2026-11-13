@@ -189,7 +189,10 @@ def test_catalog_size_reading_is_pinned():
     # "HH:MM[:SS] 或 sunrise/sunset±offset" 收成"只认 HH:MM"，与运行期 matches_at 同源。
     # ⚠️ 上一笔（1.14.11）我改了码表却没动这枚 pin 与文档读数——当时 `-k` 选择罩不到本文件，
     #    CI 才会红。教训：加诊断码必查这三处（本 pin／两份架构文档／_NON_LITERAL_KEYS）。
+    # 53 → 54：AF-786（2026-11-14）——DURATION_INVALID（`for`／`debounce`／`wait`／
+    # `ask.timeout`／`emit.delay` 的时长字面量过不了运行期 `parse_duration`：`for`/`debounce`
+    # 的抛点在事件分发里（打断整轮）、`wait`/`timeout` 被 `_suspend` 吞成软失效）。
     assert "CONFIRM_WITHOUT_DENY_PATH" not in CHECKS, "确认闸已撤，这枚码不该再发出"
     assert "CONFIRM_WITHOUT_DENY_PATH" not in CODE_HINT
-    assert len(CHECKS) == 53, f"CHECKS 现读 {len(CHECKS)} 枚，两份架构文档那句读数要跟着改"
+    assert len(CHECKS) == 54, f"CHECKS 现读 {len(CHECKS)} 枚，两份架构文档那句读数要跟着改"
     assert set(CHECKS) == set(CODE_HINT), "两份目录的键集要同源：只进一份就是半张脸"

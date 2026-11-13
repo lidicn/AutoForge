@@ -93,3 +93,29 @@ def test_r3_healthy_file_does_not_log(tmp_path, monkeypatch, caplog):
     assert _codes(caplog) == [], "正常读⛔ 不许落痕"
     data = json.loads(cnt.read_text(encoding="utf-8"))
     assert data.get("healthy_key") == 2 and data.get("third_bogus_key") == 1
+
+
+# ── R4（AF-786 顺带，§1.226 minor）顶层不是对象 ⇒ 也不算"读成功" ──────────
+@pytest.mark.parametrize("shape", ["[1, 2, 3]", "42", "null", '"a string"'])
+def test_r4_non_object_top_level_is_not_a_silent_zeroing(tmp_path, monkeypatch, caplog, shape):
+    """合法 JSON 但顶层不是对象（`[1,2,3]`／`42`／`null`）——修前静默 `data={}` 再整表覆盖。
+
+    `json.loads` 不抛、`isinstance(loaded, dict)` 不成立 ⇒ 旧形状直接落空表，
+    与「读不出」同一个后果（历史计数清零）却一行留痕都没有（§1.226 的 minor）。
+    现在它走同一族读失败：留 1 条具名 warning，并尽量抢救（这种形状通常救不出键）。
+    """
+    caplog.set_level(logging.WARNING)
+    client, cnt = _client(tmp_path, monkeypatch)
+    cnt.parent.mkdir(parents=True, exist_ok=True)
+    cnt.write_text(shape, encoding="utf-8")
+
+    r = client.get("/pair?k=shape_bogus_key", headers={"Accept": "application/json"})
+    assert r.status_code == 404, "计数读面出问题⛔ 不许改变主回执"
+
+    assert len(_codes(caplog)) == 1, (
+        f"顶层非对象必须留 1 条具名码（⛔ 静默清零），实得 {_codes(caplog)}"
+    )
+    msg = next(r.message for r in caplog.records if r.message.startswith(CODE))
+    assert "顶层不是对象" in msg, f"留痕要点名是哪种读失败：{msg[:80]}"
+    data = json.loads(cnt.read_text(encoding="utf-8"))
+    assert data == {"shape_bogus_key": 1}, f"回写只剩本轮那一笔：{data!r}"

@@ -30,6 +30,7 @@ from .af_ir import (
 )
 from .af_ir.expr import ExprError, check_expr, collect_var_refs
 from .af_nl import render_automation
+from .af_time import parse_duration
 
 __all__ = ["Diagnostic", "ScanResult", "StaticScanner", "live_preflight", "CHECKS", "CODE_HINT", "GuardRule", "DeviceGuardRegistry"]
 
@@ -94,6 +95,7 @@ CHECKS: dict[str, str] = {
     # ── v1.14.22 假绿三族收口（审计 AF-123/124/125）──
     "TIME_AT_INVALID": "time 触发的 at 字段不是 HH:MM——秒格式/sunrise/sunset/25:00 这类值 build 照样 ok 是假绿（运行期 matches_at 只认 HH:MM）",
     "FOR_WITHOUT_TO": "`for` 持续条件挂在**没有 to 的入口**上（group 型或变化型 state）——运行期 `_still_holds` 只能 fail-closed，条件是死的",
+    "DURATION_INVALID": "`for`／`wait` 的时长字面量过不了运行期同一份 `af_time.parse_duration`（负值／`-00:10:00`／非数字／空壳）——build 绿，运行期要么整轮事件分发抛穿、要么该节点静默软失效",
     "SERVICE_UNKNOWN": "do 动作的服务名在该域不存在（turn_onnn）——build/sim 双绿但真机必 404",
     "ENTITY_CHECK_DEGRADED": "设备目录为空，实体存在性校验静默跳过（entity_check=skipped 但零诊断）——假绿通道",
     # ── AF-707 假绿族（PM 裁定补码，2026-10-31）──
@@ -163,6 +165,7 @@ CODE_HINT: dict[str, str] = {
                           "确认 DB 已对接此房间（room 字段）；未对接时实例会走 on_timeout 静默兜底。",
     "TIME_AT_INVALID": "at 只能写 HH:MM（00-23:00-59）；日落日出请用 `type: \"sun\"` 触发器，别塞进 time.at。",
     "FOR_WITHOUT_TO": "给这条入口补显式 `to`（state 型写目标态），或把 `for` 挪到带 `to` 的入口；group 型入口不能挂 `for`。",
+    "DURATION_INVALID": "把时长改成非负、能被 `parse_duration` 解析的形态：`10m`／`90s`／`2h`／`1d`／纯数字秒／HA 原生 `00:10:00`／ISO `PT5S`。⛔ 负值不是「反向等待」的写法，运行期一律 fail-closed 抛错。",
     "SERVICE_UNKNOWN": "服务名打错（turn_onnn）；该域合法服务用 af_resolve_entity 查 services 清单。",
     "ENTITY_CHECK_DEGRADED": "先 af_catalog 刷新设备目录再 build——空目录时幽灵实体检测不到，这条 ok 不可信。",
     "ASK_BINARY_NO_DENY_PATH": "给二元 ask 补 `no` 边（指向 pass/收尾），或把 `default` 改指非执行下游；⛔ 不要删 no 让 unknown 落到 do。",
@@ -449,6 +452,8 @@ class StaticScanner:
         self._check_time_at(auto, out)
         # AF-780（2026-11-14）：`for` 持续条件必须挂在带 `to` 的入口上（运行期只能 fail-closed）
         self._check_for_target(auto, out)
+        # AF-786（2026-11-14）：`for`／`wait` 的时长字面量进构建闸——与运行期同一份 parse_duration
+        self._check_durations(auto, out)
         self._check_entities(auto, out)
         self._check_static_loop(auto, out)
         self._check_emit(auto, out)
@@ -1013,6 +1018,68 @@ class StaticScanner:
                         node.id,
                     )
                 )
+
+    # AF-786（2026-11-14）：时长字面量进构建闸——**闸门口径就是运行期的那个解析器本身**。
+    #
+    # 运行期口径（`af_time.parse_duration`，P1-9 起 fail-closed）：负值／inf／nan／空串／
+    # `HH:MM:SS` 里非数字一律抛 `ValueError`（`-00:10:00` 在 AF-775 之前还会静默成 600 秒）。
+    # 闸门此前**一枚时长字段都不查**，于是两条只在真机上才露的通道一直开着：
+    #   · `for`／`debounce` 畸形 ⇒ `Scheduler._update_pending`／`_try_fire` 在 `handle_event`
+    #     里直接抛（那两行都不在 `try` 里）⇒ **整轮事件分发停摆**：不是这一条自动化失败，
+    #     是同一轮里排在它后面的每一条自动化都不再被处理；
+    #   · `wait`／`ask.timeout` 畸形 ⇒ 执行到该节点时 `_suspend` 接住异常走 `_soft_fail`，
+    #     实例静默走 on_error/default ⇒ build 绿、仿真绿、真机上这一段永远不发生。
+    # ⇒ 不在闸门里另写一份「看起来合法」的正则（AF-780 的 `time.at` 就是这么造出假绿的），
+    #   直接调用同一个 `parse_duration`：它抛，就落 `DURATION_INVALID`（ERROR）。
+    #
+    # 射程（2026-11-14 定，⛔ 别随手加减）：`for`／`debounce`（入口）／`wait.duration`／
+    # `ask.timeout`／`emit.delay`——这五格都是「运行期同一个解析器抛、且抛点没有具名码兜底」。
+    # 为什么不含另外两格：`canary.duration` 有 `CANARY_DURATION_PARSE_FAILED` 具名码＋
+    # 「按无观察期处理」的既裁降级（那是语义选择，不是漏检）；`sun.offset` 走
+    # `af_nl_parse` 的入向解析、不在运行期调 `parse_duration`。
+    def _check_durations(self, auto: Automation, out: ScanResult) -> None:
+        for node in auto.entry_nodes():
+            self._duration_diag(auto, node, "for", node.for_, out)
+            self._duration_diag(auto, node, "debounce", node.debounce, out)
+        for node in auto.nodes.values():
+            if node.kind == "wait":
+                self._duration_diag(auto, node, "wait", node.duration, out)
+            elif node.kind == "ask":
+                self._duration_diag(auto, node, "timeout", node.timeout, out)
+            emit = getattr(node, "emit", None)
+            if emit is not None:
+                self._duration_diag(auto, node, "emit.delay", getattr(emit, "delay", None), out)
+
+    #: 时长字段 → 不合法时**运行期实际的后果**（诊断正文里点名，别让人自己猜）
+    _DURATION_FALLBACK: ClassVar[dict[str, str]] = {
+        "for": "`for` 的抛点在 `Scheduler._update_pending`，它会把**整轮事件分发**打断",
+        "debounce": "`debounce` 的抛点在 `Scheduler._try_fire`，同样打断**整轮事件分发**",
+        "wait": "`wait` 的抛点被 `_suspend` 吞成 `_soft_fail`，实例静默走 on_error/default",
+        "timeout": "`timeout` 的抛点被 `_suspend` 吞成 `_soft_fail`，实例静默走 on_error/default",
+        "emit.delay": "`emit.delay` 的抛点在 `Executor._emit_node`，会把实例求值段打断",
+    }
+
+    def _duration_diag(
+        self, auto: Automation, node: Node, field: str, raw: Any, out: ScanResult
+    ) -> None:
+        """一个时长字段过一遍运行期解析器；过不了就落一条具名诊断（含后果与合法形态）。"""
+        if raw in (None, ""):
+            return
+        try:
+            parse_duration(raw)
+        except (TypeError, ValueError) as exc:
+            out.diagnostics.append(
+                Diagnostic(
+                    "DURATION_INVALID",
+                    ERROR,
+                    f"节点 {node.id} 的 {field}={raw!r} 不是合法时长：{exc}"
+                    f"——运行期 `parse_duration` 就在这一格抛，"
+                    f"{self._DURATION_FALLBACK.get(field, '该节点会在运行期抛异常')}；"
+                    f"合法形态：10m／90s／2h／1d／纯数字秒／HA 原生 00:10:00／ISO PT5S，且必须非负",
+                    auto.id,
+                    node.id,
+                )
+            )
 
     # AF-125（假绿三族）：`light.turn_onnn` 实体是真的、服务名是幽灵——实体存在性
     # 校验管不到这一层，build ok + sim ok + 真机 404。判据用 af_affordance 的
