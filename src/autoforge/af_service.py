@@ -1954,6 +1954,20 @@ def _expect_failure_message(report: Any) -> str:
     return ""
 
 
+def _cancelled_rows(insts: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """AF-782：被取消实例的回执行（reason 取 `context.cancel_reason`，⛔ 不读 fail_reason）。
+
+    两者是不同来源：`fail_reason` 只在求值/动作失败时写，cancelled 实例没有那个键
+    ——修前共用一列，回执里 cancelled 的 reason 恒为空串。
+    """
+    return [
+        {"instance_id": i.get("instance_id"),
+         "node": i.get("current_node"),
+         "reason": str(((i.get("context") or {}).get("cancel_reason")) or "")[:220]}
+        for i in insts
+    ]
+
+
 def simulate_track(
     track: str,
     ir: Mapping[str, Any],
@@ -2053,8 +2067,17 @@ def simulate_track(
     # 现在 ok 派生自实例终态；「压根没跑出实例」是另一档，用 verdict 明说（⛔ 不混成失败，
     # 也不许继续冒充通过——那是 D 类：回执缺"没验到"这一档）。
     inst_states = [str(i.get("state") or "") for i in (out.get("instances") or [])]
+    # AF-782（2026-11-14，§1.220 裁定）：**cancelled 不是 failed**，必须分开列。
+    # 修前两者并进 `failed_insts` ⇒ `mode=restart` 的自动化每预演一次就报 `verdict=failed`
+    # （第二次触发抢占第一次实例就会产生 cancelled），现场于是出现"预演永远红"，
+    # 真失败反而淹在噪声里（QA-MCP R6 的 restart 双触发腿就是这么被误判的）。
+    # 但⛔ 也不许把 cancel 悄悄丢掉（2026-10-29 反假绿意图）：它单列成
+    # `cancelled_instances`，reason 取 `context.cancel_reason`（修前读 `fail_reason`，
+    # cancelled 实例根本没有那个键 ⇒ 回执里恒空串，等于"取消了但不知道为什么"）。
     failed_insts = [i for i in (out.get("instances") or [])
-                    if str(i.get("state") or "") in ("failed", "cancelled")]
+                    if str(i.get("state") or "") == "failed"]
+    cancelled_insts = [i for i in (out.get("instances") or [])
+                       if str(i.get("state") or "") == "cancelled"]
     if failed_insts:
         out["ok"] = False
         out["verdict"] = "failed"
@@ -2064,6 +2087,17 @@ def simulate_track(
              "reason": str(((i.get("context") or {}).get("fail_reason")) or "")[:220]}
             for i in failed_insts
         ]
+        if cancelled_insts:
+            # 混合档：真失败压过取消（verdict=failed），但两清单都在（⛔ 不丢信息）
+            out["cancelled_instances"] = _cancelled_rows(cancelled_insts)
+    elif cancelled_insts:
+        # 纯 cancelled ⇒ 设计内动作（restart 抢占/人工取消）：跑过了，不是失败。
+        out["ok"] = True
+        out["verdict"] = "ran"
+        out["cancelled_instances"] = _cancelled_rows(cancelled_insts)
+        out["note"] = ("有实例被取消（设计内：restart 抢占旧实例／人工取消），已与失败分开"
+                       "列入 cancelled_instances ⇒ 不算失败；⚠️ 但也不等于「验过了」——"
+                       "要验链路请看过 expect 栏。")
     elif not inst_states:
         out["ok"] = True          # 没跑出失败，但也没验到任何东西
         out["verdict"] = "nothing_triggered"
