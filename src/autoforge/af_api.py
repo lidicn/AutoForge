@@ -2245,6 +2245,26 @@ def build_app(
     def _pair_failure_count_path() -> Path:
         return Path(store_root) / ".auth" / "pair_link_failures.json"
 
+    def _pair_failure_salvage(p: Path) -> dict[str, int]:
+        """AF-779：整份 JSON 读不出来时**逐键抢救**——读得出多少算多少。
+
+        为什么不是一坏了之：这份文件是限流壳子的持久化层（容器重建清零、重启靠它恢复）。
+        修前坏一格就把整表清空、下一行原子写把全表覆盖 ⇒ 一次坏写清零所有 link_key 的
+        历史计数。逐键抢救的原则：**只丢真正坏掉的那一格**，好键原样带过去。
+        解析策略（⛔ 不猜值）：按顶层 `"key": <int>` 逐对找，值必须是纯数字；其它形态一律丢。
+        """
+        try:
+            raw = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return {}
+        out: dict[str, int] = {}
+        for key, val in re.findall(r'"((?:[^"\\]|\\.)*)"\s*:\s*(\d+)', raw):
+            try:
+                out[str(key)] = int(val)
+            except (TypeError, ValueError):  # pragma: no cover —— 正则已保证是数字
+                continue
+        return out
+
     def _pair_record_failure(link_key: str) -> int:
         """每次访问 GET /pair 都记一笔（按 link_key），落盘 .auth/ 下，重启不归零。
 
@@ -2258,8 +2278,21 @@ def build_app(
                 loaded = json.loads(p.read_text(encoding="utf-8"))
                 if isinstance(loaded, dict):
                     data = {str(k): int(v) for k, v in loaded.items()}
-            except (OSError, ValueError):
-                data = {}
+            except (OSError, ValueError) as exc:
+                # AF-779（2026-11-14，§1.216 裁定）：读失败⛔ 不许**静默** `data={}` 后整文件覆盖。
+                # 修前的形状是：盘上计数文件坏一格 ⇒ 读不出来 ⇒ 从空表重来 ⇒ 下一行
+                # `atomic_write_text` 把**所有历史计数**（含别的 link_key 的好键）一起冲掉。
+                # 后果不是"少记一次"，而是"限流壳子被一次坏写清零、而且盘上没有任何一行说明为什么"。
+                # 现在：① 留一条具名 warning（谁坏、坏在哪）；② 尽量保住能读出来的部分——
+                #    `json.loads` 失败时**逐键抢救**（坏的不是整份文件，而常常是某一格），
+                #     读得出多少算多少，只丢真正坏掉的那部分。
+                recovered = _pair_failure_salvage(p)
+                data = recovered
+                logger.warning(
+                    "PAIR_LINK_FAILURE_COUNT_READ_FAILED 配对链接失败计数读取失败"
+                    "（已尽力抢救可解析的键，本轮回写只覆盖抢救结果）：path=%s err=%r 抢救键数=%d",
+                    p, exc, len(recovered),
+                )
         data[link_key] = data.get(link_key, 0) + 1
         try:
             atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2))
