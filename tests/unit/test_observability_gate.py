@@ -692,7 +692,7 @@ def _findings(root: Path) -> list[str]:
 
 
 def _rules(findings: list[str]) -> set[str]:
-    return {f[0] for f in findings if f[:2] in ("A：", "B：", "C：", "D：", "E：")}
+    return {f[0] for f in findings if f[:2] in ("A：", "B：", "C：", "D：", "E：", "F：")}
 
 
 def _replace(path: Path, needle: str, new: str) -> None:
@@ -1112,3 +1112,114 @@ def test_alias_logger_is_in_scope(synth):
     hit = [s for s in sites if s["code"] == "MOD_A_ALIAS_CODE"]
     assert hit and hit[0]["recv"] == "_alias", (hit, outside[:3])
     assert outside == []
+
+
+# --------------------------------------------------------------------------------------
+# F：登记行的函数归属（§1.223 配反案例的门禁化）
+# --------------------------------------------------------------------------------------
+
+
+def _reg_and_coded(real):
+    doc = (REPO / gate.DOC_REL).read_text(encoding="utf-8")
+    reg, errs = gate.parse_register(doc)
+    assert not errs, errs[:3]
+    return reg, {f"{s['path']}:{s['lineno']}": s for s in real["coded"]}
+
+
+def test_f_real_repo_attribution_is_green(real):
+    """真仓 149 行登记，每一行的依据都点名它现在所在的那个函数。"""
+    reg, coded = _reg_and_coded(real)
+    assert len(reg) == len(coded) == 149, (len(reg), len(coded))
+    assert gate.fn_attribution_findings(reg, coded) == []
+
+
+def test_f_real_repo_has_swap_prone_groups_to_guard(real):
+    """牙口腿：真仓里确实存在「同文件同码多站点且分属不同函数」的组——F 才有事可挡。
+
+    没有这一条，F 变成「永远绿的空判据」也没人发现（真仓当前 **4 组**这种形状：
+    `DEPLOY_AUDIT_PERSIST_FAILED`／`SCHED_PREMISE_EVAL_FAILED`／
+    `WATCH_ENABLED_OVERRIDE_WRITE_FAILED`／`WATCH_SCRATCH_DELETE_FAILED`；
+    另有 4 组同码站点落在同一个函数里，互换无害，F 本来也不该红）。
+    """
+    _reg, coded = _reg_and_coded(real)
+    groups: dict[tuple[str, str], set[str]] = {}
+    for site in coded.values():
+        groups.setdefault((site["path"], site["code"]), set()).add(site["func"])
+    prone = {k: v for k, v in groups.items() if len(v) > 1}
+    assert len(prone) >= 4, f"配反风险组只剩 {len(prone)} 组，F 的射程前提变了：{prone}"
+
+
+def _site(path: str, lineno: int, code: str, func: str) -> dict:
+    return {"path": path, "lineno": lineno, "code": code, "level": "warning", "func": func}
+
+
+def _row(path: str, lineno: int, code: str, func_named: str) -> dict:
+    return {
+        "code": code,
+        "level": "warning",
+        "级别语义": "合成用例",
+        "介入": "不需人介入",
+        "依据": f"{path} 的 `{func_named}`",
+        "理由": "合成用例，这一行只是为了给 F 条一颗牙",
+        "认领": "AF",
+    }
+
+
+def test_f_swapped_anchors_are_red():
+    """§1.223 现场复形：两站互换锚点、码与级别都不变 ⇒ B 绿、F 必须红。
+
+    真实现场是 `WATCH_ENABLED_OVERRIDE_WRITE_FAILED` 的 `enable_by_tag`（:968）与
+    `set_automation_enabled`（:1174）被配反——这里用同名形状复现，不碰真仓。
+    """
+    path = "src/autoforge/af_service.py"
+    coded = {
+        f"{path}:968": _site(path, 968, "WATCH_ENABLED_OVERRIDE_WRITE_FAILED", "enable_by_tag"),
+        f"{path}:1174": _site(path, 1174, "WATCH_ENABLED_OVERRIDE_WRITE_FAILED", "set_automation_enabled"),
+    }
+    good = {
+        f"{path}:968": _row(path, 968, "WATCH_ENABLED_OVERRIDE_WRITE_FAILED", "enable_by_tag"),
+        f"{path}:1174": _row(path, 1174, "WATCH_ENABLED_OVERRIDE_WRITE_FAILED", "set_automation_enabled"),
+    }
+    assert gate.fn_attribution_findings(good, coded) == []
+
+    swapped = {
+        f"{path}:968": _row(path, 968, "WATCH_ENABLED_OVERRIDE_WRITE_FAILED", "set_automation_enabled"),
+        f"{path}:1174": _row(path, 1174, "WATCH_ENABLED_OVERRIDE_WRITE_FAILED", "enable_by_tag"),
+    }
+    f = gate.fn_attribution_findings(swapped, coded)
+    assert len(f) == 2, f
+    assert all(x.startswith("F：") for x in f)
+    assert "enable_by_tag" in " ".join(f) and "set_automation_enabled" in " ".join(f)
+
+
+def test_f_missing_function_name_is_red():
+    """依据里一个函数名都没点名（只写"模块 docstring"／"见代码"）⇒ 红：那等于没声明归属。"""
+    path = "src/autoforge/af_x.py"
+    coded = {f"{path}:10": _site(path, 10, "X_CODE", "_refresh")}
+    row = {f"{path}:10": {**_row(path, 10, "X_CODE", "_refresh"), "依据": f"{path} 模块 docstring"}}
+    f = gate.fn_attribution_findings(row, coded)
+    assert len(f) == 1 and "一个函数名都没点" in f[0], f
+
+
+def test_f_does_not_police_the_lineno_itself():
+    """⛔ F 不核行号：同一函数里的另一枚同码站点照样算归属正确（行号漂移归 A 条）。"""
+    path = "src/autoforge/af_x.py"
+    coded = {f"{path}:10": _site(path, 10, "X_CODE", "_load")}
+    row = {f"{path}:10": _row(path, 10, "X_CODE", "_load")}
+    assert gate.fn_attribution_findings(row, coded) == []
+
+
+def test_f_orphan_registration_is_not_double_reported():
+    """登记过期（锚点已不是具名码站点）由 B 报，F ⛔ 不跟着红一遍。"""
+    path = "src/autoforge/af_x.py"
+    row = {f"{path}:999": _row(path, 999, "X_CODE", "_load")}
+    assert gate.fn_attribution_findings(row, {}) == []
+
+
+def test_f_synth_wrong_function_name_is_red(synth):
+    """端到端：合成树上把某一行的依据改成隔壁函数 ⇒ 门整体红在 F。"""
+    doc = synth["root"] / "docs" / "可观测性清单.md"
+    _replace(doc, "src/autoforge/mod_a.py 的 `save`", "src/autoforge/mod_a.py 的 `load`")
+    f = _findings(synth["root"])
+    assert "F" in _rules(f), f
+    assert any("的 `load`" in x or "`load`" in x for x in f), f

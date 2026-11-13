@@ -19,7 +19,7 @@
 HTTP 侧要不要生成 request id、诊断环形缓冲的 TTL 填哪一档，是运行时语义与对外契约，递 DCD
 （见清单 §七），不在本门射程内。
 
-五条判据，各自单独可红：
+六条判据，各自单独可红：
 
 - **A 自动段对撞**：清单的自动段（`<!-- AUTO-BEGIN/END -->` 之间）必须逐行等于现读的**四张表**＋计数行
   （2.1 每文件×级别分布／2.2 具名码站点／2.3 关联 id 面／2.4 HTTP 面失败出口读数）。多一枚站点、
@@ -39,6 +39,12 @@ HTTP 侧要不要生成 request id、诊断环形缓冲的 TTL 填哪一档，�
   在仓内**没有对账资产**——本门先把它变成资产：数字变了而账没改，就红。
   第四档 `账过期·待补码` 由裁定 20261012 §二 引入，含义是「登记值已按现读改对，但这一格欠的是补码」；
   ⛔ 它不是「已还」，也不是抬 §四 上限的替身——这一档只动 §五，棘轮那六行一个数字都不改。
+- **F 登记行的函数归属**：每条 §三 登记行的「依据」必须点名**它现在指向的那个外层函数**
+  （`ast` 现读的 `FunctionDef` 名，`Class.method` 取最后一段）。这一条补的是 B 的盲区：
+  B 只核「这一行有没有登记这枚码」，而 §1.223 的现场是**同文件同码多站点重钉时按
+  `(文件, 码)` 顺序配对把两站配反**——两个锚点都还是合法具名码站点、码也一样，B 全绿，
+  但每个锚点旁边写的是隔壁那个函数的理由。F 只核「函数归属」，⛔ 不核行号本身
+  （行号漂移由 A 逼人重生成，两条分工不重叠）。
 
 射程前提（读不到就 `exit 2`，不许「没有发现」冒充「没有问题」）：`src/autoforge` 不在、任一 `.py`
 解析不了、清单文件不在、自动段标记缺失、§三／§四／§五 标题缺失、`af_cli.py` 读不出（D 的射程）、
@@ -111,6 +117,8 @@ DEBT_KEYS: tuple[str, ...] = (
 SITE_RE = re.compile(
     r"^- `(?P<path>[^`]+):(?P<lineno>\d+)` · code=(?P<code>[A-Z0-9_]+) · level=(?P<level>[a-z]+)"
 )
+#: F 条：§三「依据」里以反引号点名的标识符（`GrantStore._load` 取最后一段比）。
+NAMED_IDENT_RE = re.compile(r"`([A-Za-z_][\w.]*)`")
 CEIL_RE = re.compile(r"^- (?P<level>[a-z]+) = (?P<ceiling>\d+)$")
 DEBT_RE = re.compile(
     # 第四档 `账过期·待补码`（裁定 20261012-AF可观测性台账过期三格 §二）：登记值已与现读对上，
@@ -533,6 +541,51 @@ def parse_debt(doc: str) -> tuple[dict[str, dict], list[str]]:
     return out, errs
 
 
+def fn_attribution_findings(
+    register: dict[str, dict], coded_by_key: dict[str, dict]
+) -> list[str]:
+    """F：登记行的「依据」必须点名它**现在**落着的那个外层函数（§1.223 配反案例的门禁化）。
+
+    B 条的盲区（2026-11-14 P3 批实测两次）：B 只核「这一枚具名码在那一行有没有登记」。
+    手工段重钉时按 `(文件, 具名码)` 顺序配对，**同文件同码的多站点会被互换**——
+    互换后两个锚点都仍是合法具名码站点、码与级别都一样，B 照样全绿，可每个锚点旁边
+    写着的是隔壁那个函数的理由（现场：`WATCH_ENABLED_OVERRIDE_WRITE_FAILED` 的
+    `enable_by_tag`/`set_automation_enabled` 两站被配反，靠人肉 AST 才看出来）。
+
+    本条的判据只有一句话：**`ast` 现读的最内层 `FunctionDef` 名，必须出现在该行「依据」
+    里以反引号点名的标识符中**（允许 `Class.method` 写法，取最后一段比）。它**不核行号**
+    ——行号漂移归 A 条（重生成）管，两条分工不重叠，避免同一个漂移红两遍。
+
+    只核「依据」这一格而不是整行：依据的语义就是「这一站在哪、凭什么」，函数名写在那里
+    才是归属声明；理由段里顺嘴提到别的函数不该被当成归属。
+    """
+    out: list[str] = []
+    for key, ent in sorted(register.items()):
+        site = coded_by_key.get(key)
+        if site is None:
+            continue  # B 条已经报「登记过期」，同一件事不红两遍
+        func = site["func"]
+        anchor = ent.get("依据", "")
+        named = {tok.split(".")[-1] for tok in NAMED_IDENT_RE.findall(anchor)}
+        if func == "<module>":
+            ok = "<module>" in anchor or "模块级" in anchor
+            want = "`<module>`（或写「模块级」）"
+        else:
+            ok = func in named
+            want = f"`{func}`"
+        if ok:
+            continue
+        got = "、".join(f"`{n}`" for n in sorted(named)) or "（一个函数名都没点）"
+        out.append(
+            f"F：登记 `{key}`（`{ent['code']}`）现在落在 {want} 里，但依据里点名的是 {got}"
+            "——这正是 §1.223 的配反形状（同文件同码多站点重钉按顺序配对会互换），"
+            "B 条只核「这一行有没有登记这枚码」，核不出这个。"
+            f"修法：把这一行的锚点改回它依据里那个函数所在的站点（现读：{site['path']}:{site['lineno']}"
+            f" 在 `{func}`）；⛔ 别改依据去迎合配错的锚点。"
+        )
+    return out
+
+
 def access_log_shape(trees: dict[Path, ast.Module], root: Path) -> list[str]:
     p = _snap(root).base / CLI_REL
     tree = trees.get(p)
@@ -691,6 +744,9 @@ def check(root: Path) -> tuple[list[str], dict]:
                 f"B：登记里的 `{key}` 现在读不出具名码站点（行号漂了、码被改了或那一格已删）——过期登记要跟着动"
             )
 
+    # F 登记行的函数归属（§1.223：同文件同码多站点重钉配反，B 条看不见）
+    findings.extend(fn_attribution_findings(register, keys))
+
     # C 每级别无码站点上限（只减不增）
     for level in LEVELS:
         n = nc[level]
@@ -847,7 +903,9 @@ def main(argv: list[str]) -> int:
             "  修法：A 跑 `python scripts/check_observability.py --write` 重生成自动段（先想清楚该不该动）；"
             "B 给新码在 §三 补一行 `- `文件:行号` · code=X · level=y · 级别语义：… · 介入：… · 依据：… · 理由：… · 认领：…`，"
             "过期登记要删；C 先认领再抬 §四 上限；D 是 serve 访问日志掩码的形状锚点，别顺手摘掉那行调用；"
-            "E 是「欠账必须在册」——数字变了要么改账要么说明，不许让 §五 的读数停在旧值上。"
+            "E 是「欠账必须在册」——数字变了要么改账要么说明，不许让 §五 的读数停在旧值上；"
+            "F 是「登记行的函数归属」——依据里必须点名这一行现在所在的那个函数，"
+            "重钉配反了就把锚点改回去（⛔ 别改依据迎合错锚点）。"
         )
         return 1
     print(
