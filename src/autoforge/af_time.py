@@ -463,15 +463,20 @@ def parse_duration(value: str | int | float) -> float:
             raise ValueError(f"时长必须是非负有限值：{value!r}")
         return seconds
     # P1-9：支持 HH:MM:SS 格式
-    if ":" in text:
-        parts = text.split(":")
+    # AF-775（2026-11-14，§1.203 裁定）：符号必须用**已经剥好的** `iso_sign`——
+    # 修前这里拿**原始 text** 判冒号并 split，`"-00:10:00"` 的第一个字段是 `"-00"`，
+    # `float("-00")` 是 `-0.0` ⇒ `h*3600` 仍是 0 ⇒ 得 600 秒并**静默通过**负值检查
+    # （`seconds < 0` 为假）。等于"给了个负数、系统当十分钟用"，fail-closed 被绕开。
+    # ⇒ 与 ISO 分支同源：正文用 `iso_body`，结果乘 `iso_sign`，负值照 P1-9 原话抛。
+    if ":" in iso_body:
+        parts = iso_body.split(":")
         if len(parts) != 3:
             raise ValueError(f"HH:MM:SS 格式需要三个部分：{value!r}")
         try:
             h, m, s = float(parts[0]), float(parts[1]), float(parts[2])
         except ValueError as exc:
             raise ValueError(f"无法解析 HH:MM:SS：{value!r}") from exc
-        seconds = h * 3600 + m * 60 + s
+        seconds = iso_sign * (h * 3600 + m * 60 + s)
         if not math.isfinite(seconds) or seconds < 0:
             raise ValueError(f"时长必须是非负有限值：{value!r}")
         return seconds
