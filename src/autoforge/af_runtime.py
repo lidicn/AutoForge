@@ -177,7 +177,9 @@ class Runtime:
             self.instances.var_writer = _write_persist_var
         # v0.4.0：`emit` 发布的事件必须驱动 `on event` 订阅者（发布 → 订阅闭环）
         self.executor.on_emit = self.scheduler.handle_event
-        # AF-745（2026-11-08）：三条播报腿（ask／do／emit）共用的**事实计数**。
+        # AF-745（2026-11-08）：三条播报腿（do／emit／fail）共用的**事实计数**。
+        # （AF-776 2026-11-13 撤掉 ask 腿后，原来的"三条 ask／do／emit"变成 do／emit／fail 三腿；
+        #  `requested` 仍然只统计非 ask 播报——ask 面现在不出声，没有可计的东西。）
         # 为什么要有：这三条腿失败时全部"静默旁路"——无桥直接 no-op、房间解析不到就拒投递、
         # 发布异常只吞 warning；而 api 进程此前没接日志线 ⇒ 单发「播报哑掉」在**回执里也看不见**
         # （现场：出资人三连跑纯播报 IR，实例都走到 e1 done，收件账零新增、docker logs 零命中）。
@@ -201,7 +203,7 @@ class Runtime:
             speak_stats["last_room"] = area_id
 
         def _speak_deliver(trace_id: str, text: str, room: str, entity_id: str, source: str) -> None:
-            """三条腿共用的投递体：取桥 → 解析房间 → 发布 → 记账（AF-745 抽出来防三份漂移）。"""
+            """非 ask 三条腿共用的投递体：取桥 → 解析房间 → 发布 → 记账（AF-745 抽出来防三份漂移）。"""
             speak_stats["requested"] = int(speak_stats["requested"]) + 1
             bridge = _bridge.current_bridge()
             if bridge is None:
@@ -224,16 +226,15 @@ class Runtime:
                 return
             _speak_ok(area_id)
 
-        # DCD 裁定 2026-11-04 阶段1（乙）：ask 触发时经现有 MQTT 桥向 butler/inbox/speak 额外播报。
-        # ⚠️ 桥在 serve 里是 build_app 之后才 attach（见 af_mqtt_bridge.current_bridge 注释）⇒
-        # 这里**闭包惰性取** current_bridge()，⛔ 构造期抓引用会永远抓到 None（装配期无桥）。
-        # 无桥 ⇒ 直接 no-op（零副作用）。⛔ 不改 ask 核心逻辑，播报失败不冒到执行链。
-        def _speak_ask(trace_id: str, text: str, room: str) -> None:
-            _speak_deliver(trace_id, text, room, "", "ask")
-
-        self.executor.on_ask_speak = _speak_ask
-        # v1.28 R1（DCD 裁定 2026-11-04 §2.3 C1/C3/C6）：挂起时额外发 `af/ask/pending`。
-        # 与 speak 腿**同一套闸**：惰性取桥、room 解析不到即拒投递、失败只吞 warning。
+        # ⛔ AF-776（2026-11-13）：ask 的 speak 腿**已撤**（原 `_speak_ask` → `on_ask_speak`）。
+        # 现场：出资人体感"一次询问念两遍"；18:49 trace 里问句与 `INBOX_DONE(speak,
+        # source=autoforge)` 同刻到达，而 DB 侧 `butler/bus/af_ask.py` 收到 `af/ask/pending`
+        # 后自己就会 TTS 一次 ⇒ AF 再发 speak 就是第二遍。
+        # ⛔ 没有做成"钩子留着但接 None"：空钩子会被读成"撤了没生效"，也让下一个人能一键挂回去。
+        # 非 ask 的三条腿（do／emit／fail）一行未动——尤其 emit：超时作废那句来自 IR 的
+        # `pto.announce`，DB 侧超时时什么都不发，撤了它用户就再也听不到"本次询问作废"。
+        # DCD 裁定 2026-11-04 §2.3 C1/C3/C6：挂起时发 `af/ask/pending`——AF-776 后这是
+        # ask 面唯一的出声腿。与原来同一套闸：惰性取桥、room 解析不到即拒投递、失败只吞 warning。
         # 差别只在载荷与主题：C3 逐字 `{ask_id, room, prompt, source, priority}` ＋ `timeout_remaining`。
         def _publish_ask_pending(
             trace_id: str, text: str, room: str, timeout_remaining: float | None = None

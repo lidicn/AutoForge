@@ -214,16 +214,20 @@ class NodeExecutor:
     #: v0.4.0 订阅侧：发布成功后的回调（Runtime 注入 `scheduler.handle_event`），
     #: 让 emit 出去的事件能真正驱动订阅它的自动化（发布 → 订阅闭环）
     on_emit: Any | None = None
-    #: ask 触发时的额外 MQTT 播报回调（DCD 裁定 2026-11-04 阶段1 乙）：
-    #: `(trace_id, text, room) -> None`；未注入（无桥/单测）时零副作用，⛔ 不影响 ask 核心逻辑。
-    on_ask_speak: Any | None = None
+    #: ⛔ AF-776（2026-11-13 出资人体感「一次询问念两遍」）：ask 触发**不再**额外发
+    #: `butler/inbox/speak`。原来的 `on_ask_speak` 钩子在本笔删除——问句现在只走
+    #: `af/ask/pending` 一条腿（DB 侧 `butler/bus/af_ask.py` 收到后自己 TTS 一次），
+    #: AF 再发一条 speak 就是同一个问题由两套播报各念一遍（18:49 trace：
+    #: `INBOX_DONE(speak,source=autoforge)` 与问句同刻到达）。
+    #: 保留位说明：⛔ 不给"以后再挂回来"留空钩子——空钩子会被误读成"撤了但没生效"。
     #: v1.28 R1：ask 挂起时向 `af/ask/pending` 发布挂起问询（DCD 裁定 2026-11-04 阶段2 C1/C3）：
     #: `(trace_id, text, room, timeout_remaining) -> None`；未注入时零副作用。
-    #: ⛔ 与 `on_ask_speak` 一样是旁路：发布失败只记一行，绝不改 ask 的挂起/恢复/超时语义。
+    #: ⛔ 旁路：发布失败只记一行，绝不改 ask 的挂起/恢复/超时语义。AF-776 后这是
+    #: ask 面**唯一**的出声腿。
     on_ask_pending: Any | None = None
     #: do 节点执行前的额外 MQTT 播报回调（T1，2026-11-04）：非 ask 自动化条件命中后、
-    #: do 动作下发前经 `butler/inbox/speak` 播报一声。签名同 on_ask_speak：
-    #: `(trace_id, text, room) -> None`；未注入时零副作用，⛔ 不改 do 执行核心逻辑。
+    #: do 动作下发前经 `butler/inbox/speak` 播报一声。签名：
+    #: `(trace_id, text, room, entity_id) -> None`；未注入时零副作用，⛔ 不改 do 执行核心逻辑。
     on_do_speak: Any | None = None
     #: emit 发布时的额外 MQTT 播报回调（AF-PM 裁定 2026-11-05）：与 do 同源、同一 room 解析路径。
     #: 签名同 on_do_speak：`(trace_id, text, room, entity_id) -> None`；未注入时零副作用。
@@ -1520,24 +1524,20 @@ class NodeExecutor:
                 prompt=node.prompt,
                 ask_spec=node.ask,
             )
-            # DCD 裁定 2026-11-04 阶段1（乙）：ask 触发（实例暂停＋待答写入后）**额外**发一条
-            # MQTT 播报到 butler/inbox/speak。⛔ 不改 ask 核心逻辑（暂停/恢复/超时不动），
-            # ⛔ 记不住就吞（旁路留痕，失败不许弄崩 ask）。trace_id=instance_id（DB §2 非空≤64）。
-            if self.on_ask_speak is not None:
-                try:
-                    self.on_ask_speak(
-                        str(instance.instance_id), str(node.prompt or ""), str(node.room or ""),
-                    )
-                except Exception:  # noqa: BLE001 —— 播报旁路失败绝不改 ask 行为
-                    logger.warning(
-                        "ASK_SPEAK_PUBLISH_FAILED ask 播报旁路异常（不影响 ask 核心） instance=%s",
-                        instance.instance_id, exc_info=True,
-                    )
+            # ⛔ AF-776（2026-11-13）：这里原来还有一条 `on_ask_speak`（DCD 2026-11-04 阶段1 乙
+            # 「ask 触发时额外经 butler/inbox/speak 播报」）。它和下面这条 `af/ask/pending` 是
+            # 两条腿说同一句话，DB 侧 `butler/bus/af_ask.py` 收到 pending 后会自己 TTS 一次
+            # ⇒ 真机上同一问句被念两遍（18:49 trace：问句与 `INBOX_DONE(speak,source=autoforge)`
+            # 同刻）。本笔撤掉 speak 腿，**问句只走 `af/ask/pending`**。
+            # ⛔ 撤的只是"问句"这一条：超时作废那句来自 IR 的 `pto.announce`（走 emit 腿），
+            # do/emit/fail 三腿也原样保留——DB 侧超时时**什么都不发**（`af_ask.py` 明写
+            # "用户没回答：什么都不发，AF 侧超时兜底"），所以那声"本次询问作废"必须留在 AF。
             # v1.28 R1（DCD 裁定 2026-11-04 §2.3 C1/C3/C6）：挂起时**额外**发一条
             # `af/ask/pending`（AF 先出 MQTT 版 ask 面＝阶段 2 的前置）。载荷里的
             # `timeout_remaining` 就是本次挂起真正要等的秒数（图作者写多少就发多少，
             # 未写则发默认兜底值），让 DB 不必猜 AF 这一侧等了多久。
-            # ⛔ 与上方 speak 同一条纪律：旁路、失败只记一行、绝不改挂起语义。
+            # ⛔ 仍在 pending_asks 写入**之后**发：问句腿可以撤，但"先落会话再出声"的时序不许动
+            # （DB 收到就好、答回来要能对上 `pending_asks[instance_id]`）。
             if self.on_ask_pending is not None:
                 try:
                     self.on_ask_pending(

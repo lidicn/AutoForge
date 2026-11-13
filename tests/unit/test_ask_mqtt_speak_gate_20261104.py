@@ -1,19 +1,25 @@
 # -*- coding: utf-8 -*-
-"""ask 触发额外 MQTT 播报判据（DCD 裁定 2026-11-04 阶段1 乙）· 卡名 AF卡_ask_mqtt_speak。
+"""ask 触发 MQTT 播报判据 · **AF-776 后语义反转**（原卡 AF卡_ask_mqtt_speak，DCD 2026-11-04 阶段1 乙）。
 
-覆盖（编号带卡名）：
+**这次为什么翻面**：AF-776（2026-11-13 出资人体感「一次询问念两遍」）撤掉了 ask 的 speak 腿。
+原 D3「ask 触发即发一条 speak」、原 D4「Runtime 已注入 on_ask_speak 闭包」、原 D7「_suspend 必须含
+播报钩子」——这三条钉的正是**被撤掉的那个行为**，留着就是钉死缺陷。
+
+⛔ 不是把断言删掉了事，而是**如实翻转**：现在要钉的是「ask ⛔ 不许再发 speak」，
+以及「⛔ 不许留一个能一键挂回去的空钩子」（空钩子会被读成"撤了没生效"）。
+
+覆盖（编号沿用，语义按 AF-776 重写）：
   D1 ask 核心不变（开关行）：ask 仍挂起、pending_asks 建齐、prompt/room/spec 与改前逐字一致
   D2 speak 载荷逐字按 DB §3：trace_id/text/source=autoforge/room/priority=1，qos=1 retain=False
-  D3 ask 触发即触发播报回调（trace_id=instance_id、text=prompt、room=node.room）
-  D4 无桥 / 未注入 on_ask_speak ⇒ 零副作用、ask 照常挂起（不改核心）
-  D5 播报旁路抛异常 ⇒ ask 核心不受影响（仍挂起）
-  D6 room 从 IR node.room 取（room 空也发，但不伪造 room 键）
-  D7 源码钉：_suspend 里在 pending_asks 写入之后发、⛔ 不在 ask 核心之前
+     （桥方法本身没动——非 ask 的 do／emit／fail 三条腿还在用它）
+  D3 ask 触发 ⛔ 不发 speak（AF-776 反转项；原钉「必发 1 条」）
+  D4 无桥 ⇒ 零副作用、ask 照常挂起；且 executor ⛔ 不再有 `on_ask_speak` 属性
+  D5 就算有人手工把 `on_ask_speak` 塞回 executor，⛔ 也不会被调用（防"挂回去"）
+  D6 room 空也发、但不伪造 room 键（桥方法面，未变）
+  D7 源码钉：`_suspend` ⛔ 不含 `self.on_ask_speak(...)` 调用；`af/ask/pending` 仍在写待答之后
 """
 
 from __future__ import annotations
-
-import pytest
 
 from autoforge.af_bus import BusEvent
 from autoforge.af_ir import Graph, load_automation
@@ -42,6 +48,7 @@ AUTO = {
 class _FakeBridge:
     def __init__(self):
         self.speaks = []
+        self.pending = []
 
     def publish_speak(self, *, trace_id, text, room="", source="autoforge", priority=1):
         self.speaks.append({"trace_id": trace_id, "text": text, "room": room,
@@ -49,6 +56,10 @@ class _FakeBridge:
         return {"published": True, "topic": "butler/inbox/speak",
                 "payload": {"trace_id": trace_id, "text": text, "room": room,
                             "source": source, "priority": priority}}
+
+    def publish_ask_pending(self, **kw):
+        self.pending.append(kw)
+        return {"published": True, "topic": "af/ask/pending", "payload": kw}
 
 
 def _runtime():
@@ -72,18 +83,23 @@ def test_d1_ask_core_unchanged_without_bridge():
     assert sess.room == ROOM
 
 
-# ── D3 ask 触发即记 speak（trace_id=instance_id, text=prompt, room）─────
-def test_d3_ask_triggers_speak_with_instance_as_trace_id(monkeypatch):
+# ── D3 ask 触发 ⛔ 不发 speak（AF-776 反转项）──────────────────────────
+def test_d3_ask_does_not_publish_speak(monkeypatch):
+    """AF-776：问句只走 `af/ask/pending`，⛔ 不许再经 `butler/inbox/speak` 念第二遍。
+
+    修前形状（原 D3）：`len(fb.speaks) == 1`——那条断言就是缺陷本身，已按 AF-PM 派卡翻转。
+    ⛔ 不许把它改回「等于 1」：18:49 trace 实测 DB 因此 TTS 两遍。
+    """
+    from autoforge import af_mqtt_bridge as mqtt
+
     rt = _runtime()
     fb = _FakeBridge()
-    rt.executor.on_ask_speak = lambda tid, text, room: fb.publish_speak(trace_id=tid, text=text, room=room)
+    monkeypatch.setattr(mqtt, "current_bridge", lambda: fb)
+    monkeypatch.setattr(rt, "resolve_room", lambda room_text, *, source, entity_id="": "shu_fang")
     _fire(rt)
-    assert len(fb.speaks) == 1, "ask 触发应额外发一条 speak"
-    sp = fb.speaks[0]
-    sess = next(iter(rt.executor.pending_asks.values()))
-    assert sp["trace_id"] == sess.instance_id, "trace_id 必须是 instance_id（DB §2）"
-    assert sp["text"] == "书房27度了，要开空调吗？"
-    assert sp["room"] == ROOM
+
+    assert fb.speaks == [], "ask 触发⛔ 不许发 speak（AF-776：DB 收到 pending 后自己念）"
+    assert len(fb.pending) == 1, "唯一那条出声腿是 af/ask/pending"
 
 
 # ── D2 publish_speak 载荷逐字按 DB §3 + qos1 retainFalse ─────────────
@@ -126,25 +142,30 @@ def test_d2_publish_speak_payload_and_qos():
     assert r["published"] is True
 
 
-# ── D4 无桥/未注入 ⇒ 零副作用 ────────────────────────────────────────
-def test_d4_no_callable_no_effect():
+# ── D4 无桥 ⇒ 零副作用；且 executor ⛔ 不再有 on_ask_speak ──────────────
+def test_d4_no_bridge_no_effect_and_hook_is_gone():
     rt = _runtime()
-    assert rt.executor.on_ask_speak is not None  # Runtime 已注入闭包（惰性取桥）
-    # 但当前无桥 ⇒ 闭包内 current_bridge() None ⇒ no-op，不抛
-    _fire(rt)
+    # AF-776：钩子连属性都不留（原钉是 `is not None`——那正是被撤掉的东西）
+    assert not hasattr(rt.executor, "on_ask_speak"), (
+        "⛔ executor 不许再留 ask 的 speak 钩子（空钩子会被读成「撤了没生效」）"
+    )
+    _fire(rt)  # 无桥：⛔ 不许抛
     assert len(rt.executor.pending_asks) == 1
 
 
-# ── D5 播报旁路抛异常 ⇒ ask 核心不受影响 ─────────────────────────────
-def test_d5_speak_exception_does_not_break_ask():
+# ── D5 手工塞回钩子也⛔ 不会被调用（防挂回去）──────────────────────────
+def test_d5_reinjected_hook_is_never_called():
+    """反证腿：有人在 executor 上手工塞 `on_ask_speak`，`_suspend` 里⛔ 也不许再读它。
+
+    没有这条，撤腿可能变成"只删了 Runtime 的注入、executor 里那段调用还留着"——
+    在 serve 里看着一样（没注入就 no-op），但只要有人一注入就复发。
+    """
     rt = _runtime()
-
-    def _boom(*a, **k):
-        raise RuntimeError("mqtt down")
-
-    rt.executor.on_ask_speak = _boom
-    _fire(rt)  # 不应抛
-    assert len(rt.executor.pending_asks) == 1, "播报失败必须不影响 ask 挂起"
+    calls: list[tuple] = []
+    rt.executor.on_ask_speak = lambda *a, **k: calls.append((a, k))  # 手工塞回去
+    _fire(rt)
+    assert calls == [], "⛔ _suspend 不许再调用 on_ask_speak（撤腿必须撤干净）"
+    assert len(rt.executor.pending_asks) == 1
 
 
 # ── D6 room 空 ⇒ 载荷不带 room 键（不伪造）────────────────────────────
@@ -172,14 +193,16 @@ def test_d6_empty_room_omits_room_key():
     assert "room" not in captured["payload"], "room 空时不伪造 room 键"
 
 
-# ── D7 源码钉：播报在 pending_asks 写入之后（不改 ask 核心时序）─────────
-def test_d7_speak_after_pending_session_created():
+# ── D7 源码钉：_suspend 里⛔ 没有 ask 播报调用；pending 仍在写待答之后 ──
+def test_d7_source_pin_no_ask_speak_in_suspend():
     import inspect
 
     from autoforge.af_executor import NodeExecutor
 
     src = inspect.getsource(NodeExecutor._suspend)
-    assert "on_ask_speak" in src, "_suspend 必须含播报钩子"
-    # 播报必须在 AskSession 落 pending_asks 之后（不改 ask 核心挂起时序）
-    assert src.index("self.pending_asks[instance.instance_id] = AskSession") < src.index("on_ask_speak"), \
-        "播报必须在写待答之后（开关行：ask 核心时序不变）"
+    assert "self.on_ask_speak(" not in src, (
+        "⛔ `_suspend` 不许再调用 on_ask_speak（AF-776 撤腿；注释里点名历史是允许的）"
+    )
+    # 时序钉不变：pending 仍在写待答之后（DB 答回来要对得上 pending_asks）
+    assert src.index("self.pending_asks[instance.instance_id] = AskSession") < src.index("on_ask_pending"), \
+        "af/ask/pending 必须在写待答之后发（开关行：ask 核心时序不变）"
