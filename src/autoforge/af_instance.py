@@ -471,10 +471,23 @@ class InstanceManager:
         即"单个实体漂移 = 整段软失效"，不是"只有引用它的那一支失效"——
         仿真侧一直就是这个口径，生产侧第七轮起对齐。代价与备选见
         `docs/audit/审计报告_第七轮_核实与修复.md`。
+
+        **AF-781（2026-11-14）**：`event.*` 是**触发域伪实体**（`Trigger.entity_ids()` 把
+        `on event "x"` 记成 `event.x`，为的是跨自动化依赖矩阵能看见事件边），它**不属状态域**，
+        ⛔ 不进快照集合。修前它被当普通读取实体送进 `snapshot()` ⇒ 状态源对它必抛
+        `UnknownEntity` ⇒ 回退成**空快照** ⇒ 该实例的每一个 `if` 都拿不到真实实体状态、
+        一律 `UnknownEntity`，整条 `on event → if → do` 自动化静默软失效（现场形状：
+        "事件收到了、条件永远不成立"，audit 只留 `entity_drift`，看不出真凶是伪实体）。
+        剔掉它之后：**真实实体漂移仍整段软失效**（口径一字未改，⚠️ 不许顺手放宽——
+        泄漏一个"只失效一支"的错觉比缺陷本身更难查，语义变更归 DCD）。
         """
         from .af_state import UnknownEntity
         entity_ids = sorted(instance.automation.reads())
-        known = [e for e in entity_ids if self.states.has(e)] if hasattr(self.states, "has") else entity_ids
+        # AF-781：先剔触发域伪实体（`event.<name>`），再走 has() 既有路径。
+        # ⛔ 顺序不能反：has() 的语义是"可解析实体"，与"属不属于状态域"是两件事；
+        # 这里只砍**域外**的伪实体，真实实体漂移照旧整段软失效（见 docstring）。
+        state_ids = [e for e in entity_ids if not e.startswith("event.")]
+        known = [e for e in state_ids if self.states.has(e)] if hasattr(self.states, "has") else state_ids
         try:
             snapshot = self.states.snapshot(known)
         except UnknownEntity:
