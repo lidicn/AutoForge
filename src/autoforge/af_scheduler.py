@@ -596,6 +596,21 @@ class Scheduler:
             for node in auto.nodes.values():
                 if node.kind == "if" and node.expr:
                     try:
+                        # AF-771（2026-11-13）：`if` 之外还欠**入口触发自身的状态前提**。
+                        # 现场：`af_ask_purifier` 的入口是 `on(group or 人在 to=on)`，条件层
+                        # 在 `if`（夜间 ∧ 灯开 ∧ 净化器关）。只求 `if` 时，「人在」这一半
+                        # 进了房间就一直成立、离开房间也不会掉——用户 20:27 进屋时灯已连开
+                        # 2 小时 ⇒ met 从 18:49 起恒 True ⇒ `_dispatch_allowed` 判电平维持
+                        # `edge_held` ⇒ **第二次进屋永远不问**（`last_met` 于 12:27:42.268
+                        # 被写成 True，`last_dispatched_at` 仍停在 10:49:39）。
+                        # 修法：`met = (入口可快照状态前提成立) ∧ (if 成立)`。前提的"不参与"
+                        # 口径（event/time/sun、不带 to/from 的"实体变化"型）见 `_premise_met`。
+                        # ⛔ 只在**存在 if 节点**时并入门前提：`on(group or …) → do` 这种
+                        # 没有条件层的形状保持旧行为（`met=None` ⇒ 不当边沿闸用），否则
+                        # 「(group or …) 只跳到 do」的自动化会被本闸拦成只能派发一次。
+                        premise = self._entry_premise_met(auto)
+                        if premise is False:
+                            return False
                         snap = self.states.snapshot(sorted(auto.reads()))
                         return bool(evaluate(node.expr, make_resolver(snap, {}, context)))
                     except Exception:  # noqa: BLE001 —— 求值失败保守判"不满足"（fail-closed）
@@ -621,6 +636,90 @@ class Scheduler:
         if trig.op == "and":
             return all(self._group_currently_met(sub, _depth + 1) for sub in trig.sources)
         return any(self._group_currently_met(sub, _depth + 1) for sub in trig.sources)
+
+    def _entry_premise_met(self, auto: Automation) -> bool | None:
+        """AF-771（2026-11-13）：入口触发自身的「可快照状态前提」是否成立。
+
+        为什么要单独一层：D10 把「条件从不满→满足」当跳变沿，而 `af_ask_purifier` 这类
+        `on(group or …) → if(… ) → ask` 形状有**两处**条件——
+
+        · `if` 节点里的决策条件（夜间 ∧ 灯开 ∧ 净化器关）；
+        · 入口触发自己的前提（`occupancy to=on` ＝ 人在主卧）。
+
+        旧实现只求 `if`，于是「人在」这一半在进屋那一刻就算 True 并**再也不掉**：
+        用户离开房间时客户端不会重算（`if` 里没有 occupancy），met 于是连续为 True，
+        再进屋时 `_dispatch_allowed` 只剩「电平维持」`edge_held`。AF-770 修的是「沿被
+        无关事件吃掉」，本卡修的是**「沿根本没断过」**——两者症状同为「不派发」，成因相反。
+
+        返回：
+        - `True`／`False` = 至少有一个入口提供了可快照前提，且 or/and 聚合得出结论；
+        - `None` = **没有任何入口能提供前提**（全是 event/time/sun 或"实体变化"型，
+          或根本没有 group 入口）⇒ 调用方⛔ 不得据此抑制，退回「只看 if」的旧行为。
+
+        多个入口节点之间按 or 聚合（与 `_group_currently_met` 对 `group or` 的口径一致：
+        任一入口活跃即算活跃）——我们没有「本次是哪个入口点燃的」这个信息，`any` 是唯一
+        可保守成立的聚合方式。
+        """
+        verdicts: list[bool] = []
+        for node in auto.entry_nodes():
+            trig = node.trigger
+            if trig is None:
+                continue
+            trig = _normalize(trig)
+            if trig.type != "group":
+                continue
+            val = self._premise_met(trig, 0)
+            if val is not None:
+                verdicts.append(val)
+        if not verdicts:
+            return None
+        return any(verdicts)
+
+    def _premise_met(self, trig: Trigger, _depth: int) -> bool | None:
+        """AF-771：递归求「这个触发源当前是否成立」，`None` = 该项**不参与**前提。
+
+        与 `_group_currently_met` 同口径求值，但多一个第三态：那里只能返回 bool，
+        于是 `event`/`time`/`sun` 只能塌成 `False`（对 `and` 组是对的：事件型条件无法由
+        状态快照证明成立；对 `or` 入口就会把「另一个 source 本来是 active 的」也算成不满）。
+        在这里，**求不出的项一律"不参与"，⛔ 不当成"不成立"**：
+
+        - `state` 带 `to` ⇒ 快照比对（本例 `occupancy == "on"`）；
+        - `state` 带 `from` ⇒ 保守 `False`（快照没有旧态，⛔ 不猜；与 `_group_currently_met`
+          完全一致）——注意副作用：`group or` 入口里若**全是** `from` 型 source，
+          结果恒 False ⇒ 该自动化会被本闸永久压制，与 `group and` 入口的既有口径同病；
+        - `state` **不带 `to`/`from`**（"实体变化"型触发）⇒ `None`（无前提可言，
+          ⛔ 不为它去查快照：这类 source 本来就只按事件边沿触发）；
+        - `event`／`time`／`sun` ⇒ `None`（同现行为，不参与）；
+        - `group` ⇒ 递归后按 `op` 聚合（`and` ⇒ 全部成立，其余按 `or` ⇒ 任一成立；
+          聚合前把 `None` 摘掉，全 `None` ⇒ `None`）；
+        - 求值异常 ⇒ `False`（fail-closed，与卡面 §三 细则 4 一致）。
+        """
+        check_trigger_depth(_depth, "scheduler._premise_met")
+        trig = _normalize(trig)
+        if trig.type == "state":
+            if trig.from_ is not None:
+                # 快照没有"前一态"⇒ 无法证明前提成立，保守 False（⛔ 不猜）
+                return False
+            if trig.to is None:
+                # "实体变化"型触发：没有可比对的目标态 ⇒ 不参与前提
+                return None
+            if not trig.entity_id:
+                return False
+            try:
+                snap = self.states.snapshot([trig.entity_id])
+            except Exception:  # noqa: BLE001 —— 求值失败保守"不成立"（fail-closed）
+                return False
+            return snap.get(trig.entity_id) == trig.to
+        if trig.type != "group":
+            # event/time/sun：非状态驱动，无法由当前状态求值 ⇒ 不参与前提
+            return None
+        parts = [
+            v for v in (self._premise_met(sub, _depth + 1) for sub in trig.sources)
+            if v is not None
+        ]
+        if not parts:
+            return None
+        return all(parts) if trig.op == "and" else any(parts)
 
     # ─────────────────────────────────────────────────────────────────
     # D10：边沿触发的 last_met 事实存取（met_io 落盘 / 内存退回）
