@@ -1007,14 +1007,67 @@ def store_tags(root: str = typer.Option(DEFAULT_STORE_ROOT, "--root", help="存�
         typer.echo(f"· {name}: {ts}")
 
 
+def _require_enable_auth(store: Any, names: list[str], code: str, *, action: str) -> None:
+    """AF-785（2026-11-14）：CLI 批量**启用**的凭据闸（启用要码、禁用免码，AF-401）。
+
+    闸为什么在 CLI 入口层、而不是 `svc_enable_disable` 里：那个函数是**纯函数**（本地
+    直连 store 的库形调用），服务层的对应闸在 `svc.enable_by_tag`（AF-778 补的 consume）。
+    两条入口是不同面：`enable_by_tag` 是网络面（MCP/REST，令牌身份 + 授权码），
+    CLI 是**本机 owner 自用**面（没有令牌身份），凭据只证明"人手上有码"，不涉及归属。
+    ⇒ 闸只装在本机入口，⛔ 不动纯函数本体（动了会把库调用也焊死）。
+
+    顺序（与 AF-778 同形，⛔ 不许反）：先爆炸半径预检（超额拒时**不烧码**），
+    再 validate（`_auth_code_check`，四因合一 + 失败计数），最后 consume（fail-closed）。
+    """
+    from .af_service import ServiceError, _check_blast, _auth_code_check
+
+    if names:
+        try:
+            _check_blast(len(names), f"批量启用（{action}）")
+        except ServiceError as exc:
+            typer.echo(f"[爆炸半径超限] {exc}", err=True)
+            raise typer.Exit(code=EXIT_IR_ERROR)
+
+    try:
+        _auth_code_check(store, code, action=action)
+    except ServiceError as exc:
+        typer.echo(f"[启用被拒] {exc}", err=True)
+        raise typer.Exit(code=EXIT_IR_ERROR)
+
+    from pathlib import Path as _Path
+
+    from .af_auth import AuthCodeStore as _ACS
+
+    acs = _ACS(_Path(str(getattr(store, "root", ""))) / ".auth" / "auth_codes.json")
+    if not acs.consume(str(code or "").strip()):
+        # validate 与 consume 是两步：中间可能被并发消耗/撤销（MCP 面 R17-01 同形状）
+        typer.echo(
+            f"[启用被拒] 无法消耗授权码（可能已被并发消耗/已撤销/已过期）：拒绝执行（fail-closed）",
+            err=True,
+        )
+        raise typer.Exit(code=EXIT_IR_ERROR)
+
+
 @store_app.command("enable")
 def store_enable(
     tag: str = typer.Option("", "--tag", "-t", help="按标签批量启用（缺省对全部归档）"),
     root: str = typer.Option(DEFAULT_STORE_ROOT, "--root", help="存储根目录"),
+    auth_code: str = typer.Option(
+        "",
+        "--auth-code",
+        help="批量启用的授权码（AF-401：启用要码、禁用免码）；缺省读 env AUTOFORGE_AUTH_CODE（AF-714）",
+    ),
 ):
-    """批量启用自动化（v0.6.0）。--tag 限定标签，否则启用全部归档。"""
+    """批量启用自动化（v0.6.0）。--tag 限定标签，否则启用全部归档。
+
+    AF-785（2026-11-14）：**启用要码**（与 `af_enable_by_tag`/REST 同一条纪律），
+    并且过闸即 consume（短期码一次性、长期码计次）——修前这条 CLI 面完全无闸，
+    等于把"启用的凭据要求"从本机侧绕开了。
+    """
     store = GraphStore(root)
     names = _names_for_tag(store, tag)
+    _require_enable_auth(store, names, _auth_code_of(auth_code),
+                         action=f"CLI 批量启用自动化（tag={tag!r}）")
     affected = svc_enable_disable(store, names, True)
     typer.echo(f"· 已启用 {len(affected)} 个归档：{[a['name'] for a in affected]}")
 
