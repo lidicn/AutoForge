@@ -566,6 +566,14 @@ class Scheduler:
                         return False
                 return True
             except Exception:  # noqa: BLE001 —— 求值失败保守判"不满足"（fail-closed，⛔ 不猜）
+                # AF-784（2026-11-14）：这段 `except` 修前是**裸吞**——求值炸了与"条件真的
+                # 不成立"在盘上完全同形（都是 met=False ⇒ 后续判 `edge_held` ⇒ 静默不派发）。
+                # 沿用 AF-771 返工时立的同一枚码（⛔ 不另开新码：这是同一条失败轴的第二、第三站）。
+                logger.warning(
+                    "SCHED_PREMISE_EVAL_FAILED group-and 段求值失败（按不成立处理⇒不派发）"
+                    " auto=%s node=%s",
+                    auto.id, node.id, exc_info=True,
+                )
                 return False
         # 没有任何 group-and 入口触发 ⇒ 再看**条件是不是写在 `if` 节点里**（真实 IR 的常见形状：
         # `on(group or 六实体)` → `if(五条件 and)` → `do`）。这种形状的条件层真实存在，
@@ -611,9 +619,23 @@ class Scheduler:
                         premise = self._entry_premise_met(auto)
                         if premise is False:
                             return False
-                        snap = self.states.snapshot(sorted(auto.reads()))
+                        # AF-784（2026-11-14）：快照集合**剔掉 `event.*` 伪实体**——
+                        # 与 `InstanceManager._refresh_snapshot` 逐字同口径（AF-781 的修法）。
+                        # `on event "x"` 的 `Trigger.entity_ids()` 会把事件记成 `event.x`
+                        # （为跨自动化依赖矩阵看得见事件边），它不属状态域：送进 `snapshot()`
+                        # 必抛 `UnknownEntity` ⇒ 整段求值失败 ⇒ met 恒 False ⇒ 判 `edge_held`
+                        # ⇒ 「group 入口 ＋ on event 订阅 ＋ if」形状静默永不派发。
+                        snap = self.states.snapshot(
+                            [e for e in sorted(auto.reads()) if not e.startswith("event.")]
+                        )
                         return bool(evaluate(node.expr, make_resolver(snap, {}, context)))
                     except Exception:  # noqa: BLE001 —— 求值失败保守判"不满足"（fail-closed）
+                        # AF-784：同上一段——失败⛔ 不许与"条件不成立"同形静默（同一枚码）
+                        logger.warning(
+                            "SCHED_PREMISE_EVAL_FAILED if 段求值失败（按不满足处理⇒不派发）"
+                            " auto=%s node=%s",
+                            auto.id, node.id, exc_info=True,
+                        )
                         return False
         return None if not has_group_and else True
 
