@@ -92,25 +92,36 @@ def _mk(tmp_path: Path, *, ledger: str | None = None, pins: str | None = None) -
     return root
 
 
-def _run(root: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, str(SCRIPT), str(root)], capture_output=True, text=True, encoding="utf-8"
-    )
+def _run(root: Path, only: str | None = None) -> subprocess.CompletedProcess:
+    cmd = [sys.executable, str(SCRIPT), str(root)]
+    if only:
+        cmd += ["--only", only]
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
 
 
-# ── P1 真仓：六读数相等 ⇒ RC=0，且真的比对了六项 ──────────────────────
+# ── P1 真仓：两个条目六／五读数全部相等 ⇒ RC=0，且真的比对了每一项 ──────
 def test_p1_real_repo_is_green_and_says_what_it_compared():
     r = _run(REPO)
     assert r.returncode == 0, r.stdout + r.stderr
     for word in ("站点", "文件", "WARNING=", "具名码", "重码", "无码"):
         assert word in r.stdout, f"输出没点名 {word}——这条腿等于没真比对：{r.stdout}"
     assert "PINS" in r.stdout
+    # 批 4：进程模型条目也在同一次运行里被比对（少了它，注册表退化也看不出来）
+    assert "进程模型清单" in r.stdout and "PINS_PROCESS_MODEL" in r.stdout, r.stdout
+    assert "生命周期" in r.stdout and "共享名" in r.stdout, r.stdout
+
+
+def test_p1b_unknown_ledger_key_is_range_collapse():
+    """`--only` 写错名字⛔ 不许静默跳过——那是「一个条目都没比对」冒充绿。"""
+    r = _run(REPO, only="no-such-ledger")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "已注册" in r.stdout
 
 
 # ── P2 两边不同步 ⇒ RC=1，且点名该改哪个键（两个方向都红） ─────────────
 def test_p2a_ledger_moved_but_pins_did_not_is_red(tmp_path):
     root = _mk(tmp_path, ledger=_ledger(sites=4, warning=3))
-    r = _run(root)
+    r = _run(root, only="observability")
     assert r.returncode == 1, r.stdout + r.stderr
     assert "`sites`" in r.stdout and "4" in r.stdout and "3" in r.stdout, r.stdout
     assert "PINS" in r.stdout, "红因必须指向该改的那张表"
@@ -118,14 +129,14 @@ def test_p2a_ledger_moved_but_pins_did_not_is_red(tmp_path):
 
 def test_p2b_pins_moved_but_ledger_did_not_is_red(tmp_path):
     root = _mk(tmp_path, pins=PINS_OK.replace('"sites": 3', '"sites": 4'))
-    r = _run(root)
+    r = _run(root, only="observability")
     assert r.returncode == 1, r.stdout + r.stderr
     assert "`sites`" in r.stdout and "4" in r.stdout, r.stdout
 
 
 def test_p2c_only_one_level_drifts_is_red_and_names_the_level(tmp_path):
     root = _mk(tmp_path, pins=PINS_OK.replace('"warning": 2, "error": 1', '"warning": 3, "error": 1'))
-    r = _run(root)
+    r = _run(root, only="observability")
     assert r.returncode == 1, r.stdout + r.stderr
     assert "`levels`" in r.stdout and "WARNING" in r.stdout, r.stdout
 
@@ -133,7 +144,7 @@ def test_p2c_only_one_level_drifts_is_red_and_names_the_level(tmp_path):
 def test_p2d_codes_and_coded_are_two_numbers_from_one_line(tmp_path):
     """`codes`（枚数）与 `coded`（站点数）来自同一条计数行——只改一格也要红。"""
     root = _mk(tmp_path, pins=PINS_OK.replace('"coded": 3', '"coded": 4'))
-    r = _run(root)
+    r = _run(root, only="observability")
     assert r.returncode == 1, r.stdout + r.stderr
     assert "`coded`" in r.stdout, r.stdout
 
@@ -141,14 +152,14 @@ def test_p2d_codes_and_coded_are_two_numbers_from_one_line(tmp_path):
 # ── P3 射程塌 ⇒ RC=2（⛔ 不许用绿冒充） ────────────────────────────────
 def test_p3_pins_missing_is_range_collapse(tmp_path):
     root = _mk(tmp_path, pins='"只有一句话，没有 PINS"\n')
-    r = _run(root)
+    r = _run(root, only="observability")
     assert r.returncode == 2, r.stdout + r.stderr
     assert "PINS" in r.stdout
 
 
 def test_p3_pins_missing_key_is_range_collapse(tmp_path):
     root = _mk(tmp_path, pins=PINS_OK.replace('    "dup": {"SYN_ALPHA"},\n', ""))
-    r = _run(root)
+    r = _run(root, only="observability")
     assert r.returncode == 2, r.stdout + r.stderr
     assert "缺读数键" in r.stdout and "dup" in r.stdout
 
@@ -159,7 +170,7 @@ def test_p3_pins_derived_expression_is_range_collapse(tmp_path):
     这条不是形式主义：派生正是方案 A 的形状，AF-PM 已裁不采——门必须拒绝被那样糊过去。
     """
     root = _mk(tmp_path, pins='PINS = {k: v for k, v in [("sites", 3)]}\n')
-    r = _run(root)
+    r = _run(root, only="observability")
     assert r.returncode == 2, r.stdout + r.stderr
     assert "字面量" in r.stdout
 
@@ -167,28 +178,28 @@ def test_p3_pins_derived_expression_is_range_collapse(tmp_path):
 def test_p3_pins_file_unparsable_is_range_collapse(tmp_path):
     """pin 表所在文件语法坏掉 ⇒ 也是射程塌（不是「红一条」）。"""
     root = _mk(tmp_path, pins="PINS = {k: 0 for k in ()\n")  # 故意没闭合
-    r = _run(root)
+    r = _run(root, only="observability")
     assert r.returncode == 2, r.stdout + r.stderr
     assert "解析不了" in r.stdout
 
 
 def test_p3_auto_markers_missing_is_range_collapse(tmp_path):
     root = _mk(tmp_path, ledger=_ledger(begin=False))
-    r = _run(root)
+    r = _run(root, only="observability")
     assert r.returncode == 2, r.stdout + r.stderr
     assert "自动段标记" in r.stdout or "AUTO" in r.stdout
 
 
 def test_p3_count_line_shape_changed_is_range_collapse(tmp_path):
     root = _mk(tmp_path, ledger=_ledger(total_line="现读计数：三个站点（旧排版）\n"))
-    r = _run(root)
+    r = _run(root, only="observability")
     assert r.returncode == 2, r.stdout + r.stderr
     assert "2.1" in r.stdout
 
 
 def test_p3_empty_code_table_is_range_collapse(tmp_path):
     root = _mk(tmp_path, ledger=_ledger(rows="", coded=0, codes=0))
-    r = _run(root)
+    r = _run(root, only="observability")
     assert r.returncode == 2, r.stdout + r.stderr
     assert "2.2" in r.stdout
 
@@ -196,7 +207,7 @@ def test_p3_empty_code_table_is_range_collapse(tmp_path):
 # ── P4 重码集：逐枚点名 ───────────────────────────────────────────────
 def test_p4_dup_set_mismatch_names_the_code(tmp_path):
     root = _mk(tmp_path, pins=PINS_OK.replace('"dup": {"SYN_ALPHA"},', '"dup": set(),'))
-    r = _run(root)
+    r = _run(root, only="observability")
     assert r.returncode == 1, r.stdout + r.stderr
     assert "SYN_ALPHA" in r.stdout, f"重码不一致必须点名是哪个码：{r.stdout}"
     assert "重码集" in r.stdout
@@ -205,6 +216,142 @@ def test_p4_dup_set_mismatch_names_the_code(tmp_path):
 # ── P5 清单自己不自洽（无码总数 ≠ 分档求和）⇒ 指向 --write，不指向 pin ──
 def test_p5_ledger_internal_inconsistency_points_at_write(tmp_path):
     root = _mk(tmp_path, ledger=_ledger(uncoded_total=5, uncoded_raw="DEBUG=1 INFO=0 WARNING=0 ERROR=0 EXCEPTION=0 CRITICAL=0"))
-    r = _run(root)
+    r = _run(root, only="observability")
     assert r.returncode == 1, r.stdout + r.stderr
     assert "不自洽" in r.stdout and "--write" in r.stdout, r.stdout
+
+
+# ======================================================================================
+# 进程模型侧（批 4）：同一套 P1–P5 形状，另一份清单／另一张 pin 表
+# ======================================================================================
+#: 清单自动段的标记文案与可观测性那份**不同**（生成器不同），所以夹具照抄原文案。
+PM_BEGIN = "<!-- AUTO-BEGIN 由 scripts/check_process_model.py --write 生成，勿手改 -->"
+PM_END = "<!-- AUTO-END -->"
+
+PM_LEDGER_OK = (
+    "# 进程模型清单（合成）\n\n## 二、现读自动段\n\n"
+    f"{PM_BEGIN}\n"
+    "### 2.1 生命周期站点（拉起子进程／发信号／装处理器／注册退出钩子）\n\n"
+    "| kind | 站点 | 外层函数 | 关键参数 |\n| --- | --- | --- | --- |\n"
+    "| os.kill | `src/autoforge/a.py:10` | `f` | signal=0 |\n\n"
+    "现读计数：atexit.register=1 · os.kill=1 · subprocess.Popen=0\n\n"
+    "### 2.2 同步原语站点（进程内 ＋ 跨进程）\n\n"
+    "| 原语 | 站点 | 外层函数 | 绑定名 |\n| --- | --- | --- | --- |\n"
+    "| FileLock | `src/autoforge/a.py:20` | `f` | `-` |\n"
+    "| FileLock | `src/autoforge/b.py:30` | `g` | `-` |\n"
+    "| threading.Lock | `src/autoforge/b.py:40` | `g` | `x` |\n\n"
+    "现读计数：进程内 1 站点／1 个文件 · 跨进程 2 站点／2 个文件\n\n"
+    "### 2.3 模块级共享名（被函数用 `global` 改写）\n\n"
+    "| 名字 | 文件 | 改写函数 | global 语句所在函数行 | 函数体内有 `with` | 同模块进程内锁数 |\n"
+    "| --- | --- | --- | --- | --- | --- |\n"
+    "| `_A` | `src/autoforge/a.py` | `f` | 10 | 否 | 0 |\n"
+    "| `_B` | `src/autoforge/b.py` | `g` | 20 | 是 | 1 |\n\n"
+    "现读计数：2 枚名／2 个文件；其中函数体内没有任何 `with` 的 1 枚\n"
+    f"{PM_END}\n"
+)
+
+PM_PINS_OK = '''"""合成 pin 文件：进程模型侧独立表名。"""
+
+PINS_PROCESS_MODEL: dict[str, object] = {
+    "lifecycle_counts": {"os.kill": 1, "atexit.register": 1},
+    "primitives": {"inproc_sites": 1, "inproc_files": 1,
+                   "crossproc_sites": 2, "crossproc_files": 2},
+    "crossproc_by_file": {"src/autoforge/a.py": 1, "src/autoforge/b.py": 1},
+    "shared": {"names": 2, "files": 2, "no_with": 1},
+    "shared_locks": {"src/autoforge/a.py::_A": 0, "src/autoforge/b.py::_B": 1},
+}
+'''
+
+
+def _mk_pm(tmp_path: Path, *, ledger: str | None = None, pins: str | None = None) -> Path:
+    root = tmp_path / "repo"
+    (root / "docs").mkdir(parents=True)
+    (root / "tests" / "unit").mkdir(parents=True)
+    (root / "docs" / "进程模型清单.md").write_text(
+        ledger if ledger is not None else PM_LEDGER_OK, encoding="utf-8", newline="\n"
+    )
+    (root / "tests" / "unit" / "test_process_model_gate.py").write_text(
+        pins if pins is not None else PM_PINS_OK, encoding="utf-8", newline="\n"
+    )
+    return root
+
+
+# ── P6 真仓进程模型侧：五块逐格相等（已在 P1 一并断言），这里钉「块名一个不少」 ──
+def test_p6_real_repo_process_model_entry_covers_all_five_blocks():
+    """防空跑绿：输出必须点名五块，而「dup／无码 N/A」这件事要在读数说明里写明。"""
+    r = _run(REPO, only="process_model")
+    assert r.returncode == 0, r.stdout + r.stderr
+    for word in ("生命周期", "进程内", "跨进程", "共享名", "逐名锁数"):
+        assert word in r.stdout, f"进程模型侧没点名 {word}：{r.stdout}"
+    assert "N/A" in r.stdout, "该清单没有 dup／无码格，说明书里要显式标 N/A 而不是含糊过去"
+
+
+# ── P7 清单漂而 pin 没跟 ⇒ RC=1 点名块与子键 ───────────────────────────
+def test_p7_pm_lifecycle_count_drift_names_kind(tmp_path):
+    root = _mk_pm(tmp_path, ledger=PM_LEDGER_OK.replace("atexit.register=1", "atexit.register=2"))
+    r = _run(root, only="process_model")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "lifecycle_counts" in r.stdout and "atexit.register" in r.stdout, r.stdout
+    assert "PINS_PROCESS_MODEL" in r.stdout, "红因必须指向该改的那张表"
+
+
+def test_p8_pm_primitive_drift_names_the_subkey(tmp_path):
+    root = _mk_pm(tmp_path, pins=PM_PINS_OK.replace('"inproc_sites": 1', '"inproc_sites": 9'))
+    r = _run(root, only="process_model")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "`primitives['inproc_sites']`" in r.stdout, r.stdout
+
+
+def test_p9_pm_crossproc_by_file_drift_names_the_path(tmp_path):
+    root = _mk_pm(tmp_path, pins=PM_PINS_OK.replace('"src/autoforge/a.py": 1', '"src/autoforge/a.py": 3'))
+    r = _run(root, only="process_model")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "crossproc_by_file" in r.stdout and "src/autoforge/a.py" in r.stdout, r.stdout
+
+
+def test_p10_pm_shared_locks_drift_names_file_and_name(tmp_path):
+    root = _mk_pm(tmp_path, pins=PM_PINS_OK.replace('"src/autoforge/b.py::_B": 1', '"src/autoforge/b.py::_B": 2'))
+    r = _run(root, only="process_model")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "shared_locks" in r.stdout and "src/autoforge/b.py::_B" in r.stdout, r.stdout
+
+
+def test_p11_pm_shared_name_count_drift_names_the_block(tmp_path):
+    root = _mk_pm(tmp_path, pins=PM_PINS_OK.replace('"names": 2', '"names": 3'))
+    r = _run(root, only="process_model")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "`shared['names']`" in r.stdout, r.stdout
+
+
+# ── P12 进程模型侧射程塌 ⇒ RC=2 ────────────────────────────────────────
+def test_p12_pm_auto_markers_missing_is_range_collapse(tmp_path):
+    root = _mk_pm(tmp_path, ledger=PM_LEDGER_OK.replace(PM_BEGIN, "<!-- 标记被改写了 -->"))
+    r = _run(root, only="process_model")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "自动段标记" in r.stdout
+
+
+def test_p12_pm_pins_missing_is_range_collapse(tmp_path):
+    root = _mk_pm(tmp_path, pins='"没有表"\n')
+    r = _run(root, only="process_model")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "PINS_PROCESS_MODEL" in r.stdout
+
+
+def test_p12_pm_primitive_aggregate_mismatch_is_range_collapse(tmp_path):
+    """2.2 表按族聚合与计数行不符 ⇒ **射程塌**（解析口径断了），⛔ 不许当 pin 漂报红。
+
+    这条是这道门的自检器：分族规则（`threading.*`＝进程内）与清单不再一致时，
+    报「红」会让人去改 pin——那是错的修法；正确动作是先对齐口径。
+    """
+    root = _mk_pm(tmp_path, ledger=PM_LEDGER_OK.replace("跨进程 2 站点／2 个文件", "跨进程 3 站点／2 个文件"))
+    r = _run(root, only="process_model")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "不符" in r.stdout and "分族" in r.stdout, r.stdout
+
+
+def test_p12_pm_shared_table_vs_count_line_mismatch_is_range_collapse(tmp_path):
+    root = _mk_pm(tmp_path, ledger=PM_LEDGER_OK.replace("2 枚名／2 个文件", "3 枚名／2 个文件"))
+    r = _run(root, only="process_model")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "2.3" in r.stdout

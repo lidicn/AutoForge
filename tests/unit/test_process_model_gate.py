@@ -29,6 +29,41 @@ cpm = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(cpm)
 
+#: 台账读数的**人手认过的字面**（AF-PM 2026-11-14 批 4，与可观测性那份同一套机制）。
+#:
+#: `scripts/check_pin_ledger_consistency.py` 按 AST 读这张表，与 `docs/进程模型清单.md` 自动段
+#: 逐格对撞 ⇒ 漏改在**本地 gates** 就红，不必等 CI 全量 pytest。表是纯字面量 dict
+#: （⛔ 别写成从 `cpm` 现读派生的表达式：那样它就和清单的 A 腿同源，"有人认过这个数"这层价值消失）。
+#:
+#: 表名与可观测性那份**分开**（`PINS_PROCESS_MODEL` vs `PINS`）：两份清单的读数块形状不同构，
+#: 共用一个名字只会让对账门分不清哪一格属于哪份账。
+#:
+#: 改这里就是一句承诺：**我确认清单里的新读数是对的**。每格出处：
+#: - `lifecycle_counts` ← 2.1 计数行（只收本文件真正钉住的六类；其余八类由 §四 上限腿管）
+#: - `primitives` ← 2.2 计数行（进程内／跨进程 × 站点／文件）
+#: - `crossproc_by_file` ← 2.2 表按文件聚合（跨进程面）
+#: - `shared` ← 2.3 计数行（枚名／文件／其中无 `with` 的枚数）
+#: - `shared_locks` ← 2.3 表「同模块进程内锁数」列（`文件::名字` → 锁数）
+PINS_PROCESS_MODEL: dict[str, object] = {
+    "lifecycle_counts": {
+        "subprocess.Popen": 1,
+        "os.kill": 3,
+        "signal.signal": 1,
+        "atexit.register": 1,
+        "os.fork": 0,
+        "multiprocessing.Process": 0,
+    },
+    "primitives": {"inproc_sites": 21, "inproc_files": 14,
+                   "crossproc_sites": 19, "crossproc_files": 8},
+    "crossproc_by_file": {"src/autoforge/af_service.py": 3},
+    "shared": {"names": 9, "files": 6, "no_with": 6},
+    "shared_locks": {
+        "src/autoforge/af_live.py::_tick_exit_reason": 1,
+        "src/autoforge/af_live.py::_tick_supervisor": 1,
+        "src/autoforge/af_live.py::_ticker_thread": 1,
+    },
+}
+
 
 def run_gate(root: Path | None = None) -> subprocess.CompletedProcess:
     cmd = [sys.executable, str(GATE)] + ([str(root)] if root else [])
@@ -223,17 +258,18 @@ def test_real_repo_lifecycle_counts_pinned():
     trees = load_trees(REPO)
     sites = cpm.scan_lifecycle(trees, REPO)
     by = {k: sum(1 for s in sites if s["kind"] == k) for k in cpm.KINDS}
-    assert by["subprocess.Popen"] == 1
-    assert by["os.kill"] == 3
-    assert by["signal.signal"] == 1
-    assert by["atexit.register"] == 1
-    assert by["os.fork"] == 0 and by["multiprocessing.Process"] == 0
+    for kind, pinned in PINS_PROCESS_MODEL["lifecycle_counts"].items():
+        assert by[kind] == pinned, (
+            f"{kind} 现读 {by[kind]} ≠ `PINS_PROCESS_MODEL['lifecycle_counts']` {pinned}"
+            "（漏改先看本地 gates 的「台账读数 pin 对账门」，它会点名该改哪个键）"
+        )
 
 
 def test_real_repo_counts_line_in_doc():
     doc = (REPO / DOC_REL).read_text(encoding="utf-8")
-    assert "atexit.register=1" in doc and "signal.signal=1" in doc
-    assert "os.kill=3" in doc and "subprocess.Popen=1" in doc
+    life = PINS_PROCESS_MODEL["lifecycle_counts"]
+    for kind in ("atexit.register", "signal.signal", "os.kill", "subprocess.Popen"):
+        assert f"{kind}={life[kind]}" in doc, f"2.1 计数行里 {kind} 与 PINS 写的不一致"
 
 
 def test_real_repo_primitive_counts_pinned():
@@ -246,12 +282,19 @@ def test_real_repo_primitive_counts_pinned():
     # v1.29.0 第二批：`af_task_order` 的模块级写锁 ⇒ 进程内 20→21、文件 13→14。
     # v1.30.1（2026-11-13 启停旁车批）：`af_watch_toggle` 的跨进程文件锁（`merge_overrides`／
     # `clear_overrides` 两个入口共用同一把 store 根锁）⇒ 跨进程 17→19 站点、7→8 文件。
-    assert (len(inproc), len({r["path"] for r in inproc})) == (21, 14)
-    assert (len(cross), len({r["path"] for r in cross})) == (19, 8)
-    assert sum(1 for r in cross if r["path"].endswith("af_service.py")) == 3
+    _prim = PINS_PROCESS_MODEL["primitives"]
+    assert (len(inproc), len({r["path"] for r in inproc})) == (_prim["inproc_sites"], _prim["inproc_files"])
+    assert (len(cross), len({r["path"] for r in cross})) == (_prim["crossproc_sites"], _prim["crossproc_files"])
+    for _path, _n in PINS_PROCESS_MODEL["crossproc_by_file"].items():
+        assert sum(1 for r in cross if r["path"] == _path) == _n, (
+            f"{_path} 的跨进程站点现读 {sum(1 for r in cross if r['path'] == _path)} ≠ pin {_n}"
+        )
     doc = (REPO / DOC_REL).read_text(encoding="utf-8")
     # v1.29.0 第一批：`af_grant` 的模块级写锁 ⇒ 进程内 20 站点／13 个文件。
-    assert "进程内 21 站点／14 个文件 · 跨进程 19 站点／8 个文件" in doc
+    assert (
+        f"进程内 {_prim['inproc_sites']} 站点／{_prim['inproc_files']} 个文件 · "
+        f"跨进程 {_prim['crossproc_sites']} 站点／{_prim['crossproc_files']} 个文件" in doc
+    )
 
 
 def test_real_repo_shared_names_tick_trio():
@@ -266,14 +309,24 @@ def test_real_repo_shared_names_tick_trio():
     live = {r["name"]: r for r in shared.values() if r["path"].endswith("af_live.py")}
     assert set(live) == {"_tick_exit_reason", "_tick_supervisor", "_ticker_thread"}
     assert all(r["with"] is True for r in live.values()), {k: v["with"] for k, v in live.items()}
-    assert all(r["locks"] == 1 for r in live.values())
+    _locks_pin = PINS_PROCESS_MODEL["shared_locks"]
+    assert {
+        f"{r['path']}::{n}": r["locks"] for n, r in live.items()
+    } == {k: v for k, v in _locks_pin.items() if "af_live.py::" in k}, (
+        "af_live 三枚共享名的同模块锁数必须与 pin 逐名相等（`locks==1` 是 §3 Q7.3 落地后的形状）"
+    )
     # 退出原因只有一个写者：绕开 `_set_tick_exit_reason` 直接 global 改写就破坏这条
     assert live["_tick_exit_reason"]["fns"] == "_set_tick_exit_reason"
     others = [r for r in shared.values() if not r["path"].endswith("af_live.py")]
     assert all(r["with"] is False for r in others), [
         (r["name"], r["path"]) for r in others if r["with"]
     ]
-    assert len(shared) == 9 and len(others) == 6
+    # `others` 就是「不在 af_live 的那批」＝清单 2.3 计数行里「函数体内没有任何 with」的枚数
+    # （上面两条 `with` 双向断言把两个集合钉成同一个），所以这里对着清单读数比，⛔ 不另抄一个数。
+    assert len(shared) == PINS_PROCESS_MODEL["shared"]["names"]
+    assert len(others) == PINS_PROCESS_MODEL["shared"]["no_with"], (
+        f"非 af_live 的共享名现读 {len(others)} ≠ pin {PINS_PROCESS_MODEL['shared']['no_with']}"
+    )
 
 
 def test_real_doc_register_covers_every_site():
@@ -317,7 +370,7 @@ def test_real_exit_hook_wired_to_the_reaping_hand():
     text = cpm._snap(REPO).text(p)
     hooks = [n for n in ast.walk(trees[p])
              if isinstance(n, ast.Call) and cpm._callee(n) == "atexit.register"]
-    assert len(hooks) == 1
+    assert len(hooks) == PINS_PROCESS_MODEL["lifecycle_counts"]["atexit.register"]
     assert ast.unparse(hooks[0].args[0]) == "reap_watch_child"
     assert cpm._func_map(trees[p])[id(hooks[0])] == "serve"
     assert 'reap_watch_child(store_root, readonly, where="finally")' in text   # D 的后半同一把手
