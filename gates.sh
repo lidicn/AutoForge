@@ -91,7 +91,16 @@ fi
   #    在 CI 上恒 `winpid=未知` ⇒ 判据恒红。Linux 上「查人用的那个 pid」就是 `$$`
   #    本身（`ps -o cmd= -p $$` 直接可用），所以回退成 `$$` 语义成立，且两平台都
   #    给得出一个可查的 pid。
-  printf 'winpid=%s\n' "$(cat "/proc/$$/winpid" 2>/dev/null || echo "$$")"
+  # AF-774（2026-11-14）：**加平台守卫**——`/proc/<pid>/winpid` 只存在于 MSYS（Git Bash
+  #    on Windows）；Linux（CI 是 ubuntu-latest）没有这个文件，旧写法靠 `|| echo "$$"`
+  #    兜底能用，但那是"靠失败命令的后备"而不是"按平台选语义"。这里显式判可读性：
+  #    MSYS ⇒ 给 winpid（Windows 进程号，`Get-CimInstance Win32_Process` 查得到）；
+  #    其它 ⇒ 给 `$$`（Linux 上 ps 直接可用）。两平台都保证这一行**能查到一个活 pid**。
+  if [ -r "/proc/$$/winpid" ]; then
+    printf 'winpid=%s\n' "$(cat "/proc/$$/winpid" 2>/dev/null || echo "$$")"
+  else
+    printf 'winpid=%s\n' "$$"
+  fi
 } > "$_GATES_LOCK/holder"
 # `pid` 同时保留：老版本 gates.sh / 外部脚本按 `pid` 文件读，别把兼容面掐断。
 printf '%s\n' "$$" > "$_GATES_LOCK/pid"
@@ -118,6 +127,20 @@ find "$REPO" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || t
 # 冒烟解释器：本地跑就用自己的 venv；要在容器里跑，改成
 #   docker exec <容器> sh -c 'cd /app && homesdk-gates . --config .gates.toml'
 PYTHON="${GATES_PYTHON:-python3}"
+
+# AF-774（2026-11-14，§1.201/§1.204 裁定）：**解释器不在 PATH** 与 **依赖没装** 是两件事。
+# 修前这里直接 `"$PYTHON" -c "import homesdk.gates"`：解释器根本不存在时 bash 报 127，
+# 脚本照样打印「homesdk 未安装。先执行 pip install …」——把人往"重装依赖"上带，
+# 而真凶是这台机器上就没有 `python3`（Git for Windows 的 bash 现场就是这样，只有
+# `python.exe`／`py`）。误诊一次要花一轮环境排查，还把门禁自己的 RC=2 藏进"依赖问题"。
+# ⇒ 先探解释器存在性：缺了就明说缺、并给出 `GATES_PYTHON=` 的正确用法。
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+  echo "门禁环境错误：解释器 \`$PYTHON\` 不在 PATH —— 这是**解释器缺失**，不是依赖没装。" >&2
+  echo "  用 GATES_PYTHON= 指定本机 python 再跑，例如：" >&2
+  echo "    GATES_PYTHON=/c/Users/<你>/AppData/Local/Programs/Python/Python313/python.exe bash gates.sh" >&2
+  echo "  （Windows 的 Git Bash 里通常没有 python3；真实解释器多叫 python / py。）" >&2
+  exit 2
+fi
 
 if ! "$PYTHON" -c "import homesdk.gates" 2>/dev/null; then
   echo "homesdk 未安装。先执行："
