@@ -28,6 +28,7 @@ from .af_audit import (
     ACTION_FAILED,
     ENTITY_DRIFT,
     EVENT_EMITTED,
+    INSTANCE_CANCELLED,
     INSTANCE_NO_ACTION,
     INSTANCE_NO_EDGE,
     INSTANCE_SESSION_LOST,
@@ -1008,6 +1009,23 @@ class NodeExecutor:
 
         instance.ctx.context["pending_terminal"] = CANCELLED
         instance.ctx.context["cancel_reason"] = reason
+        # AF-783（2026-11-14）：取消是**设计内动作**，但此前一行审计都没有 ⇒ 现场
+        # 「实例怎么没了 / 为什么没跑完」只能靠猜（QA-MCP R6「audit 翻不到 cancel」）。
+        # 两条来源走同一处：`mode=restart` 的新触发抢占旧实例（reason=`<auto_id> restart`）、
+        # 人工/编排面 `cancel(...)`（reason=调用方文案）。INFO 档：不惊动，但答案在盘上。
+        # ⛔ 放在**真正落到 on_cancel** 的这一格，而不是函数开头：atomic do 的首轮调用只
+        # 置 `cancel_pending` 就返回，动作跑完会再进来一次——开头记会重复两笔。
+        self.audit.add(
+            AuditEvent(
+                type=INSTANCE_CANCELLED,
+                at=self.clock.now(),
+                message=f"实例被取消（走 on_cancel，不回滚已执行动作）：{reason or '调用方未注明原因'}",
+                automation_id=str(getattr(auto, "id", "") or ""),
+                instance_id=str(instance.instance_id),
+                node_id=str(getattr(node, "id", "") or ""),
+                data={"reason": str(reason or ""), "channel": "cancel"},
+            )
+        )
         return self.resume(instance, "on_cancel")
 
     # ─────────────────────────────────────────────────────────────────

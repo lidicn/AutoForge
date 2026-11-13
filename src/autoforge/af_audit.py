@@ -66,6 +66,13 @@ INSTANCE_NO_ACTION = "instance_no_action"
 #: 此前这条路径**静默**（`_terminate` 不落审计）⇒ 图里缺兜底边时，实例"消失"而无痕迹。
 INSTANCE_NO_EDGE = "instance_no_edge"
 INSTANCE_EXPIRED = "instance_expired"
+#: AF-783（2026-11-14）：实例被**取消**（`Executor.cancel`）——设计内动作，不是失败。
+#: 为什么必须留痕：`mode=restart` 的新触发会抢占旧实例、人工 `cancel` 也会走同一条路，
+#: 两条路径此前**一行审计都没有** ⇒ 现场「实例怎么没了/为什么没跑完」只能靠猜
+#: （QA-MCP R6 的"audit 翻不到 cancel"就是这条）。数据带 `reason` 区分来源
+#: （`<auto_id> restart` / 人工取消文案 / atomic 结束后的取消），INFO 档——设计内动作。
+#: ⛔ 与 `INSTANCE_EXPIRED` 区分：过期是"活得太久"被清，取消是"被更强的触发顶掉/人叫停"。
+INSTANCE_CANCELLED = "instance_cancelled"
 #: P1 实例持久化：崩溃恢复时成功挂回 / 因图变更被丢弃
 INSTANCE_RESTORED = "instance_restored"
 INSTANCE_RESTORE_DROPPED = "instance_restore_dropped"
@@ -156,6 +163,7 @@ ALL_EVENT_TYPES = (
     INSTANCE_RESTORED,
     INSTANCE_RESTORE_DROPPED,
     INSTANCE_SESSION_LOST,
+    INSTANCE_CANCELLED,
     WRITE_CONFLICT,
     INSTANCE_LEASE_HELD,
     HANDLER_FAILED,
