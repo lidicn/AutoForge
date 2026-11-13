@@ -901,8 +901,28 @@ def enable_by_tag(
 
     # AF-401/403：启用要码、禁用免码（关安全阀不该被钥匙挡住）。闸在服务层 ⇒
     # REST（/api/graphs/enable）与 MCP 同闸；放行凭据标签写进回执。
-    code_tag = ("" if not enabled else
-                _auth_code_check(store, auth_code, action=f"启用自动化（tag={tag!r}）"))
+    code_tag = ""
+    if enabled:
+        _action = f"启用自动化（tag={tag!r}）"
+        code_tag = _auth_code_check(store, auth_code, action=_action)
+        # AF-778（2026-11-14，§1.216 裁定）：过闸后**立即消耗**一次额度，fail-closed。
+        # 修前这里只 validate 不 consume ⇒ 一枚短期码可以**无限次重放**（同一枚码反复启用
+        # 不同标签/不同批次），账本上的 `consumed` 记号永远不落下；而 MCP 部署面
+        #（`af_mcp._t_save`）是"过闸即 consume"，两个面口径不一 ⇒ 谁走哪条路决定了码能烧几次。
+        # 位置纪律：**紧随 validate、save 循环之前**——先把判定与消耗走完再动盘；
+        # 但排在爆炸半径检查之后（超额拒时不烧码，否则"被拒还扣额度"）。
+        # consume 按 kind 分型由 `AuthCodeStore` 自己决定（短期码置 consumed、长期码
+        # use_count+1，af_auth.py 既有语义），⛔ 这里**不加**"拒短期码"：DCD 双轨授权里
+        # 短期码本就是部署凭据，能部署就能启用。
+        from .af_auth import AuthCodeStore as _ACS
+
+        _acs = _ACS(Path(store.root) / ".auth" / "auth_codes.json")
+        if not _acs.consume(str(auth_code or "").strip()):
+            # validate 与 consume 是两步，中间可能被别的进程抢走（MCP 面同一形状，R17-01）
+            raise ServiceError(
+                f"{_action} 无法消耗授权码（可能已被并发消耗/已撤销/已过期）：拒绝执行（fail-closed）",
+                status=403,
+            )
 
     affected: list[dict[str, Any]] = []
     # AF-PM 裁定 2026-11-13：本轮翻转涉及的自动化 id 全集 —— 启停旁车按**全部** id 写，
