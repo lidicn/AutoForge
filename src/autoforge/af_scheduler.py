@@ -23,7 +23,7 @@ from .af_executor import EMIT_TIMER_KIND, NodeExecutor
 from .af_instance import Instance, InstanceManager, make_eval_context
 from .af_ir import Automation, Graph, Node, Trigger, check_trigger_depth, evaluate
 from .af_state import StateProvider, make_resolver
-from .af_time import TimeSource, SystemTimeSource, parse_duration
+from .af_time import TimeSource, SystemTimeSource, matches_at, parse_duration
 from .af_fire_recorder import FireRecorder
 
 __all__ = ["Quota", "Scheduler", "SINGLE", "RESTART", "QUEUED", "PARALLEL", "normalize_trigger"]
@@ -903,7 +903,6 @@ class Scheduler:
         # B3-AF-04: local time for hhmm (user writes at:07:00 meaning local)
         now = getattr(self.clock, 'local_now', self.clock.now)()
         today = now.date().isoformat()
-        hhmm = f"{now.hour:02d}:{now.minute:02d}"
         # P1-1 修复：_time_fired 按 (auto,node,date) 累加，跨天不清理会无限增长。
         # 每次进入时剔除非今日的桶（集合很小，开销可忽略）。
         if self._time_fired:
@@ -916,7 +915,21 @@ class Scheduler:
                 trig = node.trigger
                 if trig is None or trig.type != "time":
                     continue
-                if trig.at != hhmm:
+                # AF-780（2026-11-14）：判定**只走** `matches_at`（与 build 闸同一份校验器）。
+                # 修前这里是 `trig.at != f"{now.hour:02d}:{now.minute:02d}"` 的裸字符串比对：
+                # 建图闸放行 `07:30:00`／`sunrise` 时，两串永不可能相等 ⇒ 这条自动化
+                # **一次都不会触发**，而 build/仿真全绿（假绿通道）。
+                # ⇒ 校验失败⛔ 不许静默 `continue`：留一条具名 warning，让"盘上这条永远不响"
+                # 变成看得见的读数（build 闸已挡住，这里是二道防线：旧归档可能先于闸入库）。
+                try:
+                    if not matches_at(now, trig.at):
+                        continue
+                except ValueError as exc:
+                    logger.warning(
+                        "SCHED_TIME_AT_INVALID time 触发 at 不合法，本次跳过该节点"
+                        "（build 闸已挡新归档；这条是旧归档的二道防线） auto=%s node=%s at=%r err=%s",
+                        auto.id, node.id, getattr(trig, "at", None), exc,
+                    )
                     continue
                 rule_key = f"{auto.id}:{node.id}"
                 # mimo FireRecorder: 落盘记账防重启重放；无 recorder 时回退内存态

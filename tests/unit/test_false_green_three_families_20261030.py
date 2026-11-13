@@ -61,16 +61,22 @@ def _seed_catalog(root: Path) -> None:
 
 
 # ── AF-124：time.at 零校验 ─────────────────────────────────────────
+# ⚠️ AF-780（2026-11-14）**口径收紧，本参数表按新语义重写**：闸门只认 `HH:MM`
+# （与运行期 `matches_at` 同一个校验器）。`HH:MM:SS` 与 `sunrise/sunset±offset` 从
+# "合法"挪到"非法"——修前 build 放行它们，而运行期比的是 `"{:02d}:{:02d}".format(h, m)`，
+# 两串永不可能相等 ⇒ 真机上那条自动化**一次都不会触发**（build 绿/仿真绿/真机死）。
+# 日出日落的正规写法是 `type: "sun"` 触发器的 offset，不该塞进 time.at。
 
-@pytest.mark.parametrize("bad_at", ["25:00", "7:5", "19-30", "12:60", "23:59:99", "now"])
+@pytest.mark.parametrize("bad_at", ["25:00", "7:5", "19-30", "12:60", "23:59:99", "now",
+                                    "23:59:59", "22:00:00", "sunrise", "sunset",
+                                    "sunrise+00:30", "sunset-01:00"])
 def test_invalid_time_at_is_rejected(tmp_path, bad_at):
     body = _build(_ir_time(bad_at), GraphStore(str(tmp_path)))
     assert body["ok"] is False, f"at={bad_at!r} 此前一路绿灯到归档（AF-124 假绿）"
     assert "TIME_AT_INVALID" in _codes(body)
 
 
-@pytest.mark.parametrize("good_at", ["19:30", "07:05", "23:59:59", "00:00",
-                                     "sunrise", "sunset", "sunrise+00:30", "sunset-01:00"])
+@pytest.mark.parametrize("good_at", ["19:30", "07:05", "00:00", "23:59"])
 def test_valid_time_at_still_passes(tmp_path, good_at):
     body = _build(_ir_time(good_at), GraphStore(str(tmp_path)))
     assert "TIME_AT_INVALID" not in _codes(body), f"at={good_at!r} 是合法时刻，不许误伤"

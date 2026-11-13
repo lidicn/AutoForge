@@ -184,9 +184,12 @@ def test_catalog_size_reading_is_pinned():
     # 50 → 52：C-2 §G.2（PM 裁落点＝af_scanner，⛔ 不动 AskSpec.__post_init__）——
     # ASK_BINARY_NO_DENY_PATH（二元 ask 缺拒绝出口/default 直达 do）＋
     # ASK_STRUCT_NO_THEN（结构化 ask 缺 then 或带 yes/no 死边）。
+    # 52 → 53：AF-780（2026-11-14）——FOR_WITHOUT_TO（`for` 挂在没有 `to` 的入口上，
+    # 运行期 `_still_holds` 只能 fail-closed）。同批 TIME_AT_INVALID 的口径从
+    # "HH:MM[:SS] 或 sunrise/sunset±offset" 收成"只认 HH:MM"，与运行期 matches_at 同源。
     # ⚠️ 上一笔（1.14.11）我改了码表却没动这枚 pin 与文档读数——当时 `-k` 选择罩不到本文件，
     #    CI 才会红。教训：加诊断码必查这三处（本 pin／两份架构文档／_NON_LITERAL_KEYS）。
     assert "CONFIRM_WITHOUT_DENY_PATH" not in CHECKS, "确认闸已撤，这枚码不该再发出"
     assert "CONFIRM_WITHOUT_DENY_PATH" not in CODE_HINT
-    assert len(CHECKS) == 52, f"CHECKS 现读 {len(CHECKS)} 枚，两份架构文档那句读数要跟着改"
+    assert len(CHECKS) == 53, f"CHECKS 现读 {len(CHECKS)} 枚，两份架构文档那句读数要跟着改"
     assert set(CHECKS) == set(CODE_HINT), "两份目录的键集要同源：只进一份就是半张脸"

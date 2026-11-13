@@ -92,7 +92,8 @@ CHECKS: dict[str, str] = {
     # ── v1.7.4 ask 节点需 DB 承接 ──
     "ASK_AT_RUNTIME": "IR 含 ask 节点：运行期挂起等待回答，需豆包管家（DB）对接 TTS/语音或 WebUI 应答",
     # ── v1.14.22 假绿三族收口（审计 AF-123/124/125）──
-    "TIME_AT_INVALID": "time 触发的 at 字段不是 HH:MM(:SS) 或 sunrise/sunset±offset——25:00 这类值 build 照样 ok 是假绿",
+    "TIME_AT_INVALID": "time 触发的 at 字段不是 HH:MM——秒格式/sunrise/sunset/25:00 这类值 build 照样 ok 是假绿（运行期 matches_at 只认 HH:MM）",
+    "FOR_WITHOUT_TO": "`for` 持续条件挂在**没有 to 的入口**上（group 型或变化型 state）——运行期 `_still_holds` 只能 fail-closed，条件是死的",
     "SERVICE_UNKNOWN": "do 动作的服务名在该域不存在（turn_onnn）——build/sim 双绿但真机必 404",
     "ENTITY_CHECK_DEGRADED": "设备目录为空，实体存在性校验静默跳过（entity_check=skipped 但零诊断）——假绿通道",
     # ── AF-707 假绿族（PM 裁定补码，2026-10-31）──
@@ -160,7 +161,8 @@ CODE_HINT: dict[str, str] = {
     "ASK_AT_RUNTIME": "ask 节点是运行期挂起点：自动化跑到此处暂停，等豆包管家（DB）通过 TTS 播报"
                           "并接收语音/文本回答，再 POST /api/sessions/{id}/answer 恢复实例。"
                           "确认 DB 已对接此房间（room 字段）；未对接时实例会走 on_timeout 静默兜底。",
-    "TIME_AT_INVALID": "at 用 HH:MM（或 HH:MM:SS），日落日出写 sunrise/sunset（可带 ±HH:MM offset）。",
+    "TIME_AT_INVALID": "at 只能写 HH:MM（00-23:00-59）；日落日出请用 `type: \"sun\"` 触发器，别塞进 time.at。",
+    "FOR_WITHOUT_TO": "给这条入口补显式 `to`（state 型写目标态），或把 `for` 挪到带 `to` 的入口；group 型入口不能挂 `for`。",
     "SERVICE_UNKNOWN": "服务名打错（turn_onnn）；该域合法服务用 af_resolve_entity 查 services 清单。",
     "ENTITY_CHECK_DEGRADED": "先 af_catalog 刷新设备目录再 build——空目录时幽灵实体检测不到，这条 ok 不可信。",
     "ASK_BINARY_NO_DENY_PATH": "给二元 ask 补 `no` 边（指向 pass/收尾），或把 `default` 改指非执行下游；⛔ 不要删 no 让 unknown 落到 do。",
@@ -445,6 +447,8 @@ class StaticScanner:
         self._check_entry(auto, out)
         # AF-124（假绿三族，v1.14.22）：time 触发 at 校验（自动化级：按节点扫触发器）
         self._check_time_at(auto, out)
+        # AF-780（2026-11-14）：`for` 持续条件必须挂在带 `to` 的入口上（运行期只能 fail-closed）
+        self._check_for_target(auto, out)
         self._check_entities(auto, out)
         self._check_static_loop(auto, out)
         self._check_emit(auto, out)
@@ -939,12 +943,13 @@ class StaticScanner:
             )
 
     # AF-124（假绿三族）：time 触发的 at 从来没人校验——`25:00` 一路绿灯到归档。
-    # 校验口径：HH:MM 或 HH:MM:SS（00-23/00-59），或 sunrise/sunset（可带 ±offset）。
-    # （顶部已 `import re`，静态正则用顶层导入——动态 __import__ 会进规范化门读数）
-    _TIME_AT_RE = re.compile(
-        r"^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$"
-        r"|^(?:sunrise|sunset)(?:[+-]\d+:[0-5]\d)?$"
-    )
+    # AF-780（2026-11-14）：口径收到**与运行期 `matches_at` 逐字同一份**——只认 `HH:MM`。
+    # 修前这里还放行 `HH:MM:SS` 与 `sunrise/sunset±offset`，可运行期 `_fire_time_triggers`
+    # 比的是 `f"{now.hour:02d}:{now.minute:02d}"`：`07:30:00` 永远 != `07:30`、`sunrise`
+    # 更永远 != 任何钟点 ⇒ **build 绿、仿真绿、真机上这条自动化一次都不会触发**。
+    # 日出日落本来就有专门的 `type: "sun"` 触发器（带 offset），不该塞进 time.at。
+    # ⛔ 放宽这条等于把「闸门口径 ≠ 运行期口径」这个假绿通道重新打开。
+    _TIME_AT_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
     def _check_time_at(self, auto: Automation, out: ScanResult) -> None:
         for node in auto.nodes.values():
@@ -971,7 +976,39 @@ class StaticScanner:
                         "TIME_AT_INVALID",
                         ERROR,
                         f"节点 {node.id} 的 time 触发 at={at!r} 不是合法时刻"
-                        f"（HH:MM[:SS] 或 sunrise/sunset[±offset]）——build 此前照样 ok 是假绿",
+                        f"（只能是 HH:MM，00-23:00-59）——运行期 `matches_at` 只认 HH:MM，"
+                        f"秒格式/sunrise/sunset 在这里 build 绿、真机永远不触发；"
+                        f"日出日落请改用 `type: \"sun\"` 触发器的 offset",
+                        auto.id,
+                        node.id,
+                    )
+                )
+
+    def _check_for_target(self, auto: Automation, out: ScanResult) -> None:
+        """AF-780（2026-11-14）：`for` 持续条件必须挂在**带 `to` 的入口**上。
+
+        运行期口径（`Scheduler._still_holds`）：`pending.to is None` ⇒ 直接 `False`
+        （fail-closed，P1-7 明写"无明确目标态的 for 条件不可靠"）。而 `node.trigger.to`
+        只有**单条 state 触发器**才可能有值：
+        - `group` 型入口（and/or）没有 `to` 字段 ⇒ 挂 `for` 后条件恒不成立；
+        - 变化型 state（既不写 `to` 也不写 `from`）同样没有目标态；
+        ⇒ 这两种写法 build 全绿、真机上"等 10 分钟再动"永远不执行。这里在编译期拦下。
+        """
+        for node in auto.entry_nodes():
+            if not node.for_:
+                continue
+            trig = getattr(node, "trigger", None)
+            ttype = str(getattr(trig, "type", "") or "")
+            to = getattr(trig, "to", None)
+            if ttype == "group" or (ttype == "state" and not to):
+                out.diagnostics.append(
+                    Diagnostic(
+                        "FOR_WITHOUT_TO",
+                        ERROR,
+                        f"节点 {node.id} 的入口触发（type={ttype or '∅'}）没有 `to`，"
+                        f"却挂了 for={node.for_!r}——运行期 `_still_holds` 对无目标态的持续"
+                        f"条件只能 fail-closed，这段等待永远不会成立"
+                        f"（给 state 入口补 to，或把 for 挪到带 to 的入口）",
                         auto.id,
                         node.id,
                     )
