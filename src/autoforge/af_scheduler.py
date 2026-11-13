@@ -147,7 +147,20 @@ class Scheduler:
                     # D10（2026-11-06）：条件**不满**也要推进 `last_met=False`——否则
                     # "条件打破"没被记下，下一次满足就不算跳变沿（先断后立失效）。
                     # 只对 group-and 自动化生效（无该条件层 ⇒ 无"条件维持"语义，不记）。
-                    self._record_met_if_applicable(auto, met=False)
+                    #
+                    # AF-769（2026-11-13）：⚠️ 这里**不能**传 `met=False`——本分支的语义是
+                    # 「本次事件**不匹配入口触发**」，⛔ 不是「全条件不满」。两者是两件事：
+                    #   · 厨房灯变化／自动化自己 emit 的 pass 事件（如 `af_ask_purifier_timeout`）
+                    #     ⇒ 不匹配 occupancy 入口触发，但「夜间 ∧ 灯开 ∧ 净化器关」此刻**仍成立**；
+                    #   · 只有全条件真被打破（如灯关）时才该记 `False`。
+                    # 旧实现把「不匹配」当「不满」硬写 False ⇒ 任何无关事件都把 `last_met` 抹成
+                    # False ⇒ 下一次同值重复上报（occupancy on→on，值都没变）被 `_dispatch_allowed`
+                    # 判成「不满→满足」跳变沿 ⇒ 重复发问（现场：`af_ask_purifier`/`af_ask_humidifier`
+                    # 的 `last_met` 恒 False、`last_dispatched_at` 恒 None，11-12 一天 66 次触发）。
+                    # 修法：交给 `_record_met_if_applicable` 记 `_auto_currently_met` 的**真实求值**
+                    # ——条件真被打破时它自然返回 False（判据⑤不塌），无 group-and 条件层时返回
+                    # None ⇒ 不记（单条 state/event/time 自动化旧行为不变）。
+                    self._record_met_if_applicable(auto)
         return fired
 
     def tick(self) -> list[Instance]:
@@ -645,16 +658,26 @@ class Scheduler:
                 return
         # 无 met_io（内存档）：没有"派发时刻"的落盘点，⛔ 不假装记上了
 
-    def _record_met_if_applicable(self, auto: Automation, *, met: bool) -> None:
+    def _record_met_if_applicable(self, auto: Automation) -> None:
         """D10：只有**带 group-and 条件层**的自动化才记 `last_met`（其余无"条件维持"语义）。
 
-        `handle_event` 在条件不满（`satisfied=False`）时调这里把 `last_met` 推进成 False，
-        保证"条件打破"被记下 ⇒ 下一次满足才算跳变沿（先断后立成立）。⛔ 不给单条 state/
-        event/time 自动化记——它们不走边沿语义，记了反而会误伤旧行为。
+        记的是 `_auto_currently_met(auto)` 的**真实求值**——「当前全条件是否成立」，
+        ⛔ 不再接受调用方传入的 `met`。
+
+        AF-769（2026-11-13）根因：旧签名 `(*, met: bool)` 让调用方硬写 `met=False`，而唯一
+        调用点 `handle_event` 的 else 分支语义是「本次事件**不匹配入口触发**」——**不等于**
+        「全条件不满」（语义差逐条写在 `handle_event` 的 else 分支注释里）。于是任何无关事件
+        （厨房灯、自动化自己 emit 的 pass 事件）都把 `last_met` 抹成 False，下一次同值重复
+        上报就被 `_dispatch_allowed` 判成「不满→满足」跳变沿，重复发问。
+
+        修法：由本方法现求当前全条件布尔。条件真被打破时（如灯关）`_auto_currently_met`
+        自然返回 `False`，"先断后立"照旧成立；返回 `None`＝无 group-and 条件层 ⇒ 不记
+        （单条 state/event/time 自动化不走边沿语义，记了反而会误伤旧行为）。
         """
-        if self._auto_currently_met(auto) is None:
+        current = self._auto_currently_met(auto)
+        if current is None:
             return
-        self._record_met(auto.id, met)
+        self._record_met(auto.id, current)
 
     def _record_trigger_facts(self, auto: Automation, node: Node, event: BusEvent | None) -> None:
         """D10：触发计数记账的**唯一实现点**（spawn 出口与抑制腿共用，⛔ 不各写一份）。
