@@ -44,9 +44,15 @@ pytestmark = pytest.mark.skipif(BASH is None, reason="本机没有 bash，跳过
 
 # ── W1 解释器缺失 ⇒ 新文案 ＋ RC=2 ──────────────────────────────────
 def test_w1_missing_interpreter_reports_clearly():
-    """判据 a：解释器不在 PATH 时必须说"解释器缺失"，并给出 GATES_PYTHON= 的用法。"""
+    """判据 a：解释器不在 PATH 时必须说"解释器缺失"，并给出 GATES_PYTHON= 的用法。
+
+    ⚠️ 调用形状必须写成 `bash "<路径>"`（bash 当**解释器**跑脚本），⛔ 不许直接
+    `"<路径>"` 执行：CI runner（Linux）checkout 出来的 gates.sh 未必带执行位，
+    直接执行会以 RC=126／「Permission denied」死在门禁自己的第一行之前——那时根本
+    走不到本卡的 `command -v` 逻辑，测的就不是这里要钉的东西了（CI run 43493931997 实测）。
+    """
     r = subprocess.run(
-        [BASH, "-c", f'GATES_PYTHON=definitely_no_such_python_zzz "{GATES}"'],
+        [BASH, "-c", f'GATES_PYTHON=definitely_no_such_python_zzz bash "{GATES}"'],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
         cwd=str(REPO),
     )
@@ -58,9 +64,12 @@ def test_w1_missing_interpreter_reports_clearly():
 
 # ── W2 ⛔ 不许再误诊成依赖没装 ───────────────────────────────────────
 def test_w2_no_dependency_misdiagnosis():
-    """判据 b（反证腿）：解释器缺失时⛔ 不许把话说到"homesdk 未安装"上。"""
+    """判据 b（反证腿）：解释器缺失时⛔ 不许把话说到"homesdk 未安装"上。
+
+    调用形状同 W1：显式 bash 解释器，不依赖执行位。
+    """
     r = subprocess.run(
-        [BASH, "-c", f'GATES_PYTHON=definitely_no_such_python_zzz "{GATES}"'],
+        [BASH, "-c", f'GATES_PYTHON=definitely_no_such_python_zzz bash "{GATES}"'],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
         cwd=str(REPO),
     )

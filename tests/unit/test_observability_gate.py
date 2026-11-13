@@ -172,7 +172,14 @@ def test_real_repo_site_readings_are_pinned(real):
     # `set_automation_enabled` 两站启停旁车写失败。后两站原本**无码**（warning 无码 72→74，
     # 把 §四 上限顶红），本批补具名码 `WATCH_ENABLED_OVERRIDE_WRITE_FAILED` 两站共用
     # ⇒ 无码 warning 回到 72、具名码 135→136。⛔ 不是抬上限。
-    assert len(real["sites"]) == 259
+    # 259 → 263（2026-11-14 v1.30.7 P3 卫生批，+4，全部 WARNING 带码）：
+    # ① `af_scheduler._fire_time_triggers` 的 `SCHED_TIME_AT_INVALID`（at 过不了 matches_at）；
+    # ② `af_api._pair_record_failure` 的 `PAIR_LINK_FAILURE_COUNT_READ_FAILED`（计数文件读失败）；
+    # ③④ `SCHED_PREMISE_EVAL_FAILED` 的**两段新腿**（`_auto_currently_met` 的 group-and 段与
+    #    if 段 except，此前裸吞；主站在 `_premise_met`，AF-771 返工批已登记）⇒ 既 +2 站又 +1 重码。
+    # ⛔ 无码存量一字未动（四站全带码），§四 六行上限同样不动。
+    # 与 CI run 43493931997 的教训同源：**台账 regen＋§三手工段＋本 pin 是三套**，gates 只查清单那套。
+    assert len(real["sites"]) == 263
     # v1.29.0 第一批：+`af_grant.py` 一个文件（5 个具名码站点）⇒ 文件 35→36。
     # v1.29.0 第二批：+`af_task_order.py` ⇒ 文件 36→37。
     # v1.30.1（2026-11-13）：+`af_watch_toggle.py` ⇒ 文件 37→38。
@@ -187,7 +194,9 @@ def test_real_repo_site_readings_are_pinned(real):
     # v1.30.1 启停旁车批 +5 warning（af_watch_toggle 4 站 ＋ af_service 写失败补码后
     # 仍记 warning，补码只改「有没有码」不改级别）、+1 info（WATCH_ENABLED_OVERRIDE_APPLIED）
     # ⇒ warning 174→179、info 10→11，六档合计 259。
-    assert dict(lv) == {"debug": 27, "info": 11, "warning": 179, "error": 30, "exception": 12}
+    # v1.30.7 P3 卫生批 +4 warning（SCHED_TIME_AT_INVALID／PAIR_LINK_FAILURE_COUNT_READ_FAILED／
+    # SCHED_PREMISE_EVAL_FAILED 两段新腿）⇒ warning 179→183，六档合计 263。
+    assert dict(lv) == {"debug": 27, "info": 11, "warning": 183, "error": 30, "exception": 12}
     assert lv["critical"] == 0, "CRITICAL 现读 0 是基线；它变了要连同 §1.6 的口径一起谈"
     assert real["outside"] == [], f"长出第二种 logger 获取形状：{real['outside'][:3]}"
 
@@ -259,6 +268,13 @@ def test_real_repo_named_code_readings_are_pinned(real):
     #    （旁车读不出，本次沿用上一份已知 override，停用位可能不是最新值），v1.30.1。
     # ⑥ `WATCH_ENABLED_OVERRIDE_WRITE_FAILED` 出自 `enable_by_tag`／`set_automation_enabled`
     #    两条腿——同一句承诺（本层把启停旁车写进盘失败 ⇒ 安全阀关不上、停用不即时生效），v1.30.1。
+    # ⑦ `SCHED_PREMISE_EVAL_FAILED` 出自**三条腿**——同一句承诺（入口/条件求值炸了，本次按
+    #    fail-closed 处理、不派发，且「真不满足」与「求值失败」必须可区分），v1.30.7 P3 批：
+    #      a. `_premise_met`：入口状态前提取快照抛 `UnknownEntity`／别的异常（AF-771 返工批立的码）；
+    #      b. `_auto_currently_met` 的 group-and 段 `except`（AF-784，此前裸吞）；
+    #      c. `_auto_currently_met` 的 if 段 `except`（AF-784，此前裸吞）。
+    #    三条都是「求值失败 ⇒ met=False ⇒ 判 edge_held ⇒ 静默不派发」，症状与「条件真的不成立」
+    #    同形，所以必须共用一枚码——⛔ 不许拆成三枚（那是同一个失败轴）。
     assert dup == {
         "DEPLOY_AUDIT_PERSIST_FAILED",
         "OWNER_ALERT_PUBLISH_FAILED",
@@ -267,6 +283,7 @@ def test_real_repo_named_code_readings_are_pinned(real):
         "TASK_ORDER_STORE_CORRUPT",
         "WATCH_ENABLED_OVERRIDE_READ_FAILED",
         "WATCH_ENABLED_OVERRIDE_WRITE_FAILED",
+        "SCHED_PREMISE_EVAL_FAILED",
     }, f"重码名单漂了：{dup}"
     nc = Counter(s["level"] for s in real["sites"] if not s["code"])
     ac0 = _auto_counts()
