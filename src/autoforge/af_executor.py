@@ -894,10 +894,22 @@ class NodeExecutor:
 
         定期调用（如每次 tick 后），遍历 pending_asks，对应实例已终态则 pop。
         返回清理的幽灵数量。
+
+        AF-773（2026-11-13）：**`inst is None` 那条分支原来永远走不到**——
+        `InstanceManager.get()` 是 `self._instances[instance_id]`，实例不在时**抛 KeyError**，
+        不是返回 None。所以"实例已不在管理器里（崩溃未恢复／被清理）"这种最典型的幽灵
+        从来没被这条清理过，只会在这里抛穿；而 AF-773 把本方法接进 `Runtime.tick()` 之后，
+        抛穿的就是**整轮 tick**（调度/超时/排队全停摆）。
+        ⇒ 用 try/except 把"取不到实例"显式落成 `inst = None`，让原本写好的那条分支真正生效。
+        ⛔ 清理口径一字未改：仍然只清「实例终态」与「实例不在」，仍记 `ASK_EXPIRED(reason=sweep)`。
         """
         ghosts = []
         for inst_id in list(self.pending_asks.keys()):
-            inst = self.instances.get(inst_id)
+            try:
+                inst = self.instances.get(inst_id)
+            except KeyError:
+                # 实例已不在管理器里 ⇒ 正宗幽灵（会话还在、宿主没了），必须出队
+                inst = None
             if inst is None or getattr(inst, "is_terminal", False) is True:
                 ghosts.append(inst_id)
         for inst_id in ghosts:

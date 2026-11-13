@@ -510,6 +510,17 @@ class Runtime:
         except Exception as exc:  # noqa: BLE001
             logger.warning("READBACK_CHECK_FAILED 回读结账异常（不影响 tick）：%r", exc)
         self.instances.expire_stale()
+        # AF-773（2026-11-13）：B3-AF-02「幽灵 ask 会话」清理——`sweep_orphans()` 早就写好了，
+        # 但**没有任何生产调用方**（此前只有单测在调它）⇒ 实例已经走到终态、`pending_asks`
+        # 里却还挂着那条会话，`/api/asks` 与 watch sidecar 就会一直把一条「问过、但永远不会
+        # 有人答」的问句摆出来（现场症状：前端一直显示待答、点答还回"没有这个会话"）。
+        # 为什么放在 tick 尾：终态可能由任何一条路径走出来（answer／timeout／cancel／边收尾／
+        # 实例被移出管理器），只有统一收尾处才兜得住全部；放在 `expire_stale()` **之后**，
+        # 是让超时/过期腿先把该终态的实例落定，再由本行把漏挂的会话扫掉。
+        # 成本＝一次按会话数的内存遍历（键数＝在跑 ask 会话数），逐 tick 调用可忽略。
+        # ⛔ 不改 `sweep_orphans()` 本体语义：它自带 `ASK_EXPIRED(reason=sweep)` 审计与
+        # 「零推进」纪律，本行只负责"有人按"。
+        self.executor.sweep_orphans()
         # 跨日清理原先**没有任何生产调用方**（`sweep()` 写好了却没人按）⇒ `fire_log.json` 按天只增不减。
         # `sweep()` 自带 3600s 单调节流，逐 tick 调用不会重复扫盘。
         recorder = self.scheduler.fire_recorder
