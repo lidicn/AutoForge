@@ -157,9 +157,15 @@ class Scheduler:
                     # False ⇒ 下一次同值重复上报（occupancy on→on，值都没变）被 `_dispatch_allowed`
                     # 判成「不满→满足」跳变沿 ⇒ 重复发问（现场：`af_ask_purifier`/`af_ask_humidifier`
                     # 的 `last_met` 恒 False、`last_dispatched_at` 恒 None，11-12 一天 66 次触发）。
-                    # 修法：交给 `_record_met_if_applicable` 记 `_auto_currently_met` 的**真实求值**
+                    # 修法：交给 `_record_met_if_applicable` 现求**真实值**，且**只在「断」时落盘**
                     # ——条件真被打破时它自然返回 False（判据⑤不塌），无 group-and 条件层时返回
                     # None ⇒ 不记（单条 state/event/time 自动化旧行为不变）。
+                    #
+                    # AF-770（2026-11-13）：769 只撤了「硬写 False」，却把「写 True」留在这里，
+                    # 于是从「重复发问」翻成「永不发问」——条件成立期间，无关节事件不停把
+                    # `last_met` 刷成 True，真触发到达时 `_dispatch_allowed` 只看到电平维持
+                    # `edge_held`（现场 135 次触发 / 0 次派发）。⇒ 「立」这一半⛔ 不在这里记，
+                    # 留给真正走到派发闸的 `_dispatch_allowed` 自己记。
                     self._record_met_if_applicable(auto)
         return fired
 
@@ -670,14 +676,25 @@ class Scheduler:
         （厨房灯、自动化自己 emit 的 pass 事件）都把 `last_met` 抹成 False，下一次同值重复
         上报就被 `_dispatch_allowed` 判成「不满→满足」跳变沿，重复发问。
 
-        修法：由本方法现求当前全条件布尔。条件真被打破时（如灯关）`_auto_currently_met`
-        自然返回 `False`，"先断后立"照旧成立；返回 `None`＝无 group-and 条件层 ⇒ 不记
-        （单条 state/event/time 自动化不走边沿语义，记了反而会误伤旧行为）。
+        AF-770（2026-11-13）根因：769 只修掉了「硬写 False」，把「写 True」留了下来——
+        条件成立期间，家里每秒几十条无关事件会不断把 `last_met` 刷成 `True`，等真正的
+        `occupancy → on` 到达时 `_dispatch_allowed` 看到 `prev is True` ⇒ 判成电平维持
+        `edge_held` ⇒ **永不派发**（现场：`af_ask_purifier` 135 次触发 / `af_ask_humidifier`
+        40 次触发，两条 `last_dispatched_at` 均 None）。
+
+        所以本方法**只在「断」这一刻落盘**：
+
+        - `current is False` ⇒ 记 `False`（条件真被打破，先断后立靠它；AF-769 L5 腿不变）。
+        - `current is True`  ⇒ **不落盘**——「立」这一半留给真触发去吃：`_dispatch_allowed`
+          在真正走到派发闸时会用同一份求值自己 `_record_met(True)`。⛔ 若在这里写 True，
+          无关节事件就把沿提前吃掉，真触发到达时只剩「电平维持」。
+        - `current is None`  ⇒ 无 group-and 条件层，不记（单条 state/event/time 旧行为不变）。
         """
         current = self._auto_currently_met(auto)
         if current is None:
             return
-        self._record_met(auto.id, current)
+        if current is False:
+            self._record_met(auto.id, False)
 
     def _record_trigger_facts(self, auto: Automation, node: Node, event: BusEvent | None) -> None:
         """D10：触发计数记账的**唯一实现点**（spawn 出口与抑制腿共用，⛔ 不各写一份）。

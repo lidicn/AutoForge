@@ -306,9 +306,13 @@ def test_l5_condition_break_records_met_false(tmp_path):
 def test_l6_source_pin_records_current_evaluation():
     """源码钉（防回退）：`_record_met_if_applicable` 记 `_auto_currently_met` 的真实求值。
 
-    钉两件事：① 方法体内是 `current = self._auto_currently_met(auto)` ＋
-    `self._record_met(auto.id, current)`；② 调用点⛔ 不再传 `met=`（「不匹配入口触发」
-    不许再被当成「全条件不满」硬写进去）。
+    钉三件事：① 方法体内是 `current = self._auto_currently_met(auto)`；② **只在
+    `current is False` 时落盘**；③ 调用点⛔ 不再传 `met=`。
+
+    ⚠️ AF-770（2026-11-13）改了 ② 的落盘条件：AF-769 那版是 `_record_met(auto.id, current)`
+    （True 也写），结果「立」这一半被无关节事件提前吃掉 ⇒ 真触发到达时只剩 `edge_held`，
+    **永不派发**（现场 135 次触发 / 0 次派发）。所以这里改成钉「只有 False 才写」——
+    True 由真正走到派发闸的 `_dispatch_allowed` 自己记。L1–L5 五条行为腿**一条没动**。
     """
     import inspect
 
@@ -317,7 +321,10 @@ def test_l6_source_pin_records_current_evaluation():
     src = inspect.getsource(af_scheduler.Scheduler._record_met_if_applicable)
     assert "current = self._auto_currently_met(auto)" in src, \
         "必须现求当前全条件布尔（AF-769 根因：算出来又被丢弃）"
-    assert "self._record_met(auto.id, current)" in src, "必须记真实求值"
+    assert "if current is False:" in src and "self._record_met(auto.id, False)" in src, \
+        "只在「断」这一刻落盘（AF-770：写 True 会把跳变沿提前吃掉，真触发到达时只剩 level 维持）"
+    assert "self._record_met(auto.id, current)" not in src, \
+        "⛔ 不许再写 True（AF-770 根因：『立』留给真触发去吃）"
     assert "self._record_met(auto.id, met)" not in src, \
         "⛔ 不许再让调用方传入的 met 覆盖真实求值"
 
