@@ -215,10 +215,20 @@ class TokenInfo:
     issued_at: float = 0.0
 
 
+#: **owner 面主体名单的唯一真源**（AF-787 返工：真源下沉到 kernel 层）。
+#:
+#: 修前它在 `af_api._OWNER_SUBJECTS`，而 `af_auth.redeem_pair_code` 用函数级
+#: `from .af_api import _OWNER_SUBJECTS` 去引用它——`import-linter` 的
+#: `Service boundary never imported by kernel` 契约**连函数级 import 也拦**
+#: （CI job `layering-gates` 就是这么红的）。层级方向不能靠"延迟导入"绕：
+#: **授权语义本就住 kernel 层**，所以真源放到这里，`af_api._OWNER_SUBJECTS`
+#: 反向别名引用它（名字保留，`af_mcp._owner_face` 的 import 路径不变）。
+OWNER_SUBJECTS: frozenset[str] = frozenset({"owner", "shared"})
+
 #: 批 4（D7）：rename_subject 的保留名（服务层拦所有调用点，不只端点）。
-#: owner 面 `{owner, shared}` ＋ 未认证占位 `unknown`——与 af_api._AGENT_LIST_RESERVED
-#: 同口径，但服务层独立定义（af_auth 不反向依赖 af_api），改一处要同步两处。
-_RESERVED_SUBJECT_NAMES = frozenset({"owner", "shared", "unknown"})
+#: owner 面 `{owner, shared}` ＋ 未认证占位 `unknown`——**由 `OWNER_SUBJECTS` 派生**，
+#: ⛔ 不再手抄一份名单（AF-787 返工顺手收的：此前这里是第二份 `{"owner","shared"}` 字面量）。
+_RESERVED_SUBJECT_NAMES = OWNER_SUBJECTS | frozenset({"unknown"})
 
 
 class TokenRegistry:
@@ -1207,11 +1217,11 @@ def request_pair_code(pair_store: PairCodeStore, agent_name_hint: str,
     与授权面无关也必须拒。闸装在**唯一实现**里而不是某一个端点上：三径同口径。
     """
     hint = (agent_name_hint or "").strip() or "未知 agent"
-    if hint in _owner_subject_names():
+    if hint in OWNER_SUBJECTS:
         # ⛔ 不落盘、不发码：被拒的请求不该在 `pair_codes.json` 里留一枚可用码
         # （它进了盘就会被 SSE 推给用户弹窗，那正是要拦的东西）。
         raise ValueError(
-            f"agent_name_hint={hint!r} 是 owner 面保留名（{'／'.join(sorted(_owner_subject_names()))}）——"
+            f"agent_name_hint={hint!r} 是 owner 面保留名（{'／'.join(sorted(OWNER_SUBJECTS))}）——"
             "请换一个能区分自己身份的名字"
         )
     if ttl_s is None:
@@ -1223,17 +1233,6 @@ def request_pair_code(pair_store: PairCodeStore, agent_name_hint: str,
 #: AF-787：修前 subject 直接取 caller 自报的 `agent_name`——agent 自称 `owner` 就拿到 owner 面
 #: 主体（元宝第五期 MCP-01）。**主体的授权含义只能由服务端给**，自报名一律降级成 `label`。
 _PAIR_SUBJECT_HEX_BYTES = 3
-
-
-def _owner_subject_names() -> frozenset[str]:
-    """owner 面主体名单——**单一真源是 `af_api._OWNER_SUBJECTS`**（⛔ 不在这里抄第二份）。
-
-    延迟导入：`af_api` 在模块层 `from .af_auth import …`，这里反向做模块层导入会成环；
-    `af_mcp._is_owner_face` 用的是同一个做法。只在**调用时刻**解析，模块导入期不碰 af_api。
-    """
-    from .af_api import _OWNER_SUBJECTS
-
-    return _OWNER_SUBJECTS
 
 
 def redeem_pair_code(
@@ -1276,7 +1275,7 @@ def redeem_pair_code(
     # 只读 peek：拒发时⛔ 不消费——用户手里那枚码不该被一次恶意 hint 的兑换顺手烧掉。
     rec = pair_store.get(trimmed)
     hint = str((rec or {}).get("agent_name_hint") or "").strip() or caller or "未知 agent"
-    reserved = _owner_subject_names()
+    reserved = OWNER_SUBJECTS
     if caller in reserved or hint in reserved:
         audit = getattr(registry, "_audit", None) if registry is not None else None
         if audit is not None:

@@ -44,8 +44,20 @@ PING = json.dumps({"jsonrpc": "2.0", "id": 9, "method": "ping"})
 
 
 def _drive(monkeypatch, tmp_path, lines: list[str]) -> tuple[list[dict], str]:
-    """在进程内跑一遍 `serve_mcp`：喂 `lines`，返回（stdout 解析出来的 JSON 行, stderr 文本）。"""
+    """在进程内跑一遍 `serve_mcp`：喂 `lines`，返回（stdout 解析出来的 JSON 行, stderr 文本）。
+
+    ⚠️ **必须把 `serve_mcp` 会写的那三个模块级全局也纳入 monkeypatch**（AF-789 返工的 CI 红，
+    2026-11-14）：`serve_mcp` 启动段无条件 `globals()["_MCP_REGISTRY"/"_MCP_PAIR_STORE"/
+    "_MCP_AUTH_STORE"] = <本用例 tmp 根>` ⇒ 这三个全局被缓存成**本文件的 tmp_path**，
+    进程内后续用例里 `_t_save` 的 `acs = _MCP_AUTH_STORE or AuthCodeStore(...)` 就会优先
+    命中错根缓存，码 validate 不中 ⇒ 假红「授权码无效」。字母序在后的
+    `test_authcode_unified_reject` 正是这样被污染的（单跑绿、与 af789 同跑红）。
+    `monkeypatch.setattr` 会在 teardown 把这三个名字恢复成用例开始时的值，所以它既记录
+    原值、也负责还原——比"腿后显式恢复 None"更稳（后者漏一个名字就再踩一次）。
+    """
     monkeypatch.delenv("AUTOFORGE_TOKENS", raising=False)
+    for _name in ("_MCP_REGISTRY", "_MCP_PAIR_STORE", "_MCP_AUTH_STORE"):
+        monkeypatch.setattr(af_mcp, _name, getattr(af_mcp, _name, None), raising=False)
     out, err = io.StringIO(), io.StringIO()
     monkeypatch.setattr(sys, "stdin", io.StringIO("\n".join(lines) + "\n"))
     monkeypatch.setattr(sys, "stdout", out)

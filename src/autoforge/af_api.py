@@ -74,6 +74,7 @@ from .af_auth import (
     BOOTSTRAP_REQUEST_PER_MIN,
     LOGIN_LOCK_S,
     LOGIN_PER_MIN,
+    OWNER_SUBJECTS,
     AdminUserStore,
     AuthCodeStore,
     PairCodeStore,
@@ -379,7 +380,12 @@ def _scope_ok(scope: str, scopes) -> bool:
 #: legacy 单管理员令牌（`AUTOFORGE_API_TOKEN` ⇒ subject `shared`）。二者已在
 #: `/api/user/agents` 那处被当成"不是第三方 agent"的同一族排除掉，此处沿用同一口径。
 #: 带 write 的第三方服务令牌（`AUTOFORGE_TOKENS` 里自定 subject）不是 owner ⇒ 只给掩码。
-_OWNER_SUBJECTS = frozenset({"owner", "shared"})
+#: **owner 面主体名单**——⚠️ 真源是 `af_auth.OWNER_SUBJECTS`（kernel 层），这里只是别名：
+#: `import-linter` 的 `Service boundary never imported by kernel` 契约禁止 kernel 反向
+#: import service（**连函数级 import 也拦**，AF-787 返工前就栽在这），所以真源必须住在
+#: 授权层，服务层反向引用。名字保留 `_OWNER_SUBJECTS`：`af_mcp._owner_face` 等既有
+#: import 路径不变，`check_owner_subject` 判据 A 的对照物也仍是这一行。
+_OWNER_SUBJECTS = OWNER_SUBJECTS
 
 #: `/api/user/agents` 列表里要排除的「系统保留主体」＝owner 面（`_OWNER_SUBJECTS`）＋
 #: 未认证占位 `unknown`。这是 `_OWNER_SUBJECTS` 的派生集合，**不是第二份手写名单**——
