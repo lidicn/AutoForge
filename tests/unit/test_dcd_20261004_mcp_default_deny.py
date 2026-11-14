@@ -72,9 +72,23 @@ def test_opt_in_reads_only_the_documented_value(monkeypatch, raw_value, expected
 
 # ---------- 启动横幅与 whoami 的 note：不许把默认档印成"全放行" ----------
 
+def _isolate_serve_globals(monkeypatch) -> None:
+    """`serve_mcp` 启动段**无条件**把这三个模块级全局改指本用例的 tmp 根。
+
+    进程内跑（不隔离）就会把错根缓存留给字母序在后的用例：`_t_save` 里
+    `acs = _MCP_AUTH_STORE or AuthCodeStore(...)` 优先命中错根，码 validate 不中
+    ⇒ 假红「授权码无效」（AF-789 返工的 CI 红同族，见 test_af789_stdio_guard_gate_20261114）。
+    本文件今天被字母序掩护（污染者排在 authcode 之后），下一个在其前面插测试的人就会踩。
+    `monkeypatch.setattr` 既记录原值也负责还原，三个名字一次收齐。
+    """
+    for _name in ('_MCP_REGISTRY', '_MCP_PAIR_STORE', '_MCP_AUTH_STORE'):
+        monkeypatch.setattr(af_mcp, _name, getattr(af_mcp, _name, None), raising=False)
+
+
 def test_startup_banner_states_the_default_refusal(tmp_path, capsys, monkeypatch):
     monkeypatch.delenv(FLAG, raising=False)
     monkeypatch.setattr('sys.stdin', [])
+    _isolate_serve_globals(monkeypatch)
     serve_mcp(root=str(tmp_path))
     err = capsys.readouterr().err
     assert '默认拒绝' in err and 'AUTOFORGE_MCP_ALLOW_NO_TOKEN' in err
@@ -84,6 +98,7 @@ def test_startup_banner_states_the_default_refusal(tmp_path, capsys, monkeypatch
 def test_startup_banner_marks_the_prototype_as_an_explicit_choice(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv(FLAG, '1')
     monkeypatch.setattr('sys.stdin', [])
+    _isolate_serve_globals(monkeypatch)
     serve_mcp(root=str(tmp_path))
     err = capsys.readouterr().err
     assert '原型档，显式选择' in err
