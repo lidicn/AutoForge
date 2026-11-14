@@ -7,10 +7,10 @@
 
 ## 1. 它是什么
 
-`forge mcp` 以 **stdio** 模式启动一个零依赖的 MCP server，把 AutoForge 的全部能力以 **24 个工具**暴露给任意兼容 MCP 的 Agent。
+`forge mcp` 以 **stdio** 模式启动一个零依赖的 MCP server，把 AutoForge 的全部能力以 **39 个工具**暴露给任意兼容 MCP 的 Agent。
 Agent 端无需了解 REST：直接「说人话 → 查设备拿真 ID → 写 AF-Spec → `af_build` 过安全闸 → `af_simulate` 验证逻辑 → `af_save` 进待批队列」，由人在 WebUI/CLI 审批后落盘。
 
-> 注：`README.md` 旧写「21 个工具」，代码已扩展到 **24 个**（v1.1.0 新增 5 个设备目录工具、v1.5.0 新增 `af_experience`/`af_telemetry`）。以本文件与 `docs/ROADMAP.md` 为准。
+> 注：`README.md` 旧写「21 个工具」，经多版扩展（v1.1.0 设备目录工具、v1.5.0 `af_experience`/`af_telemetry`、v1.29 执行授权/任务单/场景/配对族），现读 **39 个**。全集以 `af_mcp.TOOLS` 注册表与 `tools/list` 现读为准，本文件 §六 逐条列出（v1.30.10 前本表只列 24 条——MCP-13 缺口已补）。
 
 ## 2. 前置条件
 
@@ -75,34 +75,49 @@ Agent 配置文件里加一段 `mcpServers`：
 4. 真机下发：`af_live_run` 需服务端 `AUTOFORGE_LIVE_ENABLED=1` + `AUTOFORGE_HA_TOKEN` + 请求 `confirm=true`
    + 非空 `live_allow` 白名单且 IR 写目标 ⊆ 白名单（三重闸）。
 
-## 6. 24 个工具速查
+## 6. 39 个工具速查
 
 | 工具 | 能力 | scope |
 |---|---|---|
-| `af_health` | 服务健康自检（版本/契约/里程碑/readonly） | 公开 |
-| `af_refresh_catalog` | 拉 HA 全屋设备目录进本地缓存 | 公开 |
-| `af_resolve_entity` | 设备名→候选 entity_id（写 IR 前必调） | 公开 |
-| `af_remember_entity` | 沉淀「设备名→entity_id」别名（下次直中） | 写 |
-| `af_list_entities` | 全屋实体过滤浏览（分页） | 公开 |
-| `af_get_entity_state` | 查某实体当前状态 | 公开 |
-| `af_catalog` | 设备目录摘要（域/区域/freshness） | 公开 |
-| `af_build` | 第一道闸：校验自动化 IR | 公开 |
-| `af_compile_spec` | AF-Spec 文本→IR | 公开 |
-| `af_simulate` | 第二道闸：FakeHA 回放 + expect 断言 | 公开 |
-| `af_list_graphs` | 列出已归档自动化 | 公开 |
-| `af_get_graph` | 获取某归档指定版本图 | 公开 |
-| `af_graphs_by_tag` | 按标签筛选归档 | 公开 |
-| `af_conf` | 查看置信度分级（G4） | 公开 |
-| `af_set_tags` | 设置归档标签 | 写 |
-| `af_enable_by_tag` | 批量启停某标签下自动化 | 写 |
-| `af_export_store` | 导出整个 store 为 bundle | 公开 |
-| `af_import_store` | 导入 bundle（skip/overwrite/rename） | 写 |
-| `af_save` | 归档为新版本（**先入待批队列**） | 写 |
-| `af_diff` | 版本 diff（G6） | 公开 |
-| `af_live_run` | 真机下发（三重闸） | live |
-| `af_whoami` | 自检当前 MCP 会话鉴权身份 | 公开 |
-| `af_experience` | 实体共现经验摘要 | 公开 |
-| `af_telemetry` | token/结果遥测 + 错误类别分布 | 公开 |
+| `af_draft` | 黄金路径第 1 步：传意图 JSON，自动生成 IR 并返回 ref | None |
+| `af_apply` | 黄金路径第 2 步：ref 一次走完校验→仿真→入队 | write |
+| `af_test_submit` | 测试通道：批量提交 draft→build→simulate（落 `/data/test/`） | write |
+| `af_test_report` | 测试通道：获取测试报告 | None |
+| `af_test_clear` | 测试通道：清空测试区（test_root 由服务端定，Agent 递不进路径） | write |
+| `af_health` | 服务健康自检（版本/契约/里程碑/联动/写闸） | None |
+| `af_request_pair` | 配对第 1 步：发起配对请求，8 位单次短时效码经 SSE 推用户弹窗 | write |
+| `af_pair` | 配对第 2 步：用口述配对码兑换 Bearer 令牌 | write |
+| `af_refresh_catalog` | 拉 HA 全屋设备目录进本地缓存（首连/大增减后调一次） | None |
+| `af_resolve_entity` | 设备名→entity_id 唯一正路 | None |
+| `af_remember_entity` | 设备名→entity_id 人工/agent 选型写入（v1.6.0 决策智能） | write |
+| `af_list_entities` | 全屋实体目录过滤浏览（读本地缓存，不触真实 HA） | None |
+| `af_get_entity_state` | 查某实体当前状态 | None |
+| `af_catalog` | 设备目录摘要（按域统计＋区域，防数千实体撑爆上下文） | None |
+| `af_build` | 第一道闸：校验自动化 IR | None |
+| `af_compile_spec` | AF-Spec 文本语法编译成 IR（同一份真相） | None |
+| `af_simulate` | 第二道闸：内存 FakeHA 回放验证逻辑 | None |
+| `af_list_graphs` | 列出已归档自动化（版本/模式/标签） | None |
+| `af_quarantine` | 隔离区清单（`.deleted/` 可人工恢复） | read |
+| `af_delete_graph` | 删除归档：移入 `.deleted/`（可恢复，⛔ 物理删） | write |
+| `af_get_graph` | 取某归档指定版本图（ir/nl/diagnostics） | None |
+| `af_graphs_by_tag` | 按标签筛选归档 | None |
+| `af_conf` | 查看归档置信度分级（G4 MA） | None |
+| `af_set_tags` | 设置归档标签（覆盖式） | write |
+| `af_enable_by_tag` | 批量启停某标签下所有自动化（需授权码闸） | write |
+| `af_export_store` | 导出 store 为可携带 bundle（含 tags＋校验和） | None |
+| `af_import_store` | 导入 bundle | write |
+| `af_save` | IR 归档为新版本（先过第一道闸） | write |
+| `af_diff` | 版本 diff（G6）：结构化差异＋可读 render | None |
+| `af_live_run` | 真机下发（四重闸＋**单写者租约**：serve 持锁时 503 `READONLY_DEGRADED`——设计口径非故障，真机下发请走 HTTP 面） | live |
+| `af_grant` | 执行授权 v1.29：码管部署、grant 管执行（issue/list/revoke/renew/receipts） | write |
+| `af_order` | 一次性任务单 v1.29（create/list/get/cancel） | write |
+| `af_scene` | 场景对象 v1.29（save/list/get/delete/run；**run 需 live 档＋单写者租约**） | write |
+| `af_whoami` | 自检当前 MCP 会话鉴权身份（subject/scopes） | None |
+| `af_guide` | 起草前必读：AF 自动化起草指引全文 | None |
+| `af_experience` | 实体共现经验摘要（成功落盘后采集，失败样本不污染） | None |
+| `af_telemetry` | token/结果遥测＋错误类别分布 | None |
+| `af_deploy` | 发起部署（写更新标记给宿主脚本，与 WebUI 升级按钮同枚 marker） | admin |
+| `af_deploy_status` | 部署进度（pending/requested） | admin |
 
 > MCP 面**不注册** `approve` 工具（批准只在 HTTP/CLI 服务层），且比 HTTP 面窄：
 > 无 `af_bind` / `af_intervene` / 会话类工具——MCP 只暴露 Agent 安全可用的子集。
