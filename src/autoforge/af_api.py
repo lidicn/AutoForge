@@ -2066,6 +2066,19 @@ def build_app(
             )
             if not local_escape:
                 return JSONResponse(status_code=403, content={"ok": False, "error": "未授权"})
+        elif info.subject not in _OWNER_SUBJECTS:
+            # AF-788（元宝第五期 MCP-02）：这条 SSE 属于 **owner 面**——它推的是"有人在请求
+            # 与你机器配对"的弹窗事件，收方本应是 owner 自己的 ForgeSight。修前只判"有令牌"，
+            # 于是一枚第三方 agent 令牌（read/write 都算）挂上来就能看别人家的配对请求
+            # （弹窗数量、hint、时间），且它根本不接任何弹窗——纯旁听面。
+            # ⇒ 收成 owner 面：非 owner 一律 403。本地无令牌逃生舱（info is None）不受影响。
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "ok": False,
+                    "error": "配对请求流只播给 owner 面（ForgeSight）：该令牌主体不在 owner 名单",
+                },
+            )
         return StreamingResponse(_pair_event_gen(request), media_type="text/event-stream")
 
     # ── v1.9.0 用户 WebUI：授权码（部署授权，独立于配对）──
@@ -2205,7 +2218,12 @@ def build_app(
                 status_code=409,
                 detail="用户已暂停接受配对请求（ForgeSight 里恢复后重试）",
             )
-        pc = request_pair_code(pair_store, body.agent_name_hint)
+        try:
+            pc = request_pair_code(pair_store, body.agent_name_hint)
+        except ValueError as exc:
+            # AF-787：hint 落 owner 保留名 ⇒ 400（源头同闸在 `request_pair_code` 里，
+            # 三径共用；这里只负责翻成 HTTP 语义）。弹窗标题直接显示 hint，放进去就是钓鱼提示。
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         # `ok` 来自回读而不是字面量：create() 之后登记面读不出这枚码，用户弹窗里就没有码可念，
         # agent 只会等到超时——这一条回读把"告诉 agent 去等"这个承诺兑现了才返回。
         persisted = pair_store.get(pc.code) is not None
@@ -2226,6 +2244,14 @@ def build_app(
         )
         if status == "no_code":
             raise HTTPException(status_code=400, detail="缺少 code")
+        if status == "reserved_subject":
+            # AF-787：自报名或配对码 hint 落 owner 保留名 ⇒ 400 且**不签发**
+            # （redeem_pair_code 在 peek 阶段就返回，码没被顺手烧掉）。
+            raise HTTPException(
+                status_code=400,
+                detail="agent 名字落在保留名（owner／shared），配对拒绝：主体由服务端派生，"
+                       "自报名只作显示名 —— 请换一个能区分自己身份的名字重新配对",
+            )
         if status == "invalid":
             raise HTTPException(status_code=409, detail="配对码无效、已使用或已过期")
         if status == "not_ready":
@@ -2326,7 +2352,11 @@ def build_app(
             )
         # ttl_s=600（出资人 2026-10-26 Q6）：链接要被复制转手给 agent，5 分钟不够；
         # 只这一径放宽，匿名 bootstrap 面维持 create 默认 300s。一次性/消费语义不变。
-        pc = request_pair_code(pair_store, body.agent_name_hint, ttl_s=600)
+        try:
+            pc = request_pair_code(pair_store, body.agent_name_hint, ttl_s=600)
+        except ValueError as exc:
+            # AF-787：与匿名 bootstrap 同闸（源头在 `request_pair_code`），这里只翻成 400。
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         persisted = pair_store.get(pc.code) is not None
         if not persisted:
             raise HTTPException(status_code=500, detail="配对码已生成但未登记，请重试")
@@ -2449,13 +2479,18 @@ def build_app(
         """用户在前端点'确认配对成功'：agent 已用码经 MCP `af_pair` 兑换令牌。
 
         返回已存在的 agent 身份（subject 由 af_pair 签发）；agent 尚未兑换则返回 409。
+
+        AF-787：兑换后 subject 由服务端派生（`<hint>-<hex>`，不再等于 hint），所以先按
+        **码记录里那一枚实际签发的 subject** 找人；本笔之前兑换的老码没有这一格，
+        退回旧的 hint 精确匹配（老记录里 subject 确实等于 hint）。
         """
         rec = pair_store.get(code)
         if rec is None:
             raise HTTPException(status_code=404, detail="未找到该配对码")
-        agent_name = (rec.get("agent_name_hint") or "").strip() or "agent"
+        issued = str(rec.get("subject") or "").strip()
+        target = issued or ((rec.get("agent_name_hint") or "").strip() or "agent")
         matched = next(
-            (s for s in registry.subjects() if s["subject"] == agent_name), None
+            (s for s in registry.subjects() if s["subject"] == target), None
         )
         if matched is None:
             raise HTTPException(
@@ -2463,11 +2498,13 @@ def build_app(
                 detail="agent 尚未完成配对（请先让 agent 用配对码兑换令牌）",
             )
         now = datetime.now(timezone.utc).isoformat()
+        # agent_id 用**真正签发的 subject**（它是这枚令牌的身份，hint 只是显示名）；
+        # name 保持既有语义：能读到显示名就用它，读不到回退 subject。
         return {
             "ok": True,
             "agent": {
-                "agent_id": agent_name,
-                "name": agent_name,
+                "agent_id": matched["subject"],
+                "name": matched["subject"],
                 "connected_at": now,
                 "last_seen": now,
             },

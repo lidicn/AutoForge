@@ -931,6 +931,10 @@ class PairCode:
     #: 8 位数字码留给人手输；链接转发走这串高熵值，避免链接成为免费 oracle。
     #: 同一 TTL、同一一次性语义；⛔ 不单独续期（随 code 同生同灭）。
     link_key: str = ""
+    #: AF-787：兑换时服务端派生的主体（`<hint>-<hex>`）。空串＝还没兑换（或历史记录）。
+    #: 存在的理由只有一条：`/api/user/pair/{code}/confirm` 要按**真正签发的 subject** 找人，
+    #: 而 subject 不再等于 hint（⛔ 别再拿 hint 去精确比 subject）。
+    subject: str = ""
 
 
 def _purge_expired_codes(codes: dict[str, Any]) -> int:
@@ -1139,6 +1143,19 @@ class PairCodeStore:
                 rec["pushed"] = True
                 self._persist()
 
+    def mark_redeemed(self, code: str, subject: str) -> None:
+        """AF-787：把**实际签发**的 subject 记回码记录（confirm 流按它找人）。
+
+        只写一格字符串，⛔ 不碰 consumed/expires_at：一次性语义仍由 `consume` 独占。
+        `subject` 是服务端派生的（`<hint>-<hex>`），不含凭据；记录本身随码一起过期被清。
+        """
+        self._load()  # 写前重读，同 create（BUG-20）
+        with self._lock:
+            rec = self._codes.get(code)
+            if rec is not None:
+                rec["subject"] = str(subject)
+                self._persist()
+
     # ── owner 侧"暂停接受配对请求"开关（裁定 20261006 §一）────────────
     def pause(self) -> None:
         self._write_paused(True)
@@ -1182,11 +1199,41 @@ def request_pair_code(pair_store: PairCodeStore, agent_name_hint: str,
     `ttl_s` 透传给 `create`：⛔ 不给默认值改老口径——None 走 `create` 自己的 300s；
     只有 pair-link 径显式传 600（出资人 2026-10-26 裁定 Q6：链接要被复制转手，
     5 分钟不够；一次性与消费语义不变）。
+
+    AF-787（元宝第五期 MCP-01）：`agent_name_hint` 落 owner 保留名（`owner`／`shared`）⇒
+    **在源头就拒**（`ValueError`，调用方翻成 HTTP 400）。理由有两半：
+    ① 主体现在由服务端派生（见 `redeem_pair_code`），hint 不再能拿到 owner 面，但② 弹窗标题
+    直接显示 hint——`owner` 这种 hint 会让用户在弹窗里看到「配对链接 · owner」，那是钓鱼提示，
+    与授权面无关也必须拒。闸装在**唯一实现**里而不是某一个端点上：三径同口径。
     """
     hint = (agent_name_hint or "").strip() or "未知 agent"
+    if hint in _owner_subject_names():
+        # ⛔ 不落盘、不发码：被拒的请求不该在 `pair_codes.json` 里留一枚可用码
+        # （它进了盘就会被 SSE 推给用户弹窗，那正是要拦的东西）。
+        raise ValueError(
+            f"agent_name_hint={hint!r} 是 owner 面保留名（{'／'.join(sorted(_owner_subject_names()))}）——"
+            "请换一个能区分自己身份的名字"
+        )
     if ttl_s is None:
         return pair_store.create(hint)
     return pair_store.create(hint, ttl_s=ttl_s)
+
+
+#: 配对兑换时**服务端派生**主体的步长：`<hint>-<6 位十六进制>`（`token_hex(3)` ⇒ 6 字符）。
+#: AF-787：修前 subject 直接取 caller 自报的 `agent_name`——agent 自称 `owner` 就拿到 owner 面
+#: 主体（元宝第五期 MCP-01）。**主体的授权含义只能由服务端给**，自报名一律降级成 `label`。
+_PAIR_SUBJECT_HEX_BYTES = 3
+
+
+def _owner_subject_names() -> frozenset[str]:
+    """owner 面主体名单——**单一真源是 `af_api._OWNER_SUBJECTS`**（⛔ 不在这里抄第二份）。
+
+    延迟导入：`af_api` 在模块层 `from .af_auth import …`，这里反向做模块层导入会成环；
+    `af_mcp._is_owner_face` 用的是同一个做法。只在**调用时刻**解析，模块导入期不碰 af_api。
+    """
+    from .af_api import _OWNER_SUBJECTS
+
+    return _OWNER_SUBJECTS
 
 
 def redeem_pair_code(
@@ -1197,9 +1244,9 @@ def redeem_pair_code(
 ) -> tuple[str, str | None, str | None]:
     """配对第 2 步的唯一实现：消费配对码并签发 Bearer。
 
-    返回 `(状态, 令牌, 主体)`；状态 ∈ {`ok`,`no_code`,`invalid`,`not_ready`}——调用方决定
-    把它翻成 MCP 的 `{ok:false,error}` 还是 HTTP 的 4xx，语义分层留在各自的面里，
-    但"consume 之后才签发"这一条顺序只有一份。
+    返回 `(状态, 令牌, 主体)`；状态 ∈ {`ok`,`no_code`,`invalid`,`not_ready`,
+    `reserved_subject`}——调用方决定把它翻成 MCP 的 `{ok:false,error}` 还是 HTTP 的 4xx，
+    语义分层留在各自的面里，但"consume 之后才签发"这一条顺序只有一份。
 
     **配对令牌不设过期（2026-10-23 出资人裁定）**：配对一次长期有效，只有撤销
     （`revoke_by_subject` / 单令牌 revoke）才失效——与长期授权码同语义（gap #9 的
@@ -1210,19 +1257,58 @@ def redeem_pair_code(
     `not_ready` 只在**注册表对象都没有**时给（`registry is None`）。不要在"没配置任何令牌"时
     也拒绝：那档下全站本来就是公开的（`TokenRegistry.enabled` 的口径），此时拒发配对令牌
     只会把开发档的配对流程打断，换不到任何安全收益。
+
+    **AF-787（元宝第五期 MCP-01）：主体改成服务端派生，自报名降级为 label。**
+    修前 `subject = caller 自报的 agent_name` ⇒ 自称 `owner` 即得 owner 面（主体是**授权**，
+    ⛔ 不能让被授权方自己写）。现在：
+
+    - `subject = f"{hint}-{secrets.token_hex(3)}"`（hint 取配对码登记时那枚、按 :1186 口径
+      strip／缺省）——每次兑换都是新的、与服务端登记面绑定的身份；
+    - caller 的 `agent_name` 只进 `label`（界面显示名，不参与任何鉴权）；
+    - caller 名**或** hint 落 owner 保留名 ⇒ `reserved_subject`，**不消费、不签发**，
+      并落一条 `TOKEN_ISSUED_REJECTED`（data.reason=reserved_subject，复用既有事件，
+      ⛔ 不新开一枚）。
     """
     trimmed = (code or "").strip()
     if not trimmed:
         return "no_code", None, None
+    caller = (agent_name or "").strip()
+    # 只读 peek：拒发时⛔ 不消费——用户手里那枚码不该被一次恶意 hint 的兑换顺手烧掉。
+    rec = pair_store.get(trimmed)
+    hint = str((rec or {}).get("agent_name_hint") or "").strip() or caller or "未知 agent"
+    reserved = _owner_subject_names()
+    if caller in reserved or hint in reserved:
+        audit = getattr(registry, "_audit", None) if registry is not None else None
+        if audit is not None:
+            # 与 `issue_for_agent` 的 developer 提权拒绝同族：函数内导入（af_audit 不进模块层，
+            # 防环），复用同一枚事件，⛔ 不新开码（元宝 MCP-01 的裁定口径）。
+            from .af_audit import AuditEvent, TOKEN_ISSUED_REJECTED
+
+            audit.add(
+                AuditEvent(
+                    type=TOKEN_ISSUED_REJECTED,
+                    at=datetime.now(timezone.utc),
+                    message=(
+                        "拒绝配对兑换：自报名或配对码 hint 落在 owner 保留名"
+                        f"（caller={caller!r} hint={hint!r}）"
+                    ),
+                    data={"reason": "reserved_subject", "caller": caller, "hint": hint},
+                )
+            )
+        return "reserved_subject", None, None
     pc = pair_store.consume(trimmed)
     if pc is None:
         return "invalid", None, None
-    subject = (agent_name or "").strip() or pc.agent_name_hint or "agent"
     if registry is None:
         return "not_ready", None, None
     # ttl_s=0 ⇒ `expires_at=None`（`issue_for_agent` 的口径：ttl<=0 不过期）——
     # 与 WebUI 登录令牌（走默认 24h）在同一签发点上分型。
-    return "ok", registry.issue_for_agent(subject, ttl_s=0), subject
+    subject = f"{hint}-{secrets.token_hex(_PAIR_SUBJECT_HEX_BYTES)}"
+    token = registry.issue_for_agent(subject, ttl_s=0, label=caller or None)
+    # 兑换结果记回码记录：`/api/user/pair/{code}/confirm` 要按**真正签发的 subject** 找身份
+    # （它此前拿 hint 当 subject 精确比——派生化之后那样永远匹配不到）。
+    pair_store.mark_redeemed(trimmed, subject)
+    return "ok", token, subject
 
 
 @dataclass

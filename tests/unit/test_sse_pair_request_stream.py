@@ -40,6 +40,10 @@ STREAM_PATH = "/api/mcp/pair-request"
 TOKENS = {
     "tok-reporter": {"subject": "reporter", "scopes": ["read"]},
     "tok-bot": {"subject": "bot", "scopes": ["write"]},
+    # AF-788（元宝第五期 MCP-02）：这条 SSE 是 **owner 面**——它推的是"有人在请求与你机器
+    # 配对"的弹窗事件，收方本应是 owner 自己的 ForgeSight。所以"能建起流"这条要拿 owner
+    # 令牌验；第三方 agent 令牌（哪怕 write）必须 403。
+    "tok-owner": {"subject": "owner", "scopes": ["read", "write", "live"]},
 }
 ENV_KEYS = ("AUTOFORGE_TOKENS", "AF_ALLOW_NOAUTH", "AF_REQUIRE_AUTH")
 
@@ -82,13 +86,43 @@ class _Live:
         return PairCodeStore(path).create(hint).code
 
 
-def _serve(tmp_path, env: dict[str, str]):
+def _seed_login_owner(store_root: Path) -> str:
+    """AF-788：造一枚 `principal_kind="login"` 的 owner 令牌（**mock 的 owner 在环**）。
+
+    `_OWNER_SUBJECTS` 的判定只认 subject；这条腿要证明「收成 owner 面」没有顺手把
+    **登录面**的 owner 也挡在门外。env 令牌的 principal_kind 不是 login，替代不了这一条。
+    """
+    from autoforge.af_auth import _digest
+
+    token = "af_" + "1" * 40
+    p = store_root / ".auth" / "issued_tokens.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps(
+            {
+                _digest(token): {
+                    "subject": "owner",
+                    "scopes": ["read", "write", "live"],
+                    "principal_kind": "login",
+                    "issued_at": time.time(),
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return token
+
+
+def _serve(tmp_path, env: dict[str, str], *, seed_login_owner: bool = False):
     saved = {key: os.environ.get(key) for key in ENV_KEYS}
     for key in ENV_KEYS:
         os.environ.pop(key, None)
     for key, value in env.items():
         os.environ[key] = value
     store_root = Path(tmp_path) / "store"
+    (store_root / ".auth").mkdir(parents=True, exist_ok=True)
+    login_owner = _seed_login_owner(store_root) if seed_login_owner else None
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(build_app(str(store_root)),
                                            host="127.0.0.1", port=port, log_level="error"))
@@ -99,7 +133,9 @@ def _serve(tmp_path, env: dict[str, str]):
         time.sleep(0.05)
     assert server.started, "起桥失败：SSE 判据跑在假服务器上等于没测"
     try:
-        yield _Live(f"http://127.0.0.1:{port}", store_root)
+        live = _Live(f"http://127.0.0.1:{port}", store_root)
+        live.login_owner_token = login_owner  # type: ignore[attr-defined]
+        yield live
     finally:
         server.should_exit = True
         thread.join(timeout=15)
@@ -119,6 +155,13 @@ def live(tmp_path):
 def live_noauth(tmp_path):
     """`AF_ALLOW_NOAUTH=1` 的本地逃生舱档：修前这里同样是 500。"""
     yield from _serve(tmp_path, {"AF_ALLOW_NOAUTH": "1"})
+
+
+@pytest.fixture()
+def live_login_owner(tmp_path):
+    """AF-788：**mock 的 owner 在环**——`principal_kind="login"` 的 owner 令牌必须照收。"""
+    yield from _serve(tmp_path, {"AUTOFORGE_TOKENS": json.dumps(TOKENS)},
+                      seed_login_owner=True)
 
 
 def _first_frame(response) -> list[str]:
@@ -141,10 +184,21 @@ def test_bad_token_stream_is_refused(live):
     assert live.status(token="tok-nope") == 403
 
 
+@pytest.mark.parametrize("tok", ["tok-reporter", "tok-bot"])
+def test_agent_token_stream_is_refused_owner_only(live, tok):
+    """AF-788（MCP-02）：非 owner 主体⛔ 不许收这条流——修前只判"有令牌"。
+
+    修前形状：一枚 write 令牌（`tok-bot`）挂上来就能看到别人家的配对请求（hint／数量／时间），
+    而它根本不接弹窗——纯旁听面。收成 owner 面之后一律 403。
+    """
+    live.seed_pair_code()
+    assert live.status(token=tok) == 403
+
+
 # ── 2/3. 两条合法通路都必须建立起来（修前一律 500）────────────────────
 
 
-@pytest.mark.parametrize("tok", ["tok-reporter", "tok-bot"])
+@pytest.mark.parametrize("tok", ["tok-owner"])
 def test_bearer_header_establishes_the_stream(live, tok):
     """修前读数：`AttributeError: 'coroutine' object has no attribute 'credentials'` ⇒ HTTP 500。"""
     live.seed_pair_code()
@@ -157,9 +211,9 @@ def test_bearer_header_establishes_the_stream(live, tok):
 
 
 def test_query_token_fallback_establishes_the_stream(live):
-    """EventSource 发不了 Authorization 头，`?token=` 是前端唯一可用的通路。"""
+    """EventSource 发不了 Authorization 头，`?token=` 是前端唯一可用的通路（AF-788 ⛔ 不动它）。"""
     live.seed_pair_code()
-    response, content_type = live.open_stream(token="tok-reporter")
+    response, content_type = live.open_stream(token="tok-owner")
     try:
         assert content_type.startswith("text/event-stream")
         assert _first_frame(response)[0] == "event: pair-request"
@@ -177,12 +231,28 @@ def test_noauth_local_escape_hatch_still_streams(live_noauth):
         response.close()
 
 
+def test_login_kind_owner_still_receives_the_stream(live_login_owner):
+    """AF-788 反证腿：闸只认 subject，⛔ 不许把**登录面**的 owner 也挡掉。
+
+    修法若写成「只放行 principal_kind=agent 的 owner」或「只认 env 令牌」，这条会红。
+    """
+    token = live_login_owner.login_owner_token
+    assert token, "夹具没造出 login 档 owner 令牌 ⇒ 这一腿等于没测"
+    live_login_owner.seed_pair_code()
+    response, content_type = live_login_owner.open_stream(token=token, header=True)
+    try:
+        assert content_type.startswith("text/event-stream")
+        assert _first_frame(response)[0] == "event: pair-request"
+    finally:
+        response.close()
+
+
 # ── 4. 帧形对前端解析器负责 ──────────────────────────────────────────
 
 
 def test_pair_frame_matches_the_frontend_parser(live):
     code = live.seed_pair_code(hint="NAS-SP")
-    response, _ = live.open_stream(token="tok-reporter", header=True)
+    response, _ = live.open_stream(token="tok-owner", header=True)
     try:
         lines = _first_frame(response)
     finally:

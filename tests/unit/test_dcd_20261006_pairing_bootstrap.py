@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import time
 from pathlib import Path
 
@@ -157,7 +158,8 @@ def test_redeem_has_its_own_looser_bucket(tmp_path, monkeypatch):
     assert all(s == 409 for s in statuses), statuses  # 错码：每次都是 409，不该提前 429
     ok = client.post(REDEEM_PATH, json={"code": pc.code, "agent_name": "小助手"})
     assert ok.status_code == 200, ok.text
-    assert ok.json()["token"] and ok.json()["subject"] == "小助手"
+    # AF-787：subject 由服务端派生（`<hint>-<6 hex>`），⛔ 不再等于自报名。
+    assert ok.json()["token"] and re.fullmatch(r"小助手-[0-9a-f]{6}", ok.json()["subject"]), ok.json()
 
 
 def test_request_lock_does_not_lock_redeem(tmp_path, monkeypatch):
@@ -208,7 +210,9 @@ def test_paired_agent_token_never_expires(tmp_path, monkeypatch):
     pair_store = PairCodeStore(tmp_path / "pair_codes.json")
     pc = pair_store.create("小助手")
     token, subject = redeem_pair_code(pair_store, registry, pc.code, "小助手")[1:]
-    assert subject == "小助手"
+    # AF-787：主体由服务端派生；自报名降级为 label（⛔ 不参与授权）
+    assert re.fullmatch(r"小助手-[0-9a-f]{6}", subject or ""), subject
+    assert registry.authenticate(token).label == "小助手"
     # 批 2：运行期签发令牌落摘要索引（_issued），不再混在 env 明文 _tokens 里。
     from autoforge.af_auth import _digest
     info = registry._issued[_digest(token)]

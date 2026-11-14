@@ -552,7 +552,12 @@ def _t_request_pair(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
             "code": ADM_ERR_AUTH_REQUIRED,
             "error": "用户已暂停接受配对请求（ForgeSight 里恢复后重试）",
         }
-    pc = request_pair_code(_pair_store(store), args.get("agent_name_hint") or "")
+    try:
+        pc = request_pair_code(_pair_store(store), args.get("agent_name_hint") or "")
+    except ValueError as exc:
+        # AF-787：hint 落 owner 保留名 ⇒ 与 HTTP 400 同档的「参数要改」错误
+        # （⛔ 不是 INTERNAL：那会让对端重试/报障，正确答案是换个名字）。
+        return {"ok": False, "code": ADM_ERR_PAYLOAD_INVALID, "error": str(exc)}
     return {
         "ok": True,
         "expires_at": pc.expires_at,
@@ -561,12 +566,23 @@ def _t_request_pair(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _t_pair(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    """agent 用配对码兑换运行时签发的 Bearer 令牌（subject=agent_name）。"""
+    """agent 用配对码兑换运行时签发的 Bearer 令牌。
+
+    AF-787：**主体由服务端派生**（`<hint>-<hex>`），自报的 `agent_name` 只作显示 label——
+    ⛔ 别再写成 "subject=agent_name"（那是 MCP-01 的缺陷形状本身）。
+    """
     status, token, subject = redeem_pair_code(
         _pair_store(store), _MCP_REGISTRY, args.get("code") or "", args.get("agent_name") or ""
     )
     if status == "no_code":
         return {"ok": False, "code": ADM_ERR_PAYLOAD_INVALID, "error": "缺少 code 参数"}
+    if status == "reserved_subject":
+        return {
+            "ok": False,
+            "code": ADM_ERR_PAYLOAD_INVALID,
+            "error": "agent 名字落在保留名（owner／shared）——主体的授权含义由服务端派生，"
+                     "自报名只作显示名；请换一个能区分自己身份的名字重新配对",
+        }
     if status == "invalid":
         return {"ok": False, "code": ADM_ERR_AUTH_REQUIRED, "error": "配对码无效、已使用或已过期"}
     if status == "not_ready":
@@ -2024,35 +2040,60 @@ def serve_mcp(root: str = DEFAULT_STORE_ROOT) -> None:
             req = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(req, dict):
+            # AF-789（元宝第五期 MCP-03）：顶层不是 JSON 对象（JSON-RPC batch 数组／标量）⇒
+            # 回 -32600 并继续。修前 `req.get` 在 list/str 上抛 AttributeError **穿出 stdio
+            # 循环**，整个 server 进程死掉（后续 ping 也一起没了）。
+            # ⛔ 本批**不实现真 batch**（MCP 2024-11-05 起已移除 batch；元宝那批只要求不崩），
+            # 也⛔ 不静默 continue（客户端会等到超时且拿不到任何信号）。
+            sys.stdout.write(
+                _error(
+                    None,
+                    -32600,
+                    f"invalid request: 顶层必须是 JSON 对象（收到 {type(req).__name__}；不支持 batch 数组）",
+                )
+                + "\n"
+            )
+            sys.stdout.flush()
+            continue
         method = req.get("method")
         id_ = req.get("id")
         params = req.get("params") or {}
 
-        if method == "initialize":
-            out = _respond(
-                id_,
-                {
-                    "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-                },
-            )
-        elif method == "tools/list":
-            out = _respond(id_, {"tools": [_tool_def(t) for t in TOOLS]})
-        elif method == "tools/call":
-            # P0-12 修复：每次工具调用前重新加载 revoked 列表并重鉴权
-            # （防止已吊销 token 在长运行 stdio 会话中继续有效）
-            registry._load_revoked_file()
-            current = _build_current(registry)
-            content, is_error = dispatch(params.get("name", ""), params.get("arguments", {}) or {}, store, current)
-            out = _respond(id_, {"content": content, "isError": is_error})
-        elif method == "ping":
-            out = _respond(id_, {})
-        elif method is None or id_ is None:
-            # 通知（如 notifications/initialized）→ 不回响应
-            continue
-        else:
-            out = _error(id_, -32601, f"unknown method: {method}")
+        # AF-789：方法分发整段包一层循环级 try——单条请求里任何异常都回 -32603，⛔ 不穿出
+        # stdio 循环（穿出＝server 死、客户端只看到 EOF，且盘上什么都没有）。
+        # 留一条 stderr 痕：异常类型与消息进 stderr（stdio 的 stdout 专供 JSON-RPC，
+        # ⛔ 不能把 traceback 写进去，否则客户端 JSON 解析器先炸）。
+        try:
+            if method == "initialize":
+                out = _respond(
+                    id_,
+                    {
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+                    },
+                )
+            elif method == "tools/list":
+                out = _respond(id_, {"tools": [_tool_def(t) for t in TOOLS]})
+            elif method == "tools/call":
+                # P0-12 修复：每次工具调用前重新加载 revoked 列表并重鉴权
+                # （防止已吊销 token 在长运行 stdio 会话中继续有效）
+                registry._load_revoked_file()
+                current = _build_current(registry)
+                content, is_error = dispatch(params.get("name", ""), params.get("arguments", {}) or {}, store, current)
+                out = _respond(id_, {"content": content, "isError": is_error})
+            elif method == "ping":
+                out = _respond(id_, {})
+            elif method is None or id_ is None:
+                # 通知（如 notifications/initialized）→ 不回响应
+                continue
+            else:
+                out = _error(id_, -32601, f"unknown method: {method}")
+        except Exception as exc:  # noqa: BLE001 —— 单条请求的失败不许弄死整个 stdio 会话
+            sys.stderr.write(f"[af_mcp] request failed: {type(exc).__name__}: {exc}\n")
+            sys.stderr.flush()
+            out = _error(id_, -32603, f"internal error: {type(exc).__name__}")
         sys.stdout.write(out + "\n")
         sys.stdout.flush()
 
