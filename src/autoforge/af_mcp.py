@@ -1531,7 +1531,10 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
         "undo(bool 可选：记录动作前快照并返回 undo_deploy_id，供事后 /api/undo 撤销——与 REST /api/live/run 同源；"
         "缺省 false 不记录不谎报)，auth_code(str 缺码即拒)，"
         "grant_id(str 可选：执行授权通道，与 auth_code **互斥**——长期码换来的授权在签发时已计次，"
-        "日常执行只带 grant_id)，grant_confirm(str 可选：越界时回执给的 ticket，单次放行)。需 live 权限。",
+        "日常执行只带 grant_id)，grant_confirm(str 可选：越界时回执给的 ticket，单次放行)。需 live 权限。"
+        "**单写者租约**：生产 serve 持单写者租约时本工具必然 503（READONLY_DEGRADED）——"
+        "这是**设计**口径、不是故障（同一 store 根上写面只许一个写者，裁定 20261004 §一 1 A）；"
+        "真机下发请走 HTTP 面。",
         {
             "type": "object",
             "properties": {
