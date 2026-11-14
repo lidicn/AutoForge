@@ -1036,8 +1036,10 @@ def _t_scene(store: GraphStore, args: dict[str, Any],
     """【场景·v1.29】场景对象面：save/list/get/delete/run 一个工具五个动作。
 
     一句话触发走 `run` 的 `phrase`（主词/别名**精确**匹配，匹配不上即 404——⛔ 模糊猜一个执行）。
-    ⛔ 本函数不做任何授权/范围判定：真源在 `svc.scene_*`（每步独立过 `af_grant`），
-    这里只解包参数（同 `_t_grant`／`_t_order` 纪律）。
+    授权真源仍在 `svc.scene_*`（每步独立过 `af_grant`），这里只解包参数；**唯一例外**是
+    `run` 的**档位门**（AF-790）：run 会经 `_scene_live_executor` 做真机下发
+    （`HAAdapter(dry_run=False)`），所以它必须与 `af_live_run` 同档——**要 `live` 权限**，
+    `write` 只够 save/list/get/delete。修前整工具挂 `write`，于是一枚 write 令牌就能真机写。
     """
     action = str(args.get("action") or "").strip().lower()
     caller = str((current or {}).get("subject") or "")
@@ -1063,6 +1065,19 @@ def _t_scene(store: GraphStore, args: dict[str, Any],
             store, str(args.get("scene_id") or ""), caller=caller, caller_is_owner=owner,
             token_identity=token_identity)
     if action == "run":
+        # AF-790（元宝 SCN-01）：`run` 走 `_scene_live_executor`＝`HAAdapter(dry_run=False)`，
+        # 与 `af_live_run` 是同一档真机下发 ⇒ 必须同样要 `live` 权限。⛔ 别把 save/list/get/delete
+        # 一起收紧：它们只动 `.scenes/` 里的定义，write 档足够（卡面明令维持）。
+        # `current is None` 是「没有任何令牌身份」的本地原型档（`_guard` 的同一条逃生舱：
+        # 只有显式 `AUTOFORGE_MCP_ALLOW_NO_TOKEN=1` 才走得到），此处不另判——
+        # 令牌已配置却没带令牌时 `_build_current` 给的是空 scope 身份，照样在这里被拒。
+        if current is not None and "live" not in (current.get("scopes") or []):
+            raise svc.ServiceError(
+                "af_scene run 会经 _scene_live_executor 做**真机下发**，与 af_live_run 同档："
+                f"本工具需要 live 权限（当前令牌 scopes={current.get('scopes')}）。"
+                "save/list/get/delete 仍只要求 write（AF-790／元宝 SCN-01）",
+                403,
+            )
         return svc.scene_run(
             store, scene_id=str(args.get("scene_id") or ""), phrase=str(args.get("phrase") or ""),
             agent=str(args.get("agent") or ""), caller=caller, caller_is_owner=owner,
@@ -1612,6 +1627,9 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
         "delete：scene_id（移入 .scenes/deleted/，⛔ 物理删）；"
         "run：scene_id 或 phrase(一句话主词/别名精确匹配)＋grant_id(必填：每步过执行授权)"
         "＋agent(缺省取当前主体)。匹配不上即 404 澄清，⛔ 模糊猜一个执行；"
+        "**run 需 live 权限**（它会经 _scene_live_executor 真机下发，与 af_live_run 同档）；"
+        "**run 还需单写者租约**：生产 serve 持租约时本动作必然 503（READONLY_DEGRADED），"
+        "真机下发请走 HTTP 面；save/list/get/delete 只要 write。"
         "档位不落 IR（执行期现算），L3 与四类高危域配置期即拒。",
         {
             "type": "object",

@@ -6042,6 +6042,14 @@ def scene_run(
     except SceneDefError as exc:
         raise ServiceError(f"场景定义不合法：{exc}", status=400) from exc
 
+    # AF-790（元宝 SCN-01）：`scene_run` 经 `_scene_live_executor`（`HAAdapter(dry_run=False)`）
+    # **真机下发**，与 `live_run` 同一档写入面 ⇒ 必须过同一道单写者租约。修前
+    # `_single_writer_check` 全树只有 `live_run` 一处调用，于是 serve 持锁时 `af_live_run`
+    # 503、`af_scene run` 照发——租约被整条场景面绕过。
+    # 位置与 `live_run` 对齐（裁定 20261004 §一 1 A：「服务不可写」比「授权不足」更早看见）：
+    # 排在 grant 解析**之前**——没租约就不该走到读授权账本那一步。
+    _single_writer_check(store)
+
     gs = _grant_store(store)
     try:
         grant = gs.resolve(grant_id, agent=agent_text)
