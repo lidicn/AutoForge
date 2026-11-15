@@ -9,6 +9,7 @@ G1 十项（KICKOFF §4.7）+ 与 IR §8.2 十四项的对齐补充，见 `CHECK
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,6 +34,11 @@ from .af_nl import render_automation
 from .af_time import parse_duration
 
 __all__ = ["Diagnostic", "ScanResult", "StaticScanner", "live_preflight", "CHECKS", "CODE_HINT", "GuardRule", "DeviceGuardRegistry"]
+
+#: AF-801（原 AF137）：设备护栏 `area` 规则**求值不出来**时的唯一留痕口。
+#: 安全面降级按介入档就是 ERROR（裁定 20261011《十三问》§3 Q8.3；同族先例
+#: `af_service.DEVICE_GUARD_CATALOG_INJECT_FAILED` 亦为 ERROR）——⛔ 不用 WARNING 让人沉默。
+logger = logging.getLogger(__name__)
 
 ERROR = "error"
 WARNING = "warning"
@@ -292,39 +298,70 @@ class DeviceGuardRegistry:
             return cls.from_acl(data)
         raise ValueError("device_acl.json 必须是规则数组或 {entity_id: perm} 对象")
 
-    def _hit(self, rule: GuardRule, entity_id: str) -> bool:
+    def _hit(self, rule: GuardRule, entity_id: str) -> bool | None:
+        """命中判定：`True` 命中／`False` 明确不命中／`None` **求值不出来**（AF-801）。
+
+        `None` 这一档是本类唯一的"无法判定"出口：`area` 规则的区域面求不出来（catalog
+        未注入／`area_of` 抛异常）时，**⛔ 不许**返回 `False`——那与"这条规则不适用于该实体"
+        逐字同形，等于把护栏静默关掉、走向默认放行（AF-801／原 AF137 现场形状：
+        `except Exception: return False`）。调用方见 `None` 一律按**该规则最严档**处置。
+        """
         kind = str(rule.match.get("type", ""))
         value = str(rule.match.get("value", ""))
         if kind == "entity":
             return entity_id == value
         if kind == "domain":
             return entity_id.split(".", 1)[0] == value
-        if kind == "area" and self.catalog is not None:
-            area_of = getattr(self.catalog, "area_of", None)
-            if callable(area_of):
-                try:
-                    return str(area_of(entity_id)) == value
-                except Exception:
-                    return False
+        if kind == "area":
+            area_of = getattr(self.catalog, "area_of", None) if self.catalog is not None else None
+            if not callable(area_of):
+                # 第二腿（同一 fail-open 族）：catalog 未注入／没有 area_of ⇒ 这条 area 规则
+                # **永远不命中**。修前它是静默放行；修后与解析失败同口径：留痕＋最严。
+                logger.error(
+                    "DEVICE_GUARD_AREA_UNRESOLVED entity=%s area=%r why=catalog_absent",
+                    entity_id, value,
+                )
+                return None
+            try:
+                return str(area_of(entity_id)) == value
+            except Exception as exc:  # noqa: BLE001 - 任何解析异常都必须留痕，⛔ 静默放行
+                logger.error(
+                    "DEVICE_GUARD_AREA_UNRESOLVED entity=%s area=%r why=exception err=%r",
+                    entity_id, value, exc,
+                )
+                return None
         return False
 
     def match_tier(self, entity_id: str) -> int | None:
-        """命中规则的最严 tier（0 最严）；未命中返回 None（默认放行）。"""
+        """命中规则的最严 tier（0 最严）；未命中返回 None（默认放行）。
+
+        AF-801：某条 area 规则**求值不出来**（`_hit` 返回 `None`）时立刻返回 0——
+        「保护策略不可信 ⇒ 按最严处理」，与 `deny_all` 同一方向；⛔ 不当成"没命中"放行。
+        """
         if self.deny_all:
             return 0
         best: int | None = None
         for rule in self.rules:
-            if self._hit(rule, entity_id):
+            hit = self._hit(rule, entity_id)
+            if hit is None:
+                return 0
+            if hit:
                 best = rule.tier if best is None else min(best, rule.tier)
         return best
 
     def match_perm(self, entity_id: str) -> str | None:
-        """命中规则的最严 perm（`-` 由 tier-0 表达）；未命中返回 None。"""
+        """命中规则的最严 perm（`-` 由 tier-0 表达）；未命中返回 None。
+
+        AF-801：`_hit` 返回 `None`（求值不出来）⇒ 按最严 `-`，⛔ 不回落 `rw`。
+        """
         if self.deny_all:
             return "-"
         best: tuple[int, str] | None = None
         for rule in self.rules:
-            if not self._hit(rule, entity_id):
+            hit = self._hit(rule, entity_id)
+            if hit is None:
+                return "-"
+            if not hit:
                 continue
             if rule.tier == 0:
                 return "-"

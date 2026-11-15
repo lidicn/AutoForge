@@ -71,11 +71,15 @@ gate = _load_gate(GATE_PATH)
 #: `sites`／`files`／`levels` 对 2.1 计数行，`codes`／`coded`／`uncoded` 对 2.2 计数行，
 #: `dup` 对 2.2 表里出现两次以上的码（逐枚白名单，理由在下面那条断言上方）。
 PINS: dict[str, object] = {
-    "sites": 263,
-    "files": 38,
-    "levels": {"debug": 27, "info": 11, "warning": 183, "error": 30, "exception": 12, "critical": 0},
-    "codes": 138,
-    "coded": 149,
+    # AF-801（2026-11-15）：265 站／39 文件／ERROR 32（263/38/30 ＋1 文件、+2 站）——
+    # `af_scanner.DeviceGuardRegistry._hit` 的 area 求值失败两腿（catalog 不可用／`area_of` 抛异常）
+    # 各一枚带码 ERROR `DEVICE_GUARD_AREA_UNRESOLVED`；带码 ⇒ 不吃 §四 的无码格子。
+    # `af_scanner.py` 此前零 logger 站点，故文件数 +1。
+    "sites": 265,
+    "files": 39,
+    "levels": {"debug": 27, "info": 11, "warning": 183, "error": 32, "exception": 12, "critical": 0},
+    "codes": 139,
+    "coded": 151,
     "dup": {
         "DEPLOY_AUDIT_PERSIST_FAILED",
         "OWNER_ALERT_PUBLISH_FAILED",
@@ -85,6 +89,7 @@ PINS: dict[str, object] = {
         "WATCH_ENABLED_OVERRIDE_READ_FAILED",
         "WATCH_ENABLED_OVERRIDE_WRITE_FAILED",
         "SCHED_PREMISE_EVAL_FAILED",
+        "DEVICE_GUARD_AREA_UNRESOLVED",
     },
     "uncoded": {"debug": 14, "info": 7, "warning": 72, "error": 10, "exception": 11, "critical": 0},
 }
@@ -294,6 +299,12 @@ def test_real_repo_named_code_readings_are_pinned(real):
     # ③ `WATCH_SCRATCH_DELETE_FAILED` 出自「清扫器逐个删旧目录」与「start_watch 收尾删本次 scratch」
     #    两条腿——同一句承诺（那个一次性目录没删掉，磁盘卫生没做成），执行记录 §二之一百二十六。
     # 免得下一个人把这几条例外读成"码可以随便复用"。
+    # ⑧ `DEVICE_GUARD_AREA_UNRESOLVED` 出自**两条腿**——同一句承诺（这份 area 护栏规则求值不出来，
+    #    该实体按最严 Tier-0 处置、⛔ 静默放行），v1.30.10+ 的 AF-801（原 AF137）：
+    #      a. `_hit` 的 catalog 不可用腿（catalog 未注入／没有 `area_of`）——修前这条规则永远不命中；
+    #      b. `_hit` 的 `area_of` 抛异常腿——修前 `except Exception: return False`，与「规则不适用于
+    #         该实体」逐字同形。
+    #    两腿同一承诺、排障方向不同（补注入 vs 修目录），故共用一枚码；⛔ 不许拆两枚。
     dup = {code for code, n in Counter(s["code"] for s in coded).items() if n > 1}
     # ④ `GRANT_STORE_CORRUPT` 出自「读不出／不是 JSON／形状不对」三条腿——同一句承诺
     #    （这份授权账本读不出来，本次授权面一律拒），v1.29.0 第一批。
@@ -1152,9 +1163,13 @@ def _reg_and_coded(real):
 
 
 def test_f_real_repo_attribution_is_green(real):
-    """真仓 149 行登记，每一行的依据都点名它现在所在的那个函数。"""
+    """真仓 151 行登记，每一行的依据都点名它现在所在的那个函数。
+
+    149 → 151（AF-801）：`DEVICE_GUARD_AREA_UNRESOLVED` 两腿各一行，都在 `_hit` 里（同函数，
+    F 的互换风险为零；`test_f_real_repo_has_swap_prone_groups_to_guard` 的组数不变）。
+    """
     reg, coded = _reg_and_coded(real)
-    assert len(reg) == len(coded) == 149, (len(reg), len(coded))
+    assert len(reg) == len(coded) == 151, (len(reg), len(coded))
     assert gate.fn_attribution_findings(reg, coded) == []
 
 
