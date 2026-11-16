@@ -728,12 +728,27 @@ def _t_draft(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
         return body
 
 
-def _t_apply(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
-    """一次走完 校验→仿真→入队。"""
+def _t_apply(store: GraphStore, args: dict[str, Any],
+             current: dict[str, Any] | None = None) -> dict[str, Any]:
+    """一次走完 校验→仿真→入队。
+
+    AF-808（2026-11-17，MA 联调窗口现场发现）：**必须递 `authenticated_subject`**。
+    `af_apply.apply` 把入队的 `submitted_by` 写死成工具名 `"af_apply"`（`af_apply.py:314`），
+    而服务层只认 `effective_submitter = authenticated_subject or submitted_by`
+    （`af_service.py:1363`）⇒ 漏递这一枚，pending 记录的 `submitted_by` 是**工具名**、
+    不等于任何令牌主体 ⇒ AF-734 的「agent 仅撤回自己提交的」（`af_api.py:841-849`）
+    对 af_apply 通道**永久 403**：提交人自己也撤不回自己的 op。
+    顺带同一枚 subject 还补上 `save_payload["owner"]`（`af_apply.py:308`）——此前该通道
+    归档归属是空串。
+
+    口径与 `_t_save`（af_save 通道）对齐：令牌 `subject` 直传；`current is None`
+    （本地原型/无令牌档）传空串 ⇒ 服务层回落 `submitted_by`，旧行为一字不变。
+    """
     from .af_apply import apply
     ref = args["ref"]
     stage = args.get("stage", "save")
-    return apply(ref, stage=stage, store=store)
+    return apply(ref, stage=stage, store=store,
+                 authenticated_subject=str((current or {}).get("subject") or ""))
 
 
 def _t_test_submit(store: GraphStore, args: dict[str, Any]) -> dict[str, Any]:
@@ -1092,7 +1107,10 @@ def _t_scene(store: GraphStore, args: dict[str, Any],
 _TOOLS_WITH_CONTEXT = frozenset({
     _t_delete_graph, _t_list_graphs, _t_get_graph,_t_whoami, _t_save, _t_import, _t_enable, _t_deploy,
     _t_by_tag, _t_conf, _t_diff, _t_export, _t_quarantine, _t_set_tags, _t_live, _t_grant,
-    _t_get_entity_state, _t_order, _t_list_entities, _t_scene})
+    _t_get_entity_state, _t_order, _t_list_entities, _t_scene,
+    # AF-808（2026-11-17）：af_apply 通道此前不在册 ⇒ 拿不到 current ⇒ 入队
+    # submitted_by 落成工具名、AF-734 的自己撤回对自己永久 403（见 `_t_apply` docstring）。
+    _t_apply})
 
 
 # ─────────────────────────────────────────────────────────────────────
