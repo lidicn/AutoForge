@@ -374,7 +374,7 @@ AF ── 触发(cron/事件) → 取数(调 MA 三路径) → 组装(DSL) → �
 
 **五、真要实现时要动的登记面（现读"已存在、会因此变红"的清单，⛔ 不是想象）**
 
-1. 新模块 `src/autoforge/af_adapters/ma.py` ＋ `af_adapters/__init__.py:17-19` 的 import 与 `__all__`；注册点唯一收口在 `af_runtime.py:290-296`（四面同一份能力，卡 1 已论证过为什么必须在这）。
+1. 新模块 `src/autoforge/af_adapters/ma.py` ＋ `af_adapters/__init__.py:17-19` 的 import 与 `__all__`；注册点唯一收口在 `af_runtime.py:607-613`（2026-11-16 对账回归校准，原记 `:290-296` 已漂；四面同一份能力，卡 1 已论证过为什么必须在这）。
 2. `base.py:64` `_L0_DOMAINS` +1（否则 L2 保守判拦住编译）。
 3. 出向通道同源判据：`ma` 是 **AF 作为 MCP 客户端**，与既有 `af_mcp.py`（AF 作为 server，`TOOLS` `:471`）方向相反——`check_tool_names.py` 那族只数 `af_*` 工具，不受影响；但**新增任何 `af_*` MCP 工具**才会撞那张唯一真源名单。
 4. 留痕具名码必须进 `docs/可观测性清单.md` §三 并在册（`scripts/check_observability.py` 的 C 棘轮只减不增 ⇒ 补码会降现读，不会顶上限）。
