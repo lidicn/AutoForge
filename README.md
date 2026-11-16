@@ -225,7 +225,7 @@ forge sim examples/ir/case01_day_light.json
 
 **已交付的 P1**：✅ 实例持久化与崩溃恢复 `persist`（`forge run/watch --persist-dir`）。
 
-**后续迭代（原 P1/P2 剩余项已全部拆版排期）**：跨自动化事件 `emit`/`on event` → **v0.3.0 / v0.4.0**｜指标回灌 MA → **v0.5.0**｜标签体系与批量启停 → **v0.6.0**｜模板导出备份 → **v0.7.0**｜服务层鉴权升级 → **v0.8.0**｜跨进程 / 多写者 → **v0.9.0**｜`fn` 节点评估 → **v1.0.0**。详见 [`docs/archive/ROADMAP.md`](docs/archive/ROADMAP.md) §「版本路线图（v0.2.0–v1.6.0）」。
+**后续迭代（原 P1/P2 剩余项已全部拆版排期）**：跨自动化事件 `emit`/`on event` → **v0.3.0 / v0.4.0**｜指标回灌 MA → **v0.5.0**｜标签体系与批量启停 → **v0.6.0**｜模板导出备份 → **v0.7.0**｜服务层鉴权升级 → **v0.8.0**｜跨进程 / 多写者 → **v0.9.0**｜`fn` 节点评估 → **v1.0.0**。详见 [`docs/ROADMAP.md`](docs/ROADMAP.md) §「版本路线图（v0.2.0–v1.6.0）」。
 
 **暂不排期**（理由见 ROADMAP §「不排期项」）：`fn` 实装（CEL/Lua/Wasm）、多成员 / 多租户、多语言 NL、隐私脱敏与保留期。
 
@@ -299,7 +299,7 @@ forge sim examples/ir/case01_day_light.json
 | [`docs/reference/NAMING.md`](docs/reference/NAMING.md) | 命名约定与历史改名对照 |
 | [`docs/architecture/HA_SEMANTIC_DIFF.md`](docs/architecture/HA_SEMANTIC_DIFF.md) | 与 HA 的有意偏离清单 |
 | [`docs/reference/G1_ACCEPTANCE.md`](docs/reference/G1_ACCEPTANCE.md) | 8 条验收用例 ↔ 实现点 ↔ 测试落位（含 G4 置信度/canary 映射） |
-| [`docs/archive/ROADMAP.md`](docs/archive/ROADMAP.md) | ① 已发布里程碑 G1–G7 + 真机接线归档；② **版本路线图 v0.2.0–v1.7.1** 与开发计划 |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | **总版本路线图（活文档，立项起持续追加）**：① 已发布里程碑 G1–G7 + 真机接线；② 版本路线图 v0.2.0–v1.9 与开发计划；③ 版本主线续记（v1.13+ 逐版登记） |
 | [`docs/archive/ADM-路线图_v2.0投产.md`](docs/archive/ADM-路线图_v2.0投产.md) | 架构决策记录（ADM）路线图：已决策项与剩余项（2026-09-27 时点件，2026-11-16 归档） |
 | [`docs/handoff/交接卡_模板.md`](docs/handoff/交接卡_模板.md) | 里程碑交接卡模板（文件清单/行为增量/验证/风险/合并影响） |
 | [`docs/reference/API_CONTRACT.md`](docs/reference/API_CONTRACT.md) | 服务层 API 契约速查表（**由脚本生成，⛔ 端点表与枚举不许手抄**；权威形态仍是运行中实例的 `/openapi.json`） |
