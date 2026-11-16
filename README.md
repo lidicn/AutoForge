@@ -28,8 +28,7 @@ Agent 撰写 AF-Spec / JSON IR ──▶ forge build（安全闸：静态扫描�
 ## 1.1 里程碑状态
 
 > **版本双轨**（DCD 20261001《AF 三题》·G 裁定，方案 A）：**包/API 版本 `0.1.0`**（`pyproject.toml` / `af_service.API_VERSION`，`/api/health.version` 返回它，属机器契约，不随里程碑动）↔ **对外里程碑 `v2.x`**（人读叙事）。三列映射表见 [`docs/plan/版本开发计划.md`](docs/plan/版本开发计划.md) §〇——两套口径并行且都正确，不是"版本号漂移"。
-> **当前里程碑**：`v2.5`（F14 NL→IR / F15 词表真值源）——**本地已交付，NAS 部署走变更窗口**；v0.2.0–v2.4 已全部交付。剩余增量收口与后续见 [`docs/roadmap/演进路线图_AF_v2.1+.md`](docs/roadmap/演进路线图_AF_v2.1+.md)。
-> 各版本主题与交接卡见 [`docs/roadmap/版本路线图.md`](docs/roadmap/版本路线图.md) 与 [`docs/roadmap/`](docs/roadmap/)。
+> **当前版本**：v1.30.11（发布 tag 线，origin/master = `1106c1b`）。版本主线、进行中与排队项见 [`docs/roadmap/版本路线图.md`](docs/roadmap/版本路线图.md)（唯一权威；2026-11-16 起为 v1.30.x 口径，旧里程碑 v2.x 叙事已归档至 `docs/archive/`）。
 > **回归读数**：README 不钉死测试计数——钉一份计数就多一份会过期的副本（此处曾长期挂 1300 passed / 51 skipped，而整树现读已 3000+ 条）。整树口径 `PYTHONPATH=src python -m pytest tests -q`，最新读数记在 [`docs/ADM联动执行记录-AF.md`](docs/ADM联动执行记录-AF.md)；门禁读数由 `gates.sh` 给出。
 
 | 阶段 | 主题 | 状态 |
@@ -300,7 +299,7 @@ forge sim examples/ir/case01_day_light.json
 | [`docs/architecture/HA_SEMANTIC_DIFF.md`](docs/architecture/HA_SEMANTIC_DIFF.md) | 与 HA 的有意偏离清单 |
 | [`docs/reference/G1_ACCEPTANCE.md`](docs/reference/G1_ACCEPTANCE.md) | 8 条验收用例 ↔ 实现点 ↔ 测试落位（含 G4 置信度/canary 映射） |
 | [`docs/archive/ROADMAP.md`](docs/archive/ROADMAP.md) | ① 已发布里程碑 G1–G7 + 真机接线归档；② **版本路线图 v0.2.0–v1.7.1** 与开发计划 |
-| [`docs/roadmap/ADM-路线图_v2.0投产.md`](docs/roadmap/ADM-路线图_v2.0投产.md) | 架构决策记录（ADM）路线图：已决策项与剩余项（原 `doc/ADM-路线图-AF.md`，目录归并后已换名） |
+| [`docs/archive/ADM-路线图_v2.0投产.md`](docs/archive/ADM-路线图_v2.0投产.md) | 架构决策记录（ADM）路线图：已决策项与剩余项（2026-09-27 时点件，2026-11-16 归档） |
 | [`docs/handoff/交接卡_模板.md`](docs/handoff/交接卡_模板.md) | 里程碑交接卡模板（文件清单/行为增量/验证/风险/合并影响） |
 | [`docs/reference/API_CONTRACT.md`](docs/reference/API_CONTRACT.md) | 服务层 API 契约速查表（**由脚本生成，⛔ 端点表与枚举不许手抄**；权威形态仍是运行中实例的 `/openapi.json`） |
 

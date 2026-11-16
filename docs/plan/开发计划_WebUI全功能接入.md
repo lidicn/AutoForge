@@ -1,5 +1,7 @@
 # 开发计划：WebUI 全功能接入（v1.7.0）
 
+> ⚠️ **状态（2026-11-16 PM 注）**：本文件是 v1.7.0 接入计划的历史件，路线图职责已由 `docs/roadmap/版本路线图.md` 接管。**但本文件被 `scripts/check_plan_ui_claims.py`（gates.sh 计划表口径门，`gates.sh:253`）与 `tests/unit/test_plan_ui_claims_gate.py` 钉死路径（`PLAN_DOC = docs/plan/开发计划_WebUI全功能接入.md`），⛔ 移动/改名/归档**；表内 ✅ 完成标记继续受该门逐条核对，故原地保留并加注，不入 archive。
+
 > 配套路线图条目：`docs/ROADMAP.md` 版本表 `v1.7.0` + 同名章节。
 > 目标：把后端已就绪的 **47 个 HTTP 端点 / 24 个 MCP 工具** 中「需要用户操作」的部分，**完整在 AutoForge-UI 控制台展现**。
 > 当前 WebUI（独立仓库 `autoforge-ui`）仅覆盖 R1 只读子集 + R2 审批/真机，大量后端能力无 UI 入口。
