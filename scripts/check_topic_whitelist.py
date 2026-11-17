@@ -38,6 +38,16 @@ EVENT_TOPICS = (
     "ma/presence",
     "ma/device-health",
     "ma/alerts",
+    # AF×MA 深度联动批一（DCD 裁定 `20261117-链主-AF-MA深度联动预案与契约v1四问` Q1＝甲·
+    # 连字符；契约 §三 事件族两条）：`ma/behavior-state`（状态变更边沿，载荷带 duration）、
+    # `ma/prediction`（跨阈值才发）。
+    # ⚠️ **跨仓待办（本批不假装已办）**：`E:\NAS\homesdk\doc\ADM联动主题注册表与消息契约.md`
+    # §1.2 这张表**尚未**登记这两条（表在 homesdk 仓，归链主/DCD 的 H1 件：homesdk 0.3.5
+    # 只加常量，AF pin 维持 0.3.3 同窗升）——已报 AF-PM 跟对端补表。
+    # 本处先登记，是因为裁定已把主题名逐字钉死；⛔ 不表示 AF 可以自行给新主题发通行证
+    # （与 `ASK_TOPICS` 同一先例、同一注记口径）。
+    "ma/behavior-state",
+    "ma/prediction",
 )
 
 #: 契约表 §1.3 公共收件箱（所有权与校验权在 DB；AF 可投递、**禁止订阅**）

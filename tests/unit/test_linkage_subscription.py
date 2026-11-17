@@ -21,7 +21,13 @@ from autoforge import af_live, af_mqtt_bridge
 from autoforge.af_adapters import MockAdapter
 from autoforge.af_bus import BusEvent
 from autoforge.af_ir import load_graph
-from autoforge.af_linkage_feed import KIND_DEVICE_HEALTH, KIND_PRESENCE, TRIGGER_MAX_AGE_S
+from autoforge.af_linkage_feed import (
+    KIND_BEHAVIOR_STATE,
+    KIND_DEVICE_HEALTH,
+    KIND_PRESENCE,
+    KIND_PREDICTION,
+    TRIGGER_MAX_AGE_S,
+)
 from autoforge.af_mqtt_bridge import (
     DEVICE_HEALTH_TOPIC,
     INSIGHTS_TOPIC,
@@ -277,7 +283,12 @@ def test_inbound_readings_are_surfaced(tmp_path):
     assert inbound["presence_in"] == 1 and inbound["device_health_in"] == 1
     assert inbound["rejected"] == 1
     assert inbound["feed"]["wired"] is True
-    assert inbound["feed"]["per_kind"] == {KIND_PRESENCE: 1, KIND_DEVICE_HEALTH: 1}
+    assert inbound["feed"]["per_kind"] == {
+        KIND_PRESENCE: 1,
+        KIND_DEVICE_HEALTH: 1,
+        KIND_BEHAVIOR_STATE: 0,
+        KIND_PREDICTION: 0,
+    }
     assert inbound["feed"]["root"].endswith("linkage_events")
 
 

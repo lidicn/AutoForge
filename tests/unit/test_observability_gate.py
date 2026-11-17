@@ -75,11 +75,15 @@ PINS: dict[str, object] = {
     # `af_scanner.DeviceGuardRegistry._hit` 的 area 求值失败两腿（catalog 不可用／`area_of` 抛异常）
     # 各一枚带码 ERROR `DEVICE_GUARD_AREA_UNRESOLVED`；带码 ⇒ 不吃 §四 的无码格子。
     # `af_scanner.py` 此前零 logger 站点，故文件数 +1。
-    "sites": 265,
-    "files": 39,
-    "levels": {"debug": 27, "info": 11, "warning": 183, "error": 32, "exception": 12, "critical": 0},
-    "codes": 139,
-    "coded": 151,
+    # AF×MA 批一（2026-11-17）：269 站／40 文件／ERROR 34／WARNING 184／INFO 12／码 143／带码 155——
+    # `af_adapters/ma.py` 新增 4 枚带码站点（MA_READ_STALE·warning／MA_DATA_INSUFFICIENT·info／
+    # MA_TOOL_UNREGISTERED·error／MA_WRITE_SCOPE_DENIED·error），该文件此前零 logger 站点 ⇒ 文件 +1；
+    # 全部带码 ⇒ ⛔ §四 六行上限一个数字没动（uncoded 原样）。
+    "sites": 269,
+    "files": 40,
+    "levels": {"debug": 27, "info": 12, "warning": 184, "error": 34, "exception": 12, "critical": 0},
+    "codes": 143,
+    "coded": 155,
     "dup": {
         "DEPLOY_AUDIT_PERSIST_FAILED",
         "OWNER_ALERT_PUBLISH_FAILED",
@@ -1163,13 +1167,16 @@ def _reg_and_coded(real):
 
 
 def test_f_real_repo_attribution_is_green(real):
-    """真仓 151 行登记，每一行的依据都点名它现在所在的那个函数。
+    """真仓 155 行登记，每一行的依据都点名它现在所在的那个函数。
 
     149 → 151（AF-801）：`DEVICE_GUARD_AREA_UNRESOLVED` 两腿各一行，都在 `_hit` 里（同函数，
     F 的互换风险为零；`test_f_real_repo_has_swap_prone_groups_to_guard` 的组数不变）。
+    151 → 155（AF×MA 批一）：`MA_READ_STALE`／`MA_DATA_INSUFFICIENT` 在 `call`、
+    `MA_TOOL_UNREGISTERED`／`MA_WRITE_SCOPE_DENIED` 在 `_failure_result`——四枚各自不同函数名，
+    依据逐行点名即可。
     """
     reg, coded = _reg_and_coded(real)
-    assert len(reg) == len(coded) == 151, (len(reg), len(coded))
+    assert len(reg) == len(coded) == 155, (len(reg), len(coded))
     assert gate.fn_attribution_findings(reg, coded) == []
 
 

@@ -54,6 +54,10 @@ __all__ = [
     "INSIGHTS_TOPIC",
     "PRESENCE_TOPIC",
     "DEVICE_HEALTH_TOPIC",
+    "BEHAVIOR_STATE_TOPIC",
+    "PREDICTION_TOPIC",
+    "PAYLOAD_VERSION_MAJOR",
+    "IN_COUNT_BY_KIND",
     "LINKAGE_TOPICS",
     "FORBIDDEN_SUBSCRIPTIONS",
     "INBOX_KINDS",
@@ -88,13 +92,56 @@ INSIGHTS_TOPIC = "ma/insights"
 #: 订阅、处理、判据都从常量走（卡1 那条"不许有第二份抄本"的课，同一形状）。
 PRESENCE_TOPIC = "ma/presence"
 DEVICE_HEALTH_TOPIC = "ma/device-health"
+#: AF×MA 深度联动批一（DCD 裁定 `20261117-链主-AF-MA深度联动预案与契约v1四问` Q1＝甲·连字符；
+#: 契约 §三 事件族）：两条新入向主题。命名逐字按裁定，⛔ 不发明变体、⛔ 不改现网三条。
+#: 与 `ma/presence`／`ma/device-health` 同族——只入 `LINKAGE_TOPICS`／`LINKAGE_KIND_BY_TOPIC`
+#: 两张表 ＋ `ingest_linkage` 一条分支，触发仍走既有 `on event.<name>`（⛔ 不立第六类 trigger）。
+BEHAVIOR_STATE_TOPIC = "ma/behavior-state"
+PREDICTION_TOPIC = "ma/prediction"
+#: 公共信封 `payload_version` 的**已支持主版本**（契约 §三：加字段＝minor、删字段/改语义＝major）。
+#: 只判主版本：同主版本的新次版本按"AF 忽略未知键"收；主版本不认 ⇒ 拒收并留痕（⛔ 不猜语义）。
+#: ⛔ 不设"必填"：现网三条与本批两条在过渡期都可能不带它，自添必填＝整条入向线静默不生效。
+PAYLOAD_VERSION_MAJOR = "1"
 #: 主题 → 队列 kind（`af_linkage_feed`）。**这张表是入向的两类之唯一入口**：
 #: 不在表里的主题一律走 `handle_message` 的"不是我的主题"分支，不会落盘、更不会触发。
-LINKAGE_TOPICS: tuple[str, ...] = (PRESENCE_TOPIC, DEVICE_HEALTH_TOPIC)
+LINKAGE_TOPICS: tuple[str, ...] = (
+    PRESENCE_TOPIC,
+    DEVICE_HEALTH_TOPIC,
+    BEHAVIOR_STATE_TOPIC,
+    PREDICTION_TOPIC,
+)
 LINKAGE_KIND_BY_TOPIC: dict[str, str] = {
     PRESENCE_TOPIC: _feed.KIND_PRESENCE,
     DEVICE_HEALTH_TOPIC: _feed.KIND_DEVICE_HEALTH,
+    BEHAVIOR_STATE_TOPIC: _feed.KIND_BEHAVIOR_STATE,
+    PREDICTION_TOPIC: _feed.KIND_PREDICTION,
 }
+#: kind → 入向计数键（`/api/health` 的 `inbound` 从 `counts` 读）。⛔ 不新造第四套词汇。
+IN_COUNT_BY_KIND: dict[str, str] = {
+    _feed.KIND_PRESENCE: "presence_in",
+    _feed.KIND_DEVICE_HEALTH: "device_health_in",
+    _feed.KIND_BEHAVIOR_STATE: "behavior_state_in",
+    _feed.KIND_PREDICTION: "prediction_in",
+}
+
+
+def _payload_version_reject(payload: Mapping[str, Any]) -> tuple[str, str] | None:
+    """事件族两条的公共信封闸（契约 §三）：只判 `payload_version` 的**主版本**。
+
+    - 不带该键 / 空串 ⇒ `None`（收）：过渡期对端可能还没发信封，⛔ 不自添必填；
+    - 主版本不认 ⇒ 返回 `("payload_version_unsupported", 细节)`，由调用方拒收留痕；
+    - 同主版本的新次版本 ⇒ 收（契约"加字段＝minor，AF 忽略未知键"）。
+    """
+    raw = payload.get("payload_version")
+    if raw is None or str(raw).strip() == "":
+        return None
+    text = str(raw).strip()
+    if text.split(".", 1)[0] != PAYLOAD_VERSION_MAJOR:
+        return (
+            "payload_version_unsupported",
+            f"payload_version={text!r}——本层只认主版本 {PAYLOAD_VERSION_MAJOR}（契约 §三：改语义＝major）",
+        )
+    return None
 #: v1.28 R1「ask 双向桥」小爱腿：AF **自己的** `af/ask/*` 族（⛔ 不是 `butler/inbox/*`——
 #: 那一族是 DB 的所有权面，本仓对它有 `FORBIDDEN_SUBSCRIPTIONS` 护栏）。
 #: 主题名与载荷**逐字出自 DCD 裁定 2026-11-04 阶段2（C1/C2/C3/C4）**；字面量真源在
@@ -606,6 +653,8 @@ class AfMqttBridge:
             "insights_rejected": 0,
             "presence_in": 0,
             "device_health_in": 0,
+            "behavior_state_in": 0,
+            "prediction_in": 0,
             "linkage_rejected": 0,
             "ask_answer_in": 0,
             "ask_answer_rejected": 0,
@@ -906,7 +955,7 @@ class AfMqttBridge:
         return True
 
     def handle_message(self, _client: Any, _userdata: Any, msg: Any) -> dict[str, Any]:
-        """paho 回调：只认 `ma/insights`、两条联动入向主题与 `af/ask/answer`，别的主题即使被误投也只是计数。"""
+        """paho 回调：只认 `ma/insights`、联动入向主题（`LINKAGE_TOPICS` 表）与 `af/ask/answer`，别的主题即使被误投也只是计数。"""
         topic = msg.topic.decode("utf-8", "replace") if isinstance(msg.topic, bytes) else str(msg.topic)
         if topic not in LINKAGE_TOPICS and topic != INSIGHTS_TOPIC and topic != ASK_ANSWER_TOPIC:
             if topic in FORBIDDEN_SUBSCRIPTIONS or topic.startswith(INBOX_PREFIX):
@@ -1023,19 +1072,23 @@ class AfMqttBridge:
         }
 
     def ingest_linkage(self, topic: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        """在场 / 设备健康 → **落盘**。这里不碰总线、不触发任何自动化。
+        """在场 / 设备健康 / 事件族两条 → **落盘**。这里不碰总线、不触发任何自动化。
 
         收在 paho 回调线程、消费在常驻 tick 线程，而 `EventBus` 没有锁——所以回调只做"判形状 +
         原子写一条文件"，线程交接由 `poll_linkage()` 那条扫描完成（队列本身就是那条接缝，
         顺带给了"重启不丢"）。
 
-        拒收口径只有**契约写死的**那几条（§1.2 两行 + 裁定 20261004 的 `trace_id` 事件级口径），
-        AF 不自添必填——自添必填的对端代价是"整条入向线静默不生效"，那比收下半份更难查：
-        - `trace_id` 空：两行载荷都列了它，跨仓排障靠它（§1.3 护栏 4）。
+        拒收口径只有**契约写死的**那几条（§1.2 两行 + 裁定 20261004 的 `trace_id` 事件级口径
+        + 批一事件族 §三 的 `payload_version` **主版本**），AF 不自添必填——自添必填的对端代价是
+        "整条入向线静默不生效"，那比收下半份更难查：
+        - `trace_id` 空：各条载荷都列了它，跨仓排障靠它（§1.3 护栏 4）。
         - `members` 不是数组：在场快照没有成员集合，落成"家里没人"会让按在场写的自动化
           **反过来**动作，比丢一条更糟。**空数组是合法的**（真没人）。
         - `stable_id` 空：契约 §1.2 明写**必须非空**，迁移类事件靠它认身份。
         - `total` 不是整数：丢掉这一键照常收（它是展示项，不是身份也不是状态）。
+        - `payload_version` 主版本不认（**只对事件族两条**）：契约 §三 写死"删字段/改语义＝major、
+          须新旧双发期"，拿着不认的主版本去猜字段语义＝假绿。**不带该键照收**（过渡期，§三 的
+          "AF 忽略未知键"同理）；现网两条（presence/device-health）⛔ 不走这条闸——本批不动它们。
         """
         kind = LINKAGE_KIND_BY_TOPIC.get(topic)
         if kind is None:  # 由 handle_message 的表守住；走到这里说明那张表被改坏了
@@ -1043,6 +1096,7 @@ class AfMqttBridge:
         trace_id = _clip(str(payload.get("trace_id") or "").strip())
         if not trace_id:
             return self._reject_linkage(topic, "missing_trace_id", "载荷没有 trace_id")
+        peer_event_id = ""
         if kind == _feed.KIND_PRESENCE:
             raw_members = payload.get("members")
             if not isinstance(raw_members, (list, tuple)):
@@ -1057,19 +1111,37 @@ class AfMqttBridge:
             subject = _clip("，".join(
                 str(item["member_id"]) for item in members if item.get("member_id")
             ))
-        else:
+        elif kind == _feed.KIND_DEVICE_HEALTH:
             stable_id = str(payload.get("stable_id") or "").strip()
             if not stable_id:
                 return self._reject_linkage(topic, "missing_stable_id", "契约 §1.2 要求非空")
             data = _feed.device_data_of(payload)
             subject = _clip(str(data.get("device_id") or data.get("entity_id") or ""))
+        elif kind == _feed.KIND_BEHAVIOR_STATE:
+            bad = _payload_version_reject(payload)
+            if bad is not None:
+                return self._reject_linkage(topic, bad[0], bad[1])
+            data = _feed.behavior_data_of(payload)
+            subject = _clip(
+                str(data.get("member_id") or data.get("member") or data.get("state") or "")
+            )
+            peer_event_id = _clip(str(payload.get("event_id") or "").strip())
+        else:
+            bad = _payload_version_reject(payload)
+            if bad is not None:
+                return self._reject_linkage(topic, bad[0], bad[1])
+            data = _feed.prediction_data_of(payload)
+            subject = _clip(str(data.get("room") or data.get("next_arrival") or ""))
+            peer_event_id = _clip(str(payload.get("event_id") or "").strip())
         if self.linkage_sink is None:
             return self._reject_linkage(
                 topic, "no_linkage_sink_wired", "生产入口要给 af_linkage_feed.LinkageFeed",
                 ADM_ERR_INTERNAL,
             )
         record = _feed.LinkageRecord(
-            event_id=uuid4().hex[:12],
+            # 事件族两条带契约信封 `event_id` ⇒ 用它做落盘身份（跨仓对齐同一次事件）；
+            # 现网两条的历史形状是 AF 侧现场生成（⛔ 本批不动）。
+            event_id=peer_event_id or uuid4().hex[:12],
             kind=kind,
             topic=topic,
             trace_id=trace_id,
@@ -1078,7 +1150,7 @@ class AfMqttBridge:
             data=data,
         )
         self.linkage_sink.append(record)
-        self.counts["presence_in" if kind == _feed.KIND_PRESENCE else "device_health_in"] += 1
+        self.counts[IN_COUNT_BY_KIND.get(kind, "presence_in")] += 1
         return {
             "handled": True,
             "kind": kind,
@@ -1296,6 +1368,10 @@ def linkage_status(bridge: "AfMqttBridge") -> dict[str, Any]:
             "insights_subscribed": [INSIGHTS_TOPIC] if bridge.subscribe_insights else [],
             "presence_in": bridge.counts.get("presence_in"),
             "device_health_in": bridge.counts.get("device_health_in"),
+            # 事件族两条（AF×MA 批一）：与上面两条同形——订阅清单直接来自 LINKAGE_TOPICS，
+            # 计数来自 counts；⛔ 不新造对外面（挂既有 `/api/health` 的 inbound 块）。
+            "behavior_state_in": bridge.counts.get("behavior_state_in"),
+            "prediction_in": bridge.counts.get("prediction_in"),
             "insights_in": bridge.counts.get("insights_in"),
             "insights_rejected": bridge.counts.get("insights_rejected"),
             "rejected": bridge.counts.get("linkage_rejected"),
