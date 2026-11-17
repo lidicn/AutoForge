@@ -79,11 +79,14 @@ PINS: dict[str, object] = {
     # `af_adapters/ma.py` 新增 4 枚带码站点（MA_READ_STALE·warning／MA_DATA_INSUFFICIENT·info／
     # MA_TOOL_UNREGISTERED·error／MA_WRITE_SCOPE_DENIED·error），该文件此前零 logger 站点 ⇒ 文件 +1；
     # 全部带码 ⇒ ⛔ §四 六行上限一个数字没动（uncoded 原样）。
-    "sites": 269,
+    # AF×MA 批二（2026-11-17 写向）：271 站／ERROR 35／WARNING 185／码 145／带码 157——
+    # `af_adapters/ma.py` 再增 2 枚带码站点（MA_STAGING_VIOLATION·error／MA_OUTCOME_REPORT_FAILED·warning），
+    # 该文件已在射程内 ⇒ 文件数不动；同样全带码 ⇒ uncoded 与 §四 上限不动。
+    "sites": 271,
     "files": 40,
-    "levels": {"debug": 27, "info": 12, "warning": 184, "error": 34, "exception": 12, "critical": 0},
-    "codes": 143,
-    "coded": 155,
+    "levels": {"debug": 27, "info": 12, "warning": 185, "error": 35, "exception": 12, "critical": 0},
+    "codes": 145,
+    "coded": 157,
     "dup": {
         "DEPLOY_AUDIT_PERSIST_FAILED",
         "OWNER_ALERT_PUBLISH_FAILED",
@@ -1167,16 +1170,18 @@ def _reg_and_coded(real):
 
 
 def test_f_real_repo_attribution_is_green(real):
-    """真仓 155 行登记，每一行的依据都点名它现在所在的那个函数。
+    """真仓 157 行登记，每一行的依据都点名它现在所在的那个函数。
 
     149 → 151（AF-801）：`DEVICE_GUARD_AREA_UNRESOLVED` 两腿各一行，都在 `_hit` 里（同函数，
     F 的互换风险为零；`test_f_real_repo_has_swap_prone_groups_to_guard` 的组数不变）。
     151 → 155（AF×MA 批一）：`MA_READ_STALE`／`MA_DATA_INSUFFICIENT` 在 `call`、
     `MA_TOOL_UNREGISTERED`／`MA_WRITE_SCOPE_DENIED` 在 `_failure_result`——四枚各自不同函数名，
     依据逐行点名即可。
+    155 → 157（AF×MA 批二写向）：`MA_STAGING_VIOLATION` 在 `call`、
+    `MA_OUTCOME_REPORT_FAILED` 在 `_maybe_write_failure`——两枚不同函数，逐行点名。
     """
     reg, coded = _reg_and_coded(real)
-    assert len(reg) == len(coded) == 155, (len(reg), len(coded))
+    assert len(reg) == len(coded) == 157, (len(reg), len(coded))
     assert gate.fn_attribution_findings(reg, coded) == []
 
 

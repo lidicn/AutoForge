@@ -611,4 +611,4 @@ def test_d_af_outbound_tool_face_is_still_39():
     names = {row[0] for row in af_mcp.TOOLS}
     for facade in ("get_automation_context", "get_automation_opportunities", "get_member_habits"):
         assert facade not in names, f"{facade} 是 AF 出向调用，⛔ 不许进 AF 的对外工具面"
-    assert len(MA_ACTIONS) == 7
+    assert len(MA_ACTIONS) == 8, "批一 7 枚 ＋ 批二写向 1 枚（report_automation_outcome）"
