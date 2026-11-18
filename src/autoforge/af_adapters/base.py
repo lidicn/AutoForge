@@ -58,7 +58,12 @@ _L3_DOMAINS = frozenset({"shell_command", "command_line", "python_script", "hass
 #: 而 `classify_action('ha','garage_door.open')` 实测返回 **L2**——落的是本函数末尾那条
 #: 「未知 domain ⇒ 保守 L2」的缺省档，不是显式归类。后果：车库门不会掉到 L1，但也不在
 #: grant 的禁入四域里（同 cover 家族，需显式 action_risk=L2）。要不要显式列为禁入＝DCD 一句话。
-_L2_DOMAINS = frozenset({"lock", "cover", "climate", "alarm_control_panel", "valve", "water_heater", "number", "select"})
+#: `tv`（AF-PM 卡 2026-11-18 · 批T 真接线待命件第 1 项）：`tv.morning_news` 动的是**电视本身**
+#: （唤醒／ADB／IPTV 全屏／选台），不是只读取数 ⇒ 落 L2。此前它靠本函数末尾「未知 domain ⇒ 保守
+#: L2」的缺省档拿到同一个结果，属于「行为对、归类隐式」：`unrecognized_service()` 还会把它报成
+#: 「域不在已知服务域表内」，读起来像写错了名字。显式登记后分类结果**一字不变**（仍是 L2），
+#: 变的是「它为什么是 L2」有据可查，且 `unrecognized_service('tv.morning_news')` 不再误报。
+_L2_DOMAINS = frozenset({"lock", "cover", "climate", "alarm_control_panel", "valve", "water_heater", "number", "select", "tv"})
 _L1_DOMAINS = frozenset(
     {"light", "switch", "fan", "input_boolean", "humidifier", "media_player", "vacuum", "scene", "script", "siren", "tts"}
 )

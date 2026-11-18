@@ -49,10 +49,15 @@
 
 from __future__ import annotations
 
+import json
+import os
 import socket
 import uuid
-from typing import Any, Mapping, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request
 
 from homesdk.adm.errors import (
     ADM_ERR_AUTH_REQUIRED,
@@ -63,23 +68,34 @@ from homesdk.adm.errors import (
 )
 
 from .base import AdapterError, CallResult
+from .http import guarded_open, host_of
 
 __all__ = [
     "ACTIVE_RESULTS",
     "DEFAULT_TV_TRANSPORT_TIMEOUT",
     "DEFECT_DORMANT_RESULT",
     "DORMANT_RESULTS",
+    "GRACE_S",
     "PARAMS_ALLOWED",
     "RESULTS",
+    "RUN_BUDGET_S",
+    "SPEECH_BY_RESULT",
+    "TERMINAL_DEADLINE_S",
     "TERMINAL_KEYS",
+    "TIMEOUT_SPEECH",
     "TOOL_MORNING_NEWS",
     "TV_ACTIONS",
+    "TV_ENDPOINT_ENV",
     "TVMCPClient",
+    "TvAnnouncement",
     "TvAdapter",
+    "TvMcpHttpClient",
+    "TvOutcomeSpeaker",
     "action_of",
     "defect_of_result",
     "map_terminal",
     "new_request_id",
+    "speech_of",
 ]
 
 #: 对端 MCP 工具名（链主从 TV 仓读出、AF-PM 亲读 `af_morning_news.py` 核对）。
@@ -118,6 +134,43 @@ TERMINAL_KEYS = (
 #: 照 `ma.py` 的 10s 会一刀切在链中途，照"无超时"又会单进程挂死 ⇒ 预算＋余量。
 DEFAULT_TV_TRANSPORT_TIMEOUT = 250.0
 
+#: 端点与凭据的读取名（照 `ma.py` 先例：secret 文件 > 环境变量）。**缺省空串**——⛔ 不把联调窗
+#: 那台机器的地址／任何凭据写死进仓（本仓 public）。接线窗由 AF-PM 从外面注入（`build_runtime`
+#: 的 `tv_endpoint` 参数，或这两个环境变量），空串 ⇒ `call()` 显式 `CallResult.fail`，⛔ 不猜地址。
+TV_ENDPOINT_ENV = "AUTOFORGE_TV_MCP_URL"
+#: LAN 内的 TVPilot MCP 端点**无鉴权**（AF-PM 卡 2026-11-18）⇒ 凭据是**可选**的：空串时不发
+#: `Authorization` 头。留着这个入口是因为二期若有反代／令牌，改配置即可，不必改代码。
+TV_TOKEN_ENV = "AUTOFORGE_TV_MCP_TOKEN"
+
+#: MCP 握手口径（与 `ma.MCP_PROTOCOL_VERSION`／`CLIENT_NAME` 同值：同一个 AF 客户端身份）。
+MCP_PROTOCOL_VERSION = "2024-11-05"
+CLIENT_NAME = "autoforge"
+
+#: 响应体上限：TVPilot 回执带 `steps[]` 全链证据，给足 1 MiB；超了拒收（⛔ 无界吞）。
+MAX_RESPONSE_BYTES = 1024 * 1024
+
+#: ── 话术面（AF-PM 卡 2026-11-18 第 4 项｜契约 v3 §2.2 表**逐字**）────────────────
+#:
+#: 六值里活跃四值各有逐字话术；**休眠两值是 `None`＝静默**（一期零 faceid，出资人 2026-11-14 裁
+#: "编排失败不播报"）。⛔ 不许在这里造新措辞、⛔ 不许把 None 改成空串糊过去（空串会被 speak 腿判成
+#: `empty_text` 记一次失败，不等于静默）。
+SPEECH_BY_RESULT: dict[str, str | None] = {
+    "iptv_ok": "新闻已打开",
+    "adb_off_tv_on": "电视已打开；ADB 未开启，新闻请打开 tvdesk 手动观看",
+    "wake_fail": "电视唤醒失败",
+    "iptv_fail": "电视已打开，新闻没能自动打开，请手动观看",
+    "faceid_timeout": None,
+    "arcface_fail": None,
+}
+
+#: 兜底话术（契约 v3 §二-1.1 超时行）：全链预算 240s ＋ 60s 宽限到点仍没有终态回执时播这一句。
+TIMEOUT_SPEECH = "电视联动执行超时"
+
+#: 全链预算＝对端 `BUDGET_S`；宽限 60s 是给 MCP 传输与 AF 侧排程的余量；两者之和＝AF 侧兜底线。
+RUN_BUDGET_S = 240.0
+GRACE_S = 60.0
+TERMINAL_DEADLINE_S = RUN_BUDGET_S + GRACE_S
+
 #: 客户端抛出的"超时"三种写法都要认：`socket.timeout`、内建 `TimeoutError`（3.11 起含
 #: `concurrent.futures.TimeoutError`）。⛔ 只认其中一种会把另外两种误映射成"对端不在线"。
 _TIMEOUT_EXC = (socket.timeout, TimeoutError)
@@ -155,6 +208,16 @@ def action_of(action: str) -> str:
 def new_request_id() -> str:
     """缺省自生成的幂等键（uuid4）：对端用它判"同一轮重复调用"，⛔ 不用时间戳等可撞值。"""
     return str(uuid.uuid4())
+
+
+def speech_of(result: Any) -> str | None:
+    """result 六值 → 小爱话术（契约 v3 §2.2 表逐字）；静默两值／枚举外一律 `None`。
+
+    纯函数、不看回执其他键：话术只由 `result` 决定（`af_speech` 那枚对端键是**对端**的话术文本，
+    落 `CallResult.data` 供留痕与逐字比对，⛔ 不是 AF 播报的真源——真源是这张表，否则对端改一个字
+    就改掉了家里的播报）。
+    """
+    return SPEECH_BY_RESULT.get(str(result or ""), None)
 
 
 def defect_of_result(result: Any) -> str | None:
@@ -267,12 +330,45 @@ class TvAdapter:
         self,
         client: TVMCPClient | None = None,
         *,
+        endpoint: str = "",
+        token: str = "",
         dry_run: bool = True,
         transport_timeout: float = DEFAULT_TV_TRANSPORT_TIMEOUT,
+        allowed_hosts: tuple[str, ...] = (),
     ) -> None:
+        """两种接法二选一（AF-PM 卡 2026-11-18 第 3 项）：
+
+        - **注入客户端**（`client=`）：单测与将来任何非 HTTP 传输；
+        - **注入端点**（`endpoint=`／`AUTOFORGE_TV_MCP_URL`）：接线窗的常态——本类内部按
+          `ma.py::_tools_call` 那一族的形状走 streamable-http MCP（initialize → tools/call）。
+          `endpoint` 缺省**空串**：⛔ 不写死联调窗地址、⛔ 不内置任何凭据；空 ⇒ `call()` 显式拒发。
+        """
         self._client = client
+        self._endpoint = str(endpoint or "")
+        self._token = str(token or "")
         self.dry_run = dry_run
         self.transport_timeout = float(transport_timeout)
+        self._allowed_hosts = tuple(h for h in allowed_hosts if h)
+        self._http: TvMcpHttpClient | None = None
+
+    # ── 端点解析（照 `ma.py::_resolve_endpoint`／`_resolve_token` 同形）────────────
+    def _resolve_endpoint(self) -> str:
+        endpoint = self._endpoint or os.environ.get(TV_ENDPOINT_ENV, "")
+        if not endpoint:
+            return ""
+        base = str(endpoint).rstrip("/")
+        # TVPilot 把 MCP 挂在 `/mcp`：只给 host:port 时补上那一段（与 `ma` 同一手，两线口径一致）。
+        parsed = urlparse(base)
+        if parsed.scheme and parsed.hostname and parsed.path in ("", "/"):
+            base = f"{base}/mcp"
+        return base
+
+    def _resolve_token(self) -> str:
+        if self._token:
+            return self._token
+        from ..af_secrets import load_secret
+
+        return str(load_secret(TV_TOKEN_ENV, ""))
 
     # ── 调用面 ─────────────────────────────────────────────────────
     def call(self, action: str, params: Mapping[str, Any] | None = None) -> CallResult:
@@ -300,16 +396,29 @@ class TvAdapter:
                 {"dry_run": True, "action": name, "tool": tool, "request_id": request_id}
             )
 
-        if self._client is None:
-            return CallResult.fail(
-                f"tv.{name} 未注入 MCP 传输客户端（连接参数由接线卡给，⛔ 本层不写死 URL/凭据），拒发",
-                code=ADM_ERR_AUTH_REQUIRED,
-                action=name,
-                request_id=request_id,
-            )
+        client = self._client
+        if client is None:
+            endpoint = self._resolve_endpoint()
+            if not endpoint:
+                # 缺省档（端点空串）不是"配错了"，是「没接线」⇒ 显式拒发，⛔ 不猜地址、⛔ 不静默 dry_run。
+                return CallResult.fail(
+                    f"tv.{name} 未注入 MCP 客户端且未配置端点（{TV_ENDPOINT_ENV}），拒发"
+                    "（连接参数由接线卡给，⛔ 本层不写死 URL/凭据）",
+                    code=ADM_ERR_AUTH_REQUIRED,
+                    action=name,
+                    request_id=request_id,
+                )
+            if self._http is None:
+                self._http = TvMcpHttpClient(
+                    endpoint,
+                    token=self._resolve_token(),
+                    transport_timeout=self.transport_timeout,
+                    allowed_hosts=self._allowed_hosts,
+                )
+            client = self._http
 
         try:
-            payload = self._client.call(tool, request_id=request_id)
+            payload = client.call(tool, request_id=request_id)
         except _UpstreamFailure as exc:  # pragma: no cover - 私有异常只在内部产生
             return CallResult.fail(
                 exc.message, code=exc.code, action=name, request_id=request_id
@@ -378,3 +487,374 @@ class TvAdapter:
             f"{ADM_ERR_PAYLOAD_INVALID}: tv.{name} 的回执既不是终态也不是幂等答复"
             f"（键={sorted(payload)}）"
         )
+
+
+# ── 传输面：streamable-http MCP 客户端（批T 真接线｜AF-PM 卡 2026-11-18 第 3 项）──────
+#
+# 为什么这里有一份"像 ma.py"的实现：`ma.py` 那套 HTTP/JSON-RPC 编码是本仓已经验过的形状
+# （SSE／JSON 双解码、会话头、白名单收口），但它是**私有实现**（`_post`／`_tools_call`），
+# 跨模块 import 私有名会把两条线焊死，任一侧改签名都是隐性破线；而把 `ma.py` 抽公共层是动
+# **已双票 PASS 的待命件**（⛔ 本卡红线）。所以本文件独立一份，口径与 `ma.py` 逐处对齐
+# （超时/鉴权/对端故障三档映射、`guarded_open` 收口、`structuredContent` 优先回落 text），
+# 并把「抽公共 MCP 传输层」写成报告 §八 的后续项，交 AF-PM 排（⛔ 本卡不自行重构）。
+
+
+def _decode_envelope(raw: bytes, content_type: str, msg_id: Any) -> dict[str, Any]:
+    """把一次 POST 的响应体解成 JSON-RPC 信封；解不出一律具名失败（⛔ 不静默当空答复）。"""
+    text = raw.decode("utf-8", errors="replace")
+    candidates: list[Any] = []
+    if "text/event-stream" in content_type:
+        for line in text.splitlines():
+            if line.startswith("data:"):
+                chunk = line[5:].strip()
+                if not chunk or chunk == "[DONE]":
+                    continue
+                try:
+                    candidates.append(json.loads(chunk))
+                except (ValueError, TypeError):
+                    continue
+    else:
+        try:
+            candidates.append(json.loads(text))
+        except (ValueError, TypeError) as exc:
+            raise _UpstreamFailure(
+                ADM_ERR_PAYLOAD_INVALID, f"tv 响应不是合法 JSON：{type(exc).__name__}"
+            ) from exc
+    for item in candidates:
+        if isinstance(item, dict) and (msg_id is None or item.get("id") == msg_id):
+            return item
+    if candidates and isinstance(candidates[-1], dict):
+        return candidates[-1]
+    raise _UpstreamFailure(ADM_ERR_PAYLOAD_INVALID, "tv 响应里没有 JSON-RPC 信封")
+
+
+def _tool_payload(name: str, result: Mapping[str, Any]) -> dict[str, Any]:
+    """MCP `tools/call` 的 result → 业务 dict（结构化内容优先，回落 text 腿；与 `ma` 同口径）。"""
+    if result.get("isError") is True:
+        text = next(
+            (
+                str(item.get("text") or "")
+                for item in (result.get("content") or [])
+                if isinstance(item, Mapping)
+            ),
+            "",
+        )
+        raise _UpstreamFailure(ADM_ERR_INTERNAL, f"tv.{name} 被 TVPilot 判为出错：{text[:200]}")
+    structured = result.get("structuredContent")
+    if isinstance(structured, Mapping):
+        return dict(structured)
+    for item in result.get("content") or []:
+        if not isinstance(item, Mapping) or item.get("type") not in (None, "text"):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        try:
+            parsed = json.loads(text)
+        except (ValueError, TypeError) as exc:
+            raise _UpstreamFailure(
+                ADM_ERR_PAYLOAD_INVALID,
+                f"tv.{name} 的 text 载荷不是合法 JSON：{type(exc).__name__}",
+            ) from exc
+        if isinstance(parsed, Mapping):
+            return dict(parsed)
+        raise _UpstreamFailure(ADM_ERR_PAYLOAD_INVALID, f"tv.{name} 的 text 载荷不是对象")
+    raise _UpstreamFailure(ADM_ERR_PAYLOAD_INVALID, f"tv.{name} 的 result 里没有结构化内容")
+
+
+class TvMcpHttpClient:
+    """`TVMCPClient` 的 HTTP 实现：initialize → tools/call，一次调用一次往返。
+
+    会话（`Mcp-Session-Id`）每个实例只握一次；**过期不在这里重试**——纯执行层契约不允许适配器
+    兜重试（`base.py` 头注），重取由 IR 的 `wait`＋`on_error` 显式表达。
+    """
+
+    def __init__(
+        self,
+        endpoint: str,
+        *,
+        token: str = "",
+        transport_timeout: float = DEFAULT_TV_TRANSPORT_TIMEOUT,
+        allowed_hosts: tuple[str, ...] = (),
+    ) -> None:
+        self.endpoint = str(endpoint or "")
+        self.host = host_of(self.endpoint)
+        self._token = str(token or "")
+        self.transport_timeout = float(transport_timeout)
+        self._allowed_hosts = tuple(h for h in allowed_hosts if h)
+        self._session_id: str | None = None
+        self._rpc_id = 0
+
+    def _next_id(self) -> int:
+        self._rpc_id += 1
+        return self._rpc_id
+
+    def _post(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        if not self.host:
+            raise _UpstreamFailure(
+                ADM_ERR_AUTH_REQUIRED,
+                f"tv 端点缺主机名或含 @ 凭证注入：{self.endpoint!r}（拒发，⛔ 不猜地址）",
+            )
+        req = Request(
+            self.endpoint,
+            data=json.dumps(dict(body)).encode("utf-8"),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Accept", "application/json, text/event-stream")
+        if self._token:
+            req.add_header("Authorization", f"Bearer {self._token}")
+        if self._session_id:
+            req.add_header("Mcp-Session-Id", self._session_id)
+        hosts = self._allowed_hosts or (self.host,)
+        try:
+            with guarded_open(req, allowed_hosts=hosts, timeout=self.transport_timeout) as resp:
+                raw = resp.read(MAX_RESPONSE_BYTES + 1)
+                content_type = (resp.headers.get("content-type") or "").lower()
+                sid = resp.headers.get("mcp-session-id") or self._session_id
+        except HTTPError as exc:
+            code = getattr(exc, "code", 0)
+            if code in _HTTP_AUTH_CODES:
+                raise _UpstreamFailure(
+                    ADM_ERR_AUTH_REQUIRED, f"tv 拒绝凭据（HTTP {code}）"
+                ) from exc
+            if code in _HTTP_TIMEOUT_CODES:
+                raise _UpstreamFailure(
+                    ADM_ERR_UPSTREAM_TIMEOUT, f"tv 超时（HTTP {code}；对端全链预算 240s）"
+                ) from exc
+            if code >= 500:
+                raise _UpstreamFailure(ADM_ERR_PEER_OFFLINE, f"tv 侧故障（HTTP {code}）") from exc
+            raise _UpstreamFailure(ADM_ERR_INTERNAL, f"tv 返回 HTTP {code}") from exc
+        except (socket.timeout, TimeoutError) as exc:
+            raise _UpstreamFailure(
+                ADM_ERR_UPSTREAM_TIMEOUT, "tv 未在传输层超时内应答"
+            ) from exc
+        except URLError as exc:
+            reason = getattr(exc, "reason", exc)
+            if isinstance(reason, _TIMEOUT_EXC):
+                raise _UpstreamFailure(ADM_ERR_UPSTREAM_TIMEOUT, "tv 未在传输层超时内应答") from exc
+            raise _UpstreamFailure(
+                ADM_ERR_PEER_OFFLINE, f"tv 不可达：{type(reason).__name__}: {reason}"
+            ) from exc
+        except OSError as exc:
+            raise _UpstreamFailure(
+                ADM_ERR_PEER_OFFLINE, f"tv 不可达：{type(exc).__name__}: {exc}"
+            ) from exc
+        self._session_id = sid
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise _UpstreamFailure(
+                ADM_ERR_PAYLOAD_INVALID,
+                f"tv 响应超过上限 {MAX_RESPONSE_BYTES} 字节，拒收（⛔ 无界吞）",
+            )
+        if not raw.strip() and "id" not in body:
+            # JSON-RPC 通知（`notifications/initialized`）按规范回 202 空体是**合法**的：
+            # ⛔ 不许把"没有信封"判成形状塌（那会把每次握手都判成失败）。
+            return {}
+        return _decode_envelope(raw, content_type, body.get("id"))
+
+    def _ensure_session(self) -> None:
+        if self._session_id is not None:
+            return
+        envelope = self._post(
+            {
+                "jsonrpc": "2.0",
+                "id": self._next_id(),
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": CLIENT_NAME, "version": "1"},
+                },
+            }
+        )
+        if "error" in envelope:
+            err = envelope["error"]
+            raise _UpstreamFailure(
+                ADM_ERR_INTERNAL,
+                f"tv 拒绝握手：{str(err.get('message') if isinstance(err, Mapping) else err)[:200]}",
+            )
+        # 握手成功即会话可用；`notifications/initialized` 只是礼节，失败不影响后续 tools/call。
+        self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    def call(self, tool: str, **kwargs: Any) -> Mapping[str, Any]:
+        """发一次 `tools/call`。参数按 MCP 的 `arguments` 透传（本线只有幂等键一枚）。"""
+        self._ensure_session()
+        envelope = self._post(
+            {
+                "jsonrpc": "2.0",
+                "id": self._next_id(),
+                "method": "tools/call",
+                "params": {"name": tool, "arguments": dict(kwargs)},
+            }
+        )
+        if "error" in envelope:
+            err = envelope["error"]
+            raise _UpstreamFailure(
+                ADM_ERR_INTERNAL,
+                f"tv 工具调用出错：{str(err.get('message') if isinstance(err, Mapping) else err)[:200]}",
+            )
+        result = envelope.get("result")
+        if not isinstance(result, Mapping):
+            raise _UpstreamFailure(ADM_ERR_PAYLOAD_INVALID, "tv 响应里没有 result 对象")
+        return _tool_payload(tool, result)
+
+
+# ── 消费面：result 六值 → 话术 → 播报（AF-PM 卡 2026-11-18 第 4 项）──────────────────
+
+
+@dataclass(frozen=True)
+class TvAnnouncement:
+    """一次消费的留痕记录（⛔ 不抛异常：调用方拿它记账/落审计）。"""
+
+    spoken: bool
+    text: str | None
+    result: str | None
+    reason: str
+    defect: str | None = None
+    error: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "spoken": self.spoken,
+            "text": self.text,
+            "result": self.result,
+            "reason": self.reason,
+            "defect": self.defect,
+            "error": self.error,
+        }
+
+
+class TvOutcomeSpeaker:
+    """把 `TvAdapter` 的回执消费成一声播报（契约 v3 §2.2 表逐字｜兜底 300s）。
+
+    四条硬纪律：
+
+    1. **话术真源＝`SPEECH_BY_RESULT`**，⛔ 不抄回执里的 `af_speech`（对端改一个字就改掉了家里
+       的播报；回执那枚键仍落 `CallResult.data` 供逐字比对）；
+    2. **静默两值**（休眠）与**幂等答复**（`accepted=False`）都不出声，⛔ 不拿"这次没做成"当语气；
+    3. **兜底**：调用方把已经过的秒数交进来，超过 `240+60s` 仍无终态 ⇒ 播「电视联动执行超时」；
+    4. **⛔ 异常不冒执行链**：`publish_speak` 抛错/回 `published=False` 一律吞成计数＋`reason`，
+       与桥自己的 `_account_publish_error` 同一纪律（播报旁路失败绝不改动作结果）。
+    """
+
+    def __init__(
+        self,
+        publish_speak: Callable[..., Any] | None = None,
+        *,
+        deadline_s: float = TERMINAL_DEADLINE_S,
+    ) -> None:
+        self._publish = publish_speak
+        self.deadline_s = float(deadline_s)
+        self.counters: dict[str, int] = {
+            "requested": 0,
+            "spoken": 0,
+            "silent": 0,
+            "timeout": 0,
+            "failed": 0,
+            "defect": 0,
+            "publish_failed": 0,
+        }
+
+    # ── 判据 ───────────────────────────────────────────────────────
+    def expired(self, elapsed_s: float | None) -> bool:
+        """到点判据：`elapsed_s` 缺省（没钟）⇒ False，⛔ 不许拿"没钟"当超时。"""
+        if elapsed_s is None:
+            return False
+        return float(elapsed_s) > self.deadline_s
+
+    # ── 消费 ───────────────────────────────────────────────────────
+    def consume(
+        self,
+        result: Any,
+        *,
+        trace_id: str,
+        room: str = "",
+        elapsed_s: float | None = None,
+    ) -> TvAnnouncement:
+        """吃一条 `CallResult`（或任何回执形状），返回留痕记录。**永不抛**。"""
+        self.counters["requested"] += 1
+        if self.expired(elapsed_s):
+            return self.announce_timeout(trace_id, room=room)
+        data = getattr(result, "data", None)
+        if not isinstance(data, Mapping):
+            self.counters["failed"] += 1
+            return TvAnnouncement(
+                spoken=False, text=None, result=None, reason="not_a_result",
+                error="回执不是 CallResult（⛔ 不自造终态）",
+            )
+        defect = data.get("defect")
+        if defect == DEFECT_DORMANT_RESULT or data.get("result") in DORMANT_RESULTS:
+            # 休眠两值＝对端实现越界（adapter 已落 `ADM_ERR_INTERNAL`＋defect）⇒ 静默＋计缺陷。
+            self.counters["defect"] += 1
+            return TvAnnouncement(
+                spoken=False,
+                text=None,
+                result=data.get("result"),
+                reason="dormant_defect",
+                defect=str(defect or DEFECT_DORMANT_RESULT),
+            )
+        if getattr(result, "success", False) is not True:
+            self.counters["failed"] += 1
+            return TvAnnouncement(
+                spoken=False,
+                text=None,
+                result=data.get("result"),
+                reason="call_failed",
+                error=str(getattr(result, "error", "") or "")[:200] or None,
+            )
+        if data.get("accepted") is False:
+            # 对端说"正在跑"是合法答复：⛔ 不播报（否则一次询问念两遍），⛔ 不判失败。
+            self.counters["silent"] += 1
+            return TvAnnouncement(
+                spoken=False, text=None, result=None, reason="already_running"
+            )
+        outcome = data.get("result")
+        text = speech_of(outcome)
+        if text is None:
+            self.counters["silent"] += 1
+            return TvAnnouncement(
+                spoken=False, text=None, result=str(outcome or "") or None, reason="no_speech"
+            )
+        return self._speak(text, result=str(outcome), trace_id=trace_id, room=room, reason="ok")
+
+    def announce_timeout(self, trace_id: str, *, room: str = "") -> TvAnnouncement:
+        """到点兜底：播「电视联动执行超时」（⛔ 不冒充任何 business 终态）。"""
+        self.counters["timeout"] += 1
+        return self._speak(
+            TIMEOUT_SPEECH,
+            result=None,
+            trace_id=trace_id,
+            room=room,
+            reason="timeout",
+        )
+
+    # ── 播报腿 ─────────────────────────────────────────────────────
+    def _speak(
+        self, text: str, *, result: str | None, trace_id: str, room: str, reason: str
+    ) -> TvAnnouncement:
+        if self._publish is None:
+            # fail-closed：没有播报腿就如实记「没出声」，⛔ 不许记成 spoken（那会骗过验收读数）。
+            self.counters["publish_failed"] += 1
+            return TvAnnouncement(
+                spoken=False, text=text, result=result, reason=f"{reason}:no_leg",
+                error="未注入 publish_speak",
+            )
+        # 三枚按关键字交出去（与 `AfMqttBridge.publish_speak` 的签名同形）：`room` 恒递，空串由桥自己
+        # 决定要不要进载荷（`if room:`）——本层⛔ 替它判，也⛔ 在这里拼一个 dict 去凑（那会把
+        # `trace_id` 变成字符串常量，被可观测性门的"信封 trace_id 站点"当成一个假站点数进去）。
+        try:
+            out = self._publish(trace_id=str(trace_id), text=text, room=str(room or ""))
+        except Exception as exc:  # noqa: BLE001 —— 播报旁路失败⛔ 冒到执行链（同桥的记账纪律）
+            self.counters["publish_failed"] += 1
+            return TvAnnouncement(
+                spoken=False, text=text, result=result, reason=f"{reason}:publish_raised",
+                error=f"{type(exc).__name__}: {exc}"[:200],
+            )
+        if isinstance(out, Mapping) and out.get("published") is False:
+            self.counters["publish_failed"] += 1
+            return TvAnnouncement(
+                spoken=False, text=text, result=result, reason=f"{reason}:not_published",
+                error=str(out.get("code") or out.get("error") or "not_published")[:200],
+            )
+        self.counters["spoken"] += 1
+        return TvAnnouncement(spoken=True, text=text, result=result, reason=reason)

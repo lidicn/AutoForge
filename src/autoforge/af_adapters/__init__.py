@@ -19,6 +19,7 @@ from .http import HTTPAdapter, guarded_open, host_of
 from .inbox import InboxAdapter
 from .ma import MaAdapter
 from .mock import MockAdapter
+from .tv import TvAdapter
 
 __all__ = [
     "Adapter",
@@ -43,4 +44,5 @@ __all__ = [
     "MockAdapter",
     "InboxAdapter",
     "MaAdapter",
+    "TvAdapter",
 ]
