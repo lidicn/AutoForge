@@ -1567,11 +1567,19 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
     """批准并回放 payload 落盘（复用 `_t_save` 的落盘逻辑，无二次渲染）。
 
     reviewer 硬编码 `"human"`（服务层约束：agent 不能自批）；HTTP 层传令牌主体。
+
+    AF-816（墨鉴 N-01）：旧实现**先 `ps.delete` 再 `save_graph`**——`save_graph` 的爆炸半径
+    >8 未传 allow_bulk／archived 写闸／owner 变更／expect_version 冲突任一抛错 ⇒ 人已批准、
+    授权码已核销、待批条目却已消失（不可重试孤儿）。修法：**save_graph 成功后再 ps.delete**；
+    失败保留待批＋具名错误（可重试/回退）。防重批用 op 幂等键：整个 load→回放→delete 串在
+    `ps._lock` 临界区里，同一 op 第二次并发进入时 load 已是 None ⇒ 404。
+    ⛔ 不回「先删」旧语义；⛔ 不改数据模型（PendingOp 的 op_id 即幂等键）。
     """
     ps = PendingStore(store.root)
-    # R4-03 修复 v2：load → 校验 → delete 全部在锁内，确保：
-    # 1) 同一 op_id 只会被批准一次（并发安全）
+    # R4-03 修复 v2 ＋ AF-816：load → 自批检查 → 回放落盘 → delete 全部在锁内串行——
+    # 1) 同一 op_id 只会被批准一次（并发安全：第二个线程 load 到 None）
     # 2) 禁止自批检查失败时不删除待批（拒绝后可重试，不再孤儿化）
+    # 3) **delete 必须排在 save_graph 成功之后**（save 抛错 ⇒ 待批仍在，可重试）
     # FFL 20261008 发现：原实现先 delete 再做 P0-13 检查，被 403 拒绝的待批直接消失。
     with ps._lock:
         op = ps.load(op_id)
@@ -1585,21 +1593,24 @@ def approve_pending(store: GraphStore, op_id: str, reviewer: str = "human") -> d
                 f"禁止自批：提交人 {submitter!r} 不能批准自己提交的操作 {op_id!r}",
                 status=403,
             )
-        ps.delete(op_id)
-    self_check = ""
-    if not submitter:
-        self_check = "unverified_submitter"  # ADM B-11：无提交人信息，自批检查无法生效
-    payload = op["payload"]
-    result = save_graph(
-        store,
-        payload.get("ir"),
-        payload.get("name", ""),
-        note=payload.get("note", ""),
-        tags=payload.get("tags"),
-        expect_version=payload.get("expect_version"),
-        owner=payload.get("owner", ""),
-        allow_bulk=bool(payload.get("allow_bulk", False)),
-    )
+        self_check = ""
+        if not submitter:
+            self_check = "unverified_submitter"  # ADM B-11：无提交人信息，自批检查无法生效
+        payload = op["payload"]
+        result = save_graph(
+            store,
+            payload.get("ir"),
+            payload.get("name", ""),
+            note=payload.get("note", ""),
+            tags=payload.get("tags"),
+            expect_version=payload.get("expect_version"),
+            owner=payload.get("owner", ""),
+            allow_bulk=bool(payload.get("allow_bulk", False)),
+        )
+        # AF-816：**落盘成功后才删待批**（⛔ 先删会让 save 失败变成不可重试孤儿）。
+        # delete 失败（罕见：文件被占/权限）如实回，⛔ 不静默——否则同 op 会被再次批准。
+        if not ps.delete(op_id):
+            logger.warning("approve_pending: 归档已落盘但待批删除未命中 op=%s（可能已被并发清）", op_id)
     result["approved_by"] = reviewer
     result["pending"] = op_id
     if self_check:
