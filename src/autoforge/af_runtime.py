@@ -25,7 +25,15 @@ except Exception:  # pragma: no cover - 旧版/未装
 
 logger = logging.getLogger("autoforge.runtime")
 
-from .af_adapters import HAAdapter, HTTPAdapter, InboxAdapter, MaAdapter, MockAdapter, AdapterRegistry
+from .af_adapters import (
+    HAAdapter,
+    HTTPAdapter,
+    InboxAdapter,
+    MaAdapter,
+    MockAdapter,
+    AdapterRegistry,
+    TvAdapter,
+)
 from .af_audit import (
     INSTANCE_LEASE_HELD,
     INSTANCE_RESTORE_DROPPED,
@@ -583,6 +591,7 @@ def build_runtime(
     http_allowed_hosts: tuple[str, ...] = (),
     ma_endpoint: str = "",
     ma_token: str = "",
+    tv_endpoint: str = "",
     quota: Quota | None = None,
     conf: ConfidenceStore | None = None,
     persist_dir: str | None = None,
@@ -611,6 +620,10 @@ def build_runtime(
     # （AF 的 kind 词表封闭，出向动作只有 `do`+`adapter`+`action` 这一种形态，见 af_adapters/ma.py 头部）。
     # 与 inbox 同一收口点：四面（CLI/HTTP/MCP/仿真）都从这里拿，没有"某一面接不到 MA"的分裂。
     registry.register(MaAdapter(endpoint=ma_endpoint, token=ma_token, dry_run=dry_run))
+    # TV 联动（AF×TVPilot · G1 纯 A）：端点**缺省空串**——接线窗由 AF-PM 注入（⛔ 本层不写死地址、
+    # ⛔ 不内置凭据；LAN 内无鉴权）。空串时 `call()` 显式拒发并留痕，⛔ 不猜、⛔ 不静默 dry_run。
+    # 与 inbox/ma 同一收口点：四面（CLI/HTTP/MCP/仿真）都从这里拿，没有"某一面接不到 tv"的分裂。
+    registry.register(TvAdapter(endpoint=tv_endpoint, dry_run=dry_run))
 
     return Runtime(
         graph=graph,

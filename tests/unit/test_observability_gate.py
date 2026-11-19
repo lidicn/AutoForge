@@ -396,7 +396,17 @@ def test_real_repo_correlation_id_asymmetry_is_on_the_books(real):
     assert "src/autoforge/af_linkage_feed.py" in paths
     assert "src/autoforge/af_adapters/inbox.py" in paths
     assert "src/autoforge/af_service.py" in paths
-    assert real["req"] == [], f"HTTP 请求级 id 出现了：{real['req'][:3]}——§五 那行要跟着改状态"
+    # 2026-11-15（AF tv 适配器待命件 · `af_adapters/tv.py`）：`req` 不再为 0——8 枚**全部**落在
+    # 那一个新文件里（`request_id` 的字符串常量：模块 docstring／`__all__` 的 `new_request_id`
+    # ／`PARAMS_ALLOWED` 与回执映射的键名），对端工具 `af_morning_news` 的契约入参就叫这个名字
+    # （AF-PM 卡 2026-11-15）⇒ §五 那一行随之改成「按设计」，⛔ 不是 HTTP 面开始做请求级 id。
+    assert len(real["req"]) == 8, (
+        f"HTTP 请求级 id 读数变了：{real['req'][:3]}——§五 那行要跟着改"
+    )
+    assert {r["path"] for r in real["req"]} == {"src/autoforge/af_adapters/tv.py"}, (
+        "这 8 枚只许来自适配器层（对端契约入参名的字符串常量）；一旦出现在 `af_api.py` 一类 HTTP 面，"
+        "就不再是「按设计」，必须先改 §五 的状态再谈"
+    )
 
 
 def test_real_repo_http_face_readings_are_pinned(real):
@@ -471,7 +481,10 @@ def test_real_repo_debt_rows_match_fresh_readings(real):
     assert debt["af_api-logger-sites"]["status"] == "已还"   # 返工 5.1⑥：三枚站点全部具名码化，账过期档解除
     assert debt["af_api-ok-false-sites"]["status"] == "账过期·待补码"
     assert debt["envelope-trace-id-sites"]["status"] == "已还"
-    assert debt["http-request-id-sites"]["status"] == "欠账"
+    assert debt["http-request-id-sites"]["status"] == "按设计", (
+        "2026-11-15 起：8 枚命中全在 `af_adapters/tv.py`（MCP 工具入参名的字符串常量），"
+        "HTTP 面（`af_api.py`）仍是 0——原「欠账」档据此改「按设计」（要做 HTTP 请求级 id 仍是 §七 问 2）"
+    )
 
 
 def test_real_repo_ceilings_did_not_rise_with_the_debt_rows(real):
