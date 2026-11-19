@@ -52,9 +52,10 @@ def test_real_src_is_clean_and_reports_the_range():
     proc = _run(SRC)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "出站护栏门禁干净" in proc.stdout
-    # 四个旁路站 + HTTPAdapter + `af_adapters/ma.py`（MA 取数）都已收口（6 处），
+    # 七个收口点：四个旁路站 + HTTPAdapter + `af_adapters/ma.py`（MA 取数）+ `af_adapters/tv.py`（TV MCP 取数，
+    # v1.30.13 批T 真接线新增 TvMcpHttpClient._post 第 7 站）都走 guarded_open；
     # 自建 opener 2 处（收口点 + ha.py 的拒跟随）
-    assert "走 guarded_open 收口 6 处" in proc.stdout
+    assert "走 guarded_open 收口 7 处" in proc.stdout
     assert "裸 urlopen 0 处" in proc.stdout
 
 
