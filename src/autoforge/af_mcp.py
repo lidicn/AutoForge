@@ -1948,12 +1948,18 @@ def dispatch(
     except InvalidArchiveName as exc:
         # 归档名会进文件系统 ⇒ 对端可自纠的输入错误。落 INTERNAL 会让 agent 以为
         # 服务坏了、拿同一个坏名字继续重试（契约泳道 P0-2 的第二半）。
+        # AF-815（墨鉴 BUG-006）：`_annotate_failure` 内部首行就把 message 落遥测/知识库
+        # history（洗不掉），所以脱敏必须**在它之前**算好——同函数 1881/1950/1968 四出口
+        # 都过了 `_redact_paths`，唯独这一支直接 `str(exc)`（bug 原文带绝对路径）。
+        # `InvalidArchiveName.message` 已不拼原名（af_store.py 上游根因），这里再过一层
+        # 保险：万一归档名残余片段被别的异常带进来，双保险都在。
+        _msg = _redact_paths(str(exc))
         return [
             _text(
                 json.dumps(
                     _failure_payload(
                         ADM_ERR_PAYLOAD_INVALID,
-                        _annotate_failure(store, name, str(exc), hint_code="InvalidArchiveName"),
+                        _annotate_failure(store, name, _msg, hint_code="InvalidArchiveName"),
                     ),
                     ensure_ascii=False,
                 )

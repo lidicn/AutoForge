@@ -112,12 +112,22 @@ _PATH_HOSTILE = ("/", "\\", "..", "\x00")
 
 
 class InvalidArchiveName(ValueError):
-    """归档名会改变落盘位置 ⇒ 直接拒绝。message **不含路径**（回执会外发给 agent）。"""
+    """归档名会改变落盘位置 ⇒ 直接拒绝。message **不含路径、不含归档名原文**（回执会外发给 agent）。
+
+    AF-815（墨鉴 BUG-007／上游根因）：docstring 承诺「不含路径」、旧实现 `{name!r}` 却把原始
+    name 整串拼进 message——归档名本身可能携带路径／`..`／NUL／凭据片段（`user:pass@`），
+    agent 拿到的回执就把这些原文外泄了。修法：message 只报 **reason＋长度/首字符摘要**，
+    ⛔ 不拼 name 原文；`self.name` 仍保留原始值供服务层定位（⛔ 不进 message）。
+    """
 
     def __init__(self, name: str, reason: str) -> None:
         self.name = name
-        super().__init__(f"归档名非法（{reason}）：{name!r}——"
-                         f"名字要写进文件系统，含 `/`、`\\`、`..`、前导点或超过 {_NAME_MAX} 字符一律拒绝")
+        _show = str(name or "")[:8]
+        _len = len(str(name or ""))
+        super().__init__(
+            f"归档名非法（{reason}，长 {_len} 字符，首 {_show!r}）：名字要写进文件系统，"
+            f"含 `/`、`\\`、`..`、NUL、前导点或超过 {_NAME_MAX} 字符一律拒绝（⛔ 不拼原名原文）"
+        )
 
 
 def normalize_archive_name(name: str) -> tuple[str, bool]:

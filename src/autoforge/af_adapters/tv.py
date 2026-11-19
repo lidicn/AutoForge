@@ -591,9 +591,12 @@ class TvMcpHttpClient:
 
     def _post(self, body: Mapping[str, Any]) -> dict[str, Any]:
         if not self.host:
+            # AF-815（墨鉴 PM 自抓 tv.py:596）：旧文案 `{self.endpoint!r}` 把**完整 endpoint**
+            # 原样回显——endpoint 可能带 `user:pass@` 内嵌凭据，回执外泄给持令牌的 agent
+            # 等于把凭据原文交出去。⛔ 不回显 URL，只报「缺主机名或含 @ 凭证注入」。
             raise _UpstreamFailure(
                 ADM_ERR_AUTH_REQUIRED,
-                f"tv 端点缺主机名或含 @ 凭证注入：{self.endpoint!r}（拒发，⛔ 不猜地址）",
+                f"tv 端点缺主机名或含 @ 凭证注入（拒发，⛔ 不猜地址、⛔ 不回显 endpoint）",
             )
         req = Request(
             self.endpoint,
