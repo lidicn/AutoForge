@@ -28,8 +28,8 @@ Agent 撰写 AF-Spec / JSON IR ──▶ forge build（安全闸：静态扫描�
 ## 1.1 里程碑状态
 
 > **版本双轨**（DCD 20261001《AF 三题》·G 裁定，方案 A）：**包/API 版本 `0.1.0`**（`pyproject.toml` / `af_service.API_VERSION`，`/api/health.version` 返回它，属机器契约，不随里程碑动）↔ **对外里程碑 `v2.x`**（人读叙事）。三列映射表见 [`docs/plan/版本开发计划.md`](docs/plan/版本开发计划.md) §〇——两套口径并行且都正确，不是"版本号漂移"。
-> **当前版本**：v1.30.11（发布 tag 线，origin/master = `1106c1b`）。
-> 版本主线、进行中与排队项见 [`docs/roadmap/版本路线图.md`](docs/roadmap/版本路线图.md)（唯一权威；2026-11-16 起为 v1.30.x 口径，旧里程碑 v2.x 叙事已归档至 `docs/archive/`）。
+> **当前版本**：v1.30.15（发布 tag 线，origin/master = `aa2864a`）。
+> 版本主线、当前规划与开发计划见 [`docs/ROADMAP.md`](docs/ROADMAP.md)「当前规划与开发计划（2026-11-20 起）」（项目级真源）；版本号现势见 [`docs/roadmap/版本路线图.md`](docs/roadmap/版本路线图.md)。
 > **回归读数**：README 不钉死测试计数——钉一份计数就多一份会过期的副本（此处曾长期挂 1300 passed / 51 skipped，而整树现读已 3000+ 条）。整树口径 `PYTHONPATH=src python -m pytest tests -q`，最新读数记在 [`docs/ADM联动执行记录-AF.md`](docs/ADM联动执行记录-AF.md)；门禁读数由 `gates.sh` 给出。
 
 | 阶段 | 主题 | 状态 |
