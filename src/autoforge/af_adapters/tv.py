@@ -200,6 +200,13 @@ class _UpstreamFailure(Exception):
         self.message = message
 
 
+class _SessionExpired(Exception):
+    """AF-822（墨鉴 N-15）：对端会话失效（HTTP 404）——**私有信号**，`call()` 捕获后
+    置 `_session_id=None` 重握手一次（限一次防循环），二次仍失败才具名报错。
+    ⛔ 不进 CallResult：这是传输层内部的可恢复态，不是业务结果。
+    """
+
+
 def action_of(action: str) -> str:
     """`tv.morning_news` 与 `morning_news` 两种写法都归一到后者（与 `ma.action_of` 同形）。"""
     return str(action or "").strip().lower().rsplit(".", 1)[-1]
@@ -520,12 +527,26 @@ def _decode_envelope(raw: bytes, content_type: str, msg_id: Any) -> dict[str, An
             raise _UpstreamFailure(
                 ADM_ERR_PAYLOAD_INVALID, f"tv 响应不是合法 JSON：{type(exc).__name__}"
             ) from exc
+    matched = None
     for item in candidates:
-        if isinstance(item, dict) and (msg_id is None or item.get("id") == msg_id):
-            return item
-    if candidates and isinstance(candidates[-1], dict):
-        return candidates[-1]
-    raise _UpstreamFailure(ADM_ERR_PAYLOAD_INVALID, "tv 响应里没有 JSON-RPC 信封")
+        if not isinstance(item, dict):
+            continue
+        # AF-823（墨鉴 N-16）：**通知帧显式跳过**——无 `id` 的帧是对端主动推送（如
+        # `notifications/*`），⛔ 不许被当成本次请求的答复收下。
+        if "id" not in item:
+            continue
+        if msg_id is None or item.get("id") == msg_id:
+            matched = item
+            break
+    if matched is not None:
+        return matched
+    # AF-823：id 不匹配一律具名失败，⛔ 回退 candidates[-1]——旧回退最坏会把对端
+    # 的通知/别次响应当成本次答复（违反「失败要具名、成功要有据」）。
+    raise _UpstreamFailure(
+        ADM_ERR_PAYLOAD_INVALID,
+        f"tv 响应里没有 id={msg_id!r} 的 JSON-RPC 信封（收到 {len(candidates)} 帧，"
+        "id 不匹配一律失败，⛔ 回退）",
+    )
 
 
 def _tool_payload(name: str, result: Mapping[str, Any]) -> dict[str, Any]:
@@ -627,6 +648,14 @@ class TvMcpHttpClient:
                 ) from exc
             if code >= 500:
                 raise _UpstreamFailure(ADM_ERR_PEER_OFFLINE, f"tv 侧故障（HTTP {code}）") from exc
+            if code == 404 and self._session_id:
+                # AF-822（墨鉴 N-15）：streamable-http MCP 对端在会话过期时对带旧
+                # `Mcp-Session-Id` 的请求回 404——旧实现归 ADM_ERR_INTERNAL 且**永不清会话**
+                # ⇒ 适配器单例一张死会话污染进程后续所有 tv 动作直到 serve 重启，
+                # 错误码还误导成 tv 侧故障。这里改抛私有 `_SessionExpired` 信号：
+                # `call()` 捕获后置 `_session_id=None` 重握手一次（限一次防循环）。
+                # ⚠️ 只对**带会话头**的请求生效：握手（无头）404 是端点错，仍归 INTERNAL。
+                raise _SessionExpired("tv 会话失效（HTTP 404，携带旧 Mcp-Session-Id）") from exc
             raise _UpstreamFailure(ADM_ERR_INTERNAL, f"tv 返回 HTTP {code}") from exc
         except (socket.timeout, TimeoutError) as exc:
             raise _UpstreamFailure(
@@ -680,16 +709,34 @@ class TvMcpHttpClient:
         self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
     def call(self, tool: str, **kwargs: Any) -> Mapping[str, Any]:
-        """发一次 `tools/call`。参数按 MCP 的 `arguments` 透传（本线只有幂等键一枚）。"""
-        self._ensure_session()
-        envelope = self._post(
-            {
-                "jsonrpc": "2.0",
-                "id": self._next_id(),
-                "method": "tools/call",
-                "params": {"name": tool, "arguments": dict(kwargs)},
-            }
-        )
+        """发一次 `tools/call`。参数按 MCP 的 `arguments` 透传（本线只有幂等键一枚）。
+
+        AF-822：会话失效（404）⇒ 置 `_session_id=None` 重握手后**重试一次**（限一次防循环）；
+        二次仍失败才把 `_SessionExpired` 落成具名 `_UpstreamFailure`（"会话失效已重试"，
+        ⛔ 再归 INTERNAL）。手写循环而不是递归：重试与首发共用同一段信封解析。
+        """
+        attempts = 0
+        while True:
+            self._ensure_session()
+            try:
+                envelope = self._post(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": self._next_id(),
+                        "method": "tools/call",
+                        "params": {"name": tool, "arguments": dict(kwargs)},
+                    }
+                )
+                break
+            except _SessionExpired:
+                attempts += 1
+                if attempts > 1:
+                    raise _UpstreamFailure(
+                        ADM_ERR_INTERNAL,
+                        "tv 会话失效已重试一次仍 404（⛔ 不再循环重握手——查对端会话生命周期）",
+                    ) from None
+                self._session_id = None  # AF-822：丢弃死会话，下一轮 `_ensure_session` 重握手
+                continue
         if "error" in envelope:
             err = envelope["error"]
             raise _UpstreamFailure(

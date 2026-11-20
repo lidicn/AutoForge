@@ -305,7 +305,9 @@ def test_http_client_decodes_plain_json_leg(stub_note=None):
     client = TvMcpHttpClient("http://tvpilot.invalid:8090/mcp")
     raw = {
         "jsonrpc": "2.0",
-        "id": 1,
+        # AF-823：响应 id 必须回显 tools/call 的请求 id（init 占 1，tools/call 为 2）；
+        # 旧实现 id 不匹配会回退 candidates[-1]，这条 id=1 的旧形状正是被回退蒙过的。
+        "id": 2,
         "result": {"content": [{"type": "text", "text": json.dumps(payload)}]},
     }
     original = tv_module.guarded_open
