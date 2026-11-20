@@ -831,6 +831,11 @@ class MaAdapter:
                 ADM_ERR_PAYLOAD_INVALID,
                 f"MA 响应超过上限 {MAX_RESPONSE_BYTES} 字节，拒收（不无界吞）",
             )
+        if not raw.strip() and "id" not in body:
+            # JSON-RPC 通知（`notifications/initialized`）按规范回 202 空体是**合法**的：
+            # ⛔ 不许把"没有信封"判成形状塌（那会把每次握手都判成失败）。
+            # （AF-830：MA 联调窗实抓——tv.py:681-685 同款守卫，ma.py 漏了，见 af_adapters/tv.py）
+            return {}
         return _decode_envelope(raw, content_type, body.get("id"))
 
     def _ensure_session(self, endpoint: str, host: str, token: str) -> None:
