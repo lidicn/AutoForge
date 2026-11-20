@@ -860,24 +860,29 @@ def enable_by_tag(
     「调用方自报名」写面（set_tags/delete/单条启停）的既有 403 文案经
     `_assert_archive_mutator` 逐字保持，⛔ 本面借用它拒批。
     """
-    names = [n for n, ts in store.all_tags().items() if tag in ts]
+    tags_map = store.all_tags()
+    names = [n for n, ts in tags_map.items() if tag in ts]
+    sub = Subject.from_caller(caller, owner_face=caller_is_owner, token_identity=token_identity)
+    if sub.token_state is TokenState.BROKEN:
+        raise ServiceError(broken_identity_error(), status=403)
+    # C-3：范围判定单源 scope_names（D4 的逐名 _assert 在批量面被份额化取代——
+    # 逐名 403 会把「别人有一条同标签」放大成整批拒绝，还把他人归档名回给调用方）。
+    visible, hidden = scope_names(lambda n: _existing_owner(store, n), names, sub)
     # D3（2026-11-05 实证）：**archived 标签＝写闸**。带 archived 的归档已从界面"收走"，
     # 但底层仍可被批量启停翻转/继续真跑（今晨实证：归档件被 MCP 覆盖部署后持续触发 74+19 次）。
     # 解档的唯一路径是显式 `set_tags` 摘掉 archived 标签。⇒ 批量启停面直接拒，
     # 而不是"翻转成功但 watch 不认"这种半吊子状态。
-    archived_names = sorted(n for n, ts in store.all_tags().items() if "archived" in ts and n in names)
+    # AF-828①（墨鉴 N-58）：写闸只对**可见集**判——修前从全量 names 挑 archived，
+    # 非 owner 调一次就被他人归档名连带整批 403，错误文案还把他人归档名拼进 detail
+    # （:875-876 注释正以「逐名 403 会泄露他人归档名」为由拒绝逐名 _assert，一处写对、
+    # 相邻一处违反它）。⇒ 先 scope_names 过滤、再判 archived、只点可见名。
+    archived_names = sorted(n for n in visible if "archived" in (tags_map.get(n) or ()))
     if archived_names:
         raise ServiceError(
             f"归档带 archived 标签，⛔ 不许按标签批量启停（先 set_tags 摘标签解档）："
             f"{archived_names[:5]}{'…' if len(archived_names) > 5 else ''}",
             status=403,
         )
-    # C-3：范围判定单源 scope_names（D4 的逐名 _assert 在批量面被份额化取代——
-    # 逐名 403 会把「别人有一条同标签」放大成整批拒绝，还把他人归档名回给调用方）。
-    sub = Subject.from_caller(caller, owner_face=caller_is_owner, token_identity=token_identity)
-    if sub.token_state is TokenState.BROKEN:
-        raise ServiceError(broken_identity_error(), status=403)
-    visible, hidden = scope_names(lambda n: _existing_owner(store, n), names, sub)
     # 先算清影响面（不落盘），超阈值直接拒——避免"改了一半才失败"
     planned: list[tuple[str, int, Any]] = []
     failed: list[dict[str, Any]] = []
@@ -929,10 +934,11 @@ def enable_by_tag(
     # 停用即时生效（watch 在派发前读它），⛔ 不再靠重启 watcher 让内存图对齐 store。
     touched_ids: list[str] = []
     for name, _version, graph in planned:
+        ids_this_graph: list[str] = []
         for auto in graph:
             auto.enabled = enabled
             auto.raw["enabled"] = enabled  # 序列化形态同步翻转，保证 re-save 后 round-trip 一致
-            touched_ids.append(str(auto.id))
+            ids_this_graph.append(str(auto.id))
         try:
             new_version = store.save(
                 graph,
@@ -950,6 +956,10 @@ def enable_by_tag(
                            "启用" if enabled else "禁用", name, exc)
             failed.append({"name": name, "reason": f"save_failed:{type(exc).__name__}"})
             continue
+        # AF-828②（墨鉴 N-59）：旁车 id 在 save **成功之后**才收集——修前在 try 前
+        # append、save 失败 continue 未撤回 ⇒ 旁车对保存失败的 id 也写 enabled
+        #（「旁车说已启用、store 还是旧值」；停用场景＝安全阀关不上）。
+        touched_ids.extend(ids_this_graph)
         affected.append({"name": name, "version": new_version, "enabled": enabled})
     # 启停旁车（AF-PM 裁定 2026-11-13）：写失败必须让 `ok` 变假 ——
     # 「停用没生效」不许看起来像成功（安全阀写不进去＝安全阀关不上）。

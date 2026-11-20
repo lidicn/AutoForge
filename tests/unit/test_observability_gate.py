@@ -75,11 +75,11 @@ PINS: dict[str, object] = {
     # `af_scanner.DeviceGuardRegistry._hit` 的 area 求值失败两腿（catalog 不可用／`area_of` 抛异常）
     # 各一枚带码 ERROR `DEVICE_GUARD_AREA_UNRESOLVED`；带码 ⇒ 不吃 §四 的无码格子。
     # `af_scanner.py` 此前零 logger 站点，故文件数 +1。
-    "sites": 265,
+    "sites": 267,
     "files": 39,
-    "levels": {"debug": 27, "info": 11, "warning": 183, "error": 32, "exception": 12, "critical": 0},
-    "codes": 139,
-    "coded": 151,
+    "levels": {"debug": 27, "info": 11, "warning": 185, "error": 32, "exception": 12, "critical": 0},
+    "codes": 140,
+    "coded": 152,
     "dup": {
         "DEPLOY_AUDIT_PERSIST_FAILED",
         "OWNER_ALERT_PUBLISH_FAILED",
@@ -91,7 +91,7 @@ PINS: dict[str, object] = {
         "SCHED_PREMISE_EVAL_FAILED",
         "DEVICE_GUARD_AREA_UNRESOLVED",
     },
-    "uncoded": {"debug": 14, "info": 7, "warning": 72, "error": 10, "exception": 11, "critical": 0},
+    "uncoded": {"debug": 14, "info": 7, "warning": 73, "error": 10, "exception": 11, "critical": 0},
 }
 
 # --------------------------------------------------------------------------------------
@@ -360,9 +360,10 @@ def test_real_repo_q83_promotion_did_not_move_the_uncoded_ceiling(real):
     nc = Counter(s["level"] for s in real["sites"] if not s["code"])
     by_code = {s["code"] for s in real["coded"]}
     assert set(Q83_CODES) <= by_code, "带码这一前提是'棘轮未动'的根据，码没了就要重新谈上限"
-    assert nc["error"] == 10 and nc["warning"] == 72, (
+    assert nc["error"] == 10 and nc["warning"] == 73, (
         f"无码存量漂了（error={nc['error']} warning={nc['warning']}）——这跟 Q8.3 无关，"
         "但要在这里响，免得有人把两件事记成同一件"
+        "（72→73：AF-816 approve_pending 的 delete 未命中 warning，无码、没占 §四 上限格）"
     )
 
 
@@ -503,9 +504,9 @@ def test_real_repo_ceilings_did_not_rise_with_the_debt_rows(real):
     # 棘轮不仅没抬、反而被收紧了 11 枚余量。这一钉从"差集新鲜度"（86−83＝3）改为"收紧后基线"（72）：
     # 今后谁再新增无码 warning 把它顶回 83 以上，这里照样红；上限 83 一个数字没动是本腿的核心。
     nc = gate._no_code_counts(real["sites"])
-    assert nc["warning"] == 72, (
-        f"warning 无码现读是 {nc['warning']}，不是 72（补码后基线）——新增无码留痕请先补码进 §三，"
-        "上限 83 仍不许抬"
+    assert nc["warning"] == 73, (
+        f"warning 无码现读是 {nc['warning']}，不是 73（补码后基线 +1，AF-816 无码 warning）——"
+        "新增无码留痕请先补码进 §三，上限 83 仍不许抬"
     )
 
 
@@ -1180,9 +1181,10 @@ def test_f_real_repo_attribution_is_green(real):
 
     149 → 151（AF-801）：`DEVICE_GUARD_AREA_UNRESOLVED` 两腿各一行，都在 `_hit` 里（同函数，
     F 的互换风险为零；`test_f_real_repo_has_swap_prone_groups_to_guard` 的组数不变）。
+    151 → 152（AF-820）：`GRANT_CONSUME_RECORD_FAILED` 一行（`_grant_consume_after_success`）。
     """
     reg, coded = _reg_and_coded(real)
-    assert len(reg) == len(coded) == 151, (len(reg), len(coded))
+    assert len(reg) == len(coded) == 152, (len(reg), len(coded))
     assert gate.fn_attribution_findings(reg, coded) == []
 
 
