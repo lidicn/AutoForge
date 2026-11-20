@@ -3222,6 +3222,11 @@ def live_run(
         if auth_code and store is not None:
             from .af_auth import AuthCodeStore as _ACS
 
+            # AF-817（墨鉴 N-02）：**consume 从这移走**——旧实现在这里先烧短期码，再
+            # `_load_ir`/静态扫描/白名单任一抛错 ⇒ 非法 IR 白烧一枚短期码（且失败分支
+            # 不进暴力破解计数）。对齐 af_mcp.py:483-487 的既有纪律「先 precheck 再 consume」：
+            # 这里只做**类型校验**（不消费），真正的 `acs.consume` 挪到 `_load_ir`＋静态扫描
+            # ＋白名单＋grant 判定**全部通过之后、真机下发之前**（见下方）。
             acs = _ACS(Path(store.root) / ".auth" / "auth_codes.json")
             try:
                 _recs = acs.list(reveal=True)
@@ -3233,15 +3238,7 @@ def live_run(
                     "真机单发只认短期码：长期码只准用于部署，⛔ 不用于手动单发（D5 三门之③）",
                     status=403,
                 )
-            # AF-753（v1.29 收口修）：短期码是**一次性**凭据——上面的 `_auth_code_check`
-            # 只 validate 不消费，不在这里核销，同一枚短期码就能反复单发（TTL 60s 只是把
-            # 窗口压短，不是闭环）。与 grant 路径（`_grant_channel_tag` 的 `acs.consume`）
-            # 同形：消费失败即 fail-closed——宁可拒掉这次下发，也不放行一枚已失效的凭据。
-            if not acs.consume(auth_code):
-                raise ServiceError(
-                    "真机单发无法核销短期码（状态已变）：拒绝执行（fail-closed，AF-753）",
-                    status=403,
-                )
+            # AF-753 语义保留：短期码一次性。真正核销在下方业务闸全过后。
 
     graph = _load_ir(ir)
 
@@ -3276,6 +3273,18 @@ def live_run(
             store, grant_record, caller, graph, targets, grant_confirm=grant_confirm,
         )
         code_tag = f"grant:{grant_record['grant_id']}"
+
+    # AF-817（墨鉴 N-02）：**短期码核销在全部业务闸之后、真机下发之前**。
+    # 上面（:3222 块）只做了类型校验（不消费）；`_load_ir`/静态扫描/白名单/grant 判定
+    # 全部通过到这里才烧短期码——非法 IR/越界白名单/授权被拒不会白烧。失败（状态已变/
+    # 并发消耗）补 `record_failure`，暴力破解计数生效（连续 10 错锁定走既有机制）。
+    if auth_code and store is not None and _kind == "short":
+        if not acs.consume(auth_code):
+            acs.record_failure(auth_code)
+            raise ServiceError(
+                "真机单发无法核销短期码（状态已变）：拒绝执行（fail-closed，AF-753）",
+                status=403,
+            )
 
     # store.root 是凭据所在（credentials.json 与归档同根）；live_run 签名里没有
     # store_root 形参——上一版我写成 `_ha_token(store_root)` 会 NameError 被 except
