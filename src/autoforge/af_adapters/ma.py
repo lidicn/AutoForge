@@ -116,7 +116,22 @@ MA_ACTIONS: dict[str, tuple[str, ...]] = {
     "get_automation_context": ("room", "member_id", "window_minutes"),
     "get_automation_opportunities": ("room", "top_k", "min_samples"),
     "get_member_habits": ("member_id", "room", "entity", "granularity", "weeks"),
+    # ── AF×MA 深度联动批二（写，DCD 裁定 Q2＝甲：本版交付、读先写后）────────────────────
+    # 载荷逐字按契约 2.3；`user_response` 是**核心字段**（出资人场景③「记录下用户的选择」），
+    # ⛔ 不是可选备注——它缺席＝这次回流记不下"用户怎么回的"，等于本工具没达成目的。
+    "report_automation_outcome": (
+        "rule_ref", "outcome", "at", "automation_decision",
+        "user_response", "context_ref", "evidence", "note",
+    ),
 }
+#: 批二写向动作（与只读门面分开：它要吃"写失败不冒执行链"纪律与 staging 守卫）。
+WRITE_ACTIONS = frozenset({"report_automation_outcome"})
+#: 契约 2.3 的 `outcome` 枚举（逐字）。`asked`＝问了没答是**合法态**，⛔ 不许当缺字段。
+OUTCOME_VALUES = ("asked", "executed", "skipped", "failed", "false_positive")
+#: 契约 2.3 的 `user_response.choice` 四值（逐字）。
+USER_RESPONSE_CHOICES = ("accepted", "declined", "modified", "no_response")
+#: 契约 2.3 的 `user_response.via` 三值（逐字）。
+USER_RESPONSE_VIA = ("voice", "bark", "webui")
 #: 批一新增的三枚**只读门面**（与上面四条老动作分开：它们要吃新鲜度闸与数据不足判定）。
 FACADE_READS = frozenset(
     {"get_automation_context", "get_automation_opportunities", "get_member_habits"}
@@ -138,6 +153,8 @@ _REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
     "get_automation_context": ("as_of", "behavior_state", "presence", "data_quality"),
     "get_automation_opportunities": ("as_of", "gaps", "candidates", "data_gate"),
     "get_member_habits": ("as_of", "habits", "data", "sufficient"),
+    # 批二写向：回执两键（契约 2.3 输出列）——`staging` 必须是 True，见 `MA_STAGING_VIOLATION` 那条守卫。
+    "report_automation_outcome": ("memory_id", "staging"),
 }
 #: 门面读的**事实块**键（`as_of` 不算事实）：至少一键在——只带 `as_of` 的空壳不算成功
 #: （⛔ 不返回空 dict 让 `result_var` 静默绑成空值，与 `_REQUIRED_KEYS` 同一条纪律）。
@@ -196,6 +213,15 @@ DISPATCH_TEXT_ERRORS: dict[str, str] = {
     "NOT_FOUND": MA_ERR_CONTRACT_DRIFT,
     "DENIED": MA_ERR_SCOPE_DENIED,
 }
+
+# ── 批二（写）：staging 守卫 ＋ 写失败纪律 ──────────────────────────────────
+#: 契约 2.3 钉死 MA 侧**恒落 staging**（`staging: true`）。AF 只发"报告"、⛔ 不选库：
+#: 回执里 `staging` 不是 `True` ⇒ 对端把这条写进了非 staging 面 ⇒ **契约漂移缺陷**，
+#: 响亮留痕（⛔ 不许当success收下再让石沉大海）。
+MA_STAGING_VIOLATION = "MA_STAGING_VIOLATION"
+#: 写向失败留痕（预案 §二.3／卡面红线）：自动化本体已完成 ⇒ 写 MA 失败**⛔ 不判自动化失败**，
+#: 但必须留痕＋计数（与桥"发布失败不冒执行链、假绿即缺陷"同族）。⛔ 不重试。
+MA_OUTCOME_REPORT_FAILED = "MA_OUTCOME_REPORT_FAILED"
 
 
 class _UpstreamFailure(Exception):
@@ -332,6 +358,41 @@ def dispatch_failure(text: str) -> "_UpstreamFailure" | None:
     return _UpstreamFailure(code, str(text or "").strip()[:200])
 
 
+def write_payload_defect(name: str, fields: Mapping[str, Any]) -> str | None:
+    """批二写向载荷的**逐字段**校验（契约 2.3）；返回缺陷说明或 `None`。
+
+    只在校验不过时返回；⛔ 不做"猜一个默认值补上"——那条路会把"AF 其实没记下用户选择"写进 MA。
+    - 必填：`rule_ref`（记的是哪条规则）、`outcome`（枚举逐字）、`automation_decision`（AF 做了什么）、
+      `user_response`（核心字段）＋其中 `choice`（四值逐字）；
+    - 可选但**给了就要对**：`user_response.via`（三值）、`at`／`user_response.at`（非空字符串）、
+      `evidence`（对象）。
+    """
+    if name not in WRITE_ACTIONS:
+        return None
+    for key in ("rule_ref", "outcome", "automation_decision", "user_response"):
+        if fields.get(key) in (None, "", {}, []):
+            return f"缺必填字段 {key!r}（契约 2.3）"
+    outcome = str(fields.get("outcome"))
+    if outcome not in OUTCOME_VALUES:
+        return f"outcome={outcome!r} 不在枚举 {list(OUTCOME_VALUES)}（asked＝问了没答是合法态）"
+    response = fields.get("user_response")
+    if not isinstance(response, Mapping):
+        return f"user_response 不是对象（收到 {type(response).__name__}）"
+    choice = str(response.get("choice") or "")
+    if choice not in USER_RESPONSE_CHOICES:
+        return f"user_response.choice={choice!r} 不在枚举 {list(USER_RESPONSE_CHOICES)}"
+    via = response.get("via")
+    if via is not None and str(via) not in USER_RESPONSE_VIA:
+        return f"user_response.via={via!r} 不在枚举 {list(USER_RESPONSE_VIA)}"
+    for key, value in (("at", fields.get("at")), ("user_response.at", response.get("at"))):
+        if value is not None and not str(value).strip():
+            return f"{key} 给了但是空值"
+    evidence = fields.get("evidence")
+    if evidence is not None and not isinstance(evidence, Mapping):
+        return f"evidence 不是对象（收到 {type(evidence).__name__}）"
+    return None
+
+
 def action_of(action: str) -> str:
     """`ma.route_question` 与 `route_question` 两种写法都归一到后者（与 `inbox.kind_of` 同形）。"""
     return str(action or "").strip().lower().rsplit(".", 1)[-1]
@@ -440,6 +501,10 @@ class MaAdapter:
         #: 事实降级两条各自的计数（陈旧／数据不足）：⛔ 都不是 error，但都要能读数。
         self.stale_read_count = 0
         self.insufficient_read_count = 0
+        #: 批二写向两条计数：staging 违约（对端把报告写进了非 staging 面）与写向失败
+        #: （自动化本体已完成 ⇒ ⛔ 不判自动化失败，但必须留痕＋计数）。
+        self.staging_violation_count = 0
+        self.write_failure_count = 0
 
     # ── 调用面 ─────────────────────────────────────────────────────
     def call(self, action: str, params: Mapping[str, Any]) -> CallResult:
@@ -468,6 +533,15 @@ class MaAdapter:
                 action=name,
             )
         arguments = {k: fields[k] for k in allowed if k in fields}
+        # 批二写向：载荷逐字段校验（契约 2.3）——在出网前拦住"记不下用户选择"的报告。
+        defect = write_payload_defect(name, fields)
+        if defect is not None:
+            return CallResult.fail(
+                f"ma.{name} 载荷不合契约 2.3：{defect}",
+                code=ADM_ERR_PAYLOAD_INVALID,
+                action=name,
+                write_payload_defect=defect,
+            )
 
         if self.dry_run:
             intent = {"action": name, "arguments": dict(arguments)}
@@ -495,13 +569,15 @@ class MaAdapter:
         try:
             parsed = self._tools_call(endpoint, host, token, name, arguments)
         except _UpstreamFailure as exc:
-            return self._failure_result(exc, action=name)
+            return self._maybe_write_failure(name, self._failure_result(exc, action=name))
 
         # ① **先认结构化 `error.code`**（契约 §2.1／预案 §三 钉死的分类顺序）：
         #    业务错误走既有 ADM 族；`DATA_INSUFFICIENT` 不是 error，落到下面的事实降级。
         business = structured_error_code(parsed)
         if business is not None and business != DATA_INSUFFICIENT:
-            return self._business_failure(name, parsed, business)
+            return self._maybe_write_failure(
+                name, self._business_failure(name, parsed, business)
+            )
 
         # ② 数据不足＝**事实**（200＋flag／`data_quality.sufficient=false`／`insufficient_data`）。
         #    ⛔ 只对批一三枚门面生效：四条老动作的回执形状与本批无关，改它们＝无谓回归面。
@@ -547,6 +623,26 @@ class MaAdapter:
                     name, freshness["age_s"], freshness["stale_after_s"], freshness["reason"],
                 )
                 degraded.append(f"stale:{freshness['reason']}")
+        # 批二写向：把这次报告的身份与语义键回显进 data（审计/排障要能不看 `payload` 就知道
+        # 「哪条规则、什么终态、用户怎么回的」——⛔ 不改对端回执，只是本层的回显）。
+        if name in WRITE_ACTIONS:
+            for key in ("rule_ref", "outcome", "automation_decision", "user_response", "context_ref"):
+                if key in fields:
+                    data[key] = fields[key]
+        # ④ 批二写向：staging 守卫（契约 2.3——AF 只发报告、⛔ 不选库）。
+        if name in WRITE_ACTIONS and parsed.get("staging") is not True:
+            self.staging_violation_count += 1
+            logger.error(
+                "MA_STAGING_VIOLATION action=%s staging=%r memory_id=%r",
+                name, parsed.get("staging"), parsed.get("memory_id"),
+            )
+            return self._maybe_write_failure(name, CallResult.fail(
+                f"ma.{name} 的回执不是 staging（staging={parsed.get('staging')!r}）"
+                "——契约 2.3 钉死 MA 恒落 staging、AF ⛔ 直写 live",
+                code=ADM_ERR_PAYLOAD_INVALID,
+                action=name,
+                defect="staging_not_true",
+            ))
         if insufficient is not None:
             self.insufficient_read_count += 1
             logger.info("MA_DATA_INSUFFICIENT read=%s shape=%s", name, insufficient)
@@ -559,6 +655,24 @@ class MaAdapter:
         return CallResult.ok(data)
 
     # ── 失败分类（五态双形状的出口）─────────────────────────────────
+    def _maybe_write_failure(self, name: str, result: CallResult) -> CallResult:
+        """批二写向失败纪律（预案 §二.3／卡面红线）：自动化本体已完成，写 MA 失败**⛔ 不判自动化失败**。
+
+        落法：给回执标 `automation_impact="none"`（本体不受影响）＋`retryable=False`（⛔ 不重试——
+        重试解不了登记/授权/通道问题，还会把同一份终态重复写），计数 `write_failure_count`，
+        并留一枚与业务码**分开**的具名 WARNING。⛔ 读向失败不走这条（那条是本次取数没成，
+        该由 IR 的 `on_error` 兜）。
+        """
+        if name not in WRITE_ACTIONS:
+            return result
+        self.write_failure_count += 1
+        result.data["automation_impact"] = "none"
+        result.data["retryable"] = False
+        logger.warning(
+            "MA_OUTCOME_REPORT_FAILED action=%s code=%s", name, result.data.get("code")
+        )
+        return result
+
     def _failure_result(self, exc: _UpstreamFailure, *, action: str) -> CallResult:
         """通道/分发级失败 ⇒ `CallResult.fail`；两条分发级**各自**计数＋具名留痕。
 
