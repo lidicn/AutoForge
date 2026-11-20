@@ -1177,7 +1177,7 @@ def _reg_and_coded(real):
 
 
 def test_f_real_repo_attribution_is_green(real):
-    """真仓 151 行登记，每一行的依据都点名它现在所在的那个函数。
+    """真仓 155 行登记，每一行的依据都点名它现在所在的那个函数。
 
     149 → 151（AF-801）：`DEVICE_GUARD_AREA_UNRESOLVED` 两腿各一行，都在 `_hit` 里（同函数，
     F 的互换风险为零；`test_f_real_repo_has_swap_prone_groups_to_guard` 的组数不变）。

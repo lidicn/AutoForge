@@ -14,8 +14,10 @@ from pathlib import Path
 
 from autoforge.af_linkage_feed import (
     DEFAULT_LIMIT,
+    KIND_BEHAVIOR_STATE,
     KIND_DEVICE_HEALTH,
     KIND_PRESENCE,
+    KIND_PREDICTION,
     MEMBERS_LIMIT,
     TRIGGER_MAX_AGE_S,
     TRIGGER_NAME,
@@ -61,7 +63,13 @@ def test_append_lands_one_file_per_kind_and_reads_back(tmp_path):
 
     assert sorted(p.name for p in (feed.root / KIND_PRESENCE).glob("*.json")) == ["0000000001000-evt1.json"]
     assert sorted(p.name for p in (feed.root / KIND_DEVICE_HEALTH).glob("*.json")) == ["0000000002000-evt2.json"]
-    assert feed.stats()["per_kind"] == {KIND_PRESENCE: 1, KIND_DEVICE_HEALTH: 1}
+    assert feed.stats()["per_kind"] == {
+        KIND_PRESENCE: 1,
+        KIND_DEVICE_HEALTH: 1,
+        # 事件族两条（AF×MA 批一）：同样是**每类各自**的格子，未落条 ⇒ 零（不是缺键）。
+        KIND_BEHAVIOR_STATE: 0,
+        KIND_PREDICTION: 0,
+    }
 
     back = feed.list_recent()
     assert [r.kind for r in back] == [KIND_DEVICE_HEALTH, KIND_PRESENCE]   # 新的在前
@@ -81,7 +89,12 @@ def test_trigger_projection_uses_existing_event_names():
     data = record.as_trigger_data()
     assert data["topic"] == "ma/device-health" and data["device_id"] == "lamp"
     assert data["trace_id"] == "trace-evt1"
-    assert set(TRIGGER_NAME) == {KIND_PRESENCE, KIND_DEVICE_HEALTH}
+    assert set(TRIGGER_NAME) == {
+        KIND_PRESENCE, KIND_DEVICE_HEALTH, KIND_BEHAVIOR_STATE, KIND_PREDICTION,
+    }
+    # 事件族两条也走既有 `on event.<name>` 通道，⛔ 不新增触发类型（DCD 2026-11-17 批一）
+    assert TRIGGER_NAME[KIND_BEHAVIOR_STATE] == "ma_behavior_state"
+    assert TRIGGER_NAME[KIND_PREDICTION] == "ma_prediction"
 
 
 def test_unregistered_kind_projects_no_trigger_name():
@@ -100,7 +113,12 @@ def test_cap_is_per_kind_and_evicts_oldest_without_any_read(tmp_path):
 
     names = [p.name for p in sorted((feed.root / KIND_PRESENCE).glob("*.json"))]
     assert len(names) == 3 and names[0].endswith("-p3.json")        # 最旧的三条已被裁掉
-    assert feed.stats()["per_kind"] == {KIND_PRESENCE: 3, KIND_DEVICE_HEALTH: 0}
+    assert feed.stats()["per_kind"] == {
+        KIND_PRESENCE: 3,
+        KIND_DEVICE_HEALTH: 0,
+        KIND_BEHAVIOR_STATE: 0,
+        KIND_PREDICTION: 0,
+    }
 
 
 def test_default_limit_is_not_shared_across_kinds(tmp_path):
@@ -110,7 +128,12 @@ def test_default_limit_is_not_shared_across_kinds(tmp_path):
     for i in range(4):
         feed.append(_record(t=1.0 + i, event_id=f"p{i}"))
         feed.append(_record(KIND_DEVICE_HEALTH, t=5.0 + i, event_id=f"d{i}"))
-    assert feed.stats()["per_kind"] == {KIND_PRESENCE: 2, KIND_DEVICE_HEALTH: 2}
+    assert feed.stats()["per_kind"] == {
+        KIND_PRESENCE: 2,
+        KIND_DEVICE_HEALTH: 2,
+        KIND_BEHAVIOR_STATE: 0,
+        KIND_PREDICTION: 0,
+    }
 
 
 def test_ttl_drops_over_age_records(tmp_path):

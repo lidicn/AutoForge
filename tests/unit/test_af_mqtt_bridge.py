@@ -22,6 +22,7 @@ from autoforge import af_mqtt_bridge
 from autoforge.af_audit import AuditLog
 from autoforge.af_conf import ConfidenceStore
 from autoforge.af_mqtt_bridge import (
+    BEHAVIOR_STATE_TOPIC,
     DEVICE_HEALTH_TOPIC,
     FAILED_TOPIC,
     FIRED_TOPIC,
@@ -30,6 +31,7 @@ from autoforge.af_mqtt_bridge import (
     INSIGHTS_TOPIC,
     MAX_ERROR_CHARS,
     NO_FAILURE_REASON,
+    PREDICTION_TOPIC,
     PRESENCE_CAPS_VERSION,
     PRESENCE_TOPIC,
     STATUS_TOPIC,
@@ -724,15 +726,31 @@ def test_inbox_topics_are_never_subscribed_and_never_handled():
     卡3 起订阅表是三条（洞察 + 在场 + 设备健康），所以这里锁的不再是"只订了一条"，
     而是**inbox 族一条都不许出现**——那才是角色边界。族外主题的数量另行钉死，
     少订/多订都会红。
+
+    AF×MA 批一（DCD 2026-11-17）后入向订阅表是四条：再加事件族 `ma/behavior-state`／
+    `ma/prediction`——本条把四条逐枚钉死（⛔ 不用 `*LINKAGE_TOPICS` 展开，那会把"多订一条"
+    也放过；这张表本身就是本门要锁的东西）。
     """
     client = FakeClient()
     bridge = _bridge(client, proposal_sink=RecordingSink())
     bridge.start()
-    assert client.subscribed == [INSIGHTS_TOPIC, PRESENCE_TOPIC, DEVICE_HEALTH_TOPIC]
+    assert client.subscribed == [
+        INSIGHTS_TOPIC,
+        PRESENCE_TOPIC,
+        DEVICE_HEALTH_TOPIC,
+        BEHAVIOR_STATE_TOPIC,
+        PREDICTION_TOPIC,
+    ]
 
     for topic in ("butler/inbox/speak", "butler/inbox/notify", "butler/inbox/tv"):
         assert bridge.subscribe_topic(topic) is False
-    assert client.subscribed == [INSIGHTS_TOPIC, PRESENCE_TOPIC, DEVICE_HEALTH_TOPIC]
+    assert client.subscribed == [
+        INSIGHTS_TOPIC,
+        PRESENCE_TOPIC,
+        DEVICE_HEALTH_TOPIC,
+        BEHAVIOR_STATE_TOPIC,
+        PREDICTION_TOPIC,
+    ]
     assert not [t for t in client.subscribed if t.startswith(INBOX_PREFIX)], client.subscribed
     dropped = bridge.handle_message(None, None, SimpleNamespace(topic="butler/inbox/speak", payload=b"{}"))
     assert dropped["handled"] is False

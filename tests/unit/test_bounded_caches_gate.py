@@ -707,8 +707,11 @@ def test_real_repo_measurements_are_pinned():
     # 与批 3/批 4 的场景对象容器（+3）同批合入——v1.29 合线 pin 按并集重钉，⛔ 取任何单支。
     # 140 → 141（2026-11-13 v1.30.1 启停旁车批）：`af_watch_toggle.EnabledOverrideGate._map`
     # （旁车 override 的内存镜像，随 `_refresh` 整体替换）多扫到一枚容器。
+    # 141 → 142（2026-11-17 AF×MA 批一）：`af_adapters.ma.MaAdapter.freshness_overrides`
+    # （新鲜度阈值覆盖表：键集 ⊆ 三枚门面读、构造期校验后只读不再增）⇒ 就地豁免带理由，
+    # ⛔ 不进 BOUNDED_CACHES（它是配置不是缓存，没有 TTL 腿）；基线名单一个数字没动。
     assert len(bounded) == 6 and len(fixed) == 3
-    assert len(containers) == 141 and len(gate.BASELINE) == 113
+    assert len(containers) == 142 and len(gate.BASELINE) == 113
 
     registered = {gate._registry_key(e["module"], e["attr"]) for e in bounded}
     assert registered <= containers, "注册表指向的容器扫不到：那条登记是给空气盖章"

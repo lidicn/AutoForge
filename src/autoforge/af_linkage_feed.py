@@ -31,13 +31,19 @@ from .af_time import SystemTimeSource
 
 __all__ = [
     "DEFAULT_LIMIT",
+    "ENVELOPE_KEYS",
     "KINDS",
+    "KIND_BEHAVIOR_STATE",
     "KIND_DEVICE_HEALTH",
     "KIND_PRESENCE",
+    "KIND_PREDICTION",
     "MEMBERS_LIMIT",
     "TEXT_LIMIT",
+    "behavior_data_of",
     "device_data_of",
+    "envelope_of",
     "members_of",
+    "prediction_data_of",
     "LinkageFeed",
     "LinkageRecord",
     "TRIGGER_MAX_AGE_S",
@@ -46,10 +52,21 @@ __all__ = [
     "UNREADABLE_MAX",
 ]
 
-#: 队列里只有这两类。键名就是**子目录名**，所以它在盘上是可见的：`{root}/presence/…`。
+#: 队列里只有这几类。键名就是**子目录名**，所以它在盘上是可见的：`{root}/presence/…`。
 KIND_PRESENCE = "presence"
 KIND_DEVICE_HEALTH = "device_health"
-KINDS: tuple[str, ...] = (KIND_PRESENCE, KIND_DEVICE_HEALTH)
+#: AF×MA 深度联动批一（DCD 2026-11-17 裁定 Q1＝连字符）：事件族两条新入向。
+#: 落形与既有两类**完全同族**——同一张 LINKAGE_TOPICS 表、同一个 LinkageFeed、同一条
+#: `on event.<name>` 触发通道；⛔ 不新增节点族/触发类型（另立一族会同时破 `ir.schema.json`、
+#: `classify_action` 分级与静态扫描器三处，而语义上既有 `event` 表达得出来）。
+KIND_BEHAVIOR_STATE = "behavior_state"
+KIND_PREDICTION = "prediction"
+KINDS: tuple[str, ...] = (
+    KIND_PRESENCE,
+    KIND_DEVICE_HEALTH,
+    KIND_BEHAVIOR_STATE,
+    KIND_PREDICTION,
+)
 
 #: 每类各自封顶（不是两类共享 500）：共享上限时"设备健康刷得多"会把在场快照挤出去，
 #: 而这两条线各自对应不同自动化，被挤掉的那条就是静默失聪。
@@ -69,6 +86,16 @@ MEMBERS_LIMIT = 32
 _MEMBER_KEYS = ("name", "member_id", "room", "via", "confidence", "last_seen", "trigger")
 #: 契约 §1.2 `ma/device-health` 的载荷键（`from` 是 Python 关键字，落盘用别名键承载）。
 _DEVICE_KEYS = ("device_id", "status", "entity_id", "from", "to", "stable_id")
+#: 事件族 `ma/behavior-state` 的业务载荷键（契约 §三 表 ＋ 预案 §三「带 duration」）。
+#: `duration` 是**可选**键：时长类边沿（如"电视看满 1h"）靠它把时长带给 AF，但"入睡/离家"
+#: 这类边沿不带它也是合法的——⛔ AF 不自添必填（自添必填的对端代价是整条入向线静默不生效）。
+_BEHAVIOR_KEYS = ("as_of", "state", "confidence", "since", "duration",
+                  "member", "member_id", "room", "trigger")
+#: 事件族 `ma/prediction` 的业务载荷键（契约 §三 表）。
+_PREDICTION_KEYS = ("as_of", "next_arrival", "upcoming_device_hints", "confidence", "room")
+#: 公共信封字段（契约 §三）：**事件族两条**入库时逐键保留，供跨仓排障与版本判定。
+#: 现网两条（presence/device-health）不走这里——⛔ 本批不动它们的载荷形状。
+ENVELOPE_KEYS = ("payload_version", "event_id", "ts", "emitted_at", "source", "type")
 
 #: 队列 kind → 自动化 `on event.<name>` 用的事件名。**不新立触发类型**：
 #: IR 的 `trigger.type` 枚举里已有 `event`，总线侧 `EVENT_ENTITY_PREFIX` 就是这条通道，
@@ -76,6 +103,8 @@ _DEVICE_KEYS = ("device_id", "status", "entity_id", "from", "to", "stable_id")
 TRIGGER_NAME: dict[str, str] = {
     KIND_PRESENCE: "ma_presence",
     KIND_DEVICE_HEALTH: "ma_device_health",
+    KIND_BEHAVIOR_STATE: "ma_behavior_state",
+    KIND_PREDICTION: "ma_prediction",
 }
 
 
@@ -144,6 +173,44 @@ def device_data_of(payload: Mapping[str, Any]) -> dict[str, Any]:
         name = "from_state" if key == "from" else key
         data[name] = _clip(value) if isinstance(value, str) else value
     return data
+
+
+def envelope_of(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """公共信封（契约 §三）：只留契约列出的那几键，文本封顶。
+
+    ⛔ 不做"信封必填"校验——必填那几条由桥按契约钉（`trace_id` 等），这里只负责**不丢**。
+    """
+    out: dict[str, Any] = {}
+    for key in ENVELOPE_KEYS:
+        if key not in payload:
+            continue
+        value = payload[key]
+        out[key] = _clip(value) if isinstance(value, str) else value
+    return out
+
+
+def _trim(payload: Mapping[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    """按白名单裁剪业务载荷（文本封顶）——三条事件族载荷共用一个口，⛔ 不各写一份。"""
+    data: dict[str, Any] = {}
+    for key in keys:
+        if key not in payload:
+            continue
+        value = payload[key]
+        if key == "upcoming_device_hints" and isinstance(value, (list, tuple)):
+            data[key] = [_clip(item) if isinstance(item, str) else item for item in value[:MEMBERS_LIMIT]]
+            continue
+        data[key] = _clip(value) if isinstance(value, str) else value
+    return data
+
+
+def behavior_data_of(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """`ma/behavior-state` 载荷裁剪（业务键 ＋ 公共信封），⛔ 不带白名单外的键。"""
+    return {**_trim(payload, _BEHAVIOR_KEYS), **envelope_of(payload)}
+
+
+def prediction_data_of(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """`ma/prediction` 载荷裁剪（业务键 ＋ 公共信封）。"""
+    return {**_trim(payload, _PREDICTION_KEYS), **envelope_of(payload)}
 
 
 def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
