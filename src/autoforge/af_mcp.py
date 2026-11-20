@@ -1473,10 +1473,14 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable, str | None]] = [
     ),
     (
         "af_export_store",
-        "导出整个 store 为可携带 bundle（含 tags + 校验和）。返回 bundle（可直接 import 回）。无参数。",
+        # AF-819（出资人 2026-11-20 拍板「无身份拒绝导出」）：scope None→"read"——
+        # 旧档 scope=None 走 _guard 的公开面直通（:101-111），无令牌也能全量导出整库
+        # （owner 面=全量；其他令牌=自己名下份额；未带令牌默认拒绝）。
+        "导出 store 为可携带 bundle（含 tags + 校验和）。owner 面令牌=全量；其他令牌=自己名下份额"
+        "（hidden_count 报缺口）；未带令牌默认拒绝（AF-819）。返回 bundle（可直接 import 回）。无参数。",
         {"type": "object", "properties": {}},
         _t_export,
-        None,
+        "read",
     ),
     (
         "af_import_store",

@@ -4579,7 +4579,10 @@ def export_store(
     审计 AF-504（🔴 实测）：此前任何 read 令牌可整店导出**他人归档**。现在带身份的
     非 owner 面导出自己名下的（别人的既不进 entries 也不进 names，`hidden_count`
     报缺口）；owner 面仍是全量——导出的是「你的份额」，不是「全库」。
-    未携带身份的旧调用路径维持全量（渐进收口，与 list_graphs 同口径）。
+    AF-819（2026-11-20，出资人拍板「无身份拒绝导出」）：MCP 面 `af_export_store` 的
+    注册 scope None→"read"（`af_mcp.py`）——无令牌在 `_guard` 即默认拒绝；
+    REST 面 `info=None` 仅剩 `AF_ALLOW_NOAUTH=1` 显式逃生舱（本地开发选择，两枚既有
+    测试钉着 noauth=200，⛔ 本卡改它的语义）；服务层直调/CLI 属本地操作者路径（本卡不碰）。
     C-3 收口：范围判定单源 `scope_names`；BROKEN ⇒ 403 残缺身份（R1）；
     R3：`checksum` 与**返回的** bundle 一致——份额化后按 scoped bundle 重算
     （⛔ 留全量指纹：导入侧复算对不上，调用方也无法自校验拿到的是哪份）；
