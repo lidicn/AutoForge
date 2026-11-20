@@ -3478,8 +3478,14 @@ def _grant_channel_tag(
     """签发/撤销/续期 grant 的**凭据通道**：owner 面直通，其余**只认长期码**。
 
     依据 DCD 20261111 §4.1 双轨授权：执行授权的授予只认长期码（短期码是一次性部署凭据）。
-    `consume=True` 时按 Q1 三件套③计一次 `use_count`（授权动作计次、日常执行不再耗码）；
-    撤销/续期这类**缩小或维持**权限的动作 `consume=False`——撤销还要耗一次额度就没人敢撤销了。
+
+    AF-820（墨鉴 N-10）：旧实现 `consume=True` 时在这里先 `acs.consume` 计次，随后
+    `grant_issue`/`grant_renew` 的 create/renew 才做参数校验（agent 空/保留名/risk 白名单/
+    范围空/ttl 越界）——任一抛错 ⇒ 长期码额度已耗、grant 未签。修法：本函数**只做类型校验**
+    （validate＋kind=="long"，⛔ 不 consume）；真正的 `acs.consume` 拆到调用方在 create/renew
+    **成功之后**单独做，失败记 warning、⛔ 不回滚业务（授权已生效、计次失败不追回）。
+
+    `consume` 参数保留用于区分「签发/续期要计次」与「撤销不耗额度」，但不在这里执行。
     """
     if not auth_code:
         if caller_is_owner:
@@ -3506,9 +3512,26 @@ def _grant_channel_tag(
             f"{action} 只认长期码：短期码不能授予执行权限（DCD 20261111 Q1 双轨授权）",
             status=403,
         )
-    if consume and not acs.consume(auth_code):
-        raise ServiceError(f"{action} 无法计次（授权码状态已变）：拒绝执行（fail-closed）", status=403)
+    # AF-820：⛔ 不在这里 acs.consume——计次由调用方在 create/renew 成功后单独做。
     return tag
+
+
+def _grant_consume_after_success(
+    store: "GraphStore | None", auth_code: str, *, action: str, consume: bool
+) -> None:
+    """AF-820：create/renew **成功后**对长期码计一次 use_count。
+
+    `consume=False`（撤销/续期缩权）不耗额度。失败只记 warning，⛔ 不回滚已生效的授权动作
+    ——授权已落盘、计次失败不追回（口径同 grant_audit 的「记账失败不回滚」）。
+    """
+    if not consume or not auth_code or store is None:
+        return
+    try:
+        from .af_auth import AuthCodeStore as _ACS
+
+        _ACS(Path(store.root) / ".auth" / "auth_codes.json").consume(auth_code)
+    except Exception as exc:  # noqa: BLE001 —— 计次失败不回滚业务
+        logger.warning("GRANT_CONSUME_RECORD_FAILED %s 授权已生效但计次失败：%r", action, exc)
 
 
 def _grant_confirm_question(check: Any) -> str:
@@ -3651,6 +3674,8 @@ def grant_issue(
         )
     except GrantError as exc:
         raise _grant_error(exc) from exc
+    # AF-820：create 成功后才对长期码计次（失败只 warning、⛔ 不回滚已签发的授权）。
+    _grant_consume_after_success(store, auth_code, action="签发执行授权（grant）", consume=True)
     _grant_audit(
         store, "GRANT_ISSUED",
         grant_id=record["grant_id"], agent=record["agent"],
@@ -3725,6 +3750,8 @@ def grant_renew(
         record = _grant_store(store).renew(grant_id, ttl_days=ttl_days, by=caller or tag)
     except GrantError as exc:
         raise _grant_error(exc) from exc
+    # AF-820：renew 成功后才对长期码计次（失败只 warning、⛔ 不回滚已续期的授权）。
+    _grant_consume_after_success(store, auth_code, action="续期执行授权（grant）", consume=True)
     _grant_audit(
         store, "GRANT_RENEWED", grant_id=record["grant_id"], agent=record["agent"],
         expires_at=_grant_iso(record["expires_at"]), authorized_by=tag, subject=str(caller or ""),
