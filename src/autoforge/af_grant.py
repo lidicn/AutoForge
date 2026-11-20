@@ -121,12 +121,15 @@ GRANT_STORE_CORRUPT = "GRANT_STORE_CORRUPT"
 GRANT_STORE_VERSION_MISMATCH = "GRANT_STORE_VERSION_MISMATCH"
 
 #: 硬拒码：出现即整条请求拒，⛔ 不给"确认放行"这条路（矩阵第 4/5 行的形状）。
+#: AF-821：GRANT_RISK_INVALID 入列——check 入口对 grant 记录的 action_risk 坏值 fail-closed
+#: （grants.json 手工编辑/跨版本写入），⛔ 再静默降档成 rank=-1（那会让 L2 越界不再要求确认）。
 HARD_DENY_CODES = frozenset(
     {
         GRANT_NOT_FOUND,
         GRANT_REVOKED,
         GRANT_EXPIRED,
         GRANT_AGENT_MISMATCH,
+        GRANT_RISK_INVALID,
         GRANT_RISK_L3,
         GRANT_DOMAIN_BANNED,
         GRANT_DEVICE_EXCLUDED,
@@ -481,6 +484,15 @@ class GrantStore:
 
         granted = str(grant.get("action_risk") or L0_READONLY).upper()
         granted_rank = _RISK_ORDER.get(granted, -1)
+        # AF-821（墨鉴 N-14）：grants.json 手工编辑／跨版本写入 ⇒ action_risk 不在白名单时
+        # rank 落 -1 ⇒ 链式比较 `... > granted_rank >= 0` 恒假 ⇒ L2 越界**不再要求确认**
+        # （软拒静默消失）。同文件 _load／create 都 fail-closed，唯 check 静默降档——
+        # 修法：坏值在 check 入口具名硬拒（⛔ 静默 -1）。
+        if granted_rank < 0:
+            denied.append({
+                "code": GRANT_RISK_INVALID,
+                "detail": f"grant 记录的 action_risk 不在白名单：{granted!r}（fail-closed，AF-821）",
+            })
         risk = L0_READONLY
         for adapter, action, params in actions:
             level = classify_action(adapter, action, params or {})
