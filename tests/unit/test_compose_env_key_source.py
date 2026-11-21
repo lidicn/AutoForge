@@ -50,12 +50,27 @@ def _live_env_keys(text: str) -> list[str]:
     return keys
 
 
+def _src_files() -> list[Path]:
+    """扫描面＝`src/autoforge` **全树**（含子包），不是顶层。
+
+    病根（v1.30.17 CI run 44890786792 实测 1 failed）：`AUTOFORGE_TV_MCP_URL` 的读点在
+    `af_adapters/tv.py:140`（`TV_ENDPOINT_ENV = "AUTOFORGE_TV_MCP_URL"`），顶层
+    `SRC.glob("*.py")` 扫不到 ⇒ compose 里新加的透传键被判成「代码里没人读、值注入会静默
+    失效」。射程缩到顶层会让**所有适配器层的端点键**都成为假红，所以这里钉死两件：
+    ①扫描面必须覆盖子包（下面有断言，⛔ 删了就回到假红）；②判据本身照旧（键名双向同源）。
+    """
+    files = sorted(p for p in SRC.rglob("*.py") if "__pycache__" not in p.parts)
+    assert any(p.parent.name == "af_adapters" for p in files), (
+        "扫描面必须覆盖 src/autoforge/af_adapters/——tv.py 的端点读点在那里")
+    return files
+
+
 def test_compose_live_env_keys_are_read_by_code():
     """compose 里每一条会执行的 `AUTOFORGE_*`，代码里必须有同名读数。"""
     text = _compose_text()
     keys = _live_env_keys(text)
     assert len(keys) >= 6, f"compose 里数到的 environment 键只有 {keys}——形状改了，这条『干净』没有依据"
-    corpus = "\n".join(p.read_text(encoding="utf-8") for p in sorted(SRC.glob("*.py")))
+    corpus = "\n".join(p.read_text(encoding="utf-8") for p in _src_files())
     unseen = [k for k in keys if f'"{k}"' not in corpus and f"'{k}'" not in corpus and k not in corpus]
     assert not unseen, f"compose 引用了代码里没人读的键（值注入会静默失效）：{unseen}"
 
