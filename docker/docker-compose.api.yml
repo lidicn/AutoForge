@@ -92,6 +92,12 @@ services:
       - HA_LONG_LIVED_TOKEN=${HA_LONG_LIVED_TOKEN:-}
       - AUTOFORGE_HA_TOKEN=${AUTOFORGE_HA_TOKEN:-}
       - AF_ALLOW_NOAUTH=${AF_ALLOW_NOAUTH:-}
+      # ── ADM 联动出站端点（墨鉴 N-19：`tv_endpoint` 全仓只三处命中、生产四面零传值）──
+      # TV：AF×TVPilot 一期的唯一接线口。`build_runtime(tv_endpoint=...)` 在生产四面都没传值
+      # ⇒ 唯一可用通道就是本进程环境变量 `AUTOFORGE_TV_MCP_URL`（读点 tv.py 的 TV_ENDPOINT_ENV）。
+      # 值由宿主 `docker/.env` 注入；**留空是真 no-op**：空串 ⇒ 适配器显式拒发并留痕，⛔ 不猜地址、
+      # ⛔ 不静默 dry_run（tv.py 头部纪律）。端点非敏感（LAN 内无鉴权），真值不进本文件。
+      - AUTOFORGE_TV_MCP_URL=${AUTOFORGE_TV_MCP_URL:-}
       # ── conf 分级引擎（mimo #19）：NAS 面正式启用 ──
       # 字面量 1 = 发布开关烘进入库文件，确定性单源：不依赖宿主 .env（NAS .env 仍是旧键名、
       # 迁移是遗留任务）。关闭 = 走 revert commit + 自部署，不留宿主侧暗门。
