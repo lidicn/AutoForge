@@ -126,6 +126,11 @@ MA_ACTIONS: dict[str, tuple[str, ...]] = {
 }
 #: 批二写向动作（与只读门面分开：它要吃"写失败不冒执行链"纪律与 staging 守卫）。
 WRITE_ACTIONS = frozenset({"report_automation_outcome"})
+#: 写向出网 wire 层字符串化（AF-831 附属件，链主 2026-11-21 裁定）：MA 现网 Pydantic 合同把
+#: `at`/`automation_decision`/`user_response` 钉成 str、`evidence` 钉成 list[str]，而契约 2.3
+#: 语义层是「对象」。裁定＝**语义层按对象**（IR 作者永远写对象），字符串化**收进本适配器出网前
+#: 统一做**（⛔ 让每个调用点自适配）。对象 {k: v} → ["k:v", ...]；已是 str 的值不再二次包装。
+_WRITE_WIRE_STRINGIFY = frozenset({"at", "automation_decision", "user_response"})
 #: 契约 2.3 的 `outcome` 枚举（逐字）。`asked`＝问了没答是**合法态**，⛔ 不许当缺字段。
 OUTCOME_VALUES = ("asked", "executed", "skipped", "failed", "false_positive")
 #: 契约 2.3 的 `user_response.choice` 四值（逐字）。
@@ -376,6 +381,13 @@ def write_payload_defect(name: str, fields: Mapping[str, Any]) -> str | None:
     if outcome not in OUTCOME_VALUES:
         return f"outcome={outcome!r} 不在枚举 {list(OUTCOME_VALUES)}（asked＝问了没答是合法态）"
     response = fields.get("user_response")
+    if isinstance(response, str):
+        # AF-831 wire 形（链主 2026-11-21 裁定）：已字符串化的 user_response 也认——
+        # 解回对象复核语义（choice 枚举）；解析失败按原语义拒，⛔ 静默放行。
+        try:
+            response = json.loads(response)
+        except (ValueError, TypeError):
+            return "user_response 已是 wire 字符串但不是合法 JSON"
     if not isinstance(response, Mapping):
         return f"user_response 不是对象（收到 {type(response).__name__}）"
     choice = str(response.get("choice") or "")
@@ -549,6 +561,20 @@ class MaAdapter:
                 del self.intents[0]
             self.intents.append(intent)
             return CallResult.ok({"dry_run": True, **intent})
+
+        # AF-831 附属件（链主 2026-11-21 裁定）：写向出网 wire 层字符串化——
+        # dry_run 意图保持**对象**（语义层真值），只在这条真发路径转 MA 合同的 wire 形。
+        if name in WRITE_ACTIONS:
+            wire = dict(arguments)
+            for key in _WRITE_WIRE_STRINGIFY:
+                value = wire.get(key)
+                if isinstance(value, str):
+                    continue  # 已是 wire 形，幂等（防二次包装）
+                wire[key] = json.dumps(value, ensure_ascii=False)
+            evidence = arguments.get("evidence")
+            if isinstance(evidence, Mapping):
+                wire["evidence"] = [f"{k}:{v}" for k, v in evidence.items()]
+            arguments = wire
 
         endpoint = self._resolve_endpoint()
         host = host_of(endpoint)
